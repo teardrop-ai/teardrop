@@ -1,0 +1,27 @@
+# ─── Web Framework ─────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+sse-starlette>=3.3.0
+
+# ─── LangGraph / LangChain ─────────────────────────────────────────────────────
+langgraph>=1.1.0
+langchain>=1.2.0
+langchain-core>=0.3.0
+langchain-anthropic>=1.4.0
+langsmith>=0.3.0
+
+# ─── MCP (Model Context Protocol) ──────────────────────────────────────────────
+mcp>=1.26.0
+fastmcp>=3.1.0
+
+# ─── Data Validation & Settings ────────────────────────────────────────────────
+pydantic>=2.10.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.1
+
+# ─── HTTP / Async ──────────────────────────────────────────────────────────────
+httpx>=0.28.0
+anyio>=4.0.0
+
+# ─── Utilities ─────────────────────────────────────────────────────────────────
+python-multipart>=0.0.18
