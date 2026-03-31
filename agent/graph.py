@@ -6,17 +6,43 @@ Graph topology:
 
 from __future__ import annotations
 
-import functools
 import logging
 from typing import Literal
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import planner_node, tool_executor_node, ui_generator_node
 from agent.state import AgentState, TaskStatus
+from config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Module-level handle so the lifespan can set/close it.
+_checkpointer: AsyncSqliteSaver | None = None
+
+
+async def init_checkpointer() -> AsyncSqliteSaver:
+    """Create and store the async SQLite checkpointer."""
+    global _checkpointer
+    settings = get_settings()
+    import aiosqlite
+
+    conn = await aiosqlite.connect(settings.checkpoint_db_path)
+    _checkpointer = AsyncSqliteSaver(conn)
+    await _checkpointer.setup()
+    logger.info("SQLite checkpointer ready at %s", settings.checkpoint_db_path)
+    return _checkpointer
+
+
+async def close_checkpointer() -> None:
+    """Gracefully close the checkpointer connection."""
+    global _checkpointer, _compiled_graph
+    if _checkpointer is not None:
+        await _checkpointer.conn.close()
+        _checkpointer = None
+        _compiled_graph = None
+        logger.info("SQLite checkpointer closed")
 
 
 def _route_after_planner(state: AgentState) -> Literal["tool_executor", "ui_generator"]:
@@ -33,8 +59,8 @@ def _route_after_tools(state: AgentState) -> Literal["planner", "ui_generator"]:
     return "ui_generator"
 
 
-def build_graph() -> StateGraph:
-    """Build and compile the agent StateGraph with a MemorySaver checkpointer."""
+def build_graph(checkpointer: AsyncSqliteSaver) -> StateGraph:
+    """Build and compile the agent StateGraph with an async SQLite checkpointer."""
     builder = StateGraph(AgentState)
 
     # Register nodes
@@ -62,12 +88,19 @@ def build_graph() -> StateGraph:
     # UI generation always terminates
     builder.add_edge("ui_generator", END)
 
-    checkpointer = MemorySaver()
     return builder.compile(checkpointer=checkpointer)
 
 
-@functools.lru_cache(maxsize=1)
+# Cached compiled graph — built once after checkpointer is initialized.
+_compiled_graph = None
+
+
 def get_graph() -> StateGraph:
-    """Return the cached compiled graph singleton."""
-    logger.info("Compiling LangGraph agent graph")
-    return build_graph()
+    """Return the compiled graph, building it once on first call."""
+    global _compiled_graph
+    if _compiled_graph is None:
+        if _checkpointer is None:
+            raise RuntimeError("Checkpointer not initialized. Call init_checkpointer() first.")
+        _compiled_graph = build_graph(_checkpointer)
+        logger.info("Compiled LangGraph agent graph")
+    return _compiled_graph

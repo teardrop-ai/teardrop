@@ -22,6 +22,14 @@ pydantic>=2.10.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.1
 
+# ─── Authentication ────────────────────────────────────────────────────────────
+PyJWT>=2.12.0
+cryptography>=44.0.0
+
+# ─── Checkpointing ────────────────────────────────────────────────────────────
+langgraph-checkpoint-sqlite>=2.0.0
+aiosqlite>=0.21.0
+
 # ─── HTTP / Async ──────────────────────────────────────────────────────────────
 httpx>=0.28.0
 anyio>=4.0.0

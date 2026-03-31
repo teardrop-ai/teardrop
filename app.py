@@ -11,22 +11,25 @@ GET  /.well-known/agent-card.json – A2A agent card for discoverability
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
 import uuid
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from agent.graph import get_graph
+from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState, TaskStatus
+from auth import create_access_token, require_auth
 from config import get_settings
 from tools import registry
 
@@ -41,6 +44,15 @@ logger = logging.getLogger(__name__)
 
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup / shutdown lifecycle for the checkpointer."""
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
 app = FastAPI(
     title="Teardrop",
     description=(
@@ -48,6 +60,7 @@ app = FastAPI(
         "AG-UI streaming agent backed by LangGraph + Anthropic Claude."
     ),
     version="1.0.0",
+    lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -171,12 +184,54 @@ async def agent_card() -> JSONResponse:
                 },
             ],
             "tools": registry.to_a2a_tool_list(),
-            "authentication": {"required": False, "note": "Authentication not required for local dev."},
+            "authentication": {
+                "required": True,
+                "scheme": "bearer",
+                "type": "jwt",
+                "token_endpoint": "/token",
+            },
         }
     )
 
 
-@app.post("/agent/run", tags=["Agent"])
+class TokenRequest(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+@app.post("/token", tags=["Auth"])
+async def token(body: TokenRequest, request: Request) -> JSONResponse:
+    """Client-credentials token endpoint. Returns a signed RS256 JWT."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please slow down.",
+        )
+    if not settings.jwt_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="JWT client secret not configured. Set JWT_CLIENT_SECRET in .env.",
+        )
+    if (
+        body.client_id != settings.jwt_client_id
+        or not hmac.compare_digest(body.client_secret, settings.jwt_client_secret)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid client credentials",
+        )
+    access_token = create_access_token(subject=body.client_id)
+    return JSONResponse(
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.jwt_access_token_expire_minutes * 60,
+        }
+    )
+
+
+@app.post("/agent/run", tags=["Agent"], dependencies=[Depends(require_auth)])
 async def agent_run(body: AgentRunRequest, request: Request) -> EventSourceResponse:
     """AG-UI streaming endpoint.
 

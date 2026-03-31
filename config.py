@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cached_property, lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
@@ -53,6 +56,32 @@ class Settings(BaseSettings):
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     rate_limit_requests_per_minute: int = 60
+
+    # ── JWT Authentication ─────────────────────────────────────────────────────
+    jwt_private_key_path: str = Field(
+        default="keys/private.pem", description="Path to RSA private key (relative to project root)"
+    )
+    jwt_public_key_path: str = Field(
+        default="keys/public.pem", description="Path to RSA public key (relative to project root)"
+    )
+    jwt_algorithm: str = "RS256"
+    jwt_access_token_expire_minutes: int = 30
+    jwt_issuer: str = "teardrop"
+    jwt_client_id: str = Field(default="teardrop-client", description="Client ID for token endpoint")
+    jwt_client_secret: str = Field(default="", description="Client secret for token endpoint (set in .env)")
+
+    @cached_property
+    def jwt_private_key(self) -> str:
+        return (_PROJECT_ROOT / self.jwt_private_key_path).read_text()
+
+    @cached_property
+    def jwt_public_key(self) -> str:
+        return (_PROJECT_ROOT / self.jwt_public_key_path).read_text()
+
+    # ── Checkpointing ──────────────────────────────────────────────────────────
+    checkpoint_db_path: str = Field(
+        default="data/teardrop.db", description="SQLite database path for LangGraph checkpointing"
+    )
 
 
 @lru_cache
