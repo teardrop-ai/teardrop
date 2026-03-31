@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Annotated, Any
 
 from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
 
 
