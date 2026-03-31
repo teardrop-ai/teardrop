@@ -28,6 +28,7 @@ from sse_starlette.sse import EventSourceResponse
 from agent.graph import get_graph
 from agent.state import AgentState, TaskStatus
 from config import get_settings
+from tools import registry
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -163,27 +164,13 @@ async def agent_card() -> JSONResponse:
                     "name": "task_planning",
                     "description": "Break complex tasks into actionable steps.",
                 },
-                {
-                    "name": "calculation",
-                    "description": "Safe arithmetic evaluation via MCP calculate tool.",
-                },
-                {
-                    "name": "datetime",
-                    "description": "Current UTC date/time retrieval.",
-                },
-                {
-                    "name": "web_search",
-                    "description": "Web search (stub, wire in provider API key).",
-                },
-                {
-                    "name": "text_summarization",
-                    "description": "Word/sentence/paragraph statistics for text.",
-                },
+                *registry.to_a2a_skills(),
                 {
                     "name": "a2ui_rendering",
                     "description": "Declarative UI component generation (table, form, text, button, etc.).",
                 },
             ],
+            "tools": registry.to_a2a_tool_list(),
             "authentication": {"required": False, "note": "Authentication not required for local dev."},
         }
     )

@@ -14,6 +14,9 @@ langsmith>=0.1.147
 mcp>=1.26.0
 fastmcp>=3.1.0
 
+# ─── Tool Providers ────────────────────────────────────────────────────────────
+tavily-python>=0.5.0
+
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.10.0
 pydantic-settings>=2.0.0
@@ -25,3 +28,4 @@ anyio>=4.0.0
 
 # ─── Utilities ─────────────────────────────────────────────────────
 python-multipart>=0.0.18
+packaging>=24.0

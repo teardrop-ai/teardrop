@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from config import get_settings
-from tools import get_langchain_tools
+from tools import registry
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     """Reasoning / planning node.  Calls the LLM with bound tools."""
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
-    tools = get_langchain_tools()
+    tools = registry.to_langchain_tools()
     llm = _build_llm().bind_tools(tools)  # type: ignore[arg-type]
 
     messages = [SystemMessage(content=_PLANNER_SYSTEM), *state.messages]
@@ -107,7 +107,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {"task_status": TaskStatus.GENERATING_UI}
 
-    tools_by_name = {t.name: t for t in get_langchain_tools()}
+    tools_by_name = registry.get_langchain_tools_by_name()
     tool_messages: list[ToolMessage] = []
 
     for call in last_msg.tool_calls:

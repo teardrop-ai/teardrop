@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
     langsmith_project: str = "teardrop"
 
+    # ── Tool Providers ──────────────────────────────────────────────────────────
+    tavily_api_key: str = Field(default="", description="Tavily API key for web search")
+
+    # ── Tool Registry ──────────────────────────────────────────────────────────
+    tool_deprecation_window_days: int = Field(
+        default=90, description="Days before a deprecated tool version is removed"
+    )
+
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     rate_limit_requests_per_minute: int = 60
 

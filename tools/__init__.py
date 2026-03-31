@@ -1,5 +1,21 @@
-"""Tools package – MCP-wrapped tools for the Teardrop agent."""
+"""Tools package – versioned tool registry for the Teardrop agent."""
 
-from tools.mcp_tools import TOOLS, get_langchain_tools
+from __future__ import annotations
 
-__all__ = ["TOOLS", "get_langchain_tools"]
+from tools.registry import ToolRegistry
+from tools.definitions import register_all
+
+# ─── Global registry singleton ────────────────────────────────────────────────
+
+registry = ToolRegistry()
+register_all(registry)
+
+
+# ─── Backward-compatible API ──────────────────────────────────────────────────
+
+def get_langchain_tools() -> list:
+    """Return LangChain tools from the registry (backward-compatible)."""
+    return registry.to_langchain_tools()
+
+
+__all__ = ["registry", "get_langchain_tools"]

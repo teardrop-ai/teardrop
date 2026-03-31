@@ -5,6 +5,9 @@ Run independently for tool discovery and reuse across multiple agents:
 
 The server listens on stdio by default (suitable for Claude Desktop / MCP clients).
 Pass --transport=sse to expose via HTTP SSE instead.
+
+Tools are auto-registered from the ToolRegistry — adding a new ToolDefinition
+in tools/definitions/ will automatically expose it here.
 """
 
 from __future__ import annotations
@@ -16,16 +19,7 @@ from typing import Any
 
 import fastmcp
 
-from tools.mcp_tools import (
-    CalculateInput,
-    GetDatetimeInput,
-    SummarizeTextInput,
-    WebSearchInput,
-    calculate,
-    get_datetime,
-    summarize_text,
-    web_search,
-)
+from tools import registry
 
 logger = logging.getLogger(__name__)
 
@@ -35,35 +29,39 @@ mcp = fastmcp.FastMCP(
     name="teardrop-tools",
     version="1.0.0",
     instructions=(
-        "Teardrop MCP tool server. Provides arithmetic calculation, "
-        "datetime lookup, web search, and text summarization tools."
+        "Teardrop MCP tool server. Provides tools auto-registered from the "
+        "Teardrop tool registry."
     ),
 )
 
 
-@mcp.tool(description="Evaluate a safe arithmetic expression (supports +,-,*,/,**,%,sqrt,abs,etc.)")
-async def mcp_calculate(expression: str) -> dict[str, Any]:
-    inp = CalculateInput(expression=expression)
-    return await calculate(inp.expression)
+def _register_tools_with_mcp() -> None:
+    """Auto-register all active tools from the registry with FastMCP."""
+    for tool_def in registry.to_mcp_tool_defs():
+        name = tool_def["name"]
+        description = tool_def["description"]
+        input_schema = tool_def["input_schema"]
+        implementation = tool_def["implementation"]
+
+        # Create a closure to capture the current tool_def values
+        def _make_handler(
+            impl: Any, schema: Any
+        ) -> Any:
+            async def handler(**kwargs: Any) -> Any:
+                validated = schema(**kwargs)
+                return await impl(**validated.model_dump())
+
+            return handler
+
+        handler = _make_handler(implementation, input_schema)
+        handler.__name__ = f"mcp_{name}"
+        handler.__doc__ = description
+
+        mcp.tool(description=description)(handler)
+        logger.debug("MCP: registered tool %s", name)
 
 
-@mcp.tool(description="Return current UTC date and time. Optional strftime format.")
-async def mcp_get_datetime(format: str = "%Y-%m-%d %H:%M:%S UTC") -> dict[str, str]:
-    inp = GetDatetimeInput(format=format)
-    return await get_datetime(inp.format)
-
-
-@mcp.tool(description="Search the web. Returns titles, URLs and snippets (stub until API key set).")
-async def mcp_web_search(query: str, num_results: int = 5) -> dict[str, Any]:
-    inp = WebSearchInput(query=query, num_results=num_results)
-    return await web_search(inp.query, inp.num_results)
-
-
-@mcp.tool(description="Return word/sentence/paragraph statistics for a given text.")
-async def mcp_summarize_text(text: str) -> dict[str, Any]:
-    inp = SummarizeTextInput(text=text)
-    return await summarize_text(inp.text)
-
+_register_tools_with_mcp()
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
