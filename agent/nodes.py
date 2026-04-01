@@ -94,9 +94,16 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             "error": str(exc),
         }
 
+    # ── Accumulate token usage ────────────────────────────────────────────
+    usage = dict(state.metadata.get("_usage", {}))
+    if hasattr(response, "usage_metadata") and response.usage_metadata:
+        usage["tokens_in"] = usage.get("tokens_in", 0) + response.usage_metadata.get("input_tokens", 0)
+        usage["tokens_out"] = usage.get("tokens_out", 0) + response.usage_metadata.get("output_tokens", 0)
+
     return {
         "messages": [response],
         "task_status": TaskStatus.EXECUTING if response.tool_calls else TaskStatus.GENERATING_UI,
+        "metadata": {**state.metadata, "_usage": usage},
     }
 
 
@@ -109,6 +116,10 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
 
     tools_by_name = registry.get_langchain_tools_by_name()
     tool_messages: list[ToolMessage] = []
+
+    # ── Accumulate tool usage ─────────────────────────────────────────────
+    usage = dict(state.metadata.get("_usage", {}))
+    tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
     for call in last_msg.tool_calls:
         tool_name: str = call["name"]
@@ -127,10 +138,15 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
                 content = f"Tool error: {exc}"
 
         tool_messages.append(ToolMessage(content=content, tool_call_id=call_id))
+        tool_names_acc.append(tool_name)
+
+    usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
+    usage["tool_names"] = tool_names_acc
 
     return {
         "messages": tool_messages,
         "task_status": TaskStatus.PLANNING,
+        "metadata": {**state.metadata, "_usage": usage},
     }
 
 

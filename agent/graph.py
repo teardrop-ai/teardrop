@@ -7,9 +7,10 @@ Graph topology:
 from __future__ import annotations
 
 import logging
+from contextlib import AsyncExitStack
 from typing import Literal
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import planner_node, tool_executor_node, ui_generator_node
@@ -18,31 +19,33 @@ from config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Module-level handle so the lifespan can set/close it.
-_checkpointer: AsyncSqliteSaver | None = None
+# Module-level handles so the lifespan can set/close them.
+_checkpointer: AsyncPostgresSaver | None = None
+_exit_stack: AsyncExitStack | None = None
 
 
-async def init_checkpointer() -> AsyncSqliteSaver:
-    """Create and store the async SQLite checkpointer."""
-    global _checkpointer
+async def init_checkpointer() -> AsyncPostgresSaver:
+    """Create and store the async Postgres checkpointer (via psycopg3)."""
+    global _checkpointer, _exit_stack
     settings = get_settings()
-    import aiosqlite
-
-    conn = await aiosqlite.connect(settings.checkpoint_db_path)
-    _checkpointer = AsyncSqliteSaver(conn)
+    _exit_stack = AsyncExitStack()
+    _checkpointer = await _exit_stack.enter_async_context(
+        AsyncPostgresSaver.from_conn_string(settings.pg_dsn)
+    )
     await _checkpointer.setup()
-    logger.info("SQLite checkpointer ready at %s", settings.checkpoint_db_path)
+    logger.info("Postgres checkpointer ready")
     return _checkpointer
 
 
 async def close_checkpointer() -> None:
-    """Gracefully close the checkpointer connection."""
-    global _checkpointer, _compiled_graph
-    if _checkpointer is not None:
-        await _checkpointer.conn.close()
-        _checkpointer = None
-        _compiled_graph = None
-        logger.info("SQLite checkpointer closed")
+    """Gracefully close the checkpointer connection pool."""
+    global _checkpointer, _exit_stack, _compiled_graph
+    _compiled_graph = None
+    _checkpointer = None
+    if _exit_stack is not None:
+        await _exit_stack.aclose()
+        _exit_stack = None
+        logger.info("Postgres checkpointer closed")
 
 
 def _route_after_planner(state: AgentState) -> Literal["tool_executor", "ui_generator"]:
@@ -59,8 +62,8 @@ def _route_after_tools(state: AgentState) -> Literal["planner", "ui_generator"]:
     return "ui_generator"
 
 
-def build_graph(checkpointer: AsyncSqliteSaver) -> StateGraph:
-    """Build and compile the agent StateGraph with an async SQLite checkpointer."""
+def build_graph(checkpointer: AsyncPostgresSaver) -> StateGraph:
+    """Build and compile the agent StateGraph with an async Postgres checkpointer."""
     builder = StateGraph(AgentState)
 
     # Register nodes

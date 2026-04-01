@@ -78,10 +78,44 @@ class Settings(BaseSettings):
     def jwt_public_key(self) -> str:
         return (_PROJECT_ROOT / self.jwt_public_key_path).read_text()
 
+    # ── Web3 / SIWE ────────────────────────────────────────────────────────────
+    ethereum_rpc_url: str = Field(
+        default="", description="Ethereum mainnet JSON-RPC URL (Alchemy/Infura/etc.)"
+    )
+    base_rpc_url: str = Field(
+        default="", description="Base L2 JSON-RPC URL"
+    )
+    siwe_domain: str = Field(
+        default="", description="Expected domain in SIWE messages (defaults to app_host if empty)"
+    )
+    siwe_nonce_ttl_seconds: int = Field(
+        default=300, description="SIWE nonce validity window in seconds"
+    )
+
+    @property
+    def effective_siwe_domain(self) -> str:
+        return self.siwe_domain or self.app_host
+
     # ── Checkpointing ──────────────────────────────────────────────────────────
     checkpoint_db_path: str = Field(
         default="data/teardrop.db", description="SQLite database path for LangGraph checkpointing"
     )
+
+    # ── User / Usage Database ──────────────────────────────────────────────────
+    user_db_path: str = Field(
+        default="data/teardrop.db", description="SQLite database path for users, orgs, and usage events"
+    )
+
+    # ── Postgres (Neon) ────────────────────────────────────────────────────────
+    database_url: str = Field(
+        default="",
+        description="Postgres connection string (postgresql://...). Required for production.",
+    )
+
+    @property
+    def pg_dsn(self) -> str:
+        """Standard Postgres DSN, stripping any SQLAlchemy dialect prefix."""
+        return self.database_url.replace("+asyncpg", "")
 
 
 @lru_cache
