@@ -91,7 +91,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
+    from migrations.runner import apply_pending
+
     pool = await asyncpg.create_pool(settings.pg_dsn)
+    await apply_pending(pool)
     await init_checkpointer()
     await init_user_db(pool)
     await init_usage_db(pool)

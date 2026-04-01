@@ -1,0 +1,4 @@
+-- Template for future migrations.
+-- Replace this comment and write your schema change below.
+-- Example:
+--   ALTER TABLE users ADD COLUMN last_login TIMESTAMPTZ;

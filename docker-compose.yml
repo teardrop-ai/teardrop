@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: teardrop
+      POSTGRES_USER: teardrop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-teardrop}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teardrop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://teardrop:${POSTGRES_PASSWORD:-teardrop}@postgres:5432/teardrop
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount keys from host to avoid re-generating on each rebuild.
+      - ./keys:/app/keys:ro
+
+volumes:
+  postgres_data:

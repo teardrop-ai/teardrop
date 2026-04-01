@@ -1,0 +1,44 @@
+# Git and version control
+.git
+.gitignore
+
+# Python runtime artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Local secrets and generated keys (mount as volume at runtime instead)
+.env
+keys/
+
+# Development and test data
+data/
+
+# Test suite and CI config
+tests/
+.github/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+docs/
+
+# Coverage reports
+coverage.xml
+.coverage
+htmlcov/

@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: teardrop_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/teardrop_test
+      APP_ENV: test
+      JWT_CLIENT_ID: test-client
+      JWT_CLIENT_SECRET: ci-test-secret
+      ANTHROPIC_API_KEY: dummy-key
+      LANGSMITH_TRACING: "false"
+      SKIP_INTEGRATION_TESTS: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Generate RSA test keys
+        run: python scripts/generate_keys.py
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --cov=. --cov-report=xml --cov-report=term-missing
+
+      - name: Run integration tests (Docker Postgres from service)
+        env:
+          SKIP_INTEGRATION_TESTS: ""
+        run: |
+          pytest tests/integration/ -v \
+            --override-ini="asyncio_mode=auto"
+        continue-on-error: false
+
+      - name: Run API tests
+        run: pytest tests/api/ -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
