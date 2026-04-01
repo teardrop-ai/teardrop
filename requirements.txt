@@ -21,6 +21,9 @@ tavily-python>=0.5.0
 siwe>=4.4.0
 web3>=7.0.0
 
+# ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────
+x402[fastapi,evm]>=2.5.0
+
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.10.0
 pydantic-settings>=2.0.0

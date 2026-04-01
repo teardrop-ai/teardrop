@@ -57,6 +57,19 @@ from usage import (
     init_usage_db,
     record_usage_event,
 )
+from billing import (
+    BillingResult,
+    build_402_headers,
+    build_402_response_body,
+    close_billing,
+    get_billing_history,
+    get_current_pricing,
+    get_revenue_summary,
+    init_billing,
+    record_settlement,
+    settle_payment,
+    verify_payment,
+)
 from users import (
     close_user_db,
     create_org,
@@ -99,7 +112,9 @@ async def lifespan(app: FastAPI):
     await init_user_db(pool)
     await init_usage_db(pool)
     await init_wallets_db(pool)
+    await init_billing(pool)
     yield
+    await close_billing()
     await close_wallets_db()
     await close_usage_db()
     await close_user_db()
@@ -166,6 +181,7 @@ _EV_TOOL_CALL_END = "TOOL_CALL_END"
 _EV_STATE_SNAPSHOT = "STATE_SNAPSHOT"
 _EV_SURFACE_UPDATE = "SURFACE_UPDATE"
 _EV_USAGE_SUMMARY = "USAGE_SUMMARY"
+_EV_BILLING_SETTLEMENT = "BILLING_SETTLEMENT"
 _EV_ERROR = "ERROR"
 _EV_DONE = "DONE"
 
@@ -451,6 +467,27 @@ async def agent_run(
         run_id, scoped_thread_id, user_id,
     )
 
+    # ── x402 billing gate ─────────────────────────────────────────────────
+    billing = BillingResult()
+    if settings.billing_enabled and payload.get("auth_method") == "siwe":
+        payment_header = (
+            request.headers.get("payment-signature")
+            or request.headers.get("x-payment")
+        )
+        if not payment_header:
+            return JSONResponse(
+                status_code=402,
+                content=build_402_response_body(),
+                headers=build_402_headers(),
+            )
+        billing = await verify_payment(payment_header)
+        if not billing.verified:
+            return JSONResponse(
+                status_code=402,
+                content={"error": billing.error},
+                headers=build_402_headers(),
+            )
+
     async def _stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
@@ -564,6 +601,34 @@ async def agent_run(
             duration_ms=duration_ms,
         )
         await record_usage_event(usage_event)
+
+        # ── x402 settlement (after usage recorded) ────────────────────────
+        if billing.verified:
+            billing_settled = await settle_payment(billing)
+            if billing_settled.settled:
+                await record_settlement(
+                    usage_event.id,
+                    billing_settled.amount_usdc,
+                    billing_settled.tx_hash,
+                    "settled",
+                )
+                yield _sse_event(
+                    _EV_BILLING_SETTLEMENT,
+                    {
+                        "run_id": run_id,
+                        "amount_usdc": billing_settled.amount_usdc,
+                        "tx_hash": billing_settled.tx_hash,
+                        "network": settings.x402_network,
+                    },
+                )
+            else:
+                await record_settlement(
+                    usage_event.id, 0, "", "failed",
+                )
+                logger.warning(
+                    "Settlement failed run_id=%s: %s",
+                    run_id, billing_settled.error,
+                )
 
         yield _sse_event(
             _EV_USAGE_SUMMARY,
@@ -784,6 +849,56 @@ async def admin_usage_org(
     end_dt = datetime.fromisoformat(end) if end else None
     summary = await get_usage_by_org(org_id, start_dt, end_dt)
     return JSONResponse(content=summary.model_dump())
+
+
+# ─── Billing endpoints ───────────────────────────────────────────────────────
+
+
+@app.get("/billing/pricing", tags=["Billing"])
+async def billing_pricing() -> JSONResponse:
+    """Return current pricing rules (public)."""
+    if not settings.billing_enabled:
+        return JSONResponse(content={"billing_enabled": False})
+    pricing = await get_current_pricing()
+    if pricing is None:
+        return JSONResponse(content={"billing_enabled": True, "pricing": None})
+    return JSONResponse(
+        content={
+            "billing_enabled": True,
+            "pricing": pricing.model_dump(),
+            "network": settings.x402_network,
+        }
+    )
+
+
+@app.get("/billing/history", tags=["Billing"])
+async def billing_history(
+    payload: dict = Depends(require_auth),
+    limit: int = 50,
+) -> JSONResponse:
+    """Return settlement history for the authenticated user."""
+    history = await get_billing_history(payload["sub"], min(limit, 200))
+    return JSONResponse(
+        content=[
+            {**row, "created_at": row["created_at"].isoformat()}
+            for row in history
+        ]
+    )
+
+
+@app.get("/admin/billing/revenue", tags=["Admin"])
+async def admin_billing_revenue(
+    _admin: dict = Depends(require_admin),
+    start: str | None = None,
+    end: str | None = None,
+) -> JSONResponse:
+    """Aggregate settled revenue by period (admin only)."""
+    from datetime import datetime
+
+    start_dt = datetime.fromisoformat(start) if start else None
+    end_dt = datetime.fromisoformat(end) if end else None
+    summary = await get_revenue_summary(start_dt, end_dt)
+    return JSONResponse(content=summary)
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

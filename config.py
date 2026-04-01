@@ -117,6 +117,25 @@ class Settings(BaseSettings):
         """Standard Postgres DSN, stripping any SQLAlchemy dialect prefix."""
         return self.database_url.replace("+asyncpg", "")
 
+    # ── Billing / x402 ────────────────────────────────────────────────────────
+    billing_enabled: bool = Field(
+        default=False, description="Enable x402 on-chain billing for paid endpoints"
+    )
+    x402_facilitator_url: str = Field(
+        default="https://x402.org/facilitator",
+        description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",
+    )
+    x402_pay_to_address: str = Field(
+        default="", description="Treasury wallet address that receives USDC payments"
+    )
+    x402_network: str = Field(
+        default="eip155:84532",
+        description="x402 network identifier (Base Sepolia for dev, eip155:8453 for prod)",
+    )
+    x402_run_price: str = Field(
+        default="$0.01", description="Flat price per /agent/run request (exact scheme)"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
