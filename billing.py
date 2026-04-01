@@ -1,7 +1,15 @@
 """x402 billing layer for Teardrop.
 
 Provides server-side x402 payment verification and settlement for
-the /agent/run SSE endpoint using the exact scheme (flat per-run pricing).
+the /agent/run SSE endpoint.
+
+Two complementary systems:
+- Dynamic pricing: payment requirements rebuilt from pricing_rules DB table
+  on a TTL cache (default 5 min) instead of a hardcoded config value.
+- Usage-based cost accounting: calculate_run_cost_usdc() computes the true
+  cost of a run from token + tool consumption and stores it in usage_events.
+  This is the internal accounting layer that maps to the x402 'upto' scheme
+  once that scheme lands in the Python library.
 
 Manual wiring (not middleware) because SSE streaming is incompatible with
 the standard request/response middleware pattern — we must verify before
@@ -10,8 +18,10 @@ streaming begins and settle after the stream completes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 import asyncpg
@@ -25,6 +35,13 @@ logger = logging.getLogger(__name__)
 
 _server = None  # x402ResourceServer instance
 _requirements_cache: list | None = None  # cached PaymentRequirements for /agent/run
+
+# ─── Pricing TTL cache ────────────────────────────────────────────────────────
+
+_pricing_cache: PricingRule | None = None  # type: ignore[name-defined]  # resolved at runtime
+_pricing_cache_expires: float = 0.0  # monotonic clock deadline
+_pricing_lock: asyncio.Lock | None = None  # lazily initialised
+_last_requirements_price_usdc: int = -1  # run_price_usdc when requirements were last built
 
 
 def _get_server():
@@ -40,11 +57,17 @@ def _get_server():
 async def init_billing(pool: asyncpg.Pool) -> None:
     """Initialise x402 resource server and cache payment requirements.
 
-    Call during app lifespan startup when billing_enabled=True.
+    Always stores the DB pool so that pricing queries and cost accounting work
+    even when billing_enabled=False.
+    Call during app lifespan startup.
     """
-    global _server, _requirements_cache, _pool
+    global _server, _requirements_cache, _pool, _last_requirements_price_usdc
 
     settings = get_settings()
+
+    # Always store pool — pricing queries run regardless of billing_enabled.
+    _pool = pool
+
     if not settings.billing_enabled:
         logger.info("Billing disabled — skipping x402 initialisation")
         return
@@ -63,32 +86,46 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
     server.initialize()
+    _server = server
 
-    # Build and cache payment requirements for /agent/run
+    # Resolve price from live pricing_rules; fall back to config value.
+    rule = await get_live_pricing()
+    if rule is not None:
+        price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
+        _last_requirements_price_usdc = rule.run_price_usdc
+    else:
+        price_str = settings.x402_run_price
+        logger.warning(
+            "No pricing_rules row found; using config fallback price=%s", price_str
+        )
+
     config = ResourceConfig(
-        scheme="exact",
+        scheme=settings.x402_scheme,
         network=settings.x402_network,
         pay_to=settings.x402_pay_to_address,
-        price=settings.x402_run_price,
+        price=price_str,
     )
     _requirements_cache = server.build_payment_requirements(config)
-    _server = server
-    _pool = pool
 
     logger.info(
-        "Billing initialised: network=%s pay_to=%s price=%s",
+        "Billing initialised: network=%s pay_to=%s price=%s scheme=%s",
         settings.x402_network,
         settings.x402_pay_to_address,
-        settings.x402_run_price,
+        price_str,
+        settings.x402_scheme,
     )
 
 
 async def close_billing() -> None:
     """Release billing resources."""
     global _server, _requirements_cache, _pool
+    global _pricing_cache, _pricing_cache_expires, _last_requirements_price_usdc
     _server = None
     _requirements_cache = None
     _pool = None
+    _pricing_cache = None
+    _pricing_cache_expires = 0.0
+    _last_requirements_price_usdc = -1
     logger.info("Billing resources released")
 
 
@@ -128,7 +165,24 @@ class BillingResult(BaseModel):
     error: str = ""
 
 
-# ─── Payment flow helpers ────────────────────────────────────────────────────
+# ─── Price conversion ────────────────────────────────────────────────────────
+
+
+def atomic_usdc_to_price_str(atomic: int) -> str:
+    """Convert atomic USDC (6-decimal integer) to an x402 price string.
+
+    Examples:  10000 → "$0.01",  1000000 → "$1.00",  500000 → "$0.50"
+    """
+    full = f"{atomic / 1_000_000:.6f}"  # e.g. "0.010000"
+    integer_part, frac_part = full.split(".")
+    stripped = frac_part.rstrip("0")
+    # Keep at least 2 decimal places for readability
+    if len(stripped) < 2:
+        stripped = stripped.ljust(2, "0")
+    return f"${integer_part}.{stripped}"
+
+
+# ─── Requirements cache ───────────────────────────────────────────────────────
 
 
 def get_payment_requirements() -> list:
@@ -164,12 +218,55 @@ def build_402_headers() -> dict[str, str]:
     return {"X-PAYMENT-REQUIRED": encoded}
 
 
+async def _rebuild_requirements_if_stale() -> None:
+    """Rebuild x402 payment requirements when the DB pricing rule has changed.
+
+    Compares the live rule's run_price_usdc against the value used when
+    requirements were last built.  No-ops when billing is disabled or when
+    the price is unchanged.  Safe to call on every verify_payment() call —
+    get_live_pricing() serves from a TTL cache so DB hits are rare.
+    """
+    global _requirements_cache, _last_requirements_price_usdc
+
+    if _server is None:
+        return
+
+    rule = await get_live_pricing()
+    if rule is None:
+        return
+
+    if rule.run_price_usdc == _last_requirements_price_usdc:
+        return  # Price unchanged; nothing to do.
+
+    settings = get_settings()
+    from x402.schemas import ResourceConfig
+
+    new_price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
+    config = ResourceConfig(
+        scheme=settings.x402_scheme,
+        network=settings.x402_network,
+        pay_to=settings.x402_pay_to_address,
+        price=new_price_str,
+    )
+    _requirements_cache = _server.build_payment_requirements(config)
+    _last_requirements_price_usdc = rule.run_price_usdc
+    logger.info(
+        "Payment requirements updated: run_price_usdc=%d price=%s",
+        rule.run_price_usdc,
+        new_price_str,
+    )
+
+
 async def verify_payment(payment_header: str) -> BillingResult:
     """Verify a payment header against cached requirements.
 
+    Refreshes payment requirements from the live pricing rule before verifying
+    (rate-limited by TTL cache — see pricing_cache_ttl_seconds in config).
     Returns BillingResult with verified=True and stored payload/requirements,
     or verified=False with an error message.
     """
+    await _rebuild_requirements_if_stale()
+
     from x402 import parse_payment_payload
 
     server = _get_server()
@@ -267,7 +364,7 @@ async def record_settlement(
 
 
 async def get_current_pricing() -> PricingRule | None:
-    """Return the currently effective pricing rule."""
+    """Return the currently effective pricing rule (direct DB query, no cache)."""
     pool = _get_pool()
     row = await pool.fetchrow(
         """
@@ -282,6 +379,82 @@ async def get_current_pricing() -> PricingRule | None:
     if row is None:
         return None
     return PricingRule(**dict(row))
+
+
+async def get_live_pricing() -> PricingRule | None:
+    """Return the current pricing rule using a TTL cache.
+
+    Re-queries the DB at most once per pricing_cache_ttl_seconds.  Safe to
+    call on every request — the fast path is a single monotonic clock compare.
+    Returns None if no pricing_rules row exists or DB is unavailable.
+    """
+    global _pricing_cache, _pricing_cache_expires, _pricing_lock
+
+    # Fast path: valid cache.
+    if _pricing_cache is not None and time.monotonic() < _pricing_cache_expires:
+        return _pricing_cache
+
+    # Pool not yet set (e.g. called before init_billing).
+    if _pool is None:
+        return None
+
+    # Lazily create the lock (cannot be created at module level on all platforms).
+    if _pricing_lock is None:
+        _pricing_lock = asyncio.Lock()
+
+    async with _pricing_lock:
+        # Double-check after acquiring — another coroutine may have refreshed.
+        if _pricing_cache is not None and time.monotonic() < _pricing_cache_expires:
+            return _pricing_cache
+
+        try:
+            rule = await get_current_pricing()
+            _pricing_cache = rule
+            settings = get_settings()
+            _pricing_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
+            return rule
+        except Exception:
+            logger.warning("Failed to refresh pricing cache; serving stale value", exc_info=True)
+            return _pricing_cache  # Return stale on DB error rather than crashing.
+
+
+async def calculate_run_cost_usdc(usage_data: dict) -> int:
+    """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
+
+    Uses per-unit token and tool-call rates from the live pricing rule when
+    they are non-zero (usage-based pricing).  Falls back to run_price_usdc as
+    a flat rate when the active rule has no per-unit rates configured.
+
+    Returns 0 if no pricing rule is available (e.g. DB not yet seeded).
+
+    Formula (usage-based):
+        cost = (tokens_in // 1000) * tokens_in_cost_per_1k
+             + (tokens_out // 1000) * tokens_out_cost_per_1k
+             + tool_calls * tool_call_cost
+    """
+    rule = await get_live_pricing()
+    if rule is None:
+        return 0
+
+    tokens_in = int(usage_data.get("tokens_in", 0))
+    tokens_out = int(usage_data.get("tokens_out", 0))
+    tool_calls = int(usage_data.get("tool_calls", 0))
+
+    has_per_unit_rates = (
+        rule.tokens_in_cost_per_1k > 0
+        or rule.tokens_out_cost_per_1k > 0
+        or rule.tool_call_cost > 0
+    )
+
+    if not has_per_unit_rates:
+        # Flat-rate rule: every run costs run_price_usdc.
+        return rule.run_price_usdc
+
+    return (
+        (tokens_in // 1000) * rule.tokens_in_cost_per_1k
+        + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
+        + tool_calls * rule.tool_call_cost
+    )
 
 
 async def get_billing_history(

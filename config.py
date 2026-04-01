@@ -133,7 +133,15 @@ class Settings(BaseSettings):
         description="x402 network identifier (Base Sepolia for dev, eip155:8453 for prod)",
     )
     x402_run_price: str = Field(
-        default="$0.01", description="Flat price per /agent/run request (exact scheme)"
+        default="$0.01", description="Flat price per /agent/run request (exact scheme, used as fallback)"
+    )
+    x402_scheme: str = Field(
+        default="exact",
+        description="Payment scheme: 'exact' (flat per-run) or 'upto' (usage-based, requires x402 upto support)",
+    )
+    pricing_cache_ttl_seconds: int = Field(
+        default=300,
+        description="How long to cache the active pricing_rules row before re-querying (seconds)",
     )
 
 

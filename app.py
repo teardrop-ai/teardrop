@@ -61,6 +61,7 @@ from billing import (
     BillingResult,
     build_402_headers,
     build_402_response_body,
+    calculate_run_cost_usdc,
     close_billing,
     get_billing_history,
     get_current_pricing,
@@ -589,6 +590,13 @@ async def agent_run(
         except Exception:
             logger.debug("Could not retrieve final state for usage", exc_info=True)
 
+        # Calculate usage-based cost from live pricing rule (never blocks the stream).
+        cost_usdc = 0
+        try:
+            cost_usdc = await calculate_run_cost_usdc(usage_data)
+        except Exception:
+            logger.debug("Could not calculate run cost", exc_info=True)
+
         usage_event = UsageEvent(
             user_id=user_id,
             org_id=org_id,
@@ -599,6 +607,7 @@ async def agent_run(
             tool_calls=usage_data.get("tool_calls", 0),
             tool_names=usage_data.get("tool_names", []),
             duration_ms=duration_ms,
+            cost_usdc=cost_usdc,
         )
         await record_usage_event(usage_event)
 
@@ -638,6 +647,7 @@ async def agent_run(
                 "tokens_out": usage_event.tokens_out,
                 "tool_calls": usage_event.tool_calls,
                 "duration_ms": usage_event.duration_ms,
+                "cost_usdc": usage_event.cost_usdc,
             },
         )
         yield _sse_event(_EV_RUN_FINISHED, {"run_id": run_id})
