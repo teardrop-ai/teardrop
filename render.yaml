@@ -1,0 +1,71 @@
+# Render Blueprint – https://render.com/docs/blueprint-spec
+# Deploy with: Connect repo in Render dashboard → "Blueprint" detected automatically.
+#
+# Services provisioned:
+#   • teardrop      – Starter web service ($7/mo),  Docker runtime
+#
+# Database: Neon Postgres (free tier or $20/mo)
+#   • Create at https://console.neon.tech/ and paste connection string below
+
+services:
+  - type: web
+    name: teardrop
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      # ── Required ──────────────────────────────────────────────────────────
+      - key: APP_ENV
+        value: production
+
+      # Neon Postgres connection string (from https://console.neon.tech/).
+      # Format: postgresql://user:password@host/dbname
+      - key: DATABASE_URL
+        sync: false
+
+      # Auto-generated strong secret for client-credentials JWT auth.
+      - key: JWT_CLIENT_SECRET
+        generateValue: true
+
+      # Prompt operator to paste in their Anthropic API key after first deploy.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      # ── Recommended ───────────────────────────────────────────────────────
+      # Set to your Render service URL, e.g. https://teardrop.onrender.com
+      - key: SIWE_DOMAIN
+        sync: false
+
+      # Restrict CORS to your frontend origin(s), comma-separated.
+      # Defaults to "*" (open) if not set.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # ── Optional: Web search (Tavily) ─────────────────────────────────────
+      - key: TAVILY_API_KEY
+        sync: false
+
+      # ── Optional: Web3 RPC endpoints ──────────────────────────────────────
+      - key: ETHEREUM_RPC_URL
+        sync: false
+
+      - key: BASE_RPC_URL
+        sync: false
+
+      # ── Optional: x402 billing ────────────────────────────────────────────
+      # Set BILLING_ENABLED=true once wallet + pricing config is ready.
+      - key: BILLING_ENABLED
+        value: "false"
+
+      - key: X402_PAY_TO_ADDRESS
+        sync: false
+
+      - key: X402_NETWORK
+        value: "eip155:84532"
+
+      # ── Optional: LangSmith tracing ───────────────────────────────────────
+      - key: LANGSMITH_TRACING
+        value: "false"
+
+      - key: LANGSMITH_API_KEY
+        sync: false

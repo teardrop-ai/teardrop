@@ -34,6 +34,7 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import asyncpg
@@ -89,6 +90,7 @@ from wallets import (
     get_wallets_by_user,
     init_wallets_db,
 )
+from scripts.generate_keys import generate_keypair
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -107,7 +109,11 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
     from migrations.runner import apply_pending
 
+    # Ensure RSA keypair exists before config tries to read the key files.
+    generate_keypair(Path(__file__).resolve().parent / "keys")
+
     pool = await asyncpg.create_pool(settings.pg_dsn)
+    app.state.pool = pool
     await apply_pending(pool)
     await init_checkpointer()
     await init_user_db(pool)
@@ -121,6 +127,7 @@ async def lifespan(app: FastAPI):
     await close_user_db()
     await close_checkpointer()
     await pool.close()
+    app.state.pool = None
 
 
 app = FastAPI(
@@ -209,14 +216,33 @@ async def root() -> RedirectResponse:
 
 
 @app.get("/health", tags=["System"])
-async def health_check() -> JSONResponse:
-    """Liveness probe – returns service status and version."""
+async def health_check(request: Request) -> JSONResponse:
+    """Liveness probe – returns service status, version, and DB connectivity."""
+    pool: asyncpg.Pool | None = getattr(request.app.state, "pool", None)
+    if pool is not None:
+        try:
+            await pool.execute("SELECT 1")
+            postgres = "ok"
+        except Exception:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "status": "degraded",
+                    "service": "teardrop",
+                    "version": app.version,
+                    "environment": settings.app_env,
+                    "postgres": "error",
+                },
+            )
+    else:
+        postgres = "starting"
     return JSONResponse(
         content={
             "status": "ok",
             "service": "teardrop",
             "version": app.version,
             "environment": settings.app_env,
+            "postgres": postgres,
         }
     )
 
