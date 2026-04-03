@@ -163,6 +163,9 @@ class BillingResult(BaseModel):
     tx_hash: str = ""
     amount_usdc: int = 0
     error: str = ""
+    # Distinguishes on-chain x402 settlement from off-chain credit debit.
+    # Set by verify_payment ("x402") or verify_credit ("credit").
+    billing_method: str = "x402"
 
 
 # ─── Price conversion ────────────────────────────────────────────────────────
@@ -460,21 +463,42 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
 async def get_billing_history(
     user_id: str,
     limit: int = 50,
+    cursor: datetime | None = None,
 ) -> list[dict]:
-    """Return recent settled usage events for a user."""
+    """Return recent settled usage events for a user.
+
+    Supports cursor-based pagination: pass the ``created_at`` value of the
+    last item returned as ``cursor`` to retrieve the next page.
+    """
     pool = _get_pool()
-    rows = await pool.fetch(
-        """
-        SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
-               cost_usdc, settlement_tx, settlement_status, created_at
-        FROM usage_events
-        WHERE user_id = $1 AND settlement_status != 'none'
-        ORDER BY created_at DESC
-        LIMIT $2
-        """,
-        user_id,
-        limit,
-    )
+    if cursor is None:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
+                   cost_usdc, settlement_tx, settlement_status, created_at
+            FROM usage_events
+            WHERE user_id = $1 AND settlement_status != 'none'
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
+                   cost_usdc, settlement_tx, settlement_status, created_at
+            FROM usage_events
+            WHERE user_id = $1 AND settlement_status != 'none'
+              AND created_at < $3
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+            cursor,
+        )
     return [dict(r) for r in rows]
 
 
@@ -505,3 +529,150 @@ async def get_revenue_summary(
     if row is None:
         return {"total_settlements": 0, "total_revenue_usdc": 0}
     return dict(row)
+
+
+# ─── Invoice query functions ──────────────────────────────────────────────────
+
+
+async def get_invoices(
+    user_id: str,
+    limit: int = 50,
+    cursor: datetime | None = None,
+) -> list[dict]:
+    """Return per-run invoice records for a user (all runs, not just settled).
+
+    Supports cursor-based pagination: pass the ``created_at`` of the last
+    returned item as ``cursor`` to fetch the next page.
+    """
+    pool = _get_pool()
+    if cursor is None:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
+                   tool_names, duration_ms, cost_usdc, settlement_tx,
+                   settlement_status, created_at
+            FROM usage_events
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
+                   tool_names, duration_ms, cost_usdc, settlement_tx,
+                   settlement_status, created_at
+            FROM usage_events
+            WHERE user_id = $1 AND created_at < $3
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            user_id,
+            limit,
+            cursor,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_invoice_by_run(run_id: str, user_id: str) -> dict | None:
+    """Return a single run receipt, scoped to the authenticated user.
+
+    Returns None if the run_id does not exist or does not belong to user_id.
+    """
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
+               tool_names, duration_ms, cost_usdc, settlement_tx,
+               settlement_status, created_at
+        FROM usage_events
+        WHERE run_id = $1 AND user_id = $2
+        """,
+        run_id,
+        user_id,
+    )
+    return dict(row) if row is not None else None
+
+
+# ─── Credit system (off-chain prepaid balance for non-SIWE callers) ───────────
+
+
+async def get_credit_balance(org_id: str) -> int:
+    """Return org's current credit balance in atomic USDC (0 if no row yet)."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT balance_usdc FROM org_credits WHERE org_id = $1",
+        org_id,
+    )
+    return int(row["balance_usdc"]) if row is not None else 0
+
+
+async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
+    """Check that org has sufficient credit to cover at least min_balance_usdc.
+
+    Returns BillingResult(verified=True, billing_method='credit') on success.
+    """
+    balance = await get_credit_balance(org_id)
+    if balance < min_balance_usdc:
+        return BillingResult(
+            error=(
+                f"Insufficient credit: balance {balance} atomic USDC, "
+                f"required {min_balance_usdc}. Top up via POST /admin/credits/topup."
+            )
+        )
+    return BillingResult(verified=True, billing_method="credit")
+
+
+async def debit_credit(org_id: str, amount_usdc: int) -> bool:
+    """Debit amount_usdc from org's credit balance using a serialisable transaction.
+
+    Uses SELECT FOR UPDATE to prevent concurrent double-debits.
+    Floors balance at 0 — will not go negative.
+    Returns True on success, False on unexpected DB error.
+    """
+    pool = _get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT balance_usdc FROM org_credits WHERE org_id = $1 FOR UPDATE",
+                    org_id,
+                )
+                if row is None:
+                    # Row doesn't exist — nothing to debit
+                    return False
+                new_balance = max(0, int(row["balance_usdc"]) - amount_usdc)
+                await conn.execute(
+                    """
+                    UPDATE org_credits
+                    SET balance_usdc = $2, updated_at = NOW()
+                    WHERE org_id = $1
+                    """,
+                    org_id,
+                    new_balance,
+                )
+        return True
+    except Exception:
+        logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
+        return False
+
+
+async def admin_topup_credit(org_id: str, amount_usdc: int) -> int:
+    """Add amount_usdc to org's credit balance (upsert). Returns new balance."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (org_id) DO UPDATE
+            SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                updated_at = NOW()
+        RETURNING balance_usdc
+        """,
+        org_id,
+        amount_usdc,
+    )
+    return int(row["balance_usdc"])

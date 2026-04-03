@@ -52,11 +52,6 @@ coverage.xml
 # Keys (generated secrets)
 keys/
 
-# Data (checkpoint DBs)
-data/*.db
-data/*.db-shm
-data/*.db-wal
-
 # LangSmith / LangChain
 .langchain.env
 

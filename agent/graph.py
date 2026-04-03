@@ -6,6 +6,7 @@ Graph topology:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack
 from typing import Literal
@@ -96,14 +97,23 @@ def build_graph(checkpointer: AsyncPostgresSaver) -> StateGraph:
 
 # Cached compiled graph — built once after checkpointer is initialized.
 _compiled_graph = None
+_graph_lock: asyncio.Lock | None = None
 
 
-def get_graph() -> StateGraph:
+def _get_graph_lock() -> asyncio.Lock:
+    global _graph_lock
+    if _graph_lock is None:
+        _graph_lock = asyncio.Lock()
+    return _graph_lock
+
+
+async def get_graph() -> StateGraph:
     """Return the compiled graph, building it once on first call."""
     global _compiled_graph
-    if _compiled_graph is None:
-        if _checkpointer is None:
-            raise RuntimeError("Checkpointer not initialized. Call init_checkpointer() first.")
-        _compiled_graph = build_graph(_checkpointer)
-        logger.info("Compiled LangGraph agent graph")
+    async with _get_graph_lock():
+        if _compiled_graph is None:
+            if _checkpointer is None:
+                raise RuntimeError("Checkpointer not initialized. Call init_checkpointer() first.")
+            _compiled_graph = build_graph(_checkpointer)
+            logger.info("Compiled LangGraph agent graph")
     return _compiled_graph

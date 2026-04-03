@@ -40,7 +40,7 @@ from typing import Any, AsyncIterator
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -60,16 +60,22 @@ from usage import (
 )
 from billing import (
     BillingResult,
+    admin_topup_credit,
     build_402_headers,
     build_402_response_body,
     calculate_run_cost_usdc,
     close_billing,
+    debit_credit,
     get_billing_history,
+    get_credit_balance,
     get_current_pricing,
+    get_invoice_by_run,
+    get_invoices,
     get_revenue_summary,
     init_billing,
     record_settlement,
     settle_payment,
+    verify_credit,
     verify_payment,
 )
 from users import (
@@ -156,6 +162,11 @@ app.add_middleware(
 # ─── Rate limiting (in-memory, per-IP, per-minute) ───────────────────────────
 
 _rate_counters: dict[str, list[float]] = defaultdict(list)
+# NOTE: This rate limiter is in-memory and process-local. It is safe to call
+# from async code without a lock because asyncio is single-threaded and this
+# function contains no ``await`` points. Multi-container deployments require a
+# shared store (e.g., Redis) or an API gateway with built-in rate limiting.
+_RATE_COUNTER_MAX_KEYS = 10_000
 
 
 def _check_rate_limit(client_ip: str) -> bool:
@@ -168,6 +179,11 @@ def _check_rate_limit(client_ip: str) -> bool:
     if len(_rate_counters[client_ip]) >= limit:
         return False
     _rate_counters[client_ip].append(now)
+    # Evict the oldest entry once the dict exceeds the cap, preventing unbounded
+    # memory growth from IP enumeration attacks.
+    if len(_rate_counters) > _RATE_COUNTER_MAX_KEYS:
+        oldest_key = next(iter(_rate_counters))
+        del _rate_counters[oldest_key]
     return True
 
 
@@ -263,6 +279,13 @@ async def agent_card() -> JSONResponse:
                 "mcp_tools": True,
                 "multi_turn": True,
                 "human_in_the_loop": True,
+                "billing": {
+                    "enabled": settings.billing_enabled,
+                    "scheme": settings.x402_scheme,
+                    "network": settings.x402_network,
+                    "payment_endpoint": "/agent/run",
+                    "pricing_endpoint": "/billing/pricing",
+                },
             },
             "protocols": ["ag-ui", "a2a", "mcp"],
             "endpoints": {
@@ -331,7 +354,12 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
             )
         access_token = create_access_token(
             subject=user.id,
-            extra_claims={"org_id": user.org_id, "email": user.email, "role": user.role},
+            extra_claims={
+                "org_id": user.org_id,
+                "email": user.email,
+                "role": user.role,
+                "auth_method": "email",
+            },
         )
         return JSONResponse(
             content={
@@ -356,7 +384,10 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid client credentials",
             )
-        access_token = create_access_token(subject=body.client_id)
+        access_token = create_access_token(
+            subject=body.client_id,
+            extra_claims={"auth_method": "client_credentials", "org_id": ""},
+        )
         return JSONResponse(
             content={
                 "access_token": access_token,
@@ -494,32 +525,48 @@ async def agent_run(
         run_id, scoped_thread_id, user_id,
     )
 
-    # ── x402 billing gate ─────────────────────────────────────────────────
+    # ── Billing gate ────────────────────────────────────────────────────────
+    # Dispatches based on auth_method:
+    #   siwe              → x402 on-chain payment header (verify_payment)
+    #   client_credentials / email → org prepaid credit balance (verify_credit)
     billing = BillingResult()
-    if settings.billing_enabled and payload.get("auth_method") == "siwe":
-        payment_header = (
-            request.headers.get("payment-signature")
-            or request.headers.get("x-payment")
-        )
-        if not payment_header:
-            return JSONResponse(
-                status_code=402,
-                content=build_402_response_body(),
-                headers=build_402_headers(),
+    auth_method = payload.get("auth_method", "")
+    if settings.billing_enabled and auth_method in settings.billable_auth_methods:
+        if auth_method == "siwe":
+            payment_header = (
+                request.headers.get("payment-signature")
+                or request.headers.get("x-payment")
             )
-        billing = await verify_payment(payment_header)
-        if not billing.verified:
-            return JSONResponse(
-                status_code=402,
-                content={"error": billing.error},
-                headers=build_402_headers(),
-            )
+            if not payment_header:
+                return JSONResponse(
+                    status_code=402,
+                    content=build_402_response_body(),
+                    headers=build_402_headers(),
+                )
+            billing = await verify_payment(payment_header)
+            if not billing.verified:
+                return JSONResponse(
+                    status_code=402,
+                    content={"error": billing.error},
+                    headers=build_402_headers(),
+                )
+        else:
+            # Credit-based billing: ensure org has enough balance to cover at
+            # least one run at the current flat-rate floor.
+            pricing = await get_current_pricing()
+            min_required = pricing.run_price_usdc if pricing is not None else 0
+            billing = await verify_credit(org_id, min_required)
+            if not billing.verified:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail=billing.error,
+                )
 
     async def _stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
 
-        graph = get_graph()
+        graph = await get_graph()
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
             metadata={
@@ -637,33 +684,50 @@ async def agent_run(
         )
         await record_usage_event(usage_event)
 
-        # ── x402 settlement (after usage recorded) ────────────────────────
+        # ── Settlement / credit debit (after usage recorded) ─────────────
         if billing.verified:
-            billing_settled = await settle_payment(billing)
-            if billing_settled.settled:
-                await record_settlement(
-                    usage_event.id,
-                    billing_settled.amount_usdc,
-                    billing_settled.tx_hash,
-                    "settled",
-                )
-                yield _sse_event(
-                    _EV_BILLING_SETTLEMENT,
-                    {
-                        "run_id": run_id,
-                        "amount_usdc": billing_settled.amount_usdc,
-                        "tx_hash": billing_settled.tx_hash,
-                        "network": settings.x402_network,
-                    },
-                )
+            if billing.billing_method == "credit":
+                # Debit actual run cost from org's prepaid balance.
+                success = await debit_credit(org_id, cost_usdc)
+                if success:
+                    await record_settlement(usage_event.id, cost_usdc, "", "settled")
+                    yield _sse_event(
+                        _EV_BILLING_SETTLEMENT,
+                        {
+                            "run_id": run_id,
+                            "amount_usdc": cost_usdc,
+                            "tx_hash": "",
+                            "network": "credit",
+                        },
+                    )
+                else:
+                    await record_settlement(usage_event.id, cost_usdc, "", "failed")
+                    logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
-                await record_settlement(
-                    usage_event.id, 0, "", "failed",
-                )
-                logger.warning(
-                    "Settlement failed run_id=%s: %s",
-                    run_id, billing_settled.error,
-                )
+                # x402 on-chain settlement.
+                billing_settled = await settle_payment(billing)
+                if billing_settled.settled:
+                    await record_settlement(
+                        usage_event.id,
+                        billing_settled.amount_usdc,
+                        billing_settled.tx_hash,
+                        "settled",
+                    )
+                    yield _sse_event(
+                        _EV_BILLING_SETTLEMENT,
+                        {
+                            "run_id": run_id,
+                            "amount_usdc": billing_settled.amount_usdc,
+                            "tx_hash": billing_settled.tx_hash,
+                            "network": settings.x402_network,
+                        },
+                    )
+                else:
+                    await record_settlement(usage_event.id, 0, "", "failed")
+                    logger.warning(
+                        "Settlement failed run_id=%s: %s",
+                        run_id, billing_settled.error,
+                    )
 
         yield _sse_event(
             _EV_USAGE_SUMMARY,

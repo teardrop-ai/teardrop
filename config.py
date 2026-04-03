@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     agent_model: str = "claude-3-5-sonnet-20241022"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
+    agent_llm_timeout_seconds: int = Field(
+        default=120, description="Timeout in seconds for the planner LLM call"
+    )
+    agent_ui_generator_timeout_seconds: int = Field(
+        default=60, description="Timeout in seconds for the UI generator LLM call"
+    )
 
     # ── LangSmith ──────────────────────────────────────────────────────────────
     langsmith_tracing: bool = False
@@ -96,16 +102,6 @@ class Settings(BaseSettings):
     def effective_siwe_domain(self) -> str:
         return self.siwe_domain or self.app_host
 
-    # ── Checkpointing ──────────────────────────────────────────────────────────
-    checkpoint_db_path: str = Field(
-        default="data/teardrop.db", description="SQLite database path for LangGraph checkpointing"
-    )
-
-    # ── User / Usage Database ──────────────────────────────────────────────────
-    user_db_path: str = Field(
-        default="data/teardrop.db", description="SQLite database path for users, orgs, and usage events"
-    )
-
     # ── Postgres (Neon) ────────────────────────────────────────────────────────
     database_url: str = Field(
         default="",
@@ -142,6 +138,16 @@ class Settings(BaseSettings):
     pricing_cache_ttl_seconds: int = Field(
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
+    )
+    # Which auth methods are subject to billing.  SIWE callers pay via x402
+    # payment headers; other listed methods are checked against the org's
+    # prepaid credit balance instead.  Default: SIWE-only (existing behaviour).
+    billable_auth_methods: list[str] = Field(
+        default=["siwe"],
+        description=(
+            "Auth methods that require payment. 'siwe' uses x402 on-chain; "
+            "'client_credentials' and 'email' use the org prepaid credit ledger."
+        ),
     )
 
 

@@ -6,6 +6,7 @@ Node pipeline:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -21,14 +22,40 @@ logger = logging.getLogger(__name__)
 
 # ─── LLM singleton ────────────────────────────────────────────────────────────
 
-def _build_llm() -> ChatAnthropic:
-    settings = get_settings()
-    return ChatAnthropic(
-        model=settings.agent_model,
-        max_tokens=settings.agent_max_tokens,
-        temperature=settings.agent_temperature,
-        api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
-    )
+_llm: ChatAnthropic | None = None
+
+
+def _get_llm() -> ChatAnthropic:
+    global _llm
+    if _llm is None:
+        settings = get_settings()
+        _llm = ChatAnthropic(
+            model=settings.agent_model,
+            max_tokens=settings.agent_max_tokens,
+            temperature=settings.agent_temperature,
+            api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
+        )
+    return _llm
+
+
+# ─── Tool caches ──────────────────────────────────────────────────────────────
+
+_cached_tools: list | None = None
+_cached_tools_by_name: dict | None = None
+
+
+def _get_cached_tools() -> list:
+    global _cached_tools
+    if _cached_tools is None:
+        _cached_tools = registry.to_langchain_tools()
+    return _cached_tools
+
+
+def _get_cached_tools_by_name() -> dict:
+    global _cached_tools_by_name
+    if _cached_tools_by_name is None:
+        _cached_tools_by_name = registry.get_langchain_tools_by_name()
+    return _cached_tools_by_name
 
 
 # ─── System prompts ───────────────────────────────────────────────────────────
@@ -79,13 +106,26 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     """Reasoning / planning node.  Calls the LLM with bound tools."""
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
-    tools = registry.to_langchain_tools()
-    llm = _build_llm().bind_tools(tools)  # type: ignore[arg-type]
+    tools = _get_cached_tools()
+    llm = _get_llm().bind_tools(tools)  # type: ignore[arg-type]
 
     messages = [SystemMessage(content=_PLANNER_SYSTEM), *state.messages]
 
     try:
-        response: AIMessage = await llm.ainvoke(messages)  # type: ignore[assignment]
+        response: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
+            llm.ainvoke(messages),
+            timeout=settings.agent_llm_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "planner_node: LLM call timed out after %ss",
+            settings.agent_llm_timeout_seconds,
+        )
+        return {
+            "messages": [AIMessage(content="The AI model timed out. Please try again.")],
+            "task_status": TaskStatus.FAILED,
+            "error": "LLM timeout",
+        }
     except Exception as exc:
         logger.error("planner_node error: %s", exc)
         return {
@@ -107,38 +147,49 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+async def _execute_single_tool(
+    call: dict[str, Any], tools_by_name: dict
+) -> tuple[ToolMessage, str]:
+    """Execute one tool call; returns (ToolMessage, tool_name).
+
+    Errors are caught per-tool so a single failure does not abort sibling calls.
+    """
+    tool_name: str = call["name"]
+    tool_args: dict[str, Any] = call["args"]
+    call_id: str = call["id"]
+
+    tool = tools_by_name.get(tool_name)
+    if tool is None:
+        content = f"Tool '{tool_name}' not found."
+    else:
+        try:
+            result = await tool.ainvoke(tool_args)
+            content = json.dumps(result) if not isinstance(result, str) else result
+        except Exception as exc:
+            logger.warning("tool %s failed: %s", tool_name, exc)
+            content = f"Tool error: {exc}"
+
+    return ToolMessage(content=content, tool_call_id=call_id), tool_name
+
+
 async def tool_executor_node(state: AgentState) -> dict[str, Any]:
-    """Execute all pending tool calls in the latest AI message."""
+    """Execute all pending tool calls in the latest AI message, in parallel."""
     logger.debug("tool_executor_node: entry")
     last_msg = state.messages[-1]
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {"task_status": TaskStatus.GENERATING_UI}
 
-    tools_by_name = registry.get_langchain_tools_by_name()
-    tool_messages: list[ToolMessage] = []
+    tools_by_name = _get_cached_tools_by_name()
 
     # ── Accumulate tool usage ─────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
-    for call in last_msg.tool_calls:
-        tool_name: str = call["name"]
-        tool_args: dict[str, Any] = call["args"]
-        call_id: str = call["id"]
-
-        tool = tools_by_name.get(tool_name)
-        if tool is None:
-            content = f"Tool '{tool_name}' not found."
-        else:
-            try:
-                result = await tool.ainvoke(tool_args)
-                content = json.dumps(result) if not isinstance(result, str) else result
-            except Exception as exc:
-                logger.warning("tool %s failed: %s", tool_name, exc)
-                content = f"Tool error: {exc}"
-
-        tool_messages.append(ToolMessage(content=content, tool_call_id=call_id))
-        tool_names_acc.append(tool_name)
+    results = await asyncio.gather(
+        *[_execute_single_tool(call, tools_by_name) for call in last_msg.tool_calls]
+    )
+    tool_messages = [msg for msg, _ in results]
+    tool_names_acc.extend(name for _, name in results)
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
     usage["tool_names"] = tool_names_acc
@@ -169,10 +220,13 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
     if isinstance(last_msg, AIMessage) and last_msg.content:
         text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
         if _contains_structured_data(text):
-            llm = _build_llm()
+            settings = get_settings()
             prompt = f"{_UI_GENERATOR_SYSTEM}\n\nAssistant message:\n{text}"
             try:
-                result: AIMessage = await llm.ainvoke(prompt)  # type: ignore[assignment]
+                result: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
+                    _get_llm().ainvoke(prompt),
+                    timeout=settings.agent_ui_generator_timeout_seconds,
+                )
                 raw = result.content if isinstance(result.content, str) else str(result.content)
                 components = _parse_a2ui_json(raw)
                 if components:
@@ -180,6 +234,8 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
                         "ui_components": components,
                         "task_status": TaskStatus.COMPLETED,
                     }
+            except asyncio.TimeoutError:
+                logger.warning("ui_generator_node: LLM call timed out")
             except Exception as exc:
                 logger.warning("ui_generator_node: LLM call failed: %s", exc)
 

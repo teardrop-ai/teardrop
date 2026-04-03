@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import jwt
 import pytest
 
 
@@ -35,6 +36,18 @@ async def test_token_email_flow_success(anon_client, monkeypatch):
     assert "access_token" in body
     assert body["token_type"] == "bearer"
 
+    # Verify auth_method claim is present in the JWT
+    from config import get_settings
+    settings = get_settings()
+    claims = jwt.decode(
+        body["access_token"],
+        settings.jwt_public_key,
+        algorithms=[settings.jwt_algorithm],
+        issuer=settings.jwt_issuer,
+    )
+    assert claims["auth_method"] == "email"
+    assert claims["org_id"] == "org-123"
+
 
 @pytest.mark.anyio
 async def test_token_email_flow_wrong_credentials(anon_client, monkeypatch):
@@ -57,7 +70,18 @@ async def test_token_client_credentials_success(anon_client, test_settings):
         },
     )
     assert resp.status_code == 200
-    assert "access_token" in resp.json()
+    body = resp.json()
+    assert "access_token" in body
+
+    # Verify auth_method claim is present in the JWT
+    claims = jwt.decode(
+        body["access_token"],
+        test_settings.jwt_public_key,
+        algorithms=[test_settings.jwt_algorithm],
+        issuer=test_settings.jwt_issuer,
+    )
+    assert claims["auth_method"] == "client_credentials"
+    assert "org_id" in claims
 
 
 @pytest.mark.anyio
