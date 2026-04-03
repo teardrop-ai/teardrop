@@ -294,7 +294,9 @@ async def verify_payment(payment_header: str) -> BillingResult:
         return BillingResult(error=f"Verification failed: {exc}")
 
     if not result.is_valid:
-        return BillingResult(error="Payment verification failed: invalid signature or amount")
+        reason = result.invalid_reason or result.invalid_message or "invalid signature or amount"
+        logger.warning("Payment verification failed: %s (payer=%s)", reason, result.payer)
+        return BillingResult(error=f"Payment verification failed: {reason}")
 
     return BillingResult(
         verified=True,

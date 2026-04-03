@@ -124,20 +124,35 @@ def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
 
     req = payment_required.accepts[0]
     print(f"   Signing payment: {req.amount} atomic USDC → {req.pay_to}")
+    print(f"   Network: {req.network}, Asset: {req.asset}")
+    print(f"   extra: {req.extra}")
 
     # ExactEvmScheme auto-wraps a LocalAccount into the required EthAccountSigner
     scheme = ExactEvmScheme(signer=account)
 
-    # Register scheme for Base Sepolia and create the signed payload
+    # Register scheme for whichever network the server advertises
+    network = payment_required.accepts[0].network
     client = x402ClientSync()
-    client.register("eip155:84532", scheme)
+    client.register(network, scheme)
     payload = client.create_payment_payload(payment_required)
 
     print(f"   PaymentPayload created (x402_version={payload.x402_version})")
 
+    # Print decoded payload for debugging
+    payload_json = payload.model_dump_json()
+    try:
+        payload_dict = json.loads(payload_json)
+        inner = payload_dict.get("payload", {})
+        auth = inner.get("authorization", {})
+        print(f"   Authorization: from={auth.get('from')} to={auth.get('to')} value={auth.get('value')}")
+        print(f"   validAfter={auth.get('validAfter')} validBefore={auth.get('validBefore')}")
+        print(f"   nonce={str(auth.get('nonce', ''))[:20]}...")
+    except Exception:
+        pass
+
     # Serialize with camelCase aliases (BaseX402Model: serialize_by_alias=True)
     # then base64-encode for the X-PAYMENT header
-    return base64.b64encode(payload.model_dump_json().encode()).decode()
+    return base64.b64encode(payload_json.encode()).decode()
 
 
 def call_agent_run_with_payment(
@@ -252,6 +267,9 @@ def main():
         print(f"   Full response: {payment_required['body']}")
         sys.exit(1)
     print(f"   Payment: {payment_requirements[0].get('amount')} atomic USDC on {payment_requirements[0].get('network')}")
+    print(f"   Asset: {payment_requirements[0].get('asset')}")
+    print(f"   pay_to: {payment_requirements[0].get('payTo')}")
+    print(f"   extra: {payment_requirements[0].get('extra')}")
     
     # Step 5: Sign x402 payment
     print("\n→ Step 5: Signing x402 payment...")
