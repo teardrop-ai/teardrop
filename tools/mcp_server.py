@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """Standalone FastMCP server exposing Teardrop tools over MCP protocol.
 
 Run independently for tool discovery and reuse across multiple agents:

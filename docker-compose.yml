@@ -26,8 +26,9 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      # Mount keys from host to avoid re-generating on each rebuild.
-      - ./keys:/app/keys:ro
+      # Mount keys from host so generate_keypair() can write on first run and
+      # subsequent restarts reuse the same keypair (tokens stay valid).
+      - ./keys:/app/keys
 
 volumes:
   postgres_data:

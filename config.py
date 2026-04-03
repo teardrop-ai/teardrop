@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """Application configuration loaded from environment variables / .env file."""
 
 from __future__ import annotations
@@ -27,11 +29,14 @@ class Settings(BaseSettings):
     app_log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
 
     # ── CORS ───────────────────────────────────────────────────────────────────
-    cors_origins: str = "*"
+    # Empty string or "*" both mean "allow all origins" — acceptable for fully
+    # public APIs using bearer-token auth, but should be restricted to your
+    # frontend domain in production for defense-in-depth.
+    cors_origins: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:
-        if self.cors_origins == "*":
+        if self.cors_origins in ("", "*"):
             return ["*"]
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 

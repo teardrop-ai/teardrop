@@ -55,13 +55,13 @@ services:
       # ── Optional: x402 billing ────────────────────────────────────────────
       # Set BILLING_ENABLED=true once wallet + pricing config is ready.
       - key: BILLING_ENABLED
-        value: "false"
+        value: "true"
 
       - key: X402_PAY_TO_ADDRESS
         sync: false
 
       - key: X402_NETWORK
-        value: "eip155:84532"
+        value: "eip155:8453"
 
       # ── Optional: LangSmith tracing ───────────────────────────────────────
       - key: LANGSMITH_TRACING

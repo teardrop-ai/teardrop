@@ -30,6 +30,8 @@ venv.bak/
 
 # Environment variables (keep .env.example, ignore .env)
 .env
+.env.local
+.env.*.local
 !.env.example
 
 # IDEs

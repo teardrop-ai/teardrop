@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """Summarize-text tool – word, sentence, and paragraph statistics."""
 
 from __future__ import annotations

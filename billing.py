@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """x402 billing layer for Teardrop.
 
 Provides server-side x402 payment verification and settlement for

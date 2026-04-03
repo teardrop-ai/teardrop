@@ -439,3 +439,20 @@ scripts/
   init_neon.py      # Initialize Neon Postgres schema
   seed_users.py     # Create default org + admin user for local dev
 ```
+
+---
+
+## License
+
+Teardrop is licensed under the [Business Source License 1.1](LICENSE).
+
+- **Free to use** for non-production evaluation and development.
+- **Commercial production use** requires a commercial license from the maintainer.
+- **Change Date:** April 3, 2030 — on this date the code automatically converts
+  to [AGPL-3.0-only](https://www.gnu.org/licenses/agpl-3.0.html).
+
+See [LICENSE](LICENSE) for full terms. For commercial licensing enquiries, see
+the contact address in the LICENSE file.
+
+Contributions are welcome under the same license — see [CONTRIBUTING.md](CONTRIBUTING.md).
+To report a security vulnerability, see [SECURITY.md](SECURITY.md).

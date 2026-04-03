@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """get_erc20_balance – fetch ERC-20 token balance for an address."""
 
 from __future__ import annotations

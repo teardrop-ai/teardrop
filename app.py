@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """Teardrop FastAPI application.
 
 Endpoints
@@ -48,7 +50,7 @@ from sse_starlette.sse import EventSourceResponse
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState, TaskStatus
 from auth import create_access_token, require_auth
-from config import get_settings
+from config import Settings, get_settings
 from tools import registry
 from usage import (
     UsageEvent,
@@ -110,6 +112,48 @@ logger = logging.getLogger(__name__)
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 
 
+def _validate_production_config(s: "Settings") -> None:
+    """Warn on insecure defaults; fail-fast on critical misconfigurations in production."""
+    is_prod = s.app_env == "production"
+    prefix = "config"
+
+    # jwt_client_secret — Render auto-generates this; other deployments must set it.
+    if not s.jwt_client_secret:
+        if is_prod:
+            raise RuntimeError(
+                "JWT_CLIENT_SECRET is not set. "
+                "Generate a strong random secret and set it as an environment variable."
+            )
+        logger.warning("%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix)
+
+    # CORS — open wildcard is acceptable for bearer-token APIs, but flag it loudly.
+    if s.cors_origins in ("", "*"):
+        if is_prod:
+            logger.warning(
+                "%s ⚠  CORS_ORIGINS is open (*) — recommended: restrict to your frontend origin",
+                prefix,
+            )
+        else:
+            logger.info("%s ·  CORS_ORIGINS open (*) — OK for local development", prefix)
+
+    # SIWE domain — defaults to app_host (0.0.0.0) which will fail SIWE validation.
+    if not s.siwe_domain and is_prod:
+        logger.warning(
+            "%s ⚠  SIWE_DOMAIN is not set — SIWE wallet auth will fail domain validation",
+            prefix,
+        )
+
+    # Log a concise summary so operators can see the active config at a glance.
+    logger.info(
+        "%s   env=%s billing=%s cors=%s siwe_domain=%s",
+        prefix,
+        s.app_env,
+        s.billing_enabled,
+        s.cors_origins or "*(open)",
+        s.siwe_domain or "(app_host fallback)",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
@@ -117,6 +161,9 @@ async def lifespan(app: FastAPI):
 
     # Ensure RSA keypair exists before config tries to read the key files.
     generate_keypair(Path(__file__).resolve().parent / "keys")
+
+    # Warn on insecure defaults; raise on critical misconfigurations in production.
+    _validate_production_config(settings)
 
     pool = await asyncpg.create_pool(settings.pg_dsn)
     app.state.pool = pool
@@ -155,8 +202,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
 
 # ─── Rate limiting (in-memory, per-IP, per-minute) ───────────────────────────
@@ -648,9 +695,15 @@ async def agent_run(
 
         except Exception as exc:
             logger.error("agent_run error run_id=%s: %s", run_id, exc, exc_info=True)
+            # Do not leak internal exception details to clients in production.
+            error_msg = (
+                f"Agent error: {exc}"
+                if settings.app_env != "production"
+                else "An internal error occurred. Check server logs for details."
+            )
             yield _sse_event(
                 _EV_ERROR,
-                {"run_id": run_id, "error": f"Agent error: {exc}"},
+                {"run_id": run_id, "error": error_msg},
             )
             return
 

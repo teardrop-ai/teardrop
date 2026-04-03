@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """get_transaction – fetch transaction details + receipt by hash."""
 
 from __future__ import annotations

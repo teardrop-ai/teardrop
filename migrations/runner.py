@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
 """Lightweight SQL migration runner for Teardrop.
 
 Applies numbered .sql files from migrations/versions/ in order.
