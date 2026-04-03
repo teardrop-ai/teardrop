@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # ── LLM / Anthropic ────────────────────────────────────────────────────────
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
-    agent_model: str = "claude-3-5-sonnet-20241022"
+    agent_model: str = "claude-haiku-4-5-20251001"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(
