@@ -279,7 +279,8 @@ async def verify_payment(payment_header: str) -> BillingResult:
         return BillingResult(error="No payment requirements configured")
 
     try:
-        payload = parse_payment_payload(payment_header)
+        import base64 as _base64
+        payload = parse_payment_payload(_base64.b64decode(payment_header))
     except Exception as exc:
         logger.warning("Failed to parse payment header: %s", exc)
         return BillingResult(error=f"Malformed payment header: {exc}")

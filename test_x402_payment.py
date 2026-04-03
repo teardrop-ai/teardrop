@@ -108,37 +108,36 @@ def call_agent_run_no_payment(base_url: str, jwt: str) -> dict:
         sys.exit(1)
 
 
-def sign_x402_payment(
-    payment_requirements: list,
-    account,
-    private_key: str,
-) -> str:
-    """Sign x402 payment using EIP-3009 (USDC permit2 transfer)."""
-    try:
-        from x402.mechanisms.evm.exact import ExactEvmClientScheme
-        
-        scheme = ExactEvmClientScheme()
-        
-        # Create payment payload from requirements
-        # Assumes first requirement matches our config
-        req = payment_requirements[0] if payment_requirements else None
-        if not req:
-            raise ValueError("No payment requirements found")
-        
-        # The scheme.create_payment will build the EIP-3009 transfer
-        payment_payload = scheme.create_payment(
-            requirements=payment_requirements,
-            signer_address=account.address,
-        )
-        
-        # Sign the payment payload
-        signed_payload = scheme.sign_payment(payment_payload, private_key)
-        
-        # Encode as base64 (x402 protocol format)
-        return base64.b64encode(json.dumps(signed_payload).encode()).decode()
-    except ImportError:
-        print("⚠ x402 SDK not available, using mock signing")
-        return base64.b64encode(b"mock-payment").decode()
+def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
+    """Sign x402 payment using EIP-3009 (USDC transferWithAuthorization).
+
+    Uses x402ClientSync to create a properly signed PaymentPayload,
+    then base64-encodes it for the X-PAYMENT request header.
+    """
+    from x402 import parse_payment_required, x402ClientSync
+    from x402.mechanisms.evm.exact import ExactEvmScheme
+
+    account = Account.from_key(private_key)
+
+    # Parse the full 402 response body into the SDK's PaymentRequired object
+    payment_required = parse_payment_required(payment_required_body)
+
+    req = payment_required.accepts[0]
+    print(f"   Signing payment: {req.amount} atomic USDC → {req.pay_to}")
+
+    # ExactEvmScheme auto-wraps a LocalAccount into the required EthAccountSigner
+    scheme = ExactEvmScheme(signer=account)
+
+    # Register scheme for Base Sepolia and create the signed payload
+    client = x402ClientSync()
+    client.register("eip155:84532", scheme)
+    payload = client.create_payment_payload(payment_required)
+
+    print(f"   PaymentPayload created (x402_version={payload.x402_version})")
+
+    # Serialize with camelCase aliases (BaseX402Model: serialize_by_alias=True)
+    # then base64-encode for the X-PAYMENT header
+    return base64.b64encode(payload.model_dump_json().encode()).decode()
 
 
 def call_agent_run_with_payment(
@@ -149,7 +148,7 @@ def call_agent_run_with_payment(
     """Call /agent/run with signed payment → stream SSE events."""
     headers = {
         "Authorization": f"Bearer {jwt}",
-        "Payment-Signature": payment_signature,
+        "X-PAYMENT": payment_signature,
     }
     
     resp = requests.post(
@@ -246,16 +245,18 @@ def main():
     # Step 4: Call /agent/run without payment
     print("\n→ Step 4: Calling /agent/run (no payment)...")
     payment_required = call_agent_run_no_payment(base_url, jwt)
-    payment_requirements = payment_required["body"].get("payment_requirements", [])
+    # x402 v2 uses 'accepts' key
+    payment_requirements = payment_required["body"].get("accepts", [])
     if not payment_requirements:
         print("⚠ No payment requirements in 402 response")
         print(f"   Full response: {payment_required['body']}")
         sys.exit(1)
+    print(f"   Payment: {payment_requirements[0].get('amount')} atomic USDC on {payment_requirements[0].get('network')}")
     
     # Step 5: Sign x402 payment
     print("\n→ Step 5: Signing x402 payment...")
     try:
-        payment_sig = sign_x402_payment(payment_requirements, account, private_key)
+        payment_sig = sign_x402_payment(payment_required["body"], private_key)
         print(f"✓ Signed payment: {payment_sig[:50]}...")
     except Exception as e:
         print(f"✗ Error signing payment: {e}")
