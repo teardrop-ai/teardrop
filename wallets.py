@@ -171,7 +171,8 @@ async def delete_wallet(wallet_id: str, user_id: str) -> bool:
 async def create_nonce() -> str:
     """Generate and persist a single-use SIWE nonce."""
     pool = _get_pool()
-    nonce = secrets.token_urlsafe(32)
+    # EIP-4361 requires alphanumeric-only nonces [a-zA-Z0-9]{8,}
+    nonce = secrets.token_hex(16)
     await pool.execute(
         "INSERT INTO siwe_nonces (nonce, created_at) VALUES ($1, $2)",
         nonce, datetime.now(timezone.utc),
