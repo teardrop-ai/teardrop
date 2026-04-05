@@ -1018,7 +1018,7 @@ async def billing_pricing() -> JSONResponse:
     return JSONResponse(
         content={
             "billing_enabled": True,
-            "pricing": pricing.model_dump(),
+            "pricing": pricing.model_dump(mode="json"),
             "network": settings.x402_network,
         }
     )

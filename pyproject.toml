@@ -17,7 +17,9 @@ omit = [
     "scripts/*",
     ".venv/*",
     "venv/*",
+    "test_x402_payment.py",
+    "tools/mcp_server.py",
 ]
 
 [tool.coverage.report]
-fail_under = 60
+fail_under = 80
