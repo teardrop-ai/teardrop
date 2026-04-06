@@ -107,3 +107,61 @@ async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings)
         )
 
     assert resp.status_code in (400, 401)
+
+
+# ── GET /auth/me ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_auth_me_email_user(api_client):
+    """Authenticated email user gets their identity claims."""
+    resp = await api_client.get("/auth/me")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == "test-user-id"
+    assert body["org_id"] == "test-org-id"
+    assert body["role"] == "user"
+    # No wallet fields for non-SIWE sessions
+    assert "address" not in body
+    assert "chain_id" not in body
+
+
+@pytest.mark.anyio
+async def test_auth_me_siwe_user(test_settings):
+    """SIWE-authenticated user gets wallet fields in the response."""
+    from app import app
+    from auth import require_auth
+    from httpx import ASGITransport, AsyncClient
+
+    async def _mock_siwe_auth():
+        return {
+            "sub": "siwe-user-id",
+            "org_id": "siwe-org-id",
+            "role": "user",
+            "auth_method": "siwe",
+            "address": "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920",
+            "chain_id": 1,
+        }
+
+    app.dependency_overrides[require_auth] = _mock_siwe_auth
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/auth/me")
+    finally:
+        app.dependency_overrides.pop(require_auth, None)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == "siwe-user-id"
+    assert body["auth_method"] == "siwe"
+    assert body["address"] == "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920"
+    assert body["chain_id"] == 1
+
+
+@pytest.mark.anyio
+async def test_auth_me_unauthenticated(anon_client):
+    """Unauthenticated request returns 401."""
+    resp = await anon_client.get("/auth/me")
+    assert resp.status_code == 401

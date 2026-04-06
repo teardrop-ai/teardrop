@@ -7,6 +7,7 @@ Endpoints
 GET  /                       – redirect to /docs
 GET  /health                 – health check
 POST /token                  – tri-mode auth (client-creds, email+secret, SIWE)
+GET  /auth/me                – return the authenticated user's identity
 GET  /auth/siwe/nonce        – generate a single-use SIWE nonce
 POST /agent/run              – AG-UI streaming endpoint (SSE)
 GET  /.well-known/agent-card.json – A2A agent card for discoverability
@@ -577,6 +578,26 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
             "expires_in": settings.jwt_access_token_expire_minutes * 60,
         }
     )
+
+
+@app.get("/auth/me", tags=["Auth"])
+async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
+    """Return identity claims for the currently authenticated user.
+
+    Decodes the Bearer JWT and echoes back the stable claims so the
+    frontend can identify the user without an extra database round-trip.
+    """
+    body: dict = {
+        "user_id": payload["sub"],
+        "org_id": payload.get("org_id", ""),
+        "role": payload.get("role", "user"),
+        "auth_method": payload.get("auth_method", ""),
+    }
+    # Include wallet-specific fields only for SIWE sessions.
+    if payload.get("auth_method") == "siwe":
+        body["address"] = payload.get("address", "")
+        body["chain_id"] = payload.get("chain_id", 1)
+    return JSONResponse(content=body)
 
 
 @app.get("/auth/siwe/nonce", tags=["Auth"])
