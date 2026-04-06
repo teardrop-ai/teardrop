@@ -186,6 +186,44 @@ async def get_user_by_email(email: str) -> User | None:
     return user
 
 
+async def get_org_by_name(name: str) -> Org | None:
+    """Look up an organisation by name. Returns None if not found."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, name, created_at FROM orgs WHERE name = $1",
+        name,
+    )
+    if row is None:
+        return None
+    return Org(
+        id=row["id"],
+        name=row["name"],
+        created_at=row["created_at"],
+    )
+
+
+async def get_user_by_org_id(org_id: str) -> User | None:
+    """Look up the first active user in an org. Returns None if none found."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, email, org_id, hashed_secret, salt, role, is_active, created_at"
+        " FROM users WHERE org_id = $1 AND is_active = TRUE LIMIT 1",
+        org_id,
+    )
+    if row is None:
+        return None
+    return User(
+        id=row["id"],
+        email=row["email"],
+        org_id=row["org_id"],
+        hashed_secret=row["hashed_secret"],
+        salt=row["salt"],
+        role=row["role"],
+        is_active=row["is_active"],
+        created_at=row["created_at"],
+    )
+
+
 # ─── Org client credentials (M2M) ────────────────────────────────────────────
 
 

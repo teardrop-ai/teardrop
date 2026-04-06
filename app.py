@@ -88,7 +88,9 @@ from users import (
     create_org,
     create_user,
     get_client_credential_by_id,
+    get_org_by_name,
     get_user_by_email,
+    get_user_by_org_id,
     init_user_db,
     verify_secret,
 )
@@ -529,14 +531,26 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
     wallet = await get_wallet_by_address(address, chain_id)
 
     if wallet is None:
-        # Auto-register: create org, user, and wallet
-        org = await create_org(f"wallet-{address[:10].lower()}")
-        user = await create_user(
-            email=f"{address.lower()}@wallet",
-            secret=secrets.token_urlsafe(32),  # random, not user-facing
-            org_id=org.id,
-            role="user",
-        )
+        # Org may already exist from a previous partial registration
+        org_name = f"wallet-{address[:10].lower()}"
+        existing_org = await get_org_by_name(org_name)
+        if existing_org:
+            org = existing_org
+            existing_user = await get_user_by_org_id(org.id)
+            user = existing_user or await create_user(
+                email=f"{address.lower()}@wallet",
+                secret=secrets.token_urlsafe(32),
+                org_id=org.id,
+                role="user",
+            )
+        else:
+            org = await create_org(org_name)
+            user = await create_user(
+                email=f"{address.lower()}@wallet",
+                secret=secrets.token_urlsafe(32),
+                org_id=org.id,
+                role="user",
+            )
         wallet = await create_wallet(
             address=address,
             chain_id=chain_id,
