@@ -1,9 +1,14 @@
 """API tests for billing endpoints.
 
 Covers:
-  GET /billing/pricing       — public, no auth required
-  GET /billing/history       — auth required, scoped to authenticated user
-  GET /admin/billing/revenue — admin only
+  GET /billing/pricing         — public, no auth required
+  GET /billing/history         — auth required, scoped to authenticated user
+  GET /admin/billing/revenue   — admin only
+  GET /billing/balance         — auth required, org-scoped
+  GET /billing/invoices        — auth required, cursor paginated
+  GET /billing/invoice/{run_id}— auth required, 404 on miss
+  POST /admin/credits/topup    — admin only
+  GET /billing/credit-history  — auth required, org-scoped
 
 All DB/billing functions are mocked; no live Postgres required.
 """
@@ -198,3 +203,273 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
     start_arg, end_arg = mock_fn.call_args.args
     assert start_arg is not None
     assert end_arg is not None
+
+
+# ─── /billing/balance ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_billing_balance_returns_balance(api_client, monkeypatch):
+    monkeypatch.setattr("app.get_credit_balance", AsyncMock(return_value=500_000))
+
+    resp = await api_client.get("/billing/balance")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["balance_usdc"] == 500_000
+    assert data["org_id"] == "test-org-id"
+
+
+@pytest.mark.anyio
+async def test_billing_balance_requires_auth(anon_client):
+    resp = await anon_client.get("/billing/balance")
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_billing_balance_no_org_id_returns_400(anon_client, test_settings, monkeypatch):
+    """A token with empty org_id (config-based credential) should return 400."""
+    from app import app
+    from auth import require_auth
+
+    async def _mock_no_org():
+        return {"sub": "client-id", "org_id": "", "role": "user", "auth_method": "client_credentials"}
+
+    app.dependency_overrides[require_auth] = _mock_no_org
+    try:
+        async with __import__("httpx").AsyncClient(
+            transport=__import__("httpx").ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/billing/balance")
+        assert resp.status_code == 400
+    finally:
+        app.dependency_overrides.pop(require_auth, None)
+
+
+# ─── /billing/invoices ───────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_billing_invoices_returns_items(api_client, monkeypatch):
+    mock_invoices = [
+        {
+            "id": "evt-1",
+            "run_id": "run-1",
+            "thread_id": "t-1",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "tool_calls": 0,
+            "tool_names": [],
+            "duration_ms": 200,
+            "cost_usdc": 10_000,
+            "settlement_tx": "",
+            "settlement_status": "none",
+            "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        }
+    ]
+    monkeypatch.setattr("app.get_invoices", AsyncMock(return_value=mock_invoices))
+
+    resp = await api_client.get("/billing/invoices")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["run_id"] == "run-1"
+    assert "2026-01-01" in data["items"][0]["created_at"]
+    assert data["next_cursor"] is not None
+
+
+@pytest.mark.anyio
+async def test_billing_invoices_empty_returns_null_cursor(api_client, monkeypatch):
+    monkeypatch.setattr("app.get_invoices", AsyncMock(return_value=[]))
+
+    resp = await api_client.get("/billing/invoices")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["next_cursor"] is None
+
+
+@pytest.mark.anyio
+async def test_billing_invoices_passes_cursor(api_client, monkeypatch):
+    mock_fn = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.get_invoices", mock_fn)
+
+    await api_client.get("/billing/invoices?cursor=2026-01-01T00:00:00")
+
+    mock_fn.assert_called_once()
+    cursor_arg = mock_fn.call_args.args[2]
+    assert cursor_arg is not None
+
+
+@pytest.mark.anyio
+async def test_billing_invoices_requires_auth(anon_client):
+    resp = await anon_client.get("/billing/invoices")
+    assert resp.status_code == 401
+
+
+# ─── /billing/invoice/{run_id} ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_billing_invoice_by_run_found(api_client, monkeypatch):
+    mock_invoice = {
+        "id": "evt-1",
+        "run_id": "run-abc",
+        "thread_id": "t-1",
+        "tokens_in": 100,
+        "tokens_out": 50,
+        "tool_calls": 0,
+        "tool_names": [],
+        "duration_ms": 200,
+        "cost_usdc": 10_000,
+        "settlement_tx": "",
+        "settlement_status": "none",
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr("app.get_invoice_by_run", AsyncMock(return_value=mock_invoice))
+
+    resp = await api_client.get("/billing/invoice/run-abc")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == "run-abc"
+    assert "2026-01-01" in data["created_at"]
+
+
+@pytest.mark.anyio
+async def test_billing_invoice_by_run_not_found(api_client, monkeypatch):
+    monkeypatch.setattr("app.get_invoice_by_run", AsyncMock(return_value=None))
+
+    resp = await api_client.get("/billing/invoice/nonexistent")
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_billing_invoice_by_run_requires_auth(anon_client):
+    resp = await anon_client.get("/billing/invoice/run-abc")
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_billing_invoice_scoped_to_authenticated_user(api_client, monkeypatch):
+    """The endpoint must scope the lookup to the authenticated user's sub."""
+    mock_fn = AsyncMock(return_value=None)
+    monkeypatch.setattr("app.get_invoice_by_run", mock_fn)
+
+    await api_client.get("/billing/invoice/run-xyz")
+
+    mock_fn.assert_called_once_with("run-xyz", "test-user-id")
+
+
+# ─── /admin/credits/topup ────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_admin_credits_topup_success(admin_api_client, monkeypatch):
+    monkeypatch.setattr("app.admin_topup_credit", AsyncMock(return_value=1_500_000))
+
+    resp = await admin_api_client.post(
+        "/admin/credits/topup",
+        json={"org_id": "org-abc", "amount_usdc": 1_000_000},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["org_id"] == "org-abc"
+    assert data["new_balance_usdc"] == 1_500_000
+
+
+@pytest.mark.anyio
+async def test_admin_credits_topup_requires_admin(api_client):
+    resp = await api_client.post(
+        "/admin/credits/topup",
+        json={"org_id": "org-abc", "amount_usdc": 1_000_000},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_credits_topup_requires_auth(anon_client):
+    resp = await anon_client.post(
+        "/admin/credits/topup",
+        json={"org_id": "org-abc", "amount_usdc": 1_000_000},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_admin_credits_topup_rejects_zero_amount(admin_api_client):
+    resp = await admin_api_client.post(
+        "/admin/credits/topup",
+        json={"org_id": "org-abc", "amount_usdc": 0},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_credits_topup_rejects_negative_amount(admin_api_client):
+    resp = await admin_api_client.post(
+        "/admin/credits/topup",
+        json={"org_id": "org-abc", "amount_usdc": -500},
+    )
+    assert resp.status_code == 422
+
+
+# ─── /billing/credit-history ─────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_billing_credit_history_returns_items(api_client, monkeypatch):
+    mock_entries = [
+        {
+            "id": "ledger-1",
+            "org_id": "test-org-id",
+            "operation": "topup",
+            "amount_usdc": 1_000_000,
+            "balance_usdc_after": 1_000_000,
+            "reason": "manual topup",
+            "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        }
+    ]
+    monkeypatch.setattr("app.get_credit_history", AsyncMock(return_value=mock_entries))
+
+    resp = await api_client.get("/billing/credit-history")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["operation"] == "topup"
+    assert "2026-01-01" in data["items"][0]["created_at"]
+    assert data["next_cursor"] is not None
+
+
+@pytest.mark.anyio
+async def test_billing_credit_history_empty(api_client, monkeypatch):
+    monkeypatch.setattr("app.get_credit_history", AsyncMock(return_value=[]))
+
+    resp = await api_client.get("/billing/credit-history")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["next_cursor"] is None
+
+
+@pytest.mark.anyio
+async def test_billing_credit_history_operation_filter(api_client, monkeypatch):
+    mock_fn = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.get_credit_history", mock_fn)
+
+    await api_client.get("/billing/credit-history?operation=debit")
+
+    mock_fn.assert_called_once()
+    assert mock_fn.call_args.args[1] == "debit"
+
+
+@pytest.mark.anyio
+async def test_billing_credit_history_invalid_operation(api_client, monkeypatch):
+    monkeypatch.setattr("app.get_credit_history", AsyncMock(return_value=[]))
+
+    resp = await api_client.get("/billing/credit-history?operation=unknown")
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_billing_credit_history_requires_auth(anon_client):
+    resp = await anon_client.get("/billing/credit-history")
+    assert resp.status_code == 401

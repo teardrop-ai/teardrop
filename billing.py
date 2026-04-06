@@ -24,11 +24,13 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 
 import asyncpg
 from pydantic import BaseModel, Field
 
+from cache import get_redis
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -392,13 +394,29 @@ async def get_current_pricing() -> PricingRule | None:
 async def get_live_pricing() -> PricingRule | None:
     """Return the current pricing rule using a TTL cache.
 
-    Re-queries the DB at most once per pricing_cache_ttl_seconds.  Safe to
-    call on every request — the fast path is a single monotonic clock compare.
-    Returns None if no pricing_rules row exists or DB is unavailable.
+    Uses Redis if available for multi-container consistency, otherwise
+    falls back to in-process TTL cache. Re-queries the DB at most once per
+    pricing_cache_ttl_seconds. Returns None if no pricing_rules row exists or
+    DB is unavailable.
     """
     global _pricing_cache, _pricing_cache_expires, _pricing_lock
+    settings = get_settings()
+    redis = get_redis()
 
-    # Fast path: valid cache.
+    # ── Redis path (multi-container) ──────────────────────────────────────
+    if redis is not None:
+        try:
+            key = "teardrop:pricing:active"
+            cached_json = await redis.get(key)
+            if cached_json is not None:
+                data = json.loads(cached_json)
+                return PricingRule(**data)
+        except Exception as exc:
+            logger.warning("Redis pricing cache read failed; falling back to in-process: %s", exc)
+            # Fall through to in-process cache
+
+    # ── In-process TTL cache path (single-container fallback) ───────────────
+    # Fast path: valid in-process cache.
     if _pricing_cache is not None and time.monotonic() < _pricing_cache_expires:
         return _pricing_cache
 
@@ -417,9 +435,19 @@ async def get_live_pricing() -> PricingRule | None:
 
         try:
             rule = await get_current_pricing()
-            _pricing_cache = rule
-            settings = get_settings()
-            _pricing_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
+            if rule is not None:
+                _pricing_cache = rule
+                _pricing_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
+
+                # Write to Redis if available
+                if (redis := get_redis()) is not None:
+                    try:
+                        key = "teardrop:pricing:active"
+                        cached_json = json.dumps(rule.model_dump(), default=str)
+                        await redis.setex(key, settings.pricing_cache_ttl_seconds, cached_json)
+                    except Exception as exc:
+                        logger.warning("Redis pricing cache write failed (non-fatal): %s", exc)
+
             return rule
         except Exception:
             logger.warning("Failed to refresh pricing cache; serving stale value", exc_info=True)
@@ -631,11 +659,12 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
     return BillingResult(verified=True, billing_method="credit")
 
 
-async def debit_credit(org_id: str, amount_usdc: int) -> bool:
+async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
     """Debit amount_usdc from org's credit balance using a serialisable transaction.
 
     Uses SELECT FOR UPDATE to prevent concurrent double-debits.
     Floors balance at 0 — will not go negative.
+    Inserts a row into org_credit_ledger within the same transaction.
     Returns True on success, False on unexpected DB error.
     """
     pool = _get_pool()
@@ -659,25 +688,86 @@ async def debit_credit(org_id: str, amount_usdc: int) -> bool:
                     org_id,
                     new_balance,
                 )
+                await conn.execute(
+                    """
+                    INSERT INTO org_credit_ledger
+                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                    VALUES ($1, $2, 'debit', $3, $4, $5, NOW())
+                    """,
+                    str(uuid.uuid4()),
+                    org_id,
+                    amount_usdc,
+                    new_balance,
+                    reason,
+                )
         return True
     except Exception:
         logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
         return False
 
 
-async def admin_topup_credit(org_id: str, amount_usdc: int) -> int:
+async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") -> int:
     """Add amount_usdc to org's credit balance (upsert). Returns new balance."""
     pool = _get_pool()
-    row = await pool.fetchrow(
-        """
-        INSERT INTO org_credits (org_id, balance_usdc, updated_at)
-        VALUES ($1, $2, NOW())
-        ON CONFLICT (org_id) DO UPDATE
-            SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
-                updated_at = NOW()
-        RETURNING balance_usdc
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (org_id) DO UPDATE
+                    SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                        updated_at = NOW()
+                RETURNING balance_usdc
+                """,
+                org_id,
+                amount_usdc,
+            )
+            new_balance = int(row["balance_usdc"])
+            await conn.execute(
+                """
+                INSERT INTO org_credit_ledger
+                    (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                """,
+                str(uuid.uuid4()),
+                org_id,
+                amount_usdc,
+                new_balance,
+                reason,
+            )
+    return new_balance
+
+
+async def get_credit_history(
+    org_id: str,
+    operation: str | None = None,
+    limit: int = 50,
+    cursor: datetime | None = None,
+) -> list[dict]:
+    """Return credit ledger entries for an org (cursor paginated, newest first).
+
+    ``operation`` can be ``'debit'``, ``'topup'``, or ``None`` for all.
+    ``cursor`` is the ``created_at`` of the last item returned (exclusive).
+    """
+    pool = _get_pool()
+    params: list = [org_id, limit]
+    filters = ["org_id = $1"]
+    if operation is not None:
+        params.append(operation)
+        filters.append(f"operation = ${len(params)}")
+    if cursor is not None:
+        params.append(cursor)
+        filters.append(f"created_at < ${len(params)}")
+    where = " AND ".join(filters)
+    rows = await pool.fetch(
+        f"""
+        SELECT id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at
+        FROM org_credit_ledger
+        WHERE {where}
+        ORDER BY created_at DESC
+        LIMIT $2
         """,
-        org_id,
-        amount_usdc,
+        *params,
     )
-    return int(row["balance_usdc"])
+    return [dict(r) for r in rows]

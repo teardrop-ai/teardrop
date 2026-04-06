@@ -50,6 +50,7 @@ from sse_starlette.sse import EventSourceResponse
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState, TaskStatus
 from auth import create_access_token, require_auth
+from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
 from tools import registry
 from usage import (
@@ -70,6 +71,7 @@ from billing import (
     debit_credit,
     get_billing_history,
     get_credit_balance,
+    get_credit_history,
     get_current_pricing,
     get_invoice_by_run,
     get_invoices,
@@ -82,8 +84,10 @@ from billing import (
 )
 from users import (
     close_user_db,
+    create_client_credential,
     create_org,
     create_user,
+    get_client_credential_by_id,
     get_user_by_email,
     init_user_db,
     verify_secret,
@@ -168,6 +172,7 @@ async def lifespan(app: FastAPI):
     pool = await asyncpg.create_pool(settings.pg_dsn)
     app.state.pool = pool
     await apply_pending(pool)
+    await init_redis(settings.redis_url)
     await init_checkpointer()
     await init_user_db(pool)
     await init_usage_db(pool)
@@ -179,6 +184,7 @@ async def lifespan(app: FastAPI):
     await close_usage_db()
     await close_user_db()
     await close_checkpointer()
+    await close_redis()
     await pool.close()
     app.state.pool = None
 
@@ -206,28 +212,44 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
 
-# ─── Rate limiting (in-memory, per-IP, per-minute) ───────────────────────────
+# ─── Rate limiting (in-memory with Redis fallback, per-IP, per-minute) ────────
 
 _rate_counters: dict[str, list[float]] = defaultdict(list)
-# NOTE: This rate limiter is in-memory and process-local. It is safe to call
-# from async code without a lock because asyncio is single-threaded and this
-# function contains no ``await`` points. Multi-container deployments require a
-# shared store (e.g., Redis) or an API gateway with built-in rate limiting.
 _RATE_COUNTER_MAX_KEYS = 10_000
 
 
-def _check_rate_limit(client_ip: str) -> bool:
-    """Return True when within limit, False when exceeded."""
+async def _check_rate_limit(client_ip: str) -> bool:
+    """Return True when within limit, False when exceeded.
+
+    Uses Redis if available for multi-container consistency, otherwise
+    falls back to in-process sliding window.
+    """
     now = time.time()
     window = 60.0
     limit = settings.rate_limit_requests_per_minute
+
+    # ── Redis path (multi-container) ──────────────────────────────────────
+    if (redis := get_redis()) is not None:
+        key = f"teardrop:rl:{client_ip}"
+        try:
+            # Pipeline: remove old entries, count, add new, set expiry
+            pipe = redis.pipeline()
+            pipe.zremrangebyscore(key, "-inf", f"({now - window}")
+            pipe.zcard(key)
+            pipe.zadd(key, {f"{now}_{secrets.token_hex(3)}": now})  # unique member per request
+            pipe.expire(key, 61)
+            _, count, _, _ = await pipe.execute()
+            return count < limit
+        except Exception as exc:
+            logger.warning("Redis rate limit check failed; falling back to in-process: %s", exc)
+            # Fall through to in-process fallback
+
+    # ── In-process fallback (single-container) ───────────────────────────
     history = _rate_counters[client_ip]
     _rate_counters[client_ip] = [t for t in history if now - t < window]
     if len(_rate_counters[client_ip]) >= limit:
         return False
     _rate_counters[client_ip].append(now)
-    # Evict the oldest entry once the dict exceeds the cap, preventing unbounded
-    # memory growth from IP enumeration attacks.
     if len(_rate_counters) > _RATE_COUNTER_MAX_KEYS:
         oldest_key = next(iter(_rate_counters))
         del _rate_counters[oldest_key]
@@ -385,7 +407,7 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     Returns a signed RS256 JWT.
     """
     client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip):
+    if not await _check_rate_limit(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please slow down.",
@@ -416,24 +438,36 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
             }
         )
 
-    # ── Client-credentials flow (backward compatible) ──────────────────────
+    # ── Client-credentials flow ────────────────────────────────────────────────
     if body.client_id and body.client_secret:
-        if not settings.jwt_client_secret:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="JWT client secret not configured. Set JWT_CLIENT_SECRET in .env.",
-            )
-        if (
-            body.client_id != settings.jwt_client_id
-            or not hmac.compare_digest(body.client_secret, settings.jwt_client_secret)
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid client credentials",
-            )
+        # Try DB-backed org credential first (org-scoped M2M)
+        db_cred = await get_client_credential_by_id(body.client_id)
+        if db_cred is not None:
+            if not verify_secret(body.client_secret, db_cred.hashed_secret, db_cred.salt):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid client credentials",
+                )
+            org_id = db_cred.org_id
+        else:
+            # Fall back to config-based credential (backward compat — org_id is empty)
+            if not settings.jwt_client_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid client credentials",
+                )
+            if (
+                body.client_id != settings.jwt_client_id
+                or not hmac.compare_digest(body.client_secret, settings.jwt_client_secret)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid client credentials",
+                )
+            org_id = ""
         access_token = create_access_token(
             subject=body.client_id,
-            extra_claims={"auth_method": "client_credentials", "org_id": ""},
+            extra_claims={"auth_method": "client_credentials", "org_id": org_id},
         )
         return JSONResponse(
             content={
@@ -535,7 +569,7 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
 async def siwe_nonce(request: Request) -> JSONResponse:
     """Generate a single-use nonce for SIWE authentication."""
     client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip):
+    if not await _check_rate_limit(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded.",
@@ -557,7 +591,7 @@ async def agent_run(
     Thread state is scoped to the authenticated user.
     """
     client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip):
+    if not await _check_rate_limit(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please slow down.",
@@ -741,7 +775,7 @@ async def agent_run(
         if billing.verified:
             if billing.billing_method == "credit":
                 # Debit actual run cost from org's prepaid balance.
-                success = await debit_credit(org_id, cost_usdc)
+                success = await debit_credit(org_id, cost_usdc, reason=f"run:{run_id}")
                 if success:
                     await record_settlement(usage_event.id, cost_usdc, "", "settled")
                     yield _sse_event(
@@ -856,6 +890,31 @@ async def admin_create_user(
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"id": user.id, "email": user.email, "org_id": user.org_id, "role": user.role},
+    )
+
+
+class CreateClientCredentialsRequest(BaseModel):
+    org_id: str
+
+
+@app.post("/admin/client-credentials", tags=["Admin"])
+async def admin_create_client_credentials(
+    body: CreateClientCredentialsRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Create org-scoped M2M client credentials (admin only).
+
+    The client_secret is returned exactly once — store it immediately.
+    """
+    cred, plaintext_secret = await create_client_credential(body.org_id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "client_id": cred.client_id,
+            "client_secret": plaintext_secret,
+            "org_id": cred.org_id,
+            "created_at": cred.created_at.isoformat(),
+        },
     )
 
 
@@ -1052,6 +1111,103 @@ async def admin_billing_revenue(
     end_dt = datetime.fromisoformat(end) if end else None
     summary = await get_revenue_summary(start_dt, end_dt)
     return JSONResponse(content=summary)
+
+
+@app.get("/billing/balance", tags=["Billing"])
+async def billing_balance(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Return the authenticated org's current credit balance."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — credit balance requires an org-scoped credential.",
+        )
+    balance = await get_credit_balance(org_id)
+    return JSONResponse(content={"org_id": org_id, "balance_usdc": balance})
+
+
+@app.get("/billing/invoices", tags=["Billing"])
+async def billing_invoices(
+    payload: dict = Depends(require_auth),
+    limit: int = 50,
+    cursor: str | None = None,
+) -> JSONResponse:
+    """Return per-run invoice records for the authenticated user (cursor paginated)."""
+    from datetime import datetime
+
+    cursor_dt = datetime.fromisoformat(cursor) if cursor else None
+    invoices = await get_invoices(payload["sub"], min(limit, 200), cursor_dt)
+    serialized = [
+        {**row, "created_at": row["created_at"].isoformat()}
+        for row in invoices
+    ]
+    next_cursor = serialized[-1]["created_at"] if serialized else None
+    return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
+
+
+@app.get("/billing/invoice/{run_id}", tags=["Billing"])
+async def billing_invoice_by_run(
+    run_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Return a single run receipt scoped to the authenticated user."""
+    invoice = await get_invoice_by_run(run_id, payload["sub"])
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    return JSONResponse(
+        content={**invoice, "created_at": invoice["created_at"].isoformat()}
+    )
+
+
+class TopupRequest(BaseModel):
+    org_id: str
+    amount_usdc: int = Field(..., gt=0)
+
+
+@app.post("/admin/credits/topup", tags=["Admin"])
+async def admin_credits_topup(
+    body: TopupRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Top up an org's prepaid credit balance (admin only)."""
+    new_balance = await admin_topup_credit(body.org_id, body.amount_usdc)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"org_id": body.org_id, "new_balance_usdc": new_balance},
+    )
+
+
+@app.get("/billing/credit-history", tags=["Billing"])
+async def billing_credit_history(
+    payload: dict = Depends(require_auth),
+    operation: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+) -> JSONResponse:
+    """Return credit ledger entries for the authenticated org (cursor paginated)."""
+    from datetime import datetime
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — credit history requires an org-scoped credential.",
+        )
+    if operation is not None and operation not in ("debit", "topup"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="operation must be 'debit' or 'topup'",
+        )
+    cursor_dt = datetime.fromisoformat(cursor) if cursor else None
+    entries = await get_credit_history(org_id, operation, min(limit, 200), cursor_dt)
+    serialized = [
+        {**row, "created_at": row["created_at"].isoformat()}
+        for row in entries
+    ]
+    next_cursor = serialized[-1]["created_at"] if serialized else None
+    return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

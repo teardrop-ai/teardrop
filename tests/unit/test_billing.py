@@ -502,10 +502,24 @@ class TestAdminTopupCredit:
         from billing import admin_topup_credit
 
         pool = _pool_mock()
-        pool.fetchrow = AsyncMock(return_value={"balance_usdc": 50_000})
+        # admin_topup_credit now uses acquire()+transaction(), so mock conn.fetchrow
+        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 50_000})
         with patch.object(billing_module, "_pool", pool):
             balance = await admin_topup_credit("org-1", 50_000)
         assert balance == 50_000
+
+    async def test_ledger_insert_called(self):
+        """admin_topup_credit must insert a row into org_credit_ledger."""
+        from billing import admin_topup_credit
+
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000})
+        with patch.object(billing_module, "_pool", pool):
+            await admin_topup_credit("org-1", 50_000, reason="manual topup")
+        # execute called twice: upsert (via fetchrow) + ledger insert
+        pool._conn.execute.assert_called_once()
+        call_sql = pool._conn.execute.call_args.args[0]
+        assert "org_credit_ledger" in call_sql
 
 
 @pytest.mark.anyio
@@ -528,6 +542,19 @@ class TestDebitCreditMock:
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-1", 5_000)
         assert result is True
+
+    async def test_debit_inserts_ledger_row(self):
+        """debit_credit must insert a row into org_credit_ledger."""
+        from billing import debit_credit
+
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000})
+        pool._conn.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            await debit_credit("org-1", 5_000, reason="run:abc")
+        assert pool._conn.execute.call_count == 2
+        ledger_call_sql = pool._conn.execute.call_args_list[1].args[0]
+        assert "org_credit_ledger" in ledger_call_sql
 
     async def test_debit_returns_false_on_db_exception(self):
         from billing import debit_credit

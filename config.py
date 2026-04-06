@@ -118,6 +118,16 @@ class Settings(BaseSettings):
         """Standard Postgres DSN, stripping any SQLAlchemy dialect prefix."""
         return self.database_url.replace("+asyncpg", "")
 
+    # ── Redis (optional) ──────────────────────────────────────────────────────────
+    redis_url: str = Field(
+        default="",
+        description=(
+            "Redis connection URL (optional, e.g. redis://localhost:6379). "
+            "Required for multi-container deployments to share rate limiting, SIWE nonces, and pricing cache. "
+            "Leave unset for single-container or local development."
+        ),
+    )
+
     # ── Billing / x402 ────────────────────────────────────────────────────────
     billing_enabled: bool = Field(
         default=False, description="Enable x402 on-chain billing for paid endpoints"

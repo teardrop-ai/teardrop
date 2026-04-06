@@ -52,6 +52,12 @@ services:
       - key: BASE_RPC_URL
         sync: false
 
+      # ── Optional: Redis ────────────────────────────────────────────────────
+      # Shared Redis for multi-container rate limiting, SIWE nonces, pricing cache.
+      # Paste the Internal URL from your Render Redis service.
+      - key: REDIS_URL
+        sync: false
+
       # ── Optional: x402 billing ────────────────────────────────────────────
       # Set BILLING_ENABLED=true once wallet + pricing config is ready.
       - key: BILLING_ENABLED

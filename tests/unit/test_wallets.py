@@ -175,6 +175,91 @@ class TestNonces:
             result = await consume_nonce("expired-nonce")
         assert result is False
 
+    async def test_create_nonce_uses_redis_when_available(self):
+        """When Redis is available, create_nonce stores the nonce in Redis."""
+        from wallets import create_nonce
+
+        mock_redis = AsyncMock()
+        mock_redis.set = AsyncMock(return_value=True)
+        pool = _pool()
+
+        with patch("wallets.get_redis", return_value=mock_redis):
+            with patch.object(wallets_module, "_pool", pool):
+                nonce = await create_nonce()
+
+        assert isinstance(nonce, str)
+        mock_redis.set.assert_called_once()
+        # Verify the call used the correct key prefix
+        call_args = mock_redis.set.call_args
+        assert call_args[0][0].startswith("teardrop:nonce:")
+        # Pool should not have been called when Redis succeeded
+        pool.execute.assert_not_called()
+
+    async def test_create_nonce_falls_back_to_postgres_on_redis_failure(self):
+        """When Redis fails, create_nonce falls back to Postgres."""
+        from wallets import create_nonce
+
+        mock_redis = AsyncMock()
+        mock_redis.set = AsyncMock(side_effect=Exception("Redis error"))
+        pool = _pool()
+
+        with patch("wallets.get_redis", return_value=mock_redis):
+            with patch.object(wallets_module, "_pool", pool):
+                nonce = await create_nonce()
+
+        assert isinstance(nonce, str)
+        # Postgres should have been called as fallback
+        pool.execute.assert_called_once()
+
+    async def test_consume_nonce_uses_redis_when_available(self):
+        """When Redis is available, consume_nonce uses GETDEL."""
+        from wallets import consume_nonce
+
+        mock_redis = AsyncMock()
+        mock_redis.getdel = AsyncMock(return_value="1")  # Nonce exists
+        pool = _pool()
+
+        with patch("wallets.get_redis", return_value=mock_redis):
+            with patch.object(wallets_module, "_pool", pool):
+                result = await consume_nonce("test-nonce")
+
+        assert result is True
+        mock_redis.getdel.assert_called_once_with("teardrop:nonce:test-nonce")
+        # Pool should not have been called when Redis succeeded
+        pool.fetchrow.assert_not_called()
+
+    async def test_consume_nonce_redis_already_consumed(self):
+        """When Redis returns None (already consumed), consume_nonce returns False."""
+        from wallets import consume_nonce
+
+        mock_redis = AsyncMock()
+        mock_redis.getdel = AsyncMock(return_value=None)  # Already consumed
+        pool = _pool()
+
+        with patch("wallets.get_redis", return_value=mock_redis):
+            with patch.object(wallets_module, "_pool", pool):
+                result = await consume_nonce("used-nonce")
+
+        assert result is False
+        pool.fetchrow.assert_not_called()
+
+    async def test_consume_nonce_falls_back_to_postgres_on_redis_failure(self):
+        """When Redis fails, consume_nonce falls back to Postgres."""
+        from wallets import consume_nonce
+
+        mock_redis = AsyncMock()
+        mock_redis.getdel = AsyncMock(side_effect=Exception("Redis error"))
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value={"nonce": "fallback-nonce"})
+
+        with patch("wallets.get_redis", return_value=mock_redis):
+            with patch.object(wallets_module, "_pool", pool):
+                result = await consume_nonce("fallback-nonce")
+
+        assert result is True
+        # Postgres should have been called as fallback
+        pool.fetchrow.assert_called_once()
+
 
 # ─── init / close helpers ─────────────────────────────────────────────────────
 
