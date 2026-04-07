@@ -4,17 +4,16 @@
 
 from __future__ import annotations
 
-from tools.registry import ToolRegistry
-
 from tools.definitions.calculate import TOOL as calculate_tool
+from tools.definitions.get_block import TOOL as get_block_tool
 from tools.definitions.get_datetime import TOOL as get_datetime_tool
-from tools.definitions.web_search import TOOL as web_search_tool
-from tools.definitions.summarize_text import TOOL as summarize_text_tool
-from tools.definitions.get_eth_balance import TOOL as get_eth_balance_tool
 from tools.definitions.get_erc20_balance import TOOL as get_erc20_balance_tool
+from tools.definitions.get_eth_balance import TOOL as get_eth_balance_tool
 from tools.definitions.get_transaction import TOOL as get_transaction_tool
 from tools.definitions.resolve_ens import TOOL as resolve_ens_tool
-from tools.definitions.get_block import TOOL as get_block_tool
+from tools.definitions.summarize_text import TOOL as summarize_text_tool
+from tools.definitions.web_search import TOOL as web_search_tool
+from tools.registry import ToolRegistry
 
 _ALL_TOOLS = [
     calculate_tool,

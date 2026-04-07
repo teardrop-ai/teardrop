@@ -89,7 +89,7 @@ async def test_date_range_filtering(test_user):
     summary = await get_usage_by_user(test_user.id, end=future)
     assert summary.total_runs >= 1
 
-    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    datetime(2000, 1, 1, tzinfo=timezone.utc)
     empty_summary = await get_usage_by_user(test_user.id, start=future, end=future)
     assert empty_summary.total_runs == 0
 

@@ -96,7 +96,9 @@ def _stub_results(query: str, num_results: int) -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="web_search",
     version="1.0.0",
-    description="Search the web for information. Returns titles, URLs, snippets, and relevance scores.",
+    description=(
+        "Search the web for information. Returns titles, URLs, snippets, and relevance scores."
+    ),
     tags=["search", "web", "realtime"],
     input_schema=WebSearchInput,
     output_schema=WebSearchOutput,

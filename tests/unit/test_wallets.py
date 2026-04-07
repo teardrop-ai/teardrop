@@ -10,7 +10,6 @@ import pytest
 import wallets as wallets_module
 from wallets import Wallet
 
-
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
 
 

@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from tools.registry import ToolDefinition
 
-
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 
@@ -118,7 +117,9 @@ async def calculate(expression: str) -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="calculate",
     version="1.0.0",
-    description="Evaluate a safe arithmetic expression. Supports +,-,*,/,**,%,sqrt,abs,round,floor,ceil,log,sin,cos,tan,pi,e.",
+    description=(
+        "Evaluate a safe arithmetic expression. Supports +,-,*,/,**,%,sqrt,abs,round,floor,ceil,log,sin,cos,tan,pi,e."  # noqa: E501
+    ),
     tags=["math", "arithmetic", "calculation"],
     input_schema=CalculateInput,
     output_schema=CalculateOutput,

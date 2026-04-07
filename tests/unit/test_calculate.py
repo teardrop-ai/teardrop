@@ -93,6 +93,7 @@ async def test_division_by_zero_returns_error():
 @pytest.mark.anyio
 async def test_injection_prevention_semicolon():
     from pydantic import ValidationError
+
     from tools.definitions.calculate import CalculateInput
 
     with pytest.raises(ValidationError):
@@ -102,6 +103,7 @@ async def test_injection_prevention_semicolon():
 @pytest.mark.anyio
 async def test_injection_prevention_underscore():
     from pydantic import ValidationError
+
     from tools.definitions.calculate import CalculateInput
 
     with pytest.raises(ValidationError):

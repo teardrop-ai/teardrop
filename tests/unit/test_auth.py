@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import timedelta
 
 import jwt
 import pytest
@@ -48,7 +47,7 @@ def test_invalid_signature_raises(test_settings, tmp_path):
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    other_pub = (
+    (
         other_key.public_key().to_cryptography_key()
         if hasattr(other_key.public_key(), "to_cryptography_key")
         else other_key.public_key()

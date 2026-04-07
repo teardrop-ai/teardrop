@@ -23,6 +23,7 @@ if sys.platform == "win32":
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncpg  # noqa: E402
+
 from config import get_settings  # noqa: E402
 from users import close_user_db, create_org, create_user, init_user_db  # noqa: E402
 

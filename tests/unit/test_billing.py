@@ -25,7 +25,6 @@ from billing import (
     verify_payment,
 )
 
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -381,8 +380,9 @@ class _async_ctx:
 @pytest.mark.anyio
 class TestGetCurrentPricing:
     async def test_returns_pricing_rule_when_row_exists(self):
-        from billing import get_current_pricing, PricingRule
         from datetime import datetime, timezone
+
+        from billing import PricingRule, get_current_pricing
 
         pool = _pool_mock()
         pool.fetchrow = AsyncMock(
@@ -424,8 +424,9 @@ class TestGetBillingHistory:
         assert history == []
 
     async def test_cursor_pagination_path(self):
-        from billing import get_billing_history
         from datetime import datetime, timezone
+
+        from billing import get_billing_history
 
         pool = _pool_mock()
         pool.fetch = AsyncMock(return_value=[])
@@ -449,8 +450,9 @@ class TestGetInvoices:
         assert result == []
 
     async def test_cursor_pagination_path(self):
-        from billing import get_invoices
         from datetime import datetime, timezone
+
+        from billing import get_invoices
 
         pool = _pool_mock()
         pool.fetch = AsyncMock(return_value=[])
@@ -464,8 +466,9 @@ class TestGetInvoices:
 @pytest.mark.anyio
 class TestGetInvoiceByRun:
     async def test_returns_dict_when_found(self):
-        from billing import get_invoice_by_run
         from datetime import datetime, timezone
+
+        from billing import get_invoice_by_run
 
         row = {
             "id": "e1",
@@ -500,7 +503,6 @@ class TestGetInvoiceByRun:
 @pytest.mark.anyio
 class TestAdminTopupCredit:
     async def test_returns_new_balance(self):
-        from billing import admin_topup_credit
 
         pool = _pool_mock()
         # admin_topup_credit now uses acquire()+transaction(), so mock conn.fetchrow
@@ -511,7 +513,6 @@ class TestAdminTopupCredit:
 
     async def test_ledger_insert_called(self):
         """admin_topup_credit must insert a row into org_credit_ledger."""
-        from billing import admin_topup_credit
 
         pool = _pool_mock()
         pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000})
@@ -526,7 +527,6 @@ class TestAdminTopupCredit:
 @pytest.mark.anyio
 class TestDebitCreditMock:
     async def test_debit_returns_false_when_no_row(self):
-        from billing import debit_credit
 
         pool = _pool_mock()
         pool._conn.fetchrow = AsyncMock(return_value=None)
@@ -535,7 +535,6 @@ class TestDebitCreditMock:
         assert result is False
 
     async def test_debit_returns_true_on_success(self):
-        from billing import debit_credit
 
         pool = _pool_mock()
         pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000})
@@ -546,7 +545,6 @@ class TestDebitCreditMock:
 
     async def test_debit_inserts_ledger_row(self):
         """debit_credit must insert a row into org_credit_ledger."""
-        from billing import debit_credit
 
         pool = _pool_mock()
         pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000})
@@ -558,7 +556,6 @@ class TestDebitCreditMock:
         assert "org_credit_ledger" in ledger_call_sql
 
     async def test_debit_returns_false_on_db_exception(self):
-        from billing import debit_credit
 
         pool = MagicMock()
         pool.acquire = MagicMock(side_effect=Exception("DB connection lost"))

@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-
 # ─── Authentication ───────────────────────────────────────────────────────────
 
 
@@ -33,7 +32,6 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     """SIWE-authed call without X-Payment header must get 402 Payment Required."""
     from app import app
     from auth import require_auth
-    from billing import BillingResult
 
     async def _siwe_auth():
         return {

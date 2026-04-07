@@ -125,8 +125,8 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Redis connection URL (optional, e.g. redis://localhost:6379). "
-            "Required for multi-container deployments to share rate limiting, SIWE nonces, and pricing cache. "
-            "Leave unset for single-container or local development."
+            "Required for multi-container deployments to share rate limiting, SIWE nonces, and "
+            "pricing cache. Leave unset for single-container or local development."
         ),
     )
 
@@ -151,7 +151,10 @@ class Settings(BaseSettings):
     )
     x402_scheme: str = Field(
         default="exact",
-        description="Payment scheme: 'exact' (flat per-run) or 'upto' (usage-based, requires x402 upto support)",
+        description=(
+            "Payment scheme: 'exact' (flat per-run) or 'upto' (usage-based, requires x402 "
+            "upto support)"
+        ),
     )
     pricing_cache_ttl_seconds: int = Field(
         default=300,

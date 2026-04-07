@@ -6,12 +6,9 @@ Tests cover: get_eth_balance, get_erc20_balance, get_block, get_transaction, res
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from web3 import Web3
-from web3.exceptions import InvalidAddress
-
 
 # ─── get_eth_balance ─────────────────────────────────────────────────────────
 
@@ -41,7 +38,6 @@ class TestGetEthBalance:
             await get_eth_balance("0xd8da6bf26964af9d7eed9e03e53415d37aa96045", chain_id=1)
 
     async def test_unsupported_chain_raises(self, test_settings, monkeypatch):
-        from tools.definitions._web3_helpers import _get_rpc_url
 
         monkeypatch.setattr(
             "tools.definitions.get_eth_balance.get_web3",

@@ -18,17 +18,16 @@ Example:
   python test_x402_payment.py 0xabc123... https://teardrop.onrender.com
 """
 
-import sys
-import json
-import requests
-import time
 import base64
+import json
+import sys
 import warnings
 from datetime import datetime, timedelta
-from siwe import SiweMessage
-from web3 import Web3
+
+import requests
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from siwe import SiweMessage
 
 
 def get_nonce(base_url: str) -> str:
@@ -145,7 +144,8 @@ def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
         inner = payload_dict.get("payload", {})
         auth = inner.get("authorization", {})
         print(
-            f"   Authorization: from={auth.get('from')} to={auth.get('to')} value={auth.get('value')}"
+            f"   Authorization: from={auth.get('from')} to={auth.get('to')} "
+            f"value={auth.get('value')}"
         )
         print(f"   validAfter={auth.get('validAfter')} validBefore={auth.get('validBefore')}")
         print(f"   nonce={str(auth.get('nonce', ''))[:20]}...")
@@ -200,7 +200,7 @@ def call_agent_run_with_payment(
 
                 if event_type == "BILLING_SETTLEMENT":
                     settlement_tx = event_data.get("tx_hash", "")
-                    print(f"\n🎉 BILLING_SETTLEMENT event:")
+                    print("\n🎉 BILLING_SETTLEMENT event:")
                     print(f"   tx_hash: {settlement_tx}")
                     print(f"   amount_usdc: {event_data.get('amount_usdc')}")
                     print(f"   network: {event_data.get('network')}")
@@ -213,7 +213,7 @@ def call_agent_run_with_payment(
                 pass
 
     if settlement_tx:
-        print(f"\n✓ Settlement successful!")
+        print("\n✓ Settlement successful!")
         print(f"  View on Sepolia Etherscan: https://sepolia.basescan.org/tx/{settlement_tx}")
     else:
         print("\n⚠ No settlement event captured")
@@ -252,7 +252,7 @@ def main():
     siwe_msg = create_siwe_message(nonce, address, domain)
     print(f"   SIWE message: {siwe_msg[:100]}...")
     siwe_sig = sign_message(siwe_msg, private_key)
-    print(f"✓ Signed SIWE message")
+    print("✓ Signed SIWE message")
 
     # Step 3: Get JWT
     print("\n→ Step 3: Exchanging SIWE for JWT...")
@@ -268,9 +268,9 @@ def main():
         print("⚠ No payment requirements in 402 response")
         print(f"   Full response: {payment_required['body']}")
         sys.exit(1)
-    print(
-        f"   Payment: {payment_requirements[0].get('amount')} atomic USDC on {payment_requirements[0].get('network')}"
-    )
+    get_amount = payment_requirements[0].get("amount")
+    get_network = payment_requirements[0].get("network")
+    print(f"   Payment: {get_amount} atomic USDC on {get_network}")
     print(f"   Asset: {payment_requirements[0].get('asset')}")
     print(f"   pay_to: {payment_requirements[0].get('payTo')}")
     print(f"   extra: {payment_requirements[0].get('extra')}")

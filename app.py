@@ -43,25 +43,14 @@ from typing import Any, AsyncIterator
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
-from agent.state import AgentState, TaskStatus
+from agent.state import AgentState
 from auth import create_access_token, require_auth
-from cache import close_redis, get_redis, init_redis
-from config import Settings, get_settings
-from tools import registry
-from usage import (
-    UsageEvent,
-    close_usage_db,
-    get_usage_by_org,
-    get_usage_by_user,
-    init_usage_db,
-    record_usage_event,
-)
 from billing import (
     BillingResult,
     admin_topup_credit,
@@ -85,6 +74,18 @@ from billing import (
     verify_credit,
     verify_payment,
 )
+from cache import close_redis, get_redis, init_redis
+from config import Settings, get_settings
+from scripts.generate_keys import generate_keypair
+from tools import registry
+from usage import (
+    UsageEvent,
+    close_usage_db,
+    get_usage_by_org,
+    get_usage_by_user,
+    init_usage_db,
+    record_usage_event,
+)
 from users import (
     close_user_db,
     create_client_credential,
@@ -107,7 +108,6 @@ from wallets import (
     get_wallets_by_user,
     init_wallets_db,
 )
-from scripts.generate_keys import generate_keypair
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -349,7 +349,10 @@ async def agent_card() -> JSONResponse:
         content={
             "schema_version": "1.0",
             "name": "Teardrop",
-            "description": "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering.",
+            "description": (
+                "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI "
+                "streaming, and A2UI rendering."
+            ),
             "version": app.version,
             "url": f"http://{settings.app_host}:{settings.app_port}",
             "capabilities": {
@@ -380,7 +383,7 @@ async def agent_card() -> JSONResponse:
                 *registry.to_a2a_skills(),
                 {
                     "name": "a2ui_rendering",
-                    "description": "Declarative UI component generation (table, form, text, button, etc.).",
+                    "description": "Declarative UI component generation (table, form, text, button, etc.).",  # noqa: E501
                 },
             ],
             "tools": registry.to_a2a_tool_list(),
@@ -498,8 +501,8 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
 
 async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResponse:
     """Verify a SIWE message, auto-register if needed, and return a JWT."""
-    from siwe import SiweMessage
     import siwe as siwe_errors
+    from siwe import SiweMessage
 
     try:
         msg = SiweMessage.from_message(siwe_message)
@@ -978,8 +981,8 @@ async def link_wallet(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Link an additional wallet to the authenticated user via SIWE."""
-    from siwe import SiweMessage
     import siwe as siwe_errors
+    from siwe import SiweMessage
 
     try:
         msg = SiweMessage.from_message(body.siwe_message)

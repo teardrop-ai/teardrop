@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import jwt
 import pytest
@@ -10,8 +10,9 @@ import pytest
 
 @pytest.mark.anyio
 async def test_token_email_flow_success(anon_client, monkeypatch):
-    from users import User
     from datetime import datetime, timezone
+
+    from users import User
 
     mock_user = User(
         id="user-123",
@@ -121,6 +122,7 @@ async def test_token_no_auth_header_returns_401(anon_client):
 async def test_token_db_client_credentials_success(anon_client, test_settings, monkeypatch):
     """DB-backed credential returns org_id from the DB row (not empty string)."""
     from datetime import datetime, timezone
+
     from users import OrgClientCredential
 
     mock_cred = OrgClientCredential(
@@ -155,6 +157,7 @@ async def test_token_db_client_credentials_success(anon_client, test_settings, m
 async def test_token_db_client_credentials_wrong_secret(anon_client, monkeypatch):
     """DB-backed credential with wrong secret returns 401."""
     from datetime import datetime, timezone
+
     from users import OrgClientCredential
 
     mock_cred = OrgClientCredential(

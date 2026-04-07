@@ -6,8 +6,6 @@ so we don't need LifespanManager and can simply mock DB functions per-test.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 

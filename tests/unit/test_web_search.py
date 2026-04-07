@@ -5,13 +5,12 @@ No real HTTP calls are made; Tavily client and config are mocked.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
 from tools.definitions.web_search import WebSearchInput, _stub_results, web_search
-
 
 # ─── Input schema validation ──────────────────────────────────────────────────
 

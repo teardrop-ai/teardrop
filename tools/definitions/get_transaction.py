@@ -12,7 +12,6 @@ from web3 import Web3
 from tools.definitions._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
-
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 

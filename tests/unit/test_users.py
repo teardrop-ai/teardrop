@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import users as users_module
-from users import User, Org, verify_secret, _hash_secret
-
+from users import Org, User, _hash_secret, verify_secret
 
 # ─── Pure helpers ─────────────────────────────────────────────────────────────
 

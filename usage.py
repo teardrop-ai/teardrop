@@ -105,7 +105,8 @@ def _get_pool() -> asyncpg.Pool:
 
 
 async def record_usage_event(event: UsageEvent) -> None:
-    """Insert a usage event. Logs errors but never raises — accounting must not block the SSE stream."""
+    """Insert a usage event. Logs errors but never raises — accounting must not block the SSE
+    stream."""
     try:
         pool = _get_pool()
         await pool.execute(

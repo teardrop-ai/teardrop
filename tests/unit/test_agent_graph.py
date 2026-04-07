@@ -6,12 +6,10 @@ No Postgres checkpointer or LangGraph runtime is needed.
 
 from __future__ import annotations
 
-import pytest
+from langchain_core.messages import HumanMessage
 
 from agent.graph import _route_after_planner, _route_after_tools
 from agent.state import AgentState, TaskStatus
-from langchain_core.messages import HumanMessage
-
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

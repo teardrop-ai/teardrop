@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from tools.definitions._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
-
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 

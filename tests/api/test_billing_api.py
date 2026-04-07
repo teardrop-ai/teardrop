@@ -22,7 +22,6 @@ import pytest
 
 from billing import PricingRule
 
-
 # ─── /billing/pricing ────────────────────────────────────────────────────────
 
 

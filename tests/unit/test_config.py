@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 import config
 from config import Settings
 

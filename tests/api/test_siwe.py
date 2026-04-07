@@ -21,6 +21,7 @@ async def test_get_siwe_nonce(anon_client, monkeypatch):
 async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     """SIWE login with a valid signature should return a JWT."""
     from datetime import datetime, timezone
+
     from wallets import Wallet
 
     mock_wallet = Wallet(
@@ -129,9 +130,10 @@ async def test_auth_me_email_user(api_client):
 @pytest.mark.anyio
 async def test_auth_me_siwe_user(test_settings):
     """SIWE-authenticated user gets wallet fields in the response."""
+    from httpx import ASGITransport, AsyncClient
+
     from app import app
     from auth import require_auth
-    from httpx import ASGITransport, AsyncClient
 
     async def _mock_siwe_auth():
         return {

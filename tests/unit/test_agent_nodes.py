@@ -6,10 +6,8 @@ No real LLM calls or tool executions; all external interactions are mocked.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import agent.nodes as nodes_module
@@ -22,7 +20,6 @@ from agent.nodes import (
     ui_generator_node,
 )
 from agent.state import AgentState, TaskStatus
-
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

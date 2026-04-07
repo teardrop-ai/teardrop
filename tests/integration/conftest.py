@@ -14,7 +14,6 @@ import uuid
 import asyncpg
 import pytest
 
-
 _TEST_DB_URL = os.getenv("DATABASE_URL", "")
 
 
@@ -107,9 +106,9 @@ def docker_postgres():
 @pytest.fixture
 async def db_pool(docker_postgres: str):
     """Create an asyncpg pool, initialise all schemas, yield pool, truncate tables."""
+    from usage import init_usage_db
     from users import init_user_db
     from wallets import init_wallets_db
-    from usage import init_usage_db
 
     pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
 
@@ -122,7 +121,8 @@ async def db_pool(docker_postgres: str):
     # Truncate all tables so each test function gets a clean slate.
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE TABLE siwe_nonces, wallets, usage_events, users, orgs RESTART IDENTITY CASCADE"
+            "TRUNCATE TABLE siwe_nonces, wallets, usage_events, users, orgs RESTART "
+            "IDENTITY CASCADE"
         )
 
     await pool.close()

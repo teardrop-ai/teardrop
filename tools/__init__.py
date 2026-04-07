@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-from tools.registry import ToolRegistry
 from tools.definitions import register_all
+from tools.registry import ToolRegistry
 
 # ─── Global registry singleton ────────────────────────────────────────────────
 

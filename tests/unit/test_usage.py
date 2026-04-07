@@ -10,7 +10,6 @@ import pytest
 import usage as usage_module
 from usage import UsageEvent, UsageSummary
 
-
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
 
 

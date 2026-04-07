@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic import BaseModel
 
-import pytest
-
 from tools.registry import ToolDefinition, ToolRegistry
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
