@@ -44,7 +44,7 @@ def create_siwe_message(nonce: str, address: str, domain: str) -> str:
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         now = datetime.utcnow()
     expires_at = now + timedelta(hours=1)
-    
+
     message = SiweMessage(
         domain=domain,
         address=address,
@@ -72,7 +72,7 @@ def get_jwt_via_siwe(base_url: str, siwe_message: str, signature: str) -> str:
     """Exchange SIWE message + signature for JWT."""
     print(f"\n   [DEBUG] Full SIWE message:\n{siwe_message}\n")
     print(f"   [DEBUG] Signature: {signature[:50]}...\n")
-    
+
     resp = requests.post(
         f"{base_url}/token",
         json={
@@ -94,7 +94,7 @@ def call_agent_run_no_payment(base_url: str, jwt: str) -> dict:
         json={"message": "What is 2+2?", "thread_id": "test-1"},
         headers={"Authorization": f"Bearer {jwt}"},
     )
-    
+
     if resp.status_code == 402:
         print("✓ Got 402 Payment Required (expected)")
         return {
@@ -144,7 +144,9 @@ def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
         payload_dict = json.loads(payload_json)
         inner = payload_dict.get("payload", {})
         auth = inner.get("authorization", {})
-        print(f"   Authorization: from={auth.get('from')} to={auth.get('to')} value={auth.get('value')}")
+        print(
+            f"   Authorization: from={auth.get('from')} to={auth.get('to')} value={auth.get('value')}"
+        )
         print(f"   validAfter={auth.get('validAfter')} validBefore={auth.get('validBefore')}")
         print(f"   nonce={str(auth.get('nonce', ''))[:20]}...")
     except Exception:
@@ -165,29 +167,29 @@ def call_agent_run_with_payment(
         "Authorization": f"Bearer {jwt}",
         "X-PAYMENT": payment_signature,
     }
-    
+
     resp = requests.post(
         f"{base_url}/agent/run",
         json={"message": "What is 2+2?", "thread_id": "test-1"},
         headers=headers,
         stream=True,
     )
-    
+
     if resp.status_code != 200:
         print(f"✗ Expected 200, got {resp.status_code}")
         print(resp.text)
         sys.exit(1)
-    
+
     print("✓ Got 200 OK (stream started)")
     print("\n--- SSE Stream Events ---")
-    
+
     settlement_tx = None
     for line in resp.iter_lines():
         if not line:
             continue
-        
+
         line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-        
+
         # Parse SSE event format: "event: TYPE\ndata: JSON"
         if line_str.startswith("event:"):
             event_type = line_str.split(":", 1)[1].strip()
@@ -195,21 +197,21 @@ def call_agent_run_with_payment(
             event_data_str = line_str.split(":", 1)[1].strip()
             try:
                 event_data = json.loads(event_data_str)
-                
+
                 if event_type == "BILLING_SETTLEMENT":
                     settlement_tx = event_data.get("tx_hash", "")
                     print(f"\n🎉 BILLING_SETTLEMENT event:")
                     print(f"   tx_hash: {settlement_tx}")
                     print(f"   amount_usdc: {event_data.get('amount_usdc')}")
                     print(f"   network: {event_data.get('network')}")
-                
+
                 elif event_type in ["TEXT_MESSAGE_CONTENT", "USAGE_SUMMARY"]:
                     print(f"[{event_type}] {event_data}")
                 elif event_type in ["RUN_STARTED", "RUN_FINISHED", "DONE"]:
                     print(f"[{event_type}] ✓")
             except json.JSONDecodeError:
                 pass
-    
+
     if settlement_tx:
         print(f"\n✓ Settlement successful!")
         print(f"  View on Sepolia Etherscan: https://sepolia.basescan.org/tx/{settlement_tx}")
@@ -223,40 +225,40 @@ def main():
         print("\nExample:")
         print("  python test_x402_payment.py 0xabc123... https://teardrop.onrender.com")
         sys.exit(1)
-    
+
     private_key = sys.argv[1]
     base_url = sys.argv[2].rstrip("/")
-    
+
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
-    
+
     # Derive account from private key
     account = Account.from_key(private_key)
     address = account.address
     domain = base_url.replace("https://", "").replace("http://", "")
-    
+
     print(f"🔑 Address: {address}")
     print(f"🌐 Domain: {domain}")
     print(f"🔗 Base URL: {base_url}")
     print()
-    
+
     # Step 1: Get nonce
     print("→ Step 1: Getting SIWE nonce...")
     nonce = get_nonce(base_url)
     print(f"✓ Nonce: {nonce[:16]}...")
-    
+
     # Step 2: Sign SIWE message
     print("\n→ Step 2: Creating and signing SIWE message...")
     siwe_msg = create_siwe_message(nonce, address, domain)
     print(f"   SIWE message: {siwe_msg[:100]}...")
     siwe_sig = sign_message(siwe_msg, private_key)
     print(f"✓ Signed SIWE message")
-    
+
     # Step 3: Get JWT
     print("\n→ Step 3: Exchanging SIWE for JWT...")
     jwt = get_jwt_via_siwe(base_url, siwe_msg, siwe_sig)
     print(f"✓ JWT: {jwt[:50]}...")
-    
+
     # Step 4: Call /agent/run without payment
     print("\n→ Step 4: Calling /agent/run (no payment)...")
     payment_required = call_agent_run_no_payment(base_url, jwt)
@@ -266,11 +268,13 @@ def main():
         print("⚠ No payment requirements in 402 response")
         print(f"   Full response: {payment_required['body']}")
         sys.exit(1)
-    print(f"   Payment: {payment_requirements[0].get('amount')} atomic USDC on {payment_requirements[0].get('network')}")
+    print(
+        f"   Payment: {payment_requirements[0].get('amount')} atomic USDC on {payment_requirements[0].get('network')}"
+    )
     print(f"   Asset: {payment_requirements[0].get('asset')}")
     print(f"   pay_to: {payment_requirements[0].get('payTo')}")
     print(f"   extra: {payment_requirements[0].get('extra')}")
-    
+
     # Step 5: Sign x402 payment
     print("\n→ Step 5: Signing x402 payment...")
     try:
@@ -279,9 +283,10 @@ def main():
     except Exception as e:
         print(f"✗ Error signing payment: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
-    
+
     # Step 6: Call /agent/run with payment
     print("\n→ Step 6: Calling /agent/run with signed payment...")
     call_agent_run_with_payment(base_url, jwt, payment_sig)

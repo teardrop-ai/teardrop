@@ -104,6 +104,7 @@ No markdown, no prose — pure JSON.
 
 # ─── Nodes ────────────────────────────────────────────────────────────────────
 
+
 async def planner_node(state: AgentState) -> dict[str, Any]:
     """Reasoning / planning node.  Calls the LLM with bound tools."""
     logger.debug("planner_node: entry, %d messages", len(state.messages))
@@ -139,8 +140,12 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     # ── Accumulate token usage ────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
     if hasattr(response, "usage_metadata") and response.usage_metadata:
-        usage["tokens_in"] = usage.get("tokens_in", 0) + response.usage_metadata.get("input_tokens", 0)
-        usage["tokens_out"] = usage.get("tokens_out", 0) + response.usage_metadata.get("output_tokens", 0)
+        usage["tokens_in"] = usage.get("tokens_in", 0) + response.usage_metadata.get(
+            "input_tokens", 0
+        )
+        usage["tokens_out"] = usage.get("tokens_out", 0) + response.usage_metadata.get(
+            "output_tokens", 0
+        )
 
     return {
         "messages": [response],
@@ -246,9 +251,11 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _extract_a2ui_from_text(text: str) -> list[A2UIComponent]:
     """Extract components from a ```a2ui ... ``` fenced block."""
     import re
+
     pattern = r"```a2ui\s*(\{.*?\})\s*```"
     match = re.search(pattern, text, re.DOTALL)
     if not match:
@@ -270,11 +277,12 @@ def _parse_a2ui_json(raw: str) -> list[A2UIComponent]:
 def _contains_structured_data(text: str) -> bool:
     """Heuristic: does the text contain tables, lists, or numeric data?"""
     import re
+
     indicators = [
-        r"\|.*\|",        # Markdown table
-        r"^\s*[-*]\s+",   # Bullet list
-        r"\d+\.\s+\w+",   # Numbered list
-        r"\b\d+[.,]\d+\b",# Decimal numbers
+        r"\|.*\|",  # Markdown table
+        r"^\s*[-*]\s+",  # Bullet list
+        r"\d+\.\s+\w+",  # Numbered list
+        r"\b\d+[.,]\d+\b",  # Decimal numbers
     ]
     for pattern in indicators:
         if re.search(pattern, text, re.MULTILINE):

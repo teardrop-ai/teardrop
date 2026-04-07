@@ -78,8 +78,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "RS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_issuer: str = "teardrop"
-    jwt_client_id: str = Field(default="teardrop-client", description="Client ID for token endpoint")
-    jwt_client_secret: str = Field(default="", description="Client secret for token endpoint (set in .env)")
+    jwt_client_id: str = Field(
+        default="teardrop-client", description="Client ID for token endpoint"
+    )
+    jwt_client_secret: str = Field(
+        default="", description="Client secret for token endpoint (set in .env)"
+    )
 
     @cached_property
     def jwt_private_key(self) -> str:
@@ -93,9 +97,7 @@ class Settings(BaseSettings):
     ethereum_rpc_url: str = Field(
         default="", description="Ethereum mainnet JSON-RPC URL (Alchemy/Infura/etc.)"
     )
-    base_rpc_url: str = Field(
-        default="", description="Base L2 JSON-RPC URL"
-    )
+    base_rpc_url: str = Field(default="", description="Base L2 JSON-RPC URL")
     siwe_domain: str = Field(
         default="", description="Expected domain in SIWE messages (defaults to app_host if empty)"
     )
@@ -144,7 +146,8 @@ class Settings(BaseSettings):
         description="x402 network identifier (Base Sepolia for dev, eip155:8453 for prod)",
     )
     x402_run_price: str = Field(
-        default="$0.01", description="Flat price per /agent/run request (exact scheme, used as fallback)"
+        default="$0.01",
+        description="Flat price per /agent/run request (exact scheme, used as fallback)",
     )
     x402_scheme: str = Field(
         default="exact",
@@ -155,8 +158,12 @@ class Settings(BaseSettings):
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
     )
     # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
-    stripe_secret_key: str = Field(default="", description="Stripe secret key (sk_live_... or sk_test_...)")
-    stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret (whsec_...)")
+    stripe_secret_key: str = Field(
+        default="", description="Stripe secret key (sk_live_... or sk_test_...)"
+    )
+    stripe_webhook_secret: str = Field(
+        default="", description="Stripe webhook signing secret (whsec_...)"
+    )
     stripe_success_url: str = Field(default="https://teardrop.dev/dashboard?topup=success")
     stripe_cancel_url: str = Field(default="https://teardrop.dev/dashboard?topup=cancelled")
 

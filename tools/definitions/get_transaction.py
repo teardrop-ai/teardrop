@@ -15,6 +15,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class GetTransactionInput(BaseModel):
     tx_hash: str = Field(..., description="Transaction hash (0x…)")
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
@@ -33,6 +34,7 @@ class GetTransactionOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def get_transaction(tx_hash: str, chain_id: int = 1) -> dict[str, Any]:
     """Return transaction details and receipt status."""

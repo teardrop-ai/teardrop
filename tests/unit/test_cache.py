@@ -22,7 +22,7 @@ class TestInitRedis:
         mock_client = AsyncMock()
         mock_client.ping = AsyncMock(return_value="PONG")
 
-        with patch("redis.asyncio.from_url", return_value=mock_client):
+        with patch("redis.asyncio.from_url", new=AsyncMock(return_value=mock_client)):
             await cache_module.init_redis("redis://localhost:6379")
             assert cache_module.get_redis() is not None
             mock_client.ping.assert_called_once()

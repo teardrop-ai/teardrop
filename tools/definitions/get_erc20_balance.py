@@ -40,6 +40,7 @@ _ERC20_ABI = [
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class GetErc20BalanceInput(BaseModel):
     wallet_address: str = Field(..., description="Wallet address (0x…)")
     token_address: str = Field(..., description="ERC-20 token contract address (0x…)")
@@ -57,6 +58,7 @@ class GetErc20BalanceOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def get_erc20_balance(
     wallet_address: str,
@@ -93,9 +95,7 @@ async def _fetch_token_info(contract: Any, wallet: str) -> tuple[int, str, int]:
     symbol_task = asyncio.ensure_future(contract.functions.symbol().call())
     decimals_task = asyncio.ensure_future(contract.functions.decimals().call())
 
-    balance_raw, symbol, decimals = await asyncio.gather(
-        balance_task, symbol_task, decimals_task
-    )
+    balance_raw, symbol, decimals = await asyncio.gather(balance_task, symbol_task, decimals_task)
     return int(balance_raw), str(symbol), int(decimals)
 
 

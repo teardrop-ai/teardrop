@@ -30,6 +30,7 @@ from billing import PricingRule
 async def test_billing_pricing_when_disabled(api_client, monkeypatch):
     """When billing is disabled the endpoint returns {billing_enabled: false}."""
     import app as app_module
+
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = False
     monkeypatch.setattr(app_module, "settings", mock_settings)
@@ -43,6 +44,7 @@ async def test_billing_pricing_when_disabled(api_client, monkeypatch):
 async def test_billing_pricing_when_enabled_with_rule(api_client, monkeypatch):
     """When billing is enabled and a pricing rule exists the rule is returned."""
     import app as app_module
+
     mock_rule = PricingRule(id="default", name="Default", run_price_usdc=10_000)
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = True
@@ -63,6 +65,7 @@ async def test_billing_pricing_when_enabled_with_rule(api_client, monkeypatch):
 async def test_billing_pricing_enabled_no_rule(api_client, monkeypatch):
     """When billing is enabled but DB has no pricing rule, pricing is null."""
     import app as app_module
+
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = True
     monkeypatch.setattr(app_module, "settings", mock_settings)
@@ -79,6 +82,7 @@ async def test_billing_pricing_enabled_no_rule(api_client, monkeypatch):
 async def test_billing_pricing_no_auth_required(anon_client, monkeypatch):
     """The pricing endpoint is public — unauthenticated requests succeed."""
     import app as app_module
+
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = False
     monkeypatch.setattr(app_module, "settings", mock_settings)
@@ -178,9 +182,7 @@ async def test_admin_billing_revenue_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_admin_billing_revenue_returns_summary(admin_api_client, monkeypatch):
     mock_summary = {"total_settlements": 5, "total_revenue_usdc": 50_000}
-    monkeypatch.setattr(
-        "app.get_revenue_summary", AsyncMock(return_value=mock_summary)
-    )
+    monkeypatch.setattr("app.get_revenue_summary", AsyncMock(return_value=mock_summary))
 
     resp = await admin_api_client.get("/admin/billing/revenue")
     assert resp.status_code == 200
@@ -194,9 +196,7 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
     mock_fn = AsyncMock(return_value={"total_settlements": 2, "total_revenue_usdc": 20_000})
     monkeypatch.setattr("app.get_revenue_summary", mock_fn)
 
-    resp = await admin_api_client.get(
-        "/admin/billing/revenue?start=2026-01-01&end=2026-12-31"
-    )
+    resp = await admin_api_client.get("/admin/billing/revenue?start=2026-01-01&end=2026-12-31")
     assert resp.status_code == 200
     # Verify the function was actually called with parsed datetime args
     mock_fn.assert_called_once()
@@ -232,7 +232,12 @@ async def test_billing_balance_no_org_id_returns_400(anon_client, test_settings,
     from auth import require_auth
 
     async def _mock_no_org():
-        return {"sub": "client-id", "org_id": "", "role": "user", "auth_method": "client_credentials"}
+        return {
+            "sub": "client-id",
+            "org_id": "",
+            "role": "user",
+            "auth_method": "client_credentials",
+        }
 
     app.dependency_overrides[require_auth] = _mock_no_org
     try:

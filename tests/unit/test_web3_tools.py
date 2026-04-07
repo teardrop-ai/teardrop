@@ -27,9 +27,7 @@ class TestGetEthBalance:
             "tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3
         )
 
-        result = await get_eth_balance(
-            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=1
-        )
+        result = await get_eth_balance("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=1)
 
         assert result["balance_wei"] == "1000000000000000000"
         assert result["balance_eth"] == "1"
@@ -47,14 +45,15 @@ class TestGetEthBalance:
 
         monkeypatch.setattr(
             "tools.definitions.get_eth_balance.get_web3",
-            lambda chain_id: (_ for _ in ()).throw(ValueError(f"Unsupported or unconfigured chain_id={chain_id}")),
+            lambda chain_id: (_ for _ in ()).throw(
+                ValueError(f"Unsupported or unconfigured chain_id={chain_id}")
+            ),
         )
 
         with pytest.raises(Exception):
             from tools.definitions.get_eth_balance import get_eth_balance
-            await get_eth_balance(
-                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=9999
-            )
+
+            await get_eth_balance("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=9999)
 
     async def test_base_chain_is_supported(self, test_settings, monkeypatch):
         from tools.definitions.get_eth_balance import get_eth_balance
@@ -66,9 +65,7 @@ class TestGetEthBalance:
             "tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3
         )
 
-        result = await get_eth_balance(
-            "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=8453
-        )
+        result = await get_eth_balance("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=8453)
         assert result["chain_id"] == 8453
 
 
@@ -126,9 +123,7 @@ class TestGetBlock:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=mock_block)
 
-        monkeypatch.setattr(
-            "tools.definitions.get_block.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_block.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_block("latest", chain_id=1)
 
@@ -151,9 +146,7 @@ class TestGetBlock:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=mock_block)
 
-        monkeypatch.setattr(
-            "tools.definitions.get_block.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_block.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_block("100", chain_id=1)
         assert result["number"] == 100
@@ -206,9 +199,7 @@ class TestGetTransaction:
         }
         mock_w3 = MagicMock()
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
-        mock_w3.eth.get_transaction_receipt = AsyncMock(
-            side_effect=Exception("not found")
-        )
+        mock_w3.eth.get_transaction_receipt = AsyncMock(side_effect=Exception("not found"))
 
         monkeypatch.setattr(
             "tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3
@@ -228,13 +219,9 @@ class TestResolveEns:
         from tools.definitions.resolve_ens import resolve_ens
 
         mock_w3 = MagicMock()
-        mock_w3.ens.address = AsyncMock(
-            return_value="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
-        )
+        mock_w3.ens.address = AsyncMock(return_value="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
 
-        monkeypatch.setattr(
-            "tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
 
         result = await resolve_ens("vitalik.eth")
 
@@ -246,13 +233,9 @@ class TestResolveEns:
         from tools.definitions.resolve_ens import resolve_ens
 
         mock_w3 = MagicMock()
-        mock_w3.ens.address = AsyncMock(
-            side_effect=Exception("Name not found")
-        )
+        mock_w3.ens.address = AsyncMock(side_effect=Exception("Name not found"))
 
-        monkeypatch.setattr(
-            "tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
 
         result = await resolve_ens("doesnotexist123456789.eth")
 

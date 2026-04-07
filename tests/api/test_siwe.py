@@ -146,9 +146,7 @@ async def test_auth_me_siwe_user(test_settings):
 
     app.dependency_overrides[require_auth] = _mock_siwe_auth
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/auth/me")
     finally:
         app.dependency_overrides.pop(require_auth, None)

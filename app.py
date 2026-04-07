@@ -133,7 +133,9 @@ def _validate_production_config(s: "Settings") -> None:
                 "JWT_CLIENT_SECRET is not set. "
                 "Generate a strong random secret and set it as an environment variable."
             )
-        logger.warning("%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix)
+        logger.warning(
+            "%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix
+        )
 
     # CORS — open wildcard is acceptable for bearer-token APIs, but flag it loudly.
     if s.cors_origins in ("", "*"):
@@ -263,6 +265,7 @@ async def _check_rate_limit(client_ip: str) -> bool:
 
 # ─── AG-UI event helpers ──────────────────────────────────────────────────────
 
+
 def _sse_event(event_type: str, data: dict[str, Any]) -> dict[str, str]:
     """Format a Server-Sent Event dict for sse_starlette."""
     return {"event": event_type, "data": json.dumps(data)}
@@ -286,6 +289,7 @@ _EV_DONE = "DONE"
 
 # ─── Request / response models ────────────────────────────────────────────────
 
+
 class AgentRunRequest(BaseModel):
     message: str = Field(..., description="User message to send to the agent", max_length=4096)
     thread_id: str = Field(
@@ -299,6 +303,7 @@ class AgentRunRequest(BaseModel):
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
+
 
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
@@ -461,9 +466,8 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid client credentials",
                 )
-            if (
-                body.client_id != settings.jwt_client_id
-                or not hmac.compare_digest(body.client_secret, settings.jwt_client_secret)
+            if body.client_id != settings.jwt_client_id or not hmac.compare_digest(
+                body.client_secret, settings.jwt_client_secret
             ):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -527,6 +531,7 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
 
     # Checksummed address from the verified message
     from web3 import Web3
+
     address = Web3.to_checksum_address(msg.address)
     chain_id = int(msg.chain_id) if msg.chain_id else 1
 
@@ -642,7 +647,9 @@ async def agent_run(
     scoped_thread_id = f"{user_id}:{body.thread_id}"
     logger.info(
         "agent_run start run_id=%s thread_id=%s user=%s",
-        run_id, scoped_thread_id, user_id,
+        run_id,
+        scoped_thread_id,
+        user_id,
     )
 
     # ── Billing gate ────────────────────────────────────────────────────────
@@ -653,9 +660,8 @@ async def agent_run(
     auth_method = payload.get("auth_method", "")
     if settings.billing_enabled and auth_method in settings.billable_auth_methods:
         if auth_method == "siwe":
-            payment_header = (
-                request.headers.get("payment-signature")
-                or request.headers.get("x-payment")
+            payment_header = request.headers.get("payment-signature") or request.headers.get(
+                "x-payment"
             )
             if not payment_header:
                 return JSONResponse(
@@ -852,7 +858,8 @@ async def agent_run(
                     await record_settlement(usage_event.id, 0, "", "failed")
                     logger.warning(
                         "Settlement failed run_id=%s: %s",
-                        run_id, billing_settled.error,
+                        run_id,
+                        billing_settled.error,
                     )
 
         yield _sse_event(
@@ -1000,6 +1007,7 @@ async def link_wallet(
         raise HTTPException(status_code=401, detail="SIWE verification error")
 
     from web3 import Web3
+
     address = Web3.to_checksum_address(msg.address)
     chain_id = int(msg.chain_id) if msg.chain_id else 1
 
@@ -1130,10 +1138,7 @@ async def billing_history(
     """Return settlement history for the authenticated user."""
     history = await get_billing_history(payload["sub"], min(limit, 200))
     return JSONResponse(
-        content=[
-            {**row, "created_at": row["created_at"].isoformat()}
-            for row in history
-        ]
+        content=[{**row, "created_at": row["created_at"].isoformat()} for row in history]
     )
 
 
@@ -1178,10 +1183,7 @@ async def billing_invoices(
 
     cursor_dt = datetime.fromisoformat(cursor) if cursor else None
     invoices = await get_invoices(payload["sub"], min(limit, 200), cursor_dt)
-    serialized = [
-        {**row, "created_at": row["created_at"].isoformat()}
-        for row in invoices
-    ]
+    serialized = [{**row, "created_at": row["created_at"].isoformat()} for row in invoices]
     next_cursor = serialized[-1]["created_at"] if serialized else None
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
@@ -1195,9 +1197,7 @@ async def billing_invoice_by_run(
     invoice = await get_invoice_by_run(run_id, payload["sub"])
     if invoice is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
-    return JSONResponse(
-        content={**invoice, "created_at": invoice["created_at"].isoformat()}
-    )
+    return JSONResponse(content={**invoice, "created_at": invoice["created_at"].isoformat()})
 
 
 class TopupRequest(BaseModel):
@@ -1241,10 +1241,7 @@ async def billing_credit_history(
         )
     cursor_dt = datetime.fromisoformat(cursor) if cursor else None
     entries = await get_credit_history(org_id, operation, min(limit, 200), cursor_dt)
-    serialized = [
-        {**row, "created_at": row["created_at"].isoformat()}
-        for row in entries
-    ]
+    serialized = [{**row, "created_at": row["created_at"].isoformat()} for row in entries]
     next_cursor = serialized[-1]["created_at"] if serialized else None
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
@@ -1253,7 +1250,9 @@ async def billing_credit_history(
 
 
 class StripeTopupRequest(BaseModel):
-    amount_cents: int = Field(..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)")
+    amount_cents: int = Field(
+        ..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)"
+    )
 
 
 @app.post("/billing/topup/stripe", tags=["Billing"])
@@ -1289,9 +1288,13 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
     try:
         await handle_stripe_webhook(payload, sig_header)
     except _stripe.SignatureVerificationError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature"
+        )
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload"
+        )
     return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok"})
 
 

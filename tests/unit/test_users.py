@@ -25,6 +25,7 @@ class TestHashAndVerifySecret:
 
     def test_deterministic_with_same_salt(self):
         import os
+
         salt = os.urandom(32)
         h1, s1 = _hash_secret("pw", salt)
         h2, s2 = _hash_secret("pw", salt)

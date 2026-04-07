@@ -44,6 +44,7 @@ class UsageEvent(BaseModel):
 
 class UsageSummary(BaseModel):
     """Aggregated usage totals for a date range."""
+
     total_runs: int = 0
     total_tokens_in: int = 0
     total_tokens_out: int = 0

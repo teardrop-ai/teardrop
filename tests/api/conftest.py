@@ -31,9 +31,7 @@ async def api_client(test_settings):
         }
 
     app.dependency_overrides[require_auth] = _mock_auth
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.pop(require_auth, None)
@@ -63,9 +61,7 @@ async def admin_api_client(test_settings):
 
     app.dependency_overrides[require_auth] = _mock_auth
     app.dependency_overrides[require_admin] = _mock_admin
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.pop(require_auth, None)
@@ -77,7 +73,5 @@ async def anon_client(test_settings):
     """AsyncClient with NO auth overrides — tests that expect 401."""
     from app import app
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client

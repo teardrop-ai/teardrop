@@ -15,6 +15,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class GetEthBalanceInput(BaseModel):
     address: str = Field(..., description="Ethereum address (0x…)")
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
@@ -28,6 +29,7 @@ class GetEthBalanceOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def get_eth_balance(address: str, chain_id: int = 1) -> dict[str, Any]:
     """Return the native ETH balance in both wei and ether."""

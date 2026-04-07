@@ -15,6 +15,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class GetBlockInput(BaseModel):
     block_identifier: str = Field(
         default="latest",
@@ -33,6 +34,7 @@ class GetBlockOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def get_block(
     block_identifier: str = "latest",

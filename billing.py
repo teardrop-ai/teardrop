@@ -84,9 +84,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     from x402.schemas import ResourceConfig
     from x402.server import x402ResourceServer
 
-    facilitator = HTTPFacilitatorClient(
-        FacilitatorConfig(url=settings.x402_facilitator_url)
-    )
+    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.x402_facilitator_url))
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
     server.initialize()
@@ -99,9 +97,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         _last_requirements_price_usdc = rule.run_price_usdc
     else:
         price_str = settings.x402_run_price
-        logger.warning(
-            "No pricing_rules row found; using config fallback price=%s", price_str
-        )
+        logger.warning("No pricing_rules row found; using config fallback price=%s", price_str)
 
     config = ResourceConfig(
         scheme=settings.x402_scheme,
@@ -160,6 +156,7 @@ class PricingRule(BaseModel):
 
 class BillingResult(BaseModel):
     """Result of a verify or settle operation, carried through the SSE stream."""
+
     verified: bool = False
     payment_payload: object | None = None
     payment_requirements: object | None = None
@@ -204,10 +201,7 @@ def build_402_response_body() -> dict:
     reqs = get_payment_requirements()
     return {
         "error": "Payment required",
-        "accepts": [
-            r.model_dump() if hasattr(r, "model_dump") else r.__dict__
-            for r in reqs
-        ],
+        "accepts": [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in reqs],
         "x402Version": 2,
     }
 
@@ -284,6 +278,7 @@ async def verify_payment(payment_header: str) -> BillingResult:
 
     try:
         import base64 as _base64
+
         payload = parse_payment_payload(_base64.b64decode(payment_header))
     except Exception as exc:
         logger.warning("Failed to parse payment header: %s", exc)
@@ -335,7 +330,9 @@ async def settle_payment(billing_result: BillingResult) -> BillingResult:
         return billing_result
 
     billing_result.settled = True
-    billing_result.tx_hash = getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
+    billing_result.tx_hash = (
+        getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
+    )
     # Extract settled amount from the requirement
     req = billing_result.payment_requirements
     billing_result.amount_usdc = int(getattr(req, "amount", "0") or "0")
@@ -477,9 +474,7 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
     tool_calls = int(usage_data.get("tool_calls", 0))
 
     has_per_unit_rates = (
-        rule.tokens_in_cost_per_1k > 0
-        or rule.tokens_out_cost_per_1k > 0
-        or rule.tool_call_cost > 0
+        rule.tokens_in_cost_per_1k > 0 or rule.tokens_out_cost_per_1k > 0 or rule.tool_call_cost > 0
     )
 
     if not has_per_unit_rates:
@@ -832,9 +827,7 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
 
     settings = get_settings()
 
-    event = stripe.Webhook.construct_event(
-        payload, sig_header, settings.stripe_webhook_secret
-    )
+    event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
 
     if event.type != "checkout.session.completed":
         return
@@ -922,4 +915,3 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
         amount_usdc,
         event.id,
     )
-

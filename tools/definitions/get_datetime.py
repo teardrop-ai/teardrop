@@ -13,6 +13,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class GetDatetimeInput(BaseModel):
     format: str = Field(
         default="%Y-%m-%d %H:%M:%S UTC",
@@ -27,6 +28,7 @@ class GetDatetimeOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def get_datetime(format: str = "%Y-%m-%d %H:%M:%S UTC") -> dict[str, str]:
     """Return the current UTC date and time in the requested format."""

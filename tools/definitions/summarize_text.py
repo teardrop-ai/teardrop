@@ -14,6 +14,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class SummarizeTextInput(BaseModel):
     text: str = Field(..., description="Text to summarize", max_length=10_000)
 
@@ -27,6 +28,7 @@ class SummarizeTextOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def summarize_text(text: str) -> dict[str, Any]:
     """Return basic statistics about the provided text."""

@@ -66,9 +66,7 @@ async def test_admin_usage_org_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_usage_me_with_date_range(api_client, monkeypatch):
-    monkeypatch.setattr(
-        "app.get_usage_by_user", AsyncMock(return_value=UsageSummary())
-    )
+    monkeypatch.setattr("app.get_usage_by_user", AsyncMock(return_value=UsageSummary()))
     resp = await api_client.get(
         "/usage/me",
         params={"start": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59"},

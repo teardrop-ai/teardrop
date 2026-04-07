@@ -58,9 +58,7 @@ async def init_wallets_db(pool: asyncpg.Pool) -> None:
         )
         """
     )
-    await pool.execute(
-        "CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets (user_id)"
-    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_wallets_user ON wallets (user_id)")
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS siwe_nonces (
@@ -111,8 +109,13 @@ async def create_wallet(
     await pool.execute(
         "INSERT INTO wallets (id, address, chain_id, user_id, org_id, is_primary, created_at)"
         " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        wallet.id, wallet.address, wallet.chain_id,
-        wallet.user_id, wallet.org_id, wallet.is_primary, wallet.created_at,
+        wallet.id,
+        wallet.address,
+        wallet.chain_id,
+        wallet.user_id,
+        wallet.org_id,
+        wallet.is_primary,
+        wallet.created_at,
     )
     return wallet
 
@@ -123,7 +126,8 @@ async def get_wallet_by_address(address: str, chain_id: int = 1) -> Wallet | Non
     row = await pool.fetchrow(
         "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at"
         " FROM wallets WHERE address = $1 AND chain_id = $2",
-        address, chain_id,
+        address,
+        chain_id,
     )
     if row is None:
         return None
@@ -165,7 +169,8 @@ async def delete_wallet(wallet_id: str, user_id: str) -> bool:
     pool = _get_pool()
     result = await pool.execute(
         "DELETE FROM wallets WHERE id = $1 AND user_id = $2",
-        wallet_id, user_id,
+        wallet_id,
+        user_id,
     )
     return result == "DELETE 1"
 
@@ -195,7 +200,8 @@ async def create_nonce() -> str:
     pool = _get_pool()
     await pool.execute(
         "INSERT INTO siwe_nonces (nonce, created_at) VALUES ($1, $2)",
-        nonce, datetime.now(timezone.utc),
+        nonce,
+        datetime.now(timezone.utc),
     )
     return nonce
 
@@ -226,6 +232,7 @@ async def consume_nonce(nonce: str, ttl_seconds: int = 300) -> bool:
            AND created_at > NOW() - INTERVAL '1 second' * $2
         RETURNING nonce
         """,
-        nonce, float(ttl_seconds),
+        nonce,
+        float(ttl_seconds),
     )
     return row is not None

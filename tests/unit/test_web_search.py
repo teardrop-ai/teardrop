@@ -93,8 +93,18 @@ class TestWebSearch:
             "query": "OpenAI",
             "num_results": 2,
             "results": [
-                {"title": "OpenAI.com", "url": "https://openai.com", "snippet": "AI lab", "score": 0.9},
-                {"title": "GPT-4", "url": "https://openai.com/gpt4", "snippet": "Model", "score": 0.8},
+                {
+                    "title": "OpenAI.com",
+                    "url": "https://openai.com",
+                    "snippet": "AI lab",
+                    "score": 0.9,
+                },
+                {
+                    "title": "GPT-4",
+                    "url": "https://openai.com/gpt4",
+                    "snippet": "Model",
+                    "score": 0.8,
+                },
             ],
         }
         monkeypatch.setenv("TAVILY_API_KEY", "fake-key")

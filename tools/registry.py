@@ -29,8 +29,12 @@ class ToolDefinition(BaseModel):
     description: str = Field(..., description="Human/agent-readable description")
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
     input_schema: Any = Field(..., description="Pydantic BaseModel class for input validation")
-    output_schema: Any = Field(default=None, description="Optional Pydantic BaseModel class for output validation")
-    implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
+    output_schema: Any = Field(
+        default=None, description="Optional Pydantic BaseModel class for output validation"
+    )
+    implementation: Callable[..., Any] = Field(
+        ..., description="Async callable that executes the tool"
+    )
 
     # Deprecation lifecycle
     deprecated: bool = False
@@ -73,9 +77,7 @@ class ToolRegistry:
         """Register a tool definition. Overwrites if same name+version exists."""
         bucket = self._tools[tool.name]
         if tool.version in bucket:
-            logger.warning(
-                "Overwriting tool %s v%s", tool.name, tool.version
-            )
+            logger.warning("Overwriting tool %s v%s", tool.name, tool.version)
         bucket[tool.version] = tool
         logger.debug("Registered tool %s v%s", tool.name, tool.version)
 
@@ -200,9 +202,7 @@ class ToolRegistry:
         include_deprecated: bool = False,
     ) -> ToolDefinition | None:
         """Return the highest-semver non-deprecated tool in a name bucket."""
-        candidates = [
-            t for t in bucket.values() if include_deprecated or not t.deprecated
-        ]
+        candidates = [t for t in bucket.values() if include_deprecated or not t.deprecated]
         if not candidates:
             return None
         candidates.sort(key=lambda t: t.parsed_version, reverse=True)

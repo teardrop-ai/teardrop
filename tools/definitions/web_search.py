@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="Search query", max_length=500)
     num_results: int = Field(default=5, ge=1, le=20)
@@ -36,6 +37,7 @@ class WebSearchOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def web_search(query: str, num_results: int = 5) -> dict[str, Any]:
     """Search the web via Tavily.  Falls back to a stub when no API key is set."""
@@ -80,8 +82,7 @@ def _stub_results(query: str, num_results: int) -> dict[str, Any]:
                 "title": "Placeholder result – configure TAVILY_API_KEY",
                 "url": "https://example.com",
                 "snippet": (
-                    "This is a stub result. Set TAVILY_API_KEY in .env "
-                    "to get live search results."
+                    "This is a stub result. Set TAVILY_API_KEY in .env to get live search results."
                 ),
                 "score": None,
             }

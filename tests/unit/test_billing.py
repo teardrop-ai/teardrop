@@ -28,6 +28,7 @@ from billing import (
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _make_rule(**overrides) -> PricingRule:
     defaults = dict(
         id="rule-1",
@@ -111,9 +112,7 @@ class TestCalculateRunCostUsdc:
     async def test_zero_usage_returns_flat_rate(self):
         rule = _make_rule(run_price_usdc=5_000)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 0})
         assert cost == 5_000
 
     async def test_no_pricing_rule_returns_zero(self):
@@ -126,9 +125,7 @@ class TestCalculateRunCostUsdc:
     async def test_tool_calls_only_with_per_unit_rate(self):
         rule = _make_rule(run_price_usdc=0, tool_call_cost=250)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 4}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 4})
         assert cost == 1_000
 
     async def test_missing_usage_keys_default_to_zero(self):
@@ -213,9 +210,7 @@ def _payment_fixture(mock_parse_return=None, mock_parse_side_effect=None):
     if mock_parse_side_effect is not None:
         mock_x402.parse_payment_payload.side_effect = mock_parse_side_effect
     else:
-        mock_x402.parse_payment_payload.return_value = (
-            mock_parse_return or MagicMock()
-        )
+        mock_x402.parse_payment_payload.return_value = mock_parse_return or MagicMock()
     mock_server = MagicMock()
     mock_req = MagicMock()
     return mock_server, mock_req, mock_x402
@@ -233,9 +228,7 @@ class TestVerifyPayment:
             patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
             patch.dict("sys.modules", {"x402": mock_x402}),
         ):
-            result = await verify_payment(
-                base64.b64encode(b"bad data").decode()
-            )
+            result = await verify_payment(base64.b64encode(b"bad data").decode())
         assert result.verified is False
         assert "Malformed payment header" in result.error
 
@@ -275,9 +268,7 @@ class TestVerifyPayment:
         """Server returning is_valid=True sets verified=True and stores payload."""
         mock_payload = MagicMock()
         mock_verify = MagicMock(is_valid=True)
-        mock_server, mock_req, mock_x402 = _payment_fixture(
-            mock_parse_return=mock_payload
-        )
+        mock_server, mock_req, mock_x402 = _payment_fixture(mock_parse_return=mock_payload)
         mock_server.verify_payment = AsyncMock(return_value=mock_verify)
         with (
             patch.object(billing_module, "_server", mock_server),
@@ -293,9 +284,7 @@ class TestVerifyPayment:
     async def test_server_exception_returns_error(self):
         """Exception from server.verify_payment is caught and returns error."""
         mock_server, mock_req, mock_x402 = _payment_fixture()
-        mock_server.verify_payment = AsyncMock(
-            side_effect=Exception("connection refused")
-        )
+        mock_server.verify_payment = AsyncMock(side_effect=Exception("connection refused"))
         with (
             patch.object(billing_module, "_server", mock_server),
             patch.object(billing_module, "_requirements_cache", [mock_req]),
@@ -346,9 +335,7 @@ class TestSettlePayment:
 
     async def test_settle_exception_returns_error(self):
         mock_server = MagicMock()
-        mock_server.settle_payment = AsyncMock(
-            side_effect=Exception("network error")
-        )
+        mock_server.settle_payment = AsyncMock(side_effect=Exception("network error"))
         verified = BillingResult(
             verified=True,
             payment_payload=MagicMock(),
@@ -380,10 +367,13 @@ def _pool_mock():
 
 class _async_ctx:
     """Minimal async context manager that returns *value* on __aenter__."""
+
     def __init__(self, value):
         self._value = value
+
     async def __aenter__(self):
         return self._value
+
     async def __aexit__(self, *args):
         pass
 
@@ -395,13 +385,18 @@ class TestGetCurrentPricing:
         from datetime import datetime, timezone
 
         pool = _pool_mock()
-        pool.fetchrow = AsyncMock(return_value={
-            "id": "p1", "name": "Standard", "run_price_usdc": 10_000,
-            "tokens_in_cost_per_1k": 0, "tokens_out_cost_per_1k": 0,
-            "tool_call_cost": 0,
-            "effective_from": datetime.now(timezone.utc),
-            "created_at": datetime.now(timezone.utc),
-        })
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "id": "p1",
+                "name": "Standard",
+                "run_price_usdc": 10_000,
+                "tokens_in_cost_per_1k": 0,
+                "tokens_out_cost_per_1k": 0,
+                "tool_call_cost": 0,
+                "effective_from": datetime.now(timezone.utc),
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
         with patch.object(billing_module, "_pool", pool):
             rule = await get_current_pricing()
         assert isinstance(rule, PricingRule)
@@ -473,10 +468,16 @@ class TestGetInvoiceByRun:
         from datetime import datetime, timezone
 
         row = {
-            "id": "e1", "run_id": "r1", "thread_id": "t1",
-            "tokens_in": 100, "tokens_out": 50, "tool_calls": 1,
-            "tool_names": ["get_datetime"], "duration_ms": 200,
-            "cost_usdc": 10_000, "settlement_tx": "0xfoo",
+            "id": "e1",
+            "run_id": "r1",
+            "thread_id": "t1",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "tool_calls": 1,
+            "tool_names": ["get_datetime"],
+            "duration_ms": 200,
+            "cost_usdc": 10_000,
+            "settlement_tx": "0xfoo",
             "settlement_status": "settled",
             "created_at": datetime.now(timezone.utc),
         }
@@ -589,3 +590,128 @@ class TestRecordSettlement:
         with patch.object(billing_module, "_pool", pool):
             # Should not raise
             await record_settlement("evt-1", 0, "0x", "failed")
+
+
+# ─── _get_server ──────────────────────────────────────────────────────────────
+
+
+class TestGetServer:
+    def test_get_server_raises_when_not_initialised(self):
+        with patch.object(billing_module, "_server", None):
+            with pytest.raises(RuntimeError, match="Billing not initialised"):
+                billing_module._get_server()
+
+
+# ─── init_billing ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestInitBilling:
+    async def test_init_billing_disabled_sets_pool_and_returns(self):
+        from billing import init_billing
+
+        mock_settings = MagicMock()
+        mock_settings.billing_enabled = False
+        mock_pool = MagicMock()
+
+        with (
+            patch("billing.get_settings", return_value=mock_settings),
+            patch.object(billing_module, "_pool", None),
+        ):
+            await init_billing(mock_pool)
+            assert billing_module._pool is mock_pool
+
+
+# ─── close_billing ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestCloseBilling:
+    async def test_close_billing_resets_all_state(self):
+        from billing import close_billing
+
+        billing_module._server = MagicMock()
+        billing_module._pool = MagicMock()
+        billing_module._requirements_cache = [MagicMock()]
+
+        await close_billing()
+
+        assert billing_module._server is None
+        assert billing_module._pool is None
+        assert billing_module._requirements_cache is None
+
+
+# ─── _get_pool ────────────────────────────────────────────────────────────────
+
+
+class TestGetPool:
+    def test_get_pool_raises_when_uninitialised(self):
+        with patch.object(billing_module, "_pool", None):
+            with pytest.raises(RuntimeError, match="Billing DB not initialised"):
+                billing_module._get_pool()
+
+
+# ─── get_payment_requirements ─────────────────────────────────────────────────
+
+
+class TestGetPaymentRequirements:
+    def test_raises_when_requirements_cache_is_none(self):
+        from billing import get_payment_requirements
+
+        with patch.object(billing_module, "_requirements_cache", None):
+            with pytest.raises(RuntimeError, match="Billing not initialised"):
+                get_payment_requirements()
+
+
+# ─── build_402_response_body ──────────────────────────────────────────────────
+
+
+class TestBuild402ResponseBody:
+    def test_returns_expected_shape(self):
+        from billing import build_402_response_body
+
+        mock_req = MagicMock()
+        mock_req.model_dump.return_value = {"scheme": "exact", "network": "base"}
+
+        with patch.object(billing_module, "_requirements_cache", [mock_req]):
+            result = build_402_response_body()
+
+        assert "error" in result
+        assert "accepts" in result
+        assert result["x402Version"] == 2
+        assert len(result["accepts"]) == 1
+
+
+# ─── build_402_headers ────────────────────────────────────────────────────────
+
+
+class TestBuild402Headers:
+    def test_returns_base64_encoded_header(self):
+        from billing import build_402_headers
+
+        mock_req = MagicMock()
+        mock_req.model_dump.return_value = {"scheme": "exact", "network": "base"}
+
+        with patch.object(billing_module, "_requirements_cache", [mock_req]):
+            result = build_402_headers()
+
+        assert "X-PAYMENT-REQUIRED" in result
+        assert isinstance(result["X-PAYMENT-REQUIRED"], str)
+        assert len(result["X-PAYMENT-REQUIRED"]) > 0
+
+
+# ─── _rebuild_requirements_if_stale ──────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestRebuildRequirementsIfStale:
+    async def test_noop_when_server_is_none(self):
+        with patch.object(billing_module, "_server", None):
+            await billing_module._rebuild_requirements_if_stale()  # should not raise
+
+    async def test_noop_when_no_pricing_rule(self):
+        with (
+            patch.object(billing_module, "_server", MagicMock()),
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=None)),
+        ):
+            await billing_module._rebuild_requirements_if_stale()  # rule is None → early return

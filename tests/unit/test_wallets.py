@@ -77,9 +77,7 @@ class TestGetWalletByAddress:
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=_wallet_row())
         with patch.object(wallets_module, "_pool", pool):
-            wallet = await get_wallet_by_address(
-                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", 1
-            )
+            wallet = await get_wallet_by_address("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", 1)
         assert wallet is not None
         assert wallet.id == "w-1"
 

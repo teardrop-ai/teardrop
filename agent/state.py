@@ -26,7 +26,9 @@ class TaskStatus(str, Enum):
 class A2UIComponent(BaseModel):
     """A single declarative UI component emitted by the agent."""
 
-    type: str = Field(..., description="Component type: text|table|columns|rows|form|button|progress")
+    type: str = Field(
+        ..., description="Component type: text|table|columns|rows|form|button|progress"
+    )
     props: dict[str, Any] = Field(default_factory=dict, description="Component properties")
     children: list["A2UIComponent"] = Field(default_factory=list, description="Nested children")
 

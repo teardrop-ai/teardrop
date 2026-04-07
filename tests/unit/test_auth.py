@@ -48,13 +48,19 @@ def test_invalid_signature_raises(test_settings, tmp_path):
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    other_pub = other_key.public_key().to_cryptography_key() if hasattr(
-        other_key.public_key(), "to_cryptography_key"
-    ) else other_key.public_key()
-    other_pub_pem = other_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    other_pub = (
+        other_key.public_key().to_cryptography_key()
+        if hasattr(other_key.public_key(), "to_cryptography_key")
+        else other_key.public_key()
+    )
+    other_pub_pem = (
+        other_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
 
     with pytest.raises(jwt.InvalidSignatureError):
         jwt.decode(

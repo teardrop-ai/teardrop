@@ -31,8 +31,7 @@ mcp = fastmcp.FastMCP(
     name="teardrop-tools",
     version="1.0.0",
     instructions=(
-        "Teardrop MCP tool server. Provides tools auto-registered from the "
-        "Teardrop tool registry."
+        "Teardrop MCP tool server. Provides tools auto-registered from the Teardrop tool registry."
     ),
 )
 
@@ -46,9 +45,7 @@ def _register_tools_with_mcp() -> None:
         implementation = tool_def["implementation"]
 
         # Create a closure to capture the current tool_def values
-        def _make_handler(
-            impl: Any, schema: Any
-        ) -> Any:
+        def _make_handler(impl: Any, schema: Any) -> Any:
             async def handler(**kwargs: Any) -> Any:
                 validated = schema(**kwargs)
                 return await impl(**validated.model_dump())

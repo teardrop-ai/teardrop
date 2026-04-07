@@ -61,9 +61,7 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
 
     app.dependency_overrides[require_auth] = _siwe_auth
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/agent/run", json={"message": "hello"})
     finally:
         app.dependency_overrides.pop(require_auth, None)
@@ -113,9 +111,7 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
 
     app.dependency_overrides[require_auth] = _email_auth
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/agent/run", json={"message": "hello"})
     finally:
         app.dependency_overrides.pop(require_auth, None)
@@ -127,9 +123,7 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
 
 
 @pytest.mark.anyio
-async def test_agent_run_returns_200_sse_when_billing_disabled(
-    api_client, monkeypatch
-):
+async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monkeypatch):
     """When billing is disabled a well-formed request returns 200 SSE stream."""
 
     async def _empty_astream_events(*args, **kwargs):
@@ -140,7 +134,11 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(
     mock_graph.astream_events = _empty_astream_events
     mock_graph.aget_state = AsyncMock(
         return_value=MagicMock(
-            values={"metadata": {"_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []}}}
+            values={
+                "metadata": {
+                    "_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []}
+                }
+            }
         )
     )
 
@@ -187,9 +185,7 @@ async def test_agent_run_thread_id_scoped_to_user(api_client, monkeypatch):
     monkeypatch.setattr("app.record_usage_event", AsyncMock())
     monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
 
-    await api_client.post(
-        "/agent/run", json={"message": "hi", "thread_id": "my-thread"}
-    )
+    await api_client.post("/agent/run", json={"message": "hi", "thread_id": "my-thread"})
 
     # Thread ID must start with the authenticated user's sub from api_client fixture
     assert captured.get("thread_id", "").startswith("test-user-id:")

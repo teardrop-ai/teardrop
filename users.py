@@ -128,7 +128,9 @@ async def create_org(name: str) -> Org:
     )
     await pool.execute(
         "INSERT INTO orgs (id, name, created_at) VALUES ($1, $2, $3)",
-        org.id, org.name, org.created_at,
+        org.id,
+        org.name,
+        org.created_at,
     )
     return org
 
@@ -155,8 +157,14 @@ async def create_user(
     await pool.execute(
         "INSERT INTO users (id, email, org_id, hashed_secret, salt, role, is_active, created_at)"
         " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        user.id, user.email, user.org_id, user.hashed_secret,
-        user.salt, user.role, True, user.created_at,
+        user.id,
+        user.email,
+        user.org_id,
+        user.hashed_secret,
+        user.salt,
+        user.role,
+        True,
+        user.created_at,
     )
     return user
 
@@ -250,7 +258,11 @@ async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", 
         "INSERT INTO org_client_credentials"
         " (client_id, org_id, hashed_secret, salt, created_at)"
         " VALUES ($1, $2, $3, $4, $5)",
-        client_id, org_id, hashed, salt_hex, now,
+        client_id,
+        org_id,
+        hashed,
+        salt_hex,
+        now,
     )
     cred = OrgClientCredential(
         client_id=client_id,

@@ -63,7 +63,7 @@ class TestExtractA2uiFromText:
         assert result == []
 
     def test_malformed_json_returns_empty_list(self):
-        text = '```a2ui\n{this is not valid json}\n```'
+        text = "```a2ui\n{this is not valid json}\n```"
         result = _extract_a2ui_from_text(text)
         assert result == []
 
@@ -74,11 +74,11 @@ class TestExtractA2uiFromText:
 
     def test_multiple_component_types(self):
         text = (
-            '```a2ui\n'
+            "```a2ui\n"
             '{"components": ['
             '{"type": "text", "props": {"content": "Title"}}, '
             '{"type": "button", "props": {"label": "OK"}}'
-            ']}\n```'
+            "]}\n```"
         )
         result = _extract_a2ui_from_text(text)
         assert len(result) == 2
@@ -195,7 +195,7 @@ class TestPlannerNode:
             result = await planner_node(state)
 
         usage = result["metadata"]["_usage"]
-        assert usage["tokens_in"] == 60   # 10 + 50
+        assert usage["tokens_in"] == 60  # 10 + 50
         assert usage["tokens_out"] == 30  # 5 + 25
 
 
@@ -211,9 +211,7 @@ class TestToolExecutorNode:
         mock_tool.ainvoke = AsyncMock(return_value={"result": 4.0})
 
         state = _make_state(messages=[last_msg])
-        with patch.object(
-            nodes_module, "_cached_tools_by_name", {"calculate": mock_tool}
-        ):
+        with patch.object(nodes_module, "_cached_tools_by_name", {"calculate": mock_tool}):
             result = await tool_executor_node(state)
 
         assert len(result["messages"]) == 1
@@ -259,13 +257,11 @@ class TestToolExecutorNode:
             messages=[last_msg],
             metadata={"_usage": {"tool_calls": 1, "tool_names": ["calculate"]}},
         )
-        with patch.object(
-            nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}
-        ):
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
             result = await tool_executor_node(state)
 
         usage = result["metadata"]["_usage"]
-        assert usage["tool_calls"] == 3          # 1 existing + 2 new
+        assert usage["tool_calls"] == 3  # 1 existing + 2 new
         assert "get_datetime" in usage["tool_names"]
 
     async def test_no_tool_calls_returns_generating_ui(self, test_settings):
@@ -307,7 +303,7 @@ class TestUiGeneratorNode:
         assert result["task_status"] == TaskStatus.COMPLETED
 
     async def test_malformed_a2ui_json_returns_no_components(self, test_settings):
-        text = '```a2ui\n{bad json}\n```'
+        text = "```a2ui\n{bad json}\n```"
         last_msg = _make_ai_message(content=text)
         state = _make_state(messages=[last_msg])
 

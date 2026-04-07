@@ -17,6 +17,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class CalculateInput(BaseModel):
     expression: str = Field(
         ...,
@@ -98,6 +99,7 @@ def _safe_eval(node: ast.expr) -> float:
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def calculate(expression: str) -> dict[str, Any]:
     """Evaluate a safe arithmetic expression and return the numeric result."""

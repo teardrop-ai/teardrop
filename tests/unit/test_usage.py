@@ -53,9 +53,7 @@ class TestRecordUsageEvent:
 
         pool = _pool()
         pool.execute = AsyncMock(side_effect=Exception("DB gone"))
-        event = UsageEvent(
-            user_id="u", org_id="o", thread_id="t", run_id="r"
-        )
+        event = UsageEvent(user_id="u", org_id="o", thread_id="t", run_id="r")
         with patch.object(usage_module, "_pool", pool):
             # Must not raise
             await record_usage_event(event)

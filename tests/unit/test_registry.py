@@ -11,6 +11,7 @@ from tools.registry import ToolDefinition, ToolRegistry
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 class _In(BaseModel):
     value: int
 
@@ -36,6 +37,7 @@ def _make_tool(name: str = "test_tool", version: str = "1.0.0") -> ToolDefinitio
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 def test_register_and_get():
     reg = ToolRegistry()
@@ -133,6 +135,7 @@ def test_to_a2a_skills_shape():
 
 def test_duplicate_registration_overwrites_with_warning(caplog):
     import logging
+
     reg = ToolRegistry()
     reg.register(_make_tool())
     with caplog.at_level(logging.WARNING, logger="tools.registry"):

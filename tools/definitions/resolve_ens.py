@@ -14,6 +14,7 @@ from tools.registry import ToolDefinition
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
+
 class ResolveEnsInput(BaseModel):
     name: str = Field(..., description="ENS name (e.g. 'vitalik.eth')")
 
@@ -25,6 +26,7 @@ class ResolveEnsOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
 
 async def resolve_ens(name: str) -> dict[str, Any]:
     """Resolve an ENS name to an address (mainnet only)."""

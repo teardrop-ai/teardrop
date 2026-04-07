@@ -62,9 +62,7 @@ async def apply_pending(pool: asyncpg.Pool) -> list[str]:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(sql)
-                await conn.execute(
-                    "INSERT INTO _migrations (version) VALUES ($1)", version
-                )
+                await conn.execute("INSERT INTO _migrations (version) VALUES ($1)", version)
 
         logger.info("Migration %s applied.", version)
         newly_applied.append(version)
@@ -87,6 +85,7 @@ async def get_status(pool: asyncpg.Pool) -> dict[str, list[str]]:
 
 
 # ── CLI entry-point ───────────────────────────────────────────────────────────
+
 
 async def _main(args: argparse.Namespace) -> None:
     from config import get_settings
@@ -120,7 +119,9 @@ async def _main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Teardrop migration runner")
-    parser.add_argument("--status", action="store_true", help="Show migration status without applying")
+    parser.add_argument(
+        "--status", action="store_true", help="Show migration status without applying"
+    )
     args = parser.parse_args()
     asyncio.run(_main(args))
 

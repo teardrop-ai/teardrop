@@ -15,6 +15,7 @@ register_all(registry)
 
 # ─── Backward-compatible API ──────────────────────────────────────────────────
 
+
 def get_langchain_tools() -> list:
     """Return LangChain tools from the registry (backward-compatible)."""
     return registry.to_langchain_tools()

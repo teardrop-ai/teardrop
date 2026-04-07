@@ -57,11 +57,17 @@ def docker_postgres():
 
     subprocess.run(
         [
-            "docker", "run", "-d",
-            "--name", container_name,
-            "-p", "5433:5432",
-            "-e", "POSTGRES_PASSWORD=testpass",
-            "-e", "POSTGRES_DB=teardrop_test",
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "-p",
+            "5433:5432",
+            "-e",
+            "POSTGRES_PASSWORD=testpass",
+            "-e",
+            "POSTGRES_DB=teardrop_test",
             "postgres:16-alpine",
         ],
         check=True,
@@ -74,8 +80,12 @@ def docker_postgres():
         try:
             result = subprocess.run(
                 [
-                    "docker", "exec", container_name,
-                    "pg_isready", "-U", "postgres",
+                    "docker",
+                    "exec",
+                    container_name,
+                    "pg_isready",
+                    "-U",
+                    "postgres",
                 ],
                 capture_output=True,
                 timeout=5,
