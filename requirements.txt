@@ -43,6 +43,9 @@ asyncpg>=0.30.0
 httpx>=0.28.0
 anyio>=4.0.0
 
+# ─── Stripe (prepaid credit top-up) ───────────────────────────────────────────
+stripe>=10.0.0
+
 # ─── Utilities ─────────────────────────────────────────────────────
 python-multipart>=0.0.18
 packaging>=24.0

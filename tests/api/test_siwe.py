@@ -141,6 +141,7 @@ async def test_auth_me_siwe_user(test_settings):
             "auth_method": "siwe",
             "address": "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920",
             "chain_id": 1,
+            "email": "0xa03772fbd16dbf3760b59f1c5921bceb8a6b2920@wallet",
         }
 
     app.dependency_overrides[require_auth] = _mock_siwe_auth
@@ -158,6 +159,7 @@ async def test_auth_me_siwe_user(test_settings):
     assert body["auth_method"] == "siwe"
     assert body["address"] == "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920"
     assert body["chain_id"] == 1
+    assert body["email"] == "0xa03772fbd16dbf3760b59f1c5921bceb8a6b2920@wallet"
 
 
 @pytest.mark.anyio

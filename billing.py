@@ -771,3 +771,155 @@ async def get_credit_history(
         *params,
     )
     return [dict(r) for r in rows]
+
+
+# ─── Stripe (prepaid credit top-up) ──────────────────────────────────────────
+
+
+async def create_stripe_checkout_session(org_id: str, user_id: str, amount_cents: int) -> str:
+    """Create a Stripe Checkout session for a prepaid credit top-up.
+
+    amount_cents is USD cents (100 = $1.00).
+    Returns the hosted Checkout page URL to redirect the user to.
+    Unit conversion: 1 USD cent = 10_000 atomic USDC (1_000_000 = $1.00).
+    """
+    import stripe  # noqa: PLC0415 — lazy import; only needed when Stripe is configured
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    stripe.api_key = settings.stripe_secret_key
+
+    amount_usdc = amount_cents * 10_000  # atomic USDC units
+    session = await stripe.checkout.Session.create_async(
+        mode="payment",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": "Teardrop Cloud Credits"},
+                    "unit_amount": amount_cents,
+                },
+                "quantity": 1,
+            }
+        ],
+        client_reference_id=org_id,
+        metadata={
+            "org_id": org_id,
+            "user_id": user_id,
+            "amount_usdc": str(amount_usdc),
+        },
+        success_url=settings.stripe_success_url,
+        cancel_url=settings.stripe_cancel_url,
+    )
+    url = session.url
+    if not url:
+        raise RuntimeError(f"Stripe returned a session without a URL (session_id={session.id})")
+    return url
+
+
+async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
+    """Verify and process a Stripe webhook event.
+
+    Raises stripe.SignatureVerificationError on invalid signature.
+    Raises ValueError on malformed JSON payload.
+    Both should result in an HTTP 400 response from the caller.
+
+    Idempotent: duplicate deliveries of the same event are silently ignored
+    via the stripe_webhook_events PRIMARY KEY constraint.
+    """
+    import stripe  # noqa: PLC0415
+
+    settings = get_settings()
+
+    event = stripe.Webhook.construct_event(
+        payload, sig_header, settings.stripe_webhook_secret
+    )
+
+    if event.type != "checkout.session.completed":
+        return
+
+    session = event.data.object
+    if session.payment_status != "paid":
+        return
+
+    org_id: str | None = session.client_reference_id or (
+        session.metadata.get("org_id") if session.metadata else None
+    )
+    if not org_id:
+        logger.error("stripe webhook: no org_id in event %s", event.id)
+        return
+
+    # Prefer metadata amount (set by us); fall back to Stripe amount_total.
+    # Wrap int() conversion — malformed metadata should not raise ValueError,
+    # which would be misidentified by the caller as a bad Stripe payload.
+    raw_meta = (session.metadata or {}).get("amount_usdc")
+    try:
+        amount_usdc = int(raw_meta) if raw_meta else int(session.amount_total or 0) * 10_000
+    except (ValueError, TypeError):
+        logger.warning(
+            "stripe webhook: bad amount_usdc metadata %r for event %s — using amount_total",
+            raw_meta,
+            event.id,
+        )
+        amount_usdc = int(session.amount_total or 0) * 10_000
+
+    if amount_usdc <= 0:
+        logger.error("stripe webhook: non-positive amount_usdc=%s event %s", amount_usdc, event.id)
+        return
+
+    # Perform idempotency guard + credit update in a single transaction so that
+    # a crash between the two writes can never result in a consumed event with
+    # no credit applied (which would be silently skipped on Stripe's retry).
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                INSERT INTO stripe_webhook_events (stripe_event_id, org_id, amount_usdc)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (stripe_event_id) DO NOTHING
+                RETURNING stripe_event_id
+                """,
+                event.id,
+                org_id,
+                amount_usdc,
+            )
+            if row is None:
+                # Duplicate delivery — silently ignore
+                logger.info("stripe webhook: duplicate event %s ignored", event.id)
+                return
+
+            credit_row = await conn.fetchrow(
+                """
+                INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (org_id) DO UPDATE
+                    SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                        updated_at = NOW()
+                RETURNING balance_usdc
+                """,
+                org_id,
+                amount_usdc,
+            )
+            new_balance = int(credit_row["balance_usdc"])
+            await conn.execute(
+                """
+                INSERT INTO org_credit_ledger
+                    (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                """,
+                str(uuid.uuid4()),
+                org_id,
+                amount_usdc,
+                new_balance,
+                f"stripe:{event.id}",
+            )
+
+    logger.info(
+        "stripe webhook: topped up org_id=%s amount_usdc=%s event=%s",
+        org_id,
+        amount_usdc,
+        event.id,
+    )
+

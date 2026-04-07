@@ -154,14 +154,20 @@ class Settings(BaseSettings):
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
     )
+    # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
+    stripe_secret_key: str = Field(default="", description="Stripe secret key (sk_live_... or sk_test_...)")
+    stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret (whsec_...)")
+    stripe_success_url: str = Field(default="https://teardrop.dev/dashboard?topup=success")
+    stripe_cancel_url: str = Field(default="https://teardrop.dev/dashboard?topup=cancelled")
+
     # Which auth methods are subject to billing.  SIWE callers pay via x402
     # payment headers; other listed methods are checked against the org's
     # prepaid credit balance instead.  Default: SIWE-only (existing behaviour).
     billable_auth_methods: list[str] = Field(
-        default=["siwe"],
+        default=["siwe", "client_credentials", "email"],
         description=(
             "Auth methods that require payment. 'siwe' uses x402 on-chain; "
-            "'client_credentials' and 'email' use the org prepaid credit ledger."
+            "'client_credentials' and 'email' use the org prepaid credit ledger instead."
         ),
     )
 

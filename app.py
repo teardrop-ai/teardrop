@@ -69,6 +69,7 @@ from billing import (
     build_402_response_body,
     calculate_run_cost_usdc,
     close_billing,
+    create_stripe_checkout_session,
     debit_credit,
     get_billing_history,
     get_credit_balance,
@@ -77,6 +78,7 @@ from billing import (
     get_invoice_by_run,
     get_invoices,
     get_revenue_summary,
+    handle_stripe_webhook,
     init_billing,
     record_settlement,
     settle_payment,
@@ -569,6 +571,7 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
             "chain_id": chain_id,
             "auth_method": "siwe",
             "role": "user",
+            "email": f"{address.lower()}@wallet",
         },
     )
     return JSONResponse(
@@ -592,6 +595,7 @@ async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
         "org_id": payload.get("org_id", ""),
         "role": payload.get("role", "user"),
         "auth_method": payload.get("auth_method", ""),
+        "email": payload.get("email", ""),
     }
     # Include wallet-specific fields only for SIWE sessions.
     if payload.get("auth_method") == "siwe":
@@ -1243,6 +1247,52 @@ async def billing_credit_history(
     ]
     next_cursor = serialized[-1]["created_at"] if serialized else None
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
+
+
+# ─── Stripe top-up endpoints ─────────────────────────────────────────────────
+
+
+class StripeTopupRequest(BaseModel):
+    amount_cents: int = Field(..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)")
+
+
+@app.post("/billing/topup/stripe", tags=["Billing"])
+async def billing_topup_stripe(
+    body: StripeTopupRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Create a Stripe Checkout session for a prepaid credit top-up.
+
+    Returns a hosted Checkout URL to redirect the user to.
+    """
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — top-up requires an org-scoped credential.",
+        )
+    user_id: str = payload.get("sub", "")
+    checkout_url = await create_stripe_checkout_session(org_id, user_id, body.amount_cents)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"checkout_url": checkout_url},
+    )
+
+
+@app.post("/billing/topup/webhook", include_in_schema=False)
+async def billing_topup_webhook(request: Request) -> JSONResponse:
+    """Stripe webhook receiver for checkout.session.completed events."""
+    import stripe as _stripe  # noqa: PLC0415
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        await handle_stripe_webhook(payload, sig_header)
+    except _stripe.SignatureVerificationError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature")
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload")
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok"})
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────
