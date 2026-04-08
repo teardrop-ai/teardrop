@@ -477,3 +477,142 @@ async def test_billing_credit_history_invalid_operation(api_client, monkeypatch)
 async def test_billing_credit_history_requires_auth(anon_client):
     resp = await anon_client.get("/billing/credit-history")
     assert resp.status_code == 401
+
+
+# ─── GET /billing/topup/usdc/requirements ────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_usdc_requirements_returns_accepts_array(api_client, monkeypatch):
+    """Returns 200 with an accepts array containing at least one payment requirement."""
+    mock_req = MagicMock()
+    mock_req.model_dump.return_value = {
+        "scheme": "exact",
+        "network": "base-sepolia",
+        "max_amount_required": 1_000_000,
+        "pay_to": "0xTREASURY",
+    }
+    monkeypatch.setattr("app.build_usdc_topup_requirements", MagicMock(return_value=[mock_req]))
+
+    resp = await api_client.get("/billing/topup/usdc/requirements?amount_usdc=1000000")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "accepts" in data
+    assert isinstance(data["accepts"], list)
+    assert len(data["accepts"]) == 1
+    assert data["accepts"][0]["scheme"] == "exact"
+    assert data["x402Version"] == 2
+
+
+@pytest.mark.anyio
+async def test_usdc_requirements_billing_disabled_returns_503(api_client, monkeypatch):
+    """Returns 503 when billing is not initialised (RuntimeError from _get_server)."""
+    monkeypatch.setattr(
+        "app.build_usdc_topup_requirements",
+        MagicMock(side_effect=RuntimeError("Billing not initialised")),
+    )
+
+    resp = await api_client.get("/billing/topup/usdc/requirements?amount_usdc=1000000")
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_usdc_requirements_below_min_returns_422(api_client):
+    """amount_usdc below 1_000_000 fails Pydantic validation → 422."""
+    resp = await api_client.get("/billing/topup/usdc/requirements?amount_usdc=999999")
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_usdc_requirements_requires_auth(anon_client):
+    resp = await anon_client.get("/billing/topup/usdc/requirements?amount_usdc=1000000")
+    assert resp.status_code == 401
+
+
+# ─── POST /billing/topup/usdc ────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_success_credits_org(api_client, monkeypatch):
+    """Valid payment header → 200 with status 'credited' and new balance."""
+    from billing import BillingResult
+
+    mock_result = BillingResult(settled=True, tx_hash="0xABC123", amount_usdc=1_000_000)
+    monkeypatch.setattr("app.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+    monkeypatch.setattr("app.credit_usdc_topup", AsyncMock(return_value=2_000_000))
+
+    resp = await api_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "credited"
+    assert data["amount_usdc"] == 1_000_000
+    assert data["balance_usdc"] == 2_000_000
+    assert data["tx_hash"] == "0xABC123"
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_duplicate_tx_returns_409(api_client, monkeypatch):
+    """Duplicate tx_hash (already processed) → 409 Conflict."""
+    from billing import BillingResult
+
+    mock_result = BillingResult(settled=True, tx_hash="0xDUPE", amount_usdc=1_000_000)
+    monkeypatch.setattr("app.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+    monkeypatch.setattr("app.credit_usdc_topup", AsyncMock(return_value=None))
+
+    resp = await api_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_failed_verification_returns_402(api_client, monkeypatch):
+    """Failed verify/settle → 402 Payment Required."""
+    from billing import BillingResult
+
+    mock_result = BillingResult(settled=False, error="Invalid signature")
+    monkeypatch.setattr("app.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+
+    resp = await api_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 402
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_billing_disabled_returns_503(api_client, monkeypatch):
+    """RuntimeError from verify_and_settle → 503 when billing is disabled."""
+    monkeypatch.setattr(
+        "app.verify_and_settle_usdc_topup",
+        AsyncMock(side_effect=RuntimeError("Billing not initialised")),
+    )
+
+    resp = await api_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_amount_below_min_returns_422(api_client):
+    """amount_usdc below 1_000_000 fails Pydantic validation → 422."""
+    resp = await api_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 999_999, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_usdc_topup_requires_auth(anon_client):
+    resp = await anon_client.post(
+        "/billing/topup/usdc",
+        json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
+    )
+    assert resp.status_code == 401

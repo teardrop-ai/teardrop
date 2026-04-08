@@ -17,10 +17,13 @@ from billing import (
     PricingRule,
     admin_topup_credit,
     atomic_usdc_to_price_str,
+    build_usdc_topup_requirements,
     calculate_run_cost_usdc,
+    credit_usdc_topup,
     debit_credit,
     get_credit_balance,
     settle_payment,
+    verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
 )
@@ -712,3 +715,210 @@ class TestRebuildRequirementsIfStale:
             patch("billing.get_live_pricing", new=AsyncMock(return_value=None)),
         ):
             await billing_module._rebuild_requirements_if_stale()  # rule is None → early return
+
+
+# ─── build_usdc_topup_requirements ────────────────────────────────────────────────────────
+
+
+class TestBuildUsdcTopupRequirements:
+    def test_raises_when_billing_not_initialised(self):
+        with patch.object(billing_module, "_server", None):
+            with pytest.raises(RuntimeError, match="not initialised"):
+                build_usdc_topup_requirements(1_000_000)
+
+    def test_builds_requirements_with_correct_price(self):
+        """Server's build_payment_requirements is called with the right price string."""
+        mock_server = MagicMock()
+        mock_server.build_payment_requirements.return_value = ["req"]
+
+        mock_settings = MagicMock()
+        mock_settings.x402_scheme = "exact"
+        mock_settings.x402_network = "eip155:84532"
+        mock_settings.x402_pay_to_address = "0xTreasury"
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch("billing.get_settings", return_value=mock_settings),
+        ):
+            result = build_usdc_topup_requirements(1_000_000)
+
+        # $1.00 in atomic USDC = 1_000_000 → price string "$1.00"
+        call_kwargs = mock_server.build_payment_requirements.call_args[0][0]
+        assert call_kwargs.price == "$1.00"
+        assert call_kwargs.pay_to == "0xTreasury"
+        assert result == ["req"]
+
+    def test_price_string_for_ten_dollars(self):
+        mock_server = MagicMock()
+        mock_server.build_payment_requirements.return_value = []
+        mock_settings = MagicMock()
+        mock_settings.x402_scheme = "exact"
+        mock_settings.x402_network = "eip155:84532"
+        mock_settings.x402_pay_to_address = "0xTreasury"
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch("billing.get_settings", return_value=mock_settings),
+        ):
+            build_usdc_topup_requirements(10_000_000)  # $10.00
+
+        call_kwargs = mock_server.build_payment_requirements.call_args[0][0]
+        assert call_kwargs.price == "$10.00"
+
+
+# ─── verify_and_settle_usdc_topup ─────────────────────────────────────────────────────
+
+
+class TestVerifyAndSettleUsdcTopup:
+    """Mocks _get_server, build_usdc_topup_requirements, and parse_payment_payload."""
+
+    def _make_server(self, is_valid=True, settle_success=True, tx_hash="0xabc"):
+        server = MagicMock()
+        verify_result = MagicMock()
+        verify_result.is_valid = is_valid
+        verify_result.invalid_reason = "bad sig" if not is_valid else None
+        verify_result.invalid_message = None
+        verify_result.payer = "0xpayer"
+        server.verify_payment = AsyncMock(return_value=verify_result)
+
+        settle_result = MagicMock()
+        settle_result.success = settle_success
+        settle_result.tx_hash = tx_hash
+        server.settle_payment = AsyncMock(return_value=settle_result)
+
+        server.build_payment_requirements.return_value = [MagicMock()]
+        return server
+
+    async def test_malformed_header_returns_error(self):
+        mock_server = self._make_server()
+        mock_x402 = MagicMock()
+        mock_x402.parse_payment_payload.side_effect = ValueError("bad payload")
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(
+                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
+                ),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup("!notbase64!", 1_000_000)
+        assert not result.settled
+        assert "Malformed" in result.error
+
+    async def test_verify_failure_returns_error_without_settling(self):
+        mock_server = self._make_server(is_valid=False)
+        mock_x402 = MagicMock()
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(
+                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
+                ),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup(
+                base64.b64encode(b"dummy").decode(), 1_000_000
+            )
+        assert not result.settled
+        assert "verification failed" in result.error.lower()
+        mock_server.settle_payment.assert_not_called()
+
+    async def test_settle_failure_returns_error(self):
+        mock_server = self._make_server(settle_success=False)
+        mock_x402 = MagicMock()
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(
+                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
+                ),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup(
+                base64.b64encode(b"dummy").decode(), 1_000_000
+            )
+        assert not result.settled
+        assert "rejected" in result.error.lower()
+
+    async def test_success_returns_tx_hash_and_amount(self):
+        mock_server = self._make_server(tx_hash="0xdeadbeef")
+        mock_x402 = MagicMock()
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(
+                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
+                ),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup(
+                base64.b64encode(b"dummy").decode(), 1_000_000
+            )
+        assert result.settled
+        assert result.tx_hash == "0xdeadbeef"
+        assert result.amount_usdc == 1_000_000
+
+
+# ─── credit_usdc_topup ─────────────────────────────────────────────────────────────────
+
+
+class TestCreditUsdcTopup:
+    """Mocks the DB pool to test idempotency logic and balance accounting."""
+
+    def _make_pool(self, guard_returns_row=True, initial_balance=0):
+        """Build a mock pool whose conn.fetchrow / execute return configurable values."""
+        conn = MagicMock()
+        conn.__aenter__ = AsyncMock(return_value=conn)
+        conn.__aexit__ = AsyncMock(return_value=False)
+
+        tx = MagicMock()
+        tx.__aenter__ = AsyncMock(return_value=tx)
+        tx.__aexit__ = AsyncMock(return_value=False)
+        conn.transaction = MagicMock(return_value=tx)
+
+        guard_row = MagicMock() if guard_returns_row else None
+        credit_row = MagicMock()
+        credit_row.__getitem__ = MagicMock(
+            side_effect=lambda k: initial_balance + 1_000_000 if k == "balance_usdc" else None
+        )
+        conn.fetchrow = AsyncMock(side_effect=[guard_row, credit_row])
+        conn.execute = AsyncMock()
+
+        pool = MagicMock()
+        pool.acquire = MagicMock(return_value=conn)
+        return pool
+
+    async def test_duplicate_tx_hash_returns_none(self):
+        pool = self._make_pool(guard_returns_row=False)
+        with patch.object(billing_module, "_pool", pool):
+            result = await credit_usdc_topup("org-1", 1_000_000, "0xdupe")
+        assert result is None
+
+    async def test_new_topup_returns_new_balance(self):
+        pool = self._make_pool(guard_returns_row=True, initial_balance=0)
+        with patch.object(billing_module, "_pool", pool):
+            result = await credit_usdc_topup("org-1", 1_000_000, "0xnewtx")
+        assert result == 1_000_000  # initial 0 + 1_000_000
+
+    async def test_credit_ledger_insert_called(self):
+        """Verify a ledger row with operation='topup' and reason prefixed 'usdc_onchain:' is inserted."""
+        pool = self._make_pool(guard_returns_row=True, initial_balance=0)
+        with patch.object(billing_module, "_pool", pool):
+            await credit_usdc_topup("org-1", 1_000_000, "0xledgertx")
+        conn = pool.acquire.return_value
+        # The second execute call is the ledger insert
+        execute_calls = conn.execute.call_args_list
+        assert len(execute_calls) == 1
+        ledger_sql = execute_calls[0][0][0]
+        assert "org_credit_ledger" in ledger_sql
+        # Reason arg should start with 'usdc_onchain:'
+        reason_arg = execute_calls[0][0][5]
+        assert reason_arg.startswith("usdc_onchain:")

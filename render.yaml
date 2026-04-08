@@ -82,9 +82,3 @@ services:
 
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
-
-      - key: STRIPE_SUCCESS_URL
-        value: "https://teardrop.dev/dashboard?topup=success"
-
-      - key: STRIPE_CANCEL_URL
-        value: "https://teardrop.dev/dashboard?topup=cancelled"

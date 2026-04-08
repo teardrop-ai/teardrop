@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
@@ -56,9 +56,11 @@ from billing import (
     admin_topup_credit,
     build_402_headers,
     build_402_response_body,
+    build_usdc_topup_requirements,
     calculate_run_cost_usdc,
     close_billing,
-    create_stripe_checkout_session,
+    create_stripe_embedded_session,
+    credit_usdc_topup,
     debit_credit,
     get_billing_history,
     get_credit_balance,
@@ -67,10 +69,12 @@ from billing import (
     get_invoice_by_run,
     get_invoices,
     get_revenue_summary,
+    get_stripe_session_status,
     handle_stripe_webhook,
     init_billing,
     record_settlement,
     settle_payment,
+    verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
 )
@@ -1256,6 +1260,12 @@ class StripeTopupRequest(BaseModel):
     amount_cents: int = Field(
         ..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)"
     )
+    return_url: str = Field(
+        ...,
+        min_length=20,
+        max_length=500,
+        description="HTTPS return URL with {CHECKOUT_SESSION_ID} template",
+    )
 
 
 @app.post("/billing/topup/stripe", tags=["Billing"])
@@ -1263,9 +1273,9 @@ async def billing_topup_stripe(
     body: StripeTopupRequest,
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
-    """Create a Stripe Checkout session for a prepaid credit top-up.
+    """Create a Stripe Checkout session for embedded checkout (prepaid credit top-up).
 
-    Returns a hosted Checkout URL to redirect the user to.
+    Returns client_secret and session_id for embedding a Stripe form in the frontend.
     """
     org_id: str = payload.get("org_id", "")
     if not org_id:
@@ -1274,10 +1284,12 @@ async def billing_topup_stripe(
             detail="No org_id in token — top-up requires an org-scoped credential.",
         )
     user_id: str = payload.get("sub", "")
-    checkout_url = await create_stripe_checkout_session(org_id, user_id, body.amount_cents)
+    session_data = await create_stripe_embedded_session(
+        org_id, user_id, body.amount_cents, body.return_url
+    )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={"checkout_url": checkout_url},
+        content=session_data,
     )
 
 
@@ -1299,6 +1311,153 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload"
         )
     return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok"})
+
+
+@app.get("/billing/topup/stripe/status", tags=["Billing"])
+async def billing_topup_stripe_status(
+    session_id: str = Query(..., description="Stripe Checkout session ID"),
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Retrieve the status of a Stripe Checkout session and credit balance upon completion.
+
+    Returns { status: 'open' | 'complete' | 'expired', new_balance_fmt?: '$X.XX' }
+    new_balance_fmt is included only when status is 'complete'.
+
+    Returns HTTP 403 if the session does not belong to the authenticated org.
+    """
+    import stripe as _stripe  # noqa: PLC0415
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — status check requires an org-scoped credential.",
+        )
+
+    try:
+        status_data = await get_stripe_session_status(session_id, org_id)
+        return JSONResponse(status_code=status.HTTP_200_OK, content=status_data)
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session does not belong to this org",
+        )
+    except _stripe.error.InvalidRequestError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Stripe session not found",
+        )
+    except Exception as e:
+        logger.exception("stripe status check failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to check Stripe session status",
+        )
+
+
+# ─── USDC on-chain top-up endpoints ──────────────────────────────────────────
+
+
+@app.get("/billing/topup/usdc/requirements", tags=["Billing"])
+async def billing_usdc_topup_requirements(
+    amount_usdc: int = Query(
+        ...,
+        ge=1_000_000,
+        le=10_000_000_000,
+        description="Amount in atomic USDC (6 decimals). Min $1.00 = 1_000_000. Max $10,000 = 10_000_000_000.",
+    ),
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Return x402 PaymentRequirements to sign for a USDC on-chain top-up.
+
+    The client should sign the returned requirements using EIP-3009
+    (same flow as /agent/run X-PAYMENT), then POST the signed
+    payment_header to /billing/topup/usdc.
+
+    Returns 503 if BILLING_ENABLED is false.
+    """
+    try:
+        reqs = build_usdc_topup_requirements(amount_usdc)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"USDC top-up unavailable: {exc}",
+        )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "accepts": [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in reqs],
+            "x402Version": 2,
+        },
+    )
+
+
+class UsdcTopupRequest(BaseModel):
+    amount_usdc: int = Field(
+        ...,
+        ge=1_000_000,
+        le=10_000_000_000,
+        description="Amount in atomic USDC (6 decimals). Min $1.00 = 1_000_000.",
+    )
+    payment_header: str = Field(
+        ..., description="Base64-encoded signed EIP-3009 PaymentPayload (X-PAYMENT format)."
+    )
+
+
+@app.post("/billing/topup/usdc", tags=["Billing"])
+async def billing_topup_usdc(
+    body: UsdcTopupRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Top up org credit balance by submitting a signed USDC on-chain payment.
+
+    The client obtains payment requirements from GET /billing/topup/usdc/requirements,
+    signs them using EIP-3009 (MetaMask / wallet), and posts the base64-encoded
+    payment_header here.
+
+    The server verifies the signature, settles on-chain via the x402 facilitator,
+    then credits the authenticated org's balance atomically.
+
+    Returns 402 if signature verification fails, 409 if the tx_hash was already
+    processed (duplicate submission), 503 if billing is disabled.
+    """
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — top-up requires an org-scoped credential.",
+        )
+
+    try:
+        result = await verify_and_settle_usdc_topup(body.payment_header, body.amount_usdc)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"USDC top-up unavailable: {exc}",
+        )
+
+    if not result.settled:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=result.error or "Payment verification or settlement failed.",
+        )
+
+    new_balance = await credit_usdc_topup(org_id, result.amount_usdc, result.tx_hash)
+    if new_balance is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Transaction {result.tx_hash} was already processed.",
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "status": "credited",
+            "amount_usdc": result.amount_usdc,
+            "balance_usdc": new_balance,
+            "tx_hash": result.tx_hash,
+        },
+    )
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

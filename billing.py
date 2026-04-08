@@ -26,6 +26,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import asyncpg
 from pydantic import BaseModel, Field
@@ -771,12 +772,16 @@ async def get_credit_history(
 # ─── Stripe (prepaid credit top-up) ──────────────────────────────────────────
 
 
-async def create_stripe_checkout_session(org_id: str, user_id: str, amount_cents: int) -> str:
-    """Create a Stripe Checkout session for a prepaid credit top-up.
+async def create_stripe_embedded_session(
+    org_id: str, user_id: str, amount_cents: int, return_url: str
+) -> dict[str, str]:
+    """Create a Stripe Checkout session for embedded checkout (prepaid credit top-up).
 
     amount_cents is USD cents (100 = $1.00).
-    Returns the hosted Checkout page URL to redirect the user to.
+    return_url must be an HTTPS URL containing {CHECKOUT_SESSION_ID} for Stripe template substitution.
     Unit conversion: 1 USD cent = 10_000 atomic USDC (1_000_000 = $1.00).
+
+    Returns a dict with 'client_secret' and 'session_id' for the frontend to render the embedded form.
     """
     import stripe  # noqa: PLC0415 — lazy import; only needed when Stripe is configured
 
@@ -788,6 +793,7 @@ async def create_stripe_checkout_session(org_id: str, user_id: str, amount_cents
     amount_usdc = amount_cents * 10_000  # atomic USDC units
     session = await stripe.checkout.Session.create_async(
         mode="payment",
+        ui_mode="embedded",
         line_items=[
             {
                 "price_data": {
@@ -804,13 +810,13 @@ async def create_stripe_checkout_session(org_id: str, user_id: str, amount_cents
             "user_id": user_id,
             "amount_usdc": str(amount_usdc),
         },
-        success_url=settings.stripe_success_url,
-        cancel_url=settings.stripe_cancel_url,
+        return_url=return_url,
     )
-    url = session.url
-    if not url:
-        raise RuntimeError(f"Stripe returned a session without a URL (session_id={session.id})")
-    return url
+    if not session.client_secret:
+        raise RuntimeError(
+            f"Stripe returned a session without client_secret (session_id={session.id})"
+        )
+    return {"client_secret": session.client_secret, "session_id": session.id}
 
 
 async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
@@ -915,3 +921,189 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
         amount_usdc,
         event.id,
     )
+
+
+async def get_stripe_session_status(session_id: str, org_id: str) -> dict[str, Any]:
+    """Retrieve a Stripe Checkout session's status and optionally the updated credit balance.
+
+    Validates that the session belongs to the requested org_id (via client_reference_id).
+    If session is complete, includes 'new_balance_fmt' (formatted credit balance in $X.XX).
+
+    Raises PermissionError if session's org_id does not match the requested org_id.
+    Raises stripe.error.InvalidRequestError if session_id does not exist.
+    """
+    import stripe  # noqa: PLC0415
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    stripe.api_key = settings.stripe_secret_key
+
+    session = await stripe.checkout.Session.retrieve_async(session_id)
+
+    # Verify ownership: session.client_reference_id must match the requested org_id
+    if session.client_reference_id != org_id:
+        raise PermissionError(f"Session {session_id} does not belong to org_id {org_id}")
+
+    result: dict[str, Any] = {"status": session.status}
+
+    # If payment is complete, fetch and include the new credit balance
+    if session.status == "complete":
+        balance_usdc = await get_credit_balance(org_id)
+        result["new_balance_fmt"] = atomic_usdc_to_price_str(balance_usdc)
+
+    return result
+
+
+# ─── USDC on-chain credit top-up ─────────────────────────────────────────────
+
+
+def build_usdc_topup_requirements(amount_usdc: int) -> list:
+    """Build x402 PaymentRequirements for a USDC on-chain top-up of amount_usdc.
+
+    amount_usdc is in atomic USDC units (6 decimals) — e.g. 1_000_000 = $1.00.
+    Raises RuntimeError if billing is not initialised (BILLING_ENABLED=false).
+    The caller (endpoint) should translate RuntimeError to HTTP 503.
+    """
+    from x402.schemas import ResourceConfig  # noqa: PLC0415
+
+    settings = get_settings()
+    server = _get_server()  # Raises RuntimeError if not initialised.
+    config = ResourceConfig(
+        scheme=settings.x402_scheme,
+        network=settings.x402_network,
+        pay_to=settings.x402_pay_to_address,
+        price=atomic_usdc_to_price_str(amount_usdc),
+    )
+    return server.build_payment_requirements(config)
+
+
+async def verify_and_settle_usdc_topup(
+    payment_header: str,
+    amount_usdc: int,
+) -> BillingResult:
+    """Verify and immediately settle a USDC top-up payment header on-chain.
+
+    payment_header is a base64-encoded EIP-3009 PaymentPayload (same format
+    as the X-PAYMENT header used on /agent/run).
+
+    Verification checks: EIP-3009 signature valid, amount matches amount_usdc,
+    pay_to matches the treasury address.  Settlement submits the authorised
+    transfer to the x402 facilitator and returns a tx_hash.
+
+    Returns BillingResult with settled=True and tx_hash on success, or
+    BillingResult with error set on any failure.
+    """
+    import base64 as _base64  # noqa: PLC0415
+
+    from x402 import parse_payment_payload  # noqa: PLC0415
+
+    server = _get_server()
+    requirements = build_usdc_topup_requirements(amount_usdc)
+
+    if not requirements:
+        return BillingResult(error="No payment requirements could be built")
+
+    try:
+        payload = parse_payment_payload(_base64.b64decode(payment_header))
+    except Exception as exc:
+        logger.warning("usdc_topup: failed to parse payment header: %s", exc)
+        return BillingResult(error=f"Malformed payment header: {exc}")
+
+    requirement = requirements[0]
+
+    try:
+        verify_result = await server.verify_payment(payload, requirement)
+    except Exception as exc:
+        logger.error("usdc_topup: verification error: %s", exc, exc_info=True)
+        return BillingResult(error=f"Verification failed: {exc}")
+
+    if not verify_result.is_valid:
+        reason = (
+            verify_result.invalid_reason
+            or verify_result.invalid_message
+            or "invalid signature or amount"
+        )
+        logger.warning("usdc_topup: verification failed: %s", reason)
+        return BillingResult(error=f"Payment verification failed: {reason}")
+
+    try:
+        settle_result = await server.settle_payment(payload, requirement)
+    except Exception as exc:
+        logger.error("usdc_topup: settlement error: %s", exc, exc_info=True)
+        return BillingResult(error=f"Settlement failed: {exc}")
+
+    if not settle_result.success:
+        logger.error("usdc_topup: facilitator rejected settlement")
+        return BillingResult(error="Settlement rejected by facilitator")
+
+    tx_hash = (
+        getattr(settle_result, "tx_hash", "")
+        or getattr(settle_result, "transaction_hash", "")
+        or ""
+    )
+    logger.info("usdc_topup: settled tx_hash=%s amount_usdc=%s", tx_hash, amount_usdc)
+    return BillingResult(verified=True, settled=True, tx_hash=tx_hash, amount_usdc=amount_usdc)
+
+
+async def credit_usdc_topup(org_id: str, amount_usdc: int, tx_hash: str) -> int | None:
+    """Credit amount_usdc to org's balance after a confirmed on-chain top-up.
+
+    Idempotent: if tx_hash was already processed, returns None (duplicate).
+    On success, inserts into usdc_topup_events (idempotency guard), upserts
+    org_credits, and appends an org_credit_ledger row — all in one transaction.
+
+    Returns new balance_usdc on success, None on duplicate tx_hash.
+    """
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            guard_row = await conn.fetchrow(
+                """
+                INSERT INTO usdc_topup_events (tx_hash, org_id, amount_usdc)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (tx_hash) DO NOTHING
+                RETURNING tx_hash
+                """,
+                tx_hash,
+                org_id,
+                amount_usdc,
+            )
+            if guard_row is None:
+                logger.info("usdc_topup: duplicate tx_hash=%s ignored", tx_hash)
+                return None
+
+            credit_row = await conn.fetchrow(
+                """
+                INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (org_id) DO UPDATE
+                    SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                        updated_at = NOW()
+                RETURNING balance_usdc
+                """,
+                org_id,
+                amount_usdc,
+            )
+            new_balance = int(credit_row["balance_usdc"])
+            await conn.execute(
+                """
+                INSERT INTO org_credit_ledger
+                    (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                """,
+                str(uuid.uuid4()),
+                org_id,
+                amount_usdc,
+                new_balance,
+                f"usdc_onchain:{tx_hash}",
+            )
+
+    logger.info(
+        "usdc_topup: credited org_id=%s amount_usdc=%s new_balance=%s tx_hash=%s",
+        org_id,
+        amount_usdc,
+        new_balance,
+        tx_hash,
+    )
+    return new_balance

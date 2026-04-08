@@ -167,8 +167,6 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = Field(
         default="", description="Stripe webhook signing secret (whsec_...)"
     )
-    stripe_success_url: str = Field(default="https://teardrop.dev/dashboard?topup=success")
-    stripe_cancel_url: str = Field(default="https://teardrop.dev/dashboard?topup=cancelled")
 
     # Which auth methods are subject to billing.  SIWE callers pay via x402
     # payment headers; other listed methods are checked against the org's
