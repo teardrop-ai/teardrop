@@ -793,7 +793,7 @@ async def create_stripe_embedded_session(
     amount_usdc = amount_cents * 10_000  # atomic USDC units
     session = await stripe.checkout.Session.create_async(
         mode="payment",
-        ui_mode="embedded",
+        ui_mode="embedded_page",
         line_items=[
             {
                 "price_data": {
