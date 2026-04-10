@@ -13,32 +13,14 @@ import json
 import logging
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
+from agent.llm import extract_usage, get_llm
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from config import get_settings
 from tools import registry
 
 logger = logging.getLogger(__name__)
-
-# ─── LLM singleton ────────────────────────────────────────────────────────────
-
-_llm: ChatAnthropic | None = None
-
-
-def _get_llm() -> ChatAnthropic:
-    global _llm
-    if _llm is None:
-        settings = get_settings()
-        _llm = ChatAnthropic(
-            model=settings.agent_model,
-            max_tokens=settings.agent_max_tokens,
-            temperature=settings.agent_temperature,
-            api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
-        )
-    return _llm
-
 
 # ─── Tool caches ──────────────────────────────────────────────────────────────
 
@@ -110,7 +92,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
     tools = _get_cached_tools()
-    llm = _get_llm().bind_tools(tools)  # type: ignore[arg-type]
+    llm = get_llm().bind_tools(tools)  # type: ignore[arg-type]
 
     messages = [SystemMessage(content=_PLANNER_SYSTEM), *state.messages]
 
@@ -139,13 +121,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     # ── Accumulate token usage ────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        usage["tokens_in"] = usage.get("tokens_in", 0) + response.usage_metadata.get(
-            "input_tokens", 0
-        )
-        usage["tokens_out"] = usage.get("tokens_out", 0) + response.usage_metadata.get(
-            "output_tokens", 0
-        )
+    extracted = extract_usage(response)
+    usage["tokens_in"] = usage.get("tokens_in", 0) + extracted["tokens_in"]
+    usage["tokens_out"] = usage.get("tokens_out", 0) + extracted["tokens_out"]
 
     return {
         "messages": [response],
@@ -231,7 +209,7 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
             prompt = f"{_UI_GENERATOR_SYSTEM}\n\nAssistant message:\n{text}"
             try:
                 result: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
-                    _get_llm().ainvoke(prompt),
+                    get_llm().ainvoke(prompt),
                     timeout=settings.agent_ui_generator_timeout_seconds,
                 )
                 raw = result.content if isinstance(result.content, str) else str(result.content)

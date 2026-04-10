@@ -134,7 +134,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch.object(nodes_module, "_llm", mock_llm),
+            patch("agent.llm.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
@@ -152,7 +152,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch.object(nodes_module, "_llm", mock_llm),
+            patch("agent.llm.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
@@ -169,7 +169,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch.object(nodes_module, "_llm", mock_llm),
+            patch("agent.llm.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
         ):
             result = await planner_node(state)
@@ -186,7 +186,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tokens_in": 10, "tokens_out": 5}})
         with (
-            patch.object(nodes_module, "_llm", mock_llm),
+            patch("agent.llm.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
         ):
             result = await planner_node(state)
@@ -293,8 +293,8 @@ class TestUiGeneratorNode:
 
         # Patch _contains_structured_data to return False to skip LLM call
         with patch.object(nodes_module, "_contains_structured_data", return_value=False):
-            # Also ensure _get_llm is not called (no LLM needed)
-            with patch.object(nodes_module, "_llm", None):
+            # Also ensure get_llm is not called (no LLM needed)
+            with patch("agent.llm.get_llm", return_value=None):
                 result = await ui_generator_node(state)
 
         assert result["task_status"] == TaskStatus.COMPLETED

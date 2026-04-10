@@ -42,6 +42,12 @@ class Settings(BaseSettings):
 
     # ── LLM / Anthropic ────────────────────────────────────────────────────────
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
+    openai_api_key: str = Field(default="", description="OpenAI API key")
+    google_api_key: str = Field(default="", description="Google AI API key")
+    agent_provider: str = Field(
+        default="anthropic",
+        description="LLM provider: anthropic, openai, or google",
+    )
     agent_model: str = "claude-haiku-4-5-20251001"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
@@ -67,6 +73,12 @@ class Settings(BaseSettings):
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     rate_limit_requests_per_minute: int = 60
+    rate_limit_agent_rpm: int = Field(
+        default=30, description="Per-user rate limit for /agent/run (requests per minute)"
+    )
+    rate_limit_auth_rpm: int = Field(
+        default=20, description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)"
+    )
 
     # ── JWT Authentication ─────────────────────────────────────────────────────
     jwt_private_key_path: str = Field(

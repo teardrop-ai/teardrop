@@ -223,48 +223,55 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
 
-# ─── Rate limiting (in-memory with Redis fallback, per-IP, per-minute) ────────
+# ─── Rate limiting (sliding-window, Redis-first with in-process fallback) ─────
 
 _rate_counters: dict[str, list[float]] = defaultdict(list)
 _RATE_COUNTER_MAX_KEYS = 10_000
 
+# Named tuple for rate limit check results.
+RateLimitResult = tuple[bool, int, int]  # (allowed, remaining, reset_epoch)
 
-async def _check_rate_limit(client_ip: str) -> bool:
-    """Return True when within limit, False when exceeded.
 
-    Uses Redis if available for multi-container consistency, otherwise
-    falls back to in-process sliding window.
+async def _check_rate_limit(key: str, limit: int) -> RateLimitResult:
+    """Check sliding-window rate limit for *key*.
+
+    Returns ``(allowed, remaining, reset_epoch)``:
+    - *allowed*: ``True`` when within limit.
+    - *remaining*: requests left in the current window.
+    - *reset_epoch*: Unix timestamp when the window resets.
+
+    Uses Redis sorted sets when available; falls back to in-process dict.
     """
     now = time.time()
     window = 60.0
-    limit = settings.rate_limit_requests_per_minute
+    reset_epoch = int(now + window)
 
     # ── Redis path (multi-container) ──────────────────────────────────────
     if (redis := get_redis()) is not None:
-        key = f"teardrop:rl:{client_ip}"
+        redis_key = f"teardrop:rl:{key}"
         try:
-            # Pipeline: remove old entries, count, add new, set expiry
             pipe = redis.pipeline()
-            pipe.zremrangebyscore(key, "-inf", f"({now - window}")
-            pipe.zcard(key)
-            pipe.zadd(key, {f"{now}_{secrets.token_hex(3)}": now})  # unique member per request
-            pipe.expire(key, 61)
+            pipe.zremrangebyscore(redis_key, "-inf", f"({now - window}")
+            pipe.zcard(redis_key)
+            pipe.zadd(redis_key, {f"{now}_{secrets.token_hex(3)}": now})
+            pipe.expire(redis_key, 61)
             _, count, _, _ = await pipe.execute()
-            return count < limit
+            remaining = max(0, limit - count - 1)
+            return count < limit, remaining, reset_epoch
         except Exception as exc:
             logger.warning("Redis rate limit check failed; falling back to in-process: %s", exc)
-            # Fall through to in-process fallback
 
     # ── In-process fallback (single-container) ───────────────────────────
-    history = _rate_counters[client_ip]
-    _rate_counters[client_ip] = [t for t in history if now - t < window]
-    if len(_rate_counters[client_ip]) >= limit:
-        return False
-    _rate_counters[client_ip].append(now)
+    history = _rate_counters[key]
+    _rate_counters[key] = [t for t in history if now - t < window]
+    if len(_rate_counters[key]) >= limit:
+        return False, 0, reset_epoch
+    _rate_counters[key].append(now)
+    remaining = max(0, limit - len(_rate_counters[key]))
     if len(_rate_counters) > _RATE_COUNTER_MAX_KEYS:
         oldest_key = next(iter(_rate_counters))
         del _rate_counters[oldest_key]
-    return True
+    return True, remaining, reset_epoch
 
 
 # ─── AG-UI event helpers ──────────────────────────────────────────────────────
@@ -424,10 +431,19 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     Returns a signed RS256 JWT.
     """
     client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit(client_ip):
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    )
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please slow down.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
         )
 
     # ── User-credentials flow ──────────────────────────────────────────────
@@ -620,10 +636,19 @@ async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
 async def siwe_nonce(request: Request) -> JSONResponse:
     """Generate a single-use nonce for SIWE authentication."""
     client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit(client_ip):
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    )
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
         )
     nonce = await create_nonce()
     return JSONResponse(content={"nonce": nonce})
@@ -642,13 +667,22 @@ async def agent_run(
     Thread state is scoped to the authenticated user.
     """
     client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit(client_ip):
+    user_id: str = payload["sub"]
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"run:{user_id}", settings.rate_limit_agent_rpm
+    )
+    if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please slow down.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_agent_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
         )
 
-    user_id: str = payload["sub"]
     org_id: str = payload.get("org_id", "")
     run_id = str(uuid.uuid4())
     scoped_thread_id = f"{user_id}:{body.thread_id}"

@@ -8,6 +8,8 @@ langgraph>=0.0.8
 langchain>=0.0.354
 langchain-core>=0.1.45
 langchain-anthropic>=0.1.23
+langchain-openai>=0.1.0
+langchain-google-genai>=1.0.0
 langsmith>=0.1.147
 
 # ─── MCP (Model Context Protocol) ──────────────────────────────────────────────
