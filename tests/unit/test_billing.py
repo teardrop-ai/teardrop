@@ -748,6 +748,132 @@ class TestBuildUsdcTopupRequirements:
         assert call_kwargs.pay_to == "0xTreasury"
         assert result == ["req"]
 
+
+# ─── calculate_run_cost_usdc — per-tool override cases ───────────────────────
+
+
+@pytest.mark.anyio
+class TestCalculateRunCostWithOverrides:
+    def _usage_rule(self):
+        return _make_rule(
+            run_price_usdc=0,
+            tokens_in_cost_per_1k=1500,
+            tokens_out_cost_per_1k=7500,
+            tool_call_cost=1000,
+        )
+
+    async def test_with_overrides_web_search_billed_at_override(self):
+        """web_search should cost 15000, not the global 1000 default."""
+        rule = self._usage_rule()
+        overrides = {"web_search": 15000}
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
+            )
+        assert cost == 15_000
+
+    async def test_with_overrides_mixed_tools(self):
+        """web_search uses override (15000); calculate uses global default (1000)."""
+        rule = self._usage_rule()
+        overrides = {"web_search": 15000}
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 2,
+                    "tool_names": ["web_search", "calculate"],
+                }
+            )
+        assert cost == 15_000 + 1_000
+
+    async def test_multi_calls_same_tool(self):
+        """Two web_search calls should each cost the override (2 × 15000)."""
+        rule = self._usage_rule()
+        overrides = {"web_search": 15000}
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 2,
+                    "tool_names": ["web_search", "web_search"],
+                }
+            )
+        assert cost == 2 * 15_000
+
+    async def test_empty_overrides_dict_uses_global_default(self):
+        """When overrides is {}, all tools fall back to rule.tool_call_cost."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 3,
+                    "tool_names": ["calculate", "get_datetime", "get_eth_balance"],
+                }
+            )
+        assert cost == 3 * 1_000
+
+    async def test_defensive_fallback_unnamed_extra_calls(self):
+        """tool_calls=3 but only 1 name recorded → 1 override + 2 × default."""
+        rule = self._usage_rule()
+        overrides = {"web_search": 15000}
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 3,
+                    "tool_names": ["web_search"],
+                }
+            )
+        assert cost == 15_000 + 2 * 1_000
+
+    async def test_fallback_to_flat_rate_when_no_per_unit_rates(self):
+        """Flat-rate rule: tool_names present but should still return run_price_usdc."""
+        rule = _make_rule(run_price_usdc=10_000)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 1000,
+                    "tokens_out": 500,
+                    "tool_calls": 1,
+                    "tool_names": ["web_search"],
+                }
+            )
+        assert cost == 10_000
+
+    async def test_empty_tool_names_list_uses_tool_calls_count(self):
+        """When tool_names=[] with tool_calls=2, falls back to tool_calls × default."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 2, "tool_names": []}
+            )
+        assert cost == 2 * 1_000
+
+
     def test_price_string_for_ten_dollars(self):
         mock_server = MagicMock()
         mock_server.build_payment_requirements.return_value = []

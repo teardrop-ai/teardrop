@@ -29,7 +29,7 @@ class SummarizeTextOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def summarize_text(text: str) -> dict[str, Any]:
+async def count_text_stats(text: str) -> dict[str, Any]:
     """Return basic statistics about the provided text."""
     words = text.split()
     sentences = re.split(r"[.!?]+", text)
@@ -47,11 +47,11 @@ async def summarize_text(text: str) -> dict[str, Any]:
 # ─── Tool definition ─────────────────────────────────────────────────────────
 
 TOOL = ToolDefinition(
-    name="summarize_text",
+    name="count_text_stats",
     version="1.0.0",
-    description="Return word count, sentence count, and other statistics for a given text.",
+    description="Return word count, character count, sentence count, and paragraph statistics for a given text.",
     tags=["text", "analysis", "statistics"],
     input_schema=SummarizeTextInput,
     output_schema=SummarizeTextOutput,
-    implementation=summarize_text,
+    implementation=count_text_stats,
 )

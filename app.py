@@ -62,6 +62,7 @@ from billing import (
     create_stripe_embedded_session,
     credit_usdc_topup,
     debit_credit,
+    delete_tool_pricing_override,
     get_billing_history,
     get_credit_balance,
     get_credit_history,
@@ -70,10 +71,12 @@ from billing import (
     get_invoices,
     get_revenue_summary,
     get_stripe_session_status,
+    get_tool_pricing_overrides,
     handle_stripe_webhook,
     init_billing,
     record_settlement,
     settle_payment,
+    upsert_tool_pricing_override,
     verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
@@ -1162,10 +1165,13 @@ async def billing_pricing() -> JSONResponse:
     pricing = await get_current_pricing()
     if pricing is None:
         return JSONResponse(content={"billing_enabled": True, "pricing": None})
+    tool_overrides = await get_tool_pricing_overrides()
+    pricing_data = pricing.model_dump(mode="json")
+    pricing_data["tool_overrides"] = tool_overrides
     return JSONResponse(
         content={
             "billing_enabled": True,
-            "pricing": pricing.model_dump(mode="json"),
+            "pricing": pricing_data,
             "network": settings.x402_network,
         }
     )
@@ -1181,6 +1187,54 @@ async def billing_history(
     return JSONResponse(
         content=[{**row, "created_at": row["created_at"].isoformat()} for row in history]
     )
+
+
+class ToolPricingOverrideRequest(BaseModel):
+    tool_name: str = Field(..., min_length=1, max_length=100)
+    cost_usdc: int = Field(..., ge=0, le=100_000_000)
+    description: str = Field("", max_length=500)
+
+
+@app.post("/admin/pricing/tools", tags=["Admin"])
+async def admin_upsert_tool_pricing(
+    body: ToolPricingOverrideRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Set or update the per-call cost for a specific tool (admin only).
+
+    Rejects tool names that are not registered in the tool registry.
+    """
+    known_names = {t.name for t in registry.list_latest(include_deprecated=True)}
+    if body.tool_name not in known_names:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown tool name: {body.tool_name!r}. Must be one of: {sorted(known_names)}",
+        )
+    await upsert_tool_pricing_override(body.tool_name, body.cost_usdc, body.description)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "tool_name": body.tool_name,
+            "cost_usdc": body.cost_usdc,
+            "description": body.description,
+            "updated": True,
+        },
+    )
+
+
+@app.delete("/admin/pricing/tools/{tool_name}", tags=["Admin"])
+async def admin_delete_tool_pricing(
+    tool_name: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Remove a per-tool pricing override, reverting to the global default (admin only)."""
+    deleted = await delete_tool_pricing_override(tool_name)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No pricing override found for tool: {tool_name!r}",
+        )
+    return JSONResponse(content={"deleted": True, "tool_name": tool_name})
 
 
 @app.get("/admin/billing/revenue", tags=["Admin"])

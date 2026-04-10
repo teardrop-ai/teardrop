@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools.definitions.summarize_text import summarize_text
+from tools.definitions.summarize_text import count_text_stats as summarize_text
 
 
 @pytest.mark.anyio

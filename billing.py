@@ -48,6 +48,12 @@ _pricing_cache_expires: float = 0.0  # monotonic clock deadline
 _pricing_lock: asyncio.Lock | None = None  # lazily initialised
 _last_requirements_price_usdc: int = -1  # run_price_usdc when requirements were last built
 
+# ─── Tool pricing overrides TTL cache ─────────────────────────────────────────
+
+_tool_overrides_cache: dict[str, int] | None = None  # {tool_name: cost_usdc}
+_tool_overrides_cache_expires: float = 0.0
+_tool_overrides_lock: asyncio.Lock | None = None
+
 
 def _get_server():
     """Return the initialized x402ResourceServer, or raise if not ready."""
@@ -121,12 +127,15 @@ async def close_billing() -> None:
     """Release billing resources."""
     global _server, _requirements_cache, _pool
     global _pricing_cache, _pricing_cache_expires, _last_requirements_price_usdc
+    global _tool_overrides_cache, _tool_overrides_cache_expires
     _server = None
     _requirements_cache = None
     _pool = None
     _pricing_cache = None
     _pricing_cache_expires = 0.0
     _last_requirements_price_usdc = -1
+    _tool_overrides_cache = None
+    _tool_overrides_cache_expires = 0.0
     logger.info("Billing resources released")
 
 
@@ -152,6 +161,14 @@ class PricingRule(BaseModel):
     tokens_out_cost_per_1k: int = 0
     tool_call_cost: int = 0
     effective_from: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ToolPricingOverride(BaseModel):
+    tool_name: str
+    cost_usdc: int  # atomic USDC, e.g. 15000 = $0.015
+    description: str = ""
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -452,6 +469,121 @@ async def get_live_pricing() -> PricingRule | None:
             return _pricing_cache  # Return stale on DB error rather than crashing.
 
 
+# ─── Tool pricing override queries ───────────────────────────────────────────
+
+
+async def get_current_tool_overrides() -> dict[str, int]:
+    """Return all tool pricing overrides as a {tool_name: cost_usdc} dict (direct DB query)."""
+    pool = _get_pool()
+    rows = await pool.fetch("SELECT tool_name, cost_usdc FROM tool_pricing_overrides")
+    return {row["tool_name"]: row["cost_usdc"] for row in rows}
+
+
+async def get_tool_pricing_overrides() -> dict[str, int]:
+    """Return tool pricing overrides using a TTL cache.
+
+    Uses Redis if available for multi-container consistency, otherwise falls
+    back to an in-process TTL cache.  Returns an empty dict (never None) when
+    no overrides exist — callers should treat it as "use global default."
+    """
+    global _tool_overrides_cache, _tool_overrides_cache_expires, _tool_overrides_lock
+    settings = get_settings()
+    redis = get_redis()
+
+    # ── Redis path ────────────────────────────────────────────────────────────
+    if redis is not None:
+        try:
+            key = "teardrop:pricing:tool_overrides"
+            cached_json = await redis.get(key)
+            if cached_json is not None:
+                return json.loads(cached_json)
+        except Exception as exc:
+            logger.warning("Redis tool overrides cache read failed; falling back: %s", exc)
+
+    # ── In-process TTL cache ──────────────────────────────────────────────────
+    if _tool_overrides_cache is not None and time.monotonic() < _tool_overrides_cache_expires:
+        return _tool_overrides_cache
+
+    if _pool is None:
+        return {}
+
+    if _tool_overrides_lock is None:
+        _tool_overrides_lock = asyncio.Lock()
+
+    async with _tool_overrides_lock:
+        if _tool_overrides_cache is not None and time.monotonic() < _tool_overrides_cache_expires:
+            return _tool_overrides_cache
+
+        try:
+            overrides = await get_current_tool_overrides()
+            _tool_overrides_cache = overrides
+            _tool_overrides_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
+
+            if (redis := get_redis()) is not None:
+                try:
+                    key = "teardrop:pricing:tool_overrides"
+                    await redis.setex(
+                        key, settings.pricing_cache_ttl_seconds, json.dumps(overrides)
+                    )
+                except Exception as exc:
+                    logger.warning("Redis tool overrides cache write failed (non-fatal): %s", exc)
+
+            return overrides
+        except Exception:
+            logger.warning(
+                "Failed to refresh tool overrides cache; serving stale value", exc_info=True
+            )
+            return _tool_overrides_cache if _tool_overrides_cache is not None else {}
+
+
+async def upsert_tool_pricing_override(
+    tool_name: str, cost_usdc: int, description: str
+) -> None:
+    """Insert or update a tool pricing override and invalidate the cache."""
+    global _tool_overrides_cache, _tool_overrides_cache_expires
+    pool = _get_pool()
+    await pool.execute(
+        """
+        INSERT INTO tool_pricing_overrides (tool_name, cost_usdc, description)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (tool_name) DO UPDATE
+            SET cost_usdc = EXCLUDED.cost_usdc,
+                description = EXCLUDED.description,
+                updated_at = NOW()
+        """,
+        tool_name,
+        cost_usdc,
+        description,
+    )
+    _tool_overrides_cache = None
+    _tool_overrides_cache_expires = 0.0
+    redis = get_redis()
+    if redis is not None:
+        try:
+            await redis.delete("teardrop:pricing:tool_overrides")
+        except Exception as exc:
+            logger.warning("Redis tool overrides cache invalidation failed (non-fatal): %s", exc)
+
+
+async def delete_tool_pricing_override(tool_name: str) -> bool:
+    """Delete a tool pricing override. Returns True if a row was deleted."""
+    global _tool_overrides_cache, _tool_overrides_cache_expires
+    pool = _get_pool()
+    result = await pool.execute(
+        "DELETE FROM tool_pricing_overrides WHERE tool_name = $1", tool_name
+    )
+    deleted = result.split()[-1] != "0"
+    _tool_overrides_cache = None
+    _tool_overrides_cache_expires = 0.0
+    redis = get_redis()
+    if redis is not None:
+        try:
+            await redis.delete("teardrop:pricing:tool_overrides")
+        except Exception as exc:
+            logger.warning("Redis tool overrides cache invalidation failed (non-fatal): %s", exc)
+    return deleted
+
+
 async def calculate_run_cost_usdc(usage_data: dict) -> int:
     """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
 
@@ -459,13 +591,21 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
     they are non-zero (usage-based pricing).  Falls back to run_price_usdc as
     a flat rate when the active rule has no per-unit rates configured.
 
+    When tool_names is provided in usage_data, each tool is billed at its
+    individual override cost (from tool_pricing_overrides table) with the
+    global tool_call_cost as the fallback.  If tool_names is absent or shorter
+    than tool_calls, the remaining calls are billed at the global default.
+
     Returns 0 if no pricing rule is available (e.g. DB not yet seeded).
 
     Formula (usage-based):
         cost = (tokens_in // 1000) * tokens_in_cost_per_1k
              + (tokens_out // 1000) * tokens_out_cost_per_1k
-             + tool_calls * tool_call_cost
+             + sum(override.get(name, tool_call_cost) for name in tool_names)
+             + remaining_unnamed_calls * tool_call_cost
     """
+    from collections import Counter
+
     rule = await get_live_pricing()
     if rule is None:
         return 0
@@ -473,6 +613,7 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
     tokens_in = int(usage_data.get("tokens_in", 0))
     tokens_out = int(usage_data.get("tokens_out", 0))
     tool_calls = int(usage_data.get("tool_calls", 0))
+    tool_names: list[str] = usage_data.get("tool_names") or []
 
     has_per_unit_rates = (
         rule.tokens_in_cost_per_1k > 0 or rule.tokens_out_cost_per_1k > 0 or rule.tool_call_cost > 0
@@ -482,11 +623,23 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
         # Flat-rate rule: every run costs run_price_usdc.
         return rule.run_price_usdc
 
-    return (
+    token_cost = (
         (tokens_in // 1000) * rule.tokens_in_cost_per_1k
         + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
-        + tool_calls * rule.tool_call_cost
     )
+
+    if tool_names:
+        overrides = await get_tool_pricing_overrides()
+        named_cost = sum(
+            overrides.get(name, rule.tool_call_cost) for name in tool_names
+        )
+        # Defensive fallback: bill any gap (e.g. tool_calls counted but name not recorded)
+        unnamed_calls = max(0, tool_calls - len(tool_names))
+        tool_cost = named_cost + unnamed_calls * rule.tool_call_cost
+    else:
+        tool_cost = tool_calls * rule.tool_call_cost
+
+    return token_cost + tool_cost
 
 
 async def get_billing_history(

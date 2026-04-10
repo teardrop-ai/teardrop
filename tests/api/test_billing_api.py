@@ -616,3 +616,108 @@ async def test_usdc_topup_requires_auth(anon_client):
         json={"amount_usdc": 1_000_000, "payment_header": "dGVzdA=="},
     )
     assert resp.status_code == 401
+
+
+# ─── /admin/pricing/tools & /billing/pricing tool_overrides ──────────────────
+
+
+@pytest.mark.anyio
+async def test_billing_pricing_includes_tool_overrides(api_client, monkeypatch):
+    """GET /billing/pricing response includes tool_overrides dict."""
+    import app as app_module
+
+    mock_rule = PricingRule(
+        id="usage-based-v1",
+        name="Usage-based v1",
+        run_price_usdc=10_000,
+        tokens_in_cost_per_1k=1500,
+        tokens_out_cost_per_1k=7500,
+        tool_call_cost=1000,
+    )
+    mock_settings = MagicMock(wraps=app_module.settings)
+    mock_settings.billing_enabled = True
+    mock_settings.x402_network = "eip155:8453"
+    monkeypatch.setattr(app_module, "settings", mock_settings)
+    monkeypatch.setattr("app.get_current_pricing", AsyncMock(return_value=mock_rule))
+    monkeypatch.setattr(
+        "app.get_tool_pricing_overrides",
+        AsyncMock(return_value={"web_search": 15000, "get_token_price": 2000}),
+    )
+
+    resp = await api_client.get("/billing/pricing")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["billing_enabled"] is True
+    assert "tool_overrides" in data["pricing"]
+    assert data["pricing"]["tool_overrides"]["web_search"] == 15000
+    assert data["pricing"]["tool_overrides"]["get_token_price"] == 2000
+
+
+@pytest.mark.anyio
+async def test_admin_upsert_tool_pricing_success(admin_api_client, monkeypatch):
+    """POST /admin/pricing/tools with a known tool name succeeds."""
+    monkeypatch.setattr("app.upsert_tool_pricing_override", AsyncMock(return_value=None))
+
+    resp = await admin_api_client.post(
+        "/admin/pricing/tools",
+        json={"tool_name": "web_search", "cost_usdc": 15000, "description": "Tavily override"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tool_name"] == "web_search"
+    assert data["cost_usdc"] == 15000
+    assert data["updated"] is True
+
+
+@pytest.mark.anyio
+async def test_admin_upsert_tool_pricing_requires_admin(api_client, monkeypatch):
+    """Non-admin JWT → 403 for POST /admin/pricing/tools."""
+    resp = await api_client.post(
+        "/admin/pricing/tools",
+        json={"tool_name": "web_search", "cost_usdc": 15000, "description": ""},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_upsert_unknown_tool_rejected(admin_api_client, monkeypatch):
+    """tool_name not present in the tool registry → 400."""
+    resp = await admin_api_client.post(
+        "/admin/pricing/tools",
+        json={"tool_name": "nonexistent_tool_xyz", "cost_usdc": 9999, "description": ""},
+    )
+    assert resp.status_code == 400
+    assert "Unknown tool name" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_admin_upsert_cost_above_max_rejected(admin_api_client):
+    """cost_usdc > 100_000_000 → 422 Pydantic validation error."""
+    resp = await admin_api_client.post(
+        "/admin/pricing/tools",
+        json={"tool_name": "web_search", "cost_usdc": 200_000_000, "description": ""},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_delete_tool_pricing_success(admin_api_client, monkeypatch):
+    """DELETE /admin/pricing/tools/{tool_name} returns {deleted: true}."""
+    monkeypatch.setattr("app.delete_tool_pricing_override", AsyncMock(return_value=True))
+
+    resp = await admin_api_client.delete("/admin/pricing/tools/web_search")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted"] is True
+    assert data["tool_name"] == "web_search"
+
+
+@pytest.mark.anyio
+async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_client, monkeypatch):
+    """DELETE for a tool with no override → 404."""
+    monkeypatch.setattr("app.delete_tool_pricing_override", AsyncMock(return_value=False))
+
+    resp = await admin_api_client.delete("/admin/pricing/tools/nonexistent_tool")
+    assert resp.status_code == 404
+    assert "No pricing override found" in resp.json()["detail"]
+
