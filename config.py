@@ -196,6 +196,21 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Custom Tools (per-org webhook tools) ──────────────────────────────────
+    max_org_tools: int = Field(
+        default=50, description="Maximum custom tools per organisation"
+    )
+    max_custom_tool_calls_per_run: int = Field(
+        default=5, description="Maximum custom-tool webhook calls per agent run"
+    )
+    org_tool_encryption_key: str = Field(
+        default="",
+        description="Fernet key for encrypting webhook auth headers (generate via Fernet.generate_key())",
+    )
+    org_tools_cache_ttl_seconds: int = Field(
+        default=60, description="TTL for per-org tool cache in seconds"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

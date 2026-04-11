@@ -83,6 +83,18 @@ from billing import (
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
+from org_tools import (
+    OrgTool,
+    build_org_langchain_tools,
+    close_org_tools_db,
+    create_org_tool,
+    delete_org_tool,
+    get_org_tool,
+    init_org_tools_db,
+    invalidate_org_tools_cache,
+    list_org_tools,
+    update_org_tool,
+)
 from scripts.generate_keys import generate_keypair
 from tools import registry
 from usage import (
@@ -192,7 +204,9 @@ async def lifespan(app: FastAPI):
     await init_usage_db(pool)
     await init_wallets_db(pool)
     await init_billing(pool)
+    await init_org_tools_db(pool)
     yield
+    await close_org_tools_db()
     await close_billing()
     await close_wallets_db()
     await close_usage_db()
@@ -737,6 +751,7 @@ async def agent_run(
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
 
         graph = await get_graph()
+        org_lc_tools, org_tools_by_name = await build_org_langchain_tools(org_id)
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
             metadata={
@@ -746,6 +761,8 @@ async def agent_run(
                 "user_id": user_id,
                 "org_id": org_id,
                 "_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []},
+                "_org_tools": org_lc_tools,
+                "_org_tools_by_name": org_tools_by_name,
             },
         )
         config = {"configurable": {"thread_id": scoped_thread_id}}
@@ -1546,6 +1563,250 @@ async def billing_topup_usdc(
             "tx_hash": result.tx_hash,
         },
     )
+
+
+# ─── Custom Tool CRUD endpoints ──────────────────────────────────────────────
+
+
+class CreateOrgToolRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    description: str = Field(..., min_length=1, max_length=500)
+    input_schema: dict = Field(..., description="JSON Schema for tool input parameters")
+    webhook_url: str = Field(..., max_length=2048)
+    webhook_method: str = Field(default="POST", pattern=r"^(GET|POST|PUT)$")
+    auth_header_name: str | None = Field(default=None, max_length=64)
+    auth_header_value: str | None = Field(default=None, max_length=4096)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+
+
+class UpdateOrgToolRequest(BaseModel):
+    description: str | None = Field(default=None, max_length=500)
+    webhook_url: str | None = Field(default=None, max_length=2048)
+    webhook_method: str | None = Field(default=None, pattern=r"^(GET|POST|PUT)$")
+    auth_header_name: str | None = None
+    auth_header_value: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1, le=30)
+    is_active: bool | None = None
+
+
+class OrgToolResponse(BaseModel):
+    id: str
+    org_id: str
+    name: str
+    description: str
+    input_schema: dict
+    webhook_url: str
+    webhook_method: str
+    has_auth: bool
+    timeout_seconds: int
+    is_active: bool
+    created_at: str
+    updated_at: str
+
+
+def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
+    """Convert an OrgTool model to a JSON-serialisable dict."""
+    return {
+        "id": tool.id,
+        "org_id": tool.org_id,
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+        "webhook_url": tool.webhook_url,
+        "webhook_method": tool.webhook_method,
+        "has_auth": tool.has_auth,
+        "timeout_seconds": tool.timeout_seconds,
+        "is_active": tool.is_active,
+        "created_at": tool.created_at.isoformat(),
+        "updated_at": tool.updated_at.isoformat(),
+    }
+
+
+@app.post("/tools", tags=["Tools"])
+async def create_tool(
+    body: CreateOrgToolRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Register a custom webhook-backed tool for the authenticated org."""
+    from jsonschema import Draft7Validator, SchemaError  # noqa: PLC0415
+
+    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    user_id: str = payload.get("sub", "")
+
+    # Validate JSON Schema
+    try:
+        Draft7Validator.check_schema(body.input_schema)
+    except SchemaError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid input_schema: {exc.message}",
+        )
+
+    # SSRF check
+    ssrf_err = validate_url(body.webhook_url)
+    if ssrf_err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsafe webhook URL: {ssrf_err}",
+        )
+
+    # HTTPS enforcement in production
+    s = get_settings()
+    if s.app_env == "production" and not body.webhook_url.startswith("https://"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Webhook URL must use HTTPS in production.",
+        )
+
+    # Global name collision check
+    if registry.get(body.name) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Tool name '{body.name}' conflicts with a built-in tool.",
+        )
+
+    # Auth header consistency
+    if body.auth_header_value and not body.auth_header_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="auth_header_name is required when auth_header_value is provided.",
+        )
+
+    try:
+        tool = await create_org_tool(
+            org_id=org_id,
+            name=body.name,
+            description=body.description,
+            input_schema=body.input_schema,
+            webhook_url=body.webhook_url,
+            webhook_method=body.webhook_method,
+            auth_header_name=body.auth_header_name,
+            auth_header_value=body.auth_header_value,
+            timeout_seconds=body.timeout_seconds,
+            actor_id=user_id,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Tool '{body.name}' already exists for this org.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    await invalidate_org_tools_cache(org_id)
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=_org_tool_to_response(tool))
+
+
+@app.get("/tools", tags=["Tools"])
+async def list_tools(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List custom tools for the authenticated org."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    tools = await list_org_tools(org_id)
+    return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
+
+
+@app.get("/tools/{tool_id}", tags=["Tools"])
+async def get_tool(
+    tool_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Get a specific custom tool by ID."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    tool = await get_org_tool(tool_id, org_id)
+    if tool is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
+    return JSONResponse(content=_org_tool_to_response(tool))
+
+
+@app.patch("/tools/{tool_id}", tags=["Tools"])
+async def patch_tool(
+    tool_id: str,
+    body: UpdateOrgToolRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Update a custom tool (partial update)."""
+    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    user_id: str = payload.get("sub", "")
+
+    # SSRF check if webhook_url is being changed
+    if body.webhook_url is not None:
+        ssrf_err = validate_url(body.webhook_url)
+        if ssrf_err:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsafe webhook URL: {ssrf_err}",
+            )
+        s = get_settings()
+        if s.app_env == "production" and not body.webhook_url.startswith("https://"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Webhook URL must use HTTPS in production.",
+            )
+
+    kwargs: dict[str, Any] = {}
+    _updatable = (
+        "description", "webhook_url", "webhook_method",
+        "auth_header_name", "auth_header_value",
+        "timeout_seconds", "is_active",
+    )
+    for field_name in _updatable:
+        val = getattr(body, field_name, None)
+        if val is not None:
+            kwargs[field_name] = val
+
+    if not kwargs:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No fields to update.",
+        )
+
+    tool = await update_org_tool(tool_id, org_id, actor_id=user_id, **kwargs)
+    if tool is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
+
+    await invalidate_org_tools_cache(org_id)
+    return JSONResponse(content=_org_tool_to_response(tool))
+
+
+@app.delete("/tools/{tool_id}", tags=["Tools"])
+async def remove_tool(
+    tool_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Soft-delete a custom tool."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    user_id: str = payload.get("sub", "")
+    deleted = await delete_org_tool(tool_id, org_id, actor_id=user_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
+    await invalidate_org_tools_cache(org_id)
+    return JSONResponse(content={"status": "deleted"})
+
+
+@app.get("/admin/tools/{org_id}", tags=["Admin"])
+async def admin_list_tools(
+    org_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: list all custom tools for a given org (including inactive)."""
+    tools = await list_org_tools(org_id, active_only=False)
+    return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

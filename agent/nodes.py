@@ -92,7 +92,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
     tools = _get_cached_tools()
-    llm = get_llm().bind_tools(tools)  # type: ignore[arg-type]
+    org_tools = state.metadata.get("_org_tools", [])
+    all_tools = tools + org_tools
+    llm = get_llm().bind_tools(all_tools)  # type: ignore[arg-type]
 
     messages = [SystemMessage(content=_PLANNER_SYSTEM), *state.messages]
 
@@ -164,7 +166,10 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {"task_status": TaskStatus.GENERATING_UI}
 
-    tools_by_name = _get_cached_tools_by_name()
+    tools_by_name = {
+        **_get_cached_tools_by_name(),
+        **state.metadata.get("_org_tools_by_name", {}),
+    }
 
     # ── Accumulate tool usage ─────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
