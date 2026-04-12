@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
-# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Per-org MCP client connections — CRUD, session pool, tool discovery, and caching.
 
 Allows organisations to register external MCP servers whose tools are

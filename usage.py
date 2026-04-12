@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
-# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Usage accounting data layer (async Postgres via asyncpg).
 
 Provides:

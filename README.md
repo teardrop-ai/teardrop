@@ -17,7 +17,8 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using Cl
 
 **1. Clone and enter the project**
 ```powershell
-cd "C:\Users\<you>\Documents\Local Repositiories\teardrop"
+git clone https://github.com/teardrop-ai/teardrop.git
+cd teardrop
 ```
 
 **2. Create and activate a virtual environment**

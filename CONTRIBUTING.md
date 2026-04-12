@@ -12,7 +12,8 @@ that it will be governed by the same license.
 
 ```powershell
 # 1. Clone and enter the project
-cd "C:\Users\<you>\Documents\Local Repositiories\teardrop"
+git clone https://github.com/teardrop-ai/teardrop.git
+cd teardrop
 
 # 2. Create and activate a virtual environment
 python -m venv venv

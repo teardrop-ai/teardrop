@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
-# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Shared Redis client singleton for rate limiting, SIWE nonces, and pricing cache.
 
 Provides graceful degradation: if REDIS_URL is unset or connection fails,

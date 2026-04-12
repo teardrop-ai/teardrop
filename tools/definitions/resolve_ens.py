@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
-# Copyright (c) 2026 [YOUR NAME OR ENTITY]. All rights reserved.
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """resolve_ens – resolve an ENS name to an Ethereum address."""
 
 from __future__ import annotations

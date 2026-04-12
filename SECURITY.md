@@ -8,7 +8,7 @@ Only the latest version of Teardrop receives security fixes.
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-To report a security issue, email: **[YOUR SECURITY CONTACT EMAIL]**
+To report a security issue, email: **hello@teardrop.dev**
 
 Include as much detail as possible:
 - A description of the vulnerability and its potential impact
