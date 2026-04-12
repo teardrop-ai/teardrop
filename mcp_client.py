@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 import asyncpg
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from cache import get_redis
 from config import get_settings
@@ -646,7 +646,8 @@ async def build_mcp_langchain_tools(
 
         servers = await _get_servers_cached(org_id)
         if not servers:
-            _tools_cache[org_id] = ([], {}, time.monotonic() + settings.mcp_client_tool_cache_ttl_seconds)
+            ttl = settings.mcp_client_tool_cache_ttl_seconds
+            _tools_cache[org_id] = ([], {}, time.monotonic() + ttl)
             return [], {}
 
         from tools import registry as global_registry
