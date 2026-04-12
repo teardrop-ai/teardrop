@@ -15,6 +15,7 @@ in tools/definitions/ will automatically expose it here.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import sys
 from typing import Any
@@ -50,6 +51,25 @@ def _register_tools_with_mcp() -> None:
                 validated = schema(**kwargs)
                 return await impl(**validated.model_dump())
 
+            # Inject an explicit typed signature from the Pydantic model so
+            # FastMCP 3.x can build its JSON schema (it inspects __signature__).
+            params = [
+                inspect.Parameter(
+                    name,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    annotation=fi.annotation if fi.annotation is not None else Any,
+                    default=(
+                        inspect.Parameter.empty if fi.is_required() else fi.default
+                    ),
+                )
+                for name, fi in schema.model_fields.items()
+            ]
+            handler.__signature__ = inspect.Signature(params)
+            handler.__annotations__ = {
+                p.name: p.annotation
+                for p in params
+                if p.annotation is not inspect.Parameter.empty
+            }
             return handler
 
         handler = _make_handler(implementation, input_schema)

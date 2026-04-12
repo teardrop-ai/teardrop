@@ -121,6 +121,7 @@ from org_tools import (
 )
 from scripts.generate_keys import generate_keypair
 from tools import registry
+from tools.mcp_server import mcp as _mcp_server
 from usage import (
     UsageEvent,
     close_usage_db,
@@ -267,6 +268,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
+
+# ─── MCP Streamable HTTP endpoint (Smithery / direct MCP clients) ────────────
+app.mount("/tools/mcp", _mcp_server.http_app())
 
 # ─── Rate limiting (sliding-window, Redis-first with in-process fallback) ─────
 
@@ -449,6 +453,28 @@ async def agent_card() -> JSONResponse:
                 "type": "jwt",
                 "token_endpoint": "/token",
             },
+        }
+    )
+
+
+@app.get("/.well-known/mcp/server-card.json", tags=["MCP"])
+async def mcp_server_card() -> JSONResponse:
+    """Static MCP server card for Smithery and other MCP registries."""
+    tools = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "inputSchema": t.input_schema.model_json_schema(),
+        }
+        for t in registry.list_latest()
+    ]
+    return JSONResponse(
+        content={
+            "serverInfo": {"name": "teardrop-tools", "version": app.version},
+            "authentication": {"required": True, "schemes": ["bearer"]},
+            "tools": tools,
+            "resources": [],
+            "prompts": [],
         }
     )
 
