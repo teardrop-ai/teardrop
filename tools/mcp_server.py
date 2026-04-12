@@ -64,7 +64,9 @@ _register_tools_with_mcp()
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """CLI entry point for teardrop-mcp command."""
     transport = "stdio"
     for arg in sys.argv[1:]:
         if arg.startswith("--transport="):
@@ -73,3 +75,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting Teardrop MCP server (transport=%s)", transport)
     asyncio.run(mcp.run_async(transport=transport))
+
+
+if __name__ == "__main__":
+    main()
