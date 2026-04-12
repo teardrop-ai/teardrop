@@ -44,8 +44,10 @@ venv.bak/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
+notes/
 .tox/
 nosetests.xml
 coverage.xml

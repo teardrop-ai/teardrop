@@ -196,6 +196,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Persistent Memory (per-org RAG) ─────────────────────────────────────
+    memory_enabled: bool = Field(
+        default=True,
+        description="Enable persistent agent memory. Auto-disabled if openai_api_key is empty.",
+    )
+    memory_top_k: int = Field(
+        default=5, description="Number of memories to retrieve per agent run"
+    )
+    memory_max_per_org: int = Field(
+        default=1000, description="Maximum stored memories per organisation"
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model for memory vectors",
+    )
+    embedding_dimensions: int = Field(
+        default=1536,
+        description="Embedding vector dimensions (must match VECTOR(N) in DB schema)",
+    )
+
     # ── Custom Tools (per-org webhook tools) ──────────────────────────────────
     max_org_tools: int = Field(
         default=50, description="Maximum custom tools per organisation"

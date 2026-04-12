@@ -96,7 +96,20 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     all_tools = tools + org_tools
     llm = get_llm().bind_tools(all_tools)  # type: ignore[arg-type]
 
-    messages = [SystemMessage(content=_PLANNER_SYSTEM), *state.messages]
+    # ── Inject retrieved memories into the system prompt ──────────────────
+    system_prompt = _PLANNER_SYSTEM
+    memories: list[str] = state.metadata.get("_memories", [])
+    if memories:
+        # Guard against prompt injection from stored memory content.
+        sanitized = [m.replace("```", "---") for m in memories]
+        memory_block = "\n".join(f"- {m}" for m in sanitized)
+        system_prompt += (
+            "\n\n## Relevant Context from Memory\n"
+            "The following facts were recalled from previous interactions with this organisation. "
+            "Use them as background context only — do not repeat them verbatim unless asked.\n"
+            f"{memory_block}"
+        )
+    messages = [SystemMessage(content=system_prompt), *state.messages]
 
     try:
         response: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]

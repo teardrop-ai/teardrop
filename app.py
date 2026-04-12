@@ -83,6 +83,17 @@ from billing import (
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
+from memory import (
+    close_memory_db,
+    count_memories,
+    delete_all_org_memories,
+    delete_memory,
+    extract_and_store_memories,
+    init_memory_db,
+    list_memories,
+    recall_memories,
+    store_memory,
+)
 from org_tools import (
     OrgTool,
     build_org_langchain_tools,
@@ -205,7 +216,9 @@ async def lifespan(app: FastAPI):
     await init_wallets_db(pool)
     await init_billing(pool)
     await init_org_tools_db(pool)
+    await init_memory_db(pool)
     yield
+    await close_memory_db()
     await close_org_tools_db()
     await close_billing()
     await close_wallets_db()
@@ -752,6 +765,17 @@ async def agent_run(
 
         graph = await get_graph()
         org_lc_tools, org_tools_by_name = await build_org_langchain_tools(org_id)
+
+        # ── Recall relevant memories for this org ─────────────────────────
+        recalled: list[str] = []
+        mem_settings = get_settings()
+        if mem_settings.memory_enabled:
+            try:
+                entries = await recall_memories(org_id, body.message, mem_settings.memory_top_k)
+                recalled = [e.content for e in entries]
+            except Exception:
+                logger.debug("Memory recall failed for org_id=%s", org_id, exc_info=True)
+
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
             metadata={
@@ -763,6 +787,7 @@ async def agent_run(
                 "_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []},
                 "_org_tools": org_lc_tools,
                 "_org_tools_by_name": org_tools_by_name,
+                "_memories": recalled,
             },
         )
         config = {"configurable": {"thread_id": scoped_thread_id}}
@@ -876,6 +901,17 @@ async def agent_run(
             cost_usdc=cost_usdc,
         )
         await record_usage_event(usage_event)
+
+        # ── Extract and store memories (fire-and-forget) ─────────────────
+        if mem_settings.memory_enabled:
+            try:
+                state_msgs = (state_snapshot.values or {}).get("messages", [])
+                if state_msgs:
+                    asyncio.create_task(
+                        extract_and_store_memories(org_id, user_id, state_msgs, run_id)
+                    )
+            except Exception:
+                logger.debug("Memory extraction kickoff failed", exc_info=True)
 
         # ── Settlement / credit debit (after usage recorded) ─────────────
         if billing.verified:
@@ -1807,6 +1843,127 @@ async def admin_list_tools(
     """Admin: list all custom tools for a given org (including inactive)."""
     tools = await list_org_tools(org_id, active_only=False)
     return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
+
+
+# ─── Memory endpoints ────────────────────────────────────────────────────────
+
+
+class StoreMemoryRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=500)
+
+
+@app.get("/memories", tags=["Memory"])
+async def list_memories_endpoint(
+    payload: dict = Depends(require_auth),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, description="ISO datetime cursor for pagination"),
+) -> JSONResponse:
+    """List memories for the authenticated org (newest first, cursor-paginated)."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — memory requires an org-scoped credential.",
+        )
+
+    from datetime import datetime as _dt
+
+    cursor_dt = _dt.fromisoformat(cursor) if cursor else None
+    entries = await list_memories(org_id, limit, cursor_dt)
+    serialized = [
+        {
+            "id": e.id,
+            "content": e.content,
+            "source_run_id": e.source_run_id,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in entries
+    ]
+    next_cursor = serialized[-1]["created_at"] if serialized else None
+    total = await count_memories(org_id)
+    return JSONResponse(
+        content={"items": serialized, "total": total, "next_cursor": next_cursor}
+    )
+
+
+@app.post("/memories", tags=["Memory"])
+async def store_memory_endpoint(
+    body: StoreMemoryRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Manually store a memory for the authenticated org."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — memory requires an org-scoped credential.",
+        )
+    user_id: str = payload.get("sub", "")
+
+    entry = await store_memory(org_id, user_id, body.content)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Failed to store memory — org limit may have been reached.",
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": entry.id,
+            "content": entry.content,
+            "created_at": entry.created_at.isoformat(),
+        },
+    )
+
+
+@app.delete("/memories/{memory_id}", tags=["Memory"])
+async def delete_memory_endpoint(
+    memory_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Delete a specific memory (org-scoped)."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — memory requires an org-scoped credential.",
+        )
+    deleted = await delete_memory(memory_id, org_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
+    return JSONResponse(content={"status": "deleted"})
+
+
+@app.get("/admin/memories/org/{org_id}", tags=["Admin"])
+async def admin_list_org_memories(
+    org_id: str,
+    _admin: dict = Depends(require_admin),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JSONResponse:
+    """Admin: list memories for a specific org."""
+    entries = await list_memories(org_id, limit)
+    total = await count_memories(org_id)
+    serialized = [
+        {
+            "id": e.id,
+            "content": e.content,
+            "user_id": e.user_id,
+            "source_run_id": e.source_run_id,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in entries
+    ]
+    return JSONResponse(content={"items": serialized, "total": total})
+
+
+@app.delete("/admin/memories/org/{org_id}", tags=["Admin"])
+async def admin_purge_org_memories(
+    org_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: delete all memories for a specific org."""
+    deleted_count = await delete_all_org_memories(org_id)
+    return JSONResponse(content={"status": "purged", "deleted": deleted_count})
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

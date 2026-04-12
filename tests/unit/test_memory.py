@@ -1,0 +1,374 @@
+"""Unit tests for memory.py — DB functions mocked via pool MagicMock."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+import memory as memory_module
+from memory import MemoryEntry
+
+# ─── Pool mock helper ─────────────────────────────────────────────────────────
+
+
+def _pool():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value="INSERT 0 1")
+    pool.fetch = AsyncMock(return_value=[])
+    pool.fetchrow = AsyncMock(return_value=None)
+    return pool
+
+
+def _mock_embedding():
+    """Return a patched _generate_embedding that returns a dummy vector."""
+    return AsyncMock(return_value=[0.1] * 1536)
+
+
+# ─── MemoryEntry model ───────────────────────────────────────────────────────
+
+
+class TestMemoryEntry:
+    def test_defaults(self):
+        entry = MemoryEntry(org_id="org-1", user_id="user-1", content="fact")
+        assert entry.org_id == "org-1"
+        assert entry.content == "fact"
+        assert entry.id  # auto-generated UUID
+        assert entry.source_run_id is None
+        assert isinstance(entry.created_at, datetime)
+
+    def test_explicit_fields(self):
+        entry = MemoryEntry(
+            id="m-1",
+            org_id="org-1",
+            user_id="user-1",
+            content="some fact",
+            source_run_id="run-123",
+        )
+        assert entry.id == "m-1"
+        assert entry.source_run_id == "run-123"
+
+
+# ─── store_memory ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestStoreMemory:
+    async def test_stores_successfully(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(5,))  # count < limit
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            entry = await memory_module.store_memory("org-1", "user-1", "a fact")
+
+        assert entry is not None
+        assert entry.content == "a fact"
+        pool.execute.assert_called_once()
+
+    async def test_returns_none_when_limit_reached(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(1000,))  # at default limit
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            entry = await memory_module.store_memory("org-1", "user-1", "new fact")
+
+        assert entry is None
+        pool.execute.assert_not_called()
+
+    async def test_truncates_content_to_500_chars(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(0,))
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            long_content = "x" * 600
+            entry = await memory_module.store_memory("org-1", "user-1", long_content)
+
+        assert entry is not None
+        assert len(entry.content) == 500
+
+    async def test_swallows_exceptions(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(0,))
+        pool.execute = AsyncMock(side_effect=Exception("DB error"))
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            entry = await memory_module.store_memory("org-1", "user-1", "fact")
+
+        assert entry is None
+
+
+# ─── recall_memories ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestRecallMemories:
+    async def test_returns_entries(self, test_settings):
+        pool = _pool()
+        now = datetime.now(timezone.utc)
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "m-1",
+                    "org_id": "org-1",
+                    "user_id": "user-1",
+                    "content": "fact one",
+                    "source_run_id": None,
+                    "created_at": now,
+                }
+            ]
+        )
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            results = await memory_module.recall_memories("org-1", "some query")
+
+        assert len(results) == 1
+        assert results[0].content == "fact one"
+
+    async def test_returns_empty_on_error(self, test_settings):
+        pool = _pool()
+        pool.fetch = AsyncMock(side_effect=Exception("DB error"))
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+        ):
+            results = await memory_module.recall_memories("org-1", "query")
+
+        assert results == []
+
+
+# ─── list_memories ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestListMemories:
+    async def test_returns_entries_without_cursor(self, test_settings):
+        pool = _pool()
+        now = datetime.now(timezone.utc)
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "m-1",
+                    "org_id": "org-1",
+                    "user_id": "user-1",
+                    "content": "fact",
+                    "source_run_id": None,
+                    "created_at": now,
+                }
+            ]
+        )
+
+        with patch.object(memory_module, "_pool", pool):
+            results = await memory_module.list_memories("org-1")
+
+        assert len(results) == 1
+
+    async def test_returns_entries_with_cursor(self, test_settings):
+        pool = _pool()
+        pool.fetch = AsyncMock(return_value=[])
+
+        cursor = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with patch.object(memory_module, "_pool", pool):
+            results = await memory_module.list_memories("org-1", cursor=cursor)
+
+        assert results == []
+        call_args = pool.fetch.call_args.args
+        assert cursor in call_args
+
+
+# ─── count_memories ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestCountMemories:
+    async def test_returns_count(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(42,))
+
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.count_memories("org-1")
+
+        assert count == 42
+
+    async def test_returns_zero_when_no_row(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=None)
+
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.count_memories("org-1")
+
+        assert count == 0
+
+
+# ─── delete_memory ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestDeleteMemory:
+    async def test_returns_true_on_success(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="DELETE 1")
+
+        with patch.object(memory_module, "_pool", pool):
+            deleted = await memory_module.delete_memory("m-1", "org-1")
+
+        assert deleted is True
+
+    async def test_returns_false_when_not_found(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="DELETE 0")
+
+        with patch.object(memory_module, "_pool", pool):
+            deleted = await memory_module.delete_memory("m-99", "org-1")
+
+        assert deleted is False
+
+
+# ─── delete_all_org_memories ──────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestDeleteAllOrgMemories:
+    async def test_returns_count(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="DELETE 5")
+
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.delete_all_org_memories("org-1")
+
+        assert count == 5
+
+    async def test_returns_zero_when_none_deleted(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="DELETE 0")
+
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.delete_all_org_memories("org-1")
+
+        assert count == 0
+
+
+# ─── _extract_facts ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestExtractFacts:
+    async def test_extracts_facts(self, test_settings):
+        mock_response = MagicMock()
+        mock_response.content = json.dumps({"facts": ["fact one", "fact two"]})
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        msgs = [MagicMock(type="human", content="My wallet is 0xABC")]
+
+        with patch("agent.llm.get_llm", return_value=mock_llm):
+            facts = await memory_module._extract_facts(msgs)
+
+        assert facts == ["fact one", "fact two"]
+
+    async def test_handles_markdown_fenced_json(self, test_settings):
+        mock_response = MagicMock()
+        mock_response.content = '```json\n{"facts": ["fenced fact"]}\n```'
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        msgs = [MagicMock(type="human", content="some text")]
+
+        with patch("agent.llm.get_llm", return_value=mock_llm):
+            facts = await memory_module._extract_facts(msgs)
+
+        assert facts == ["fenced fact"]
+
+    async def test_returns_empty_on_error(self, test_settings):
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM down"))
+
+        msgs = [MagicMock(type="human", content="text")]
+
+        with patch("agent.llm.get_llm", return_value=mock_llm):
+            facts = await memory_module._extract_facts(msgs)
+
+        assert facts == []
+
+    async def test_returns_empty_for_empty_messages(self, test_settings):
+        facts = await memory_module._extract_facts([])
+        assert facts == []
+
+    async def test_limits_to_five_facts(self, test_settings):
+        mock_response = MagicMock()
+        mock_response.content = json.dumps(
+            {"facts": [f"fact {i}" for i in range(10)]}
+        )
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        msgs = [MagicMock(type="human", content="text")]
+
+        with patch("agent.llm.get_llm", return_value=mock_llm):
+            facts = await memory_module._extract_facts(msgs)
+
+        assert len(facts) == 5
+
+
+# ─── extract_and_store_memories ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestExtractAndStoreMemories:
+    async def test_extracts_and_stores(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(0,))
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+            patch.object(
+                memory_module,
+                "_extract_facts",
+                AsyncMock(return_value=["fact one", "fact two"]),
+            ),
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1", "user-1", [], "run-1"
+            )
+
+        assert count == 2
+
+    async def test_returns_zero_on_no_facts(self, test_settings):
+        with patch.object(
+            memory_module, "_extract_facts", AsyncMock(return_value=[])
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1", "user-1", [], "run-1"
+            )
+
+        assert count == 0
+
+    async def test_never_raises(self, test_settings):
+        with patch.object(
+            memory_module,
+            "_extract_facts",
+            AsyncMock(side_effect=Exception("boom")),
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1", "user-1", [], "run-1"
+            )
+
+        assert count == 0
