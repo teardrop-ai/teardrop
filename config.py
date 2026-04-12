@@ -231,6 +231,20 @@ class Settings(BaseSettings):
         default=60, description="TTL for per-org tool cache in seconds"
     )
 
+    # ── MCP Client (per-org external MCP servers) ─────────────────────────────
+    max_org_mcp_servers: int = Field(
+        default=5, description="Maximum external MCP servers per organisation"
+    )
+    max_mcp_tools_per_server: int = Field(
+        default=50, description="Maximum tools to import from a single MCP server"
+    )
+    mcp_client_connect_timeout_seconds: int = Field(
+        default=10, description="Timeout for establishing a connection to an MCP server"
+    )
+    mcp_client_tool_cache_ttl_seconds: int = Field(
+        default=300, description="TTL for caching discovered MCP tool definitions (seconds)"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
