@@ -766,28 +766,46 @@ async def agent_run(
 
     # ── Billing gate ────────────────────────────────────────────────────────
     # Dispatches based on auth_method:
-    #   siwe              → x402 on-chain payment header (verify_payment)
+    #   siwe with balance → org prepaid credit (verify_credit, bills actual cost)
+    #   siwe no balance   → x402 on-chain payment header (verify_payment, exact)
     #   client_credentials / email → org prepaid credit balance (verify_credit)
+    #
+    # Note: the siwe-with-balance path is the upto workaround — SIWE users who
+    # top up via /billing/topup/usdc are billed calculate_run_cost_usdc() actual
+    # cost post-run rather than the fixed x402 exact price.
     billing = BillingResult()
     auth_method = payload.get("auth_method", "")
     if settings.billing_enabled and auth_method in settings.billable_auth_methods:
         if auth_method == "siwe":
-            payment_header = request.headers.get("payment-signature") or request.headers.get(
-                "x-payment"
-            )
-            if not payment_header:
-                return JSONResponse(
-                    status_code=402,
-                    content=build_402_response_body(),
-                    headers=build_402_headers(),
+            # Prefer credit billing when the org has a prepaid balance.
+            siwe_credit_balance = await get_credit_balance(org_id)
+            if siwe_credit_balance > 0:
+                pricing = await get_current_pricing()
+                min_required = pricing.run_price_usdc if pricing is not None else 0
+                billing = await verify_credit(org_id, min_required)
+                if not billing.verified:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail=billing.error,
+                    )
+            else:
+                # No credit balance: require per-request x402 exact payment.
+                payment_header = request.headers.get("payment-signature") or request.headers.get(
+                    "x-payment"
                 )
-            billing = await verify_payment(payment_header)
-            if not billing.verified:
-                return JSONResponse(
-                    status_code=402,
-                    content={"error": billing.error},
-                    headers=build_402_headers(),
-                )
+                if not payment_header:
+                    return JSONResponse(
+                        status_code=402,
+                        content=build_402_response_body(),
+                        headers=build_402_headers(),
+                    )
+                billing = await verify_payment(payment_header)
+                if not billing.verified:
+                    return JSONResponse(
+                        status_code=402,
+                        content={"error": billing.error},
+                        headers=build_402_headers(),
+                    )
         else:
             # Credit-based billing: ensure org has enough balance to cover at
             # least one run at the current flat-rate floor.
@@ -2201,6 +2219,87 @@ async def admin_list_mcp_servers(
     """Admin: list all MCP servers for an org."""
     servers = await list_org_mcp_servers(org_id, active_only=False)
     return JSONResponse(content=[_mcp_server_to_response(s) for s in servers])
+
+
+# ─── A2A Delegation – Allowlist Admin ─────────────────────────────────────────
+
+
+class CreateA2AAgentRequest(BaseModel):
+    org_id: str
+    agent_url: str = Field(..., min_length=10, max_length=2000)
+    label: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/admin/a2a/agents", tags=["Admin"])
+async def admin_add_a2a_agent(
+    request: Request,
+    body: CreateA2AAgentRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Add a trusted A2A agent to an org's allowlist."""
+    pool: asyncpg.Pool = request.app.state.pool
+    agent_id = str(uuid.uuid4())
+    try:
+        await pool.execute(
+            """
+            INSERT INTO a2a_allowed_agents (id, org_id, agent_url, label)
+            VALUES ($1, $2, $3, $4)
+            """,
+            agent_id,
+            body.org_id,
+            body.agent_url.rstrip("/"),
+            body.label,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This agent URL is already in the org's allowlist",
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={"id": agent_id, "org_id": body.org_id, "agent_url": body.agent_url, "label": body.label},
+    )
+
+
+@app.get("/admin/a2a/agents/{org_id}", tags=["Admin"])
+async def admin_list_a2a_agents(
+    request: Request,
+    org_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """List all trusted A2A agents for an org."""
+    pool: asyncpg.Pool = request.app.state.pool
+    rows = await pool.fetch(
+        "SELECT id, org_id, agent_url, label, created_at FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
+        org_id,
+    )
+    return JSONResponse(content=[
+        {
+            "id": r["id"],
+            "org_id": r["org_id"],
+            "agent_url": r["agent_url"],
+            "label": r["label"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ])
+
+
+@app.delete("/admin/a2a/agents/{agent_id}", tags=["Admin"])
+async def admin_delete_a2a_agent(
+    request: Request,
+    agent_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Remove an A2A agent from an org's allowlist."""
+    pool: asyncpg.Pool = request.app.state.pool
+    result = await pool.execute(
+        "DELETE FROM a2a_allowed_agents WHERE id = $1",
+        agent_id,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return JSONResponse(content={"deleted": agent_id})
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

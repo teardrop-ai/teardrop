@@ -245,6 +245,20 @@ class Settings(BaseSettings):
         default=300, description="TTL for caching discovered MCP tool definitions (seconds)"
     )
 
+    # ── A2A Delegation (outbound agent-to-agent calls) ────────────────────────
+    a2a_delegation_enabled: bool = Field(
+        default=False, description="Enable outbound A2A delegation via delegate_to_agent tool"
+    )
+    a2a_delegation_timeout_seconds: int = Field(
+        default=120, description="HTTP timeout for outbound A2A /message:send calls (seconds)"
+    )
+    a2a_delegation_max_per_run: int = Field(
+        default=3, description="Maximum delegate_to_agent calls allowed per agent run"
+    )
+    a2a_agent_card_cache_ttl_seconds: int = Field(
+        default=300, description="TTL for caching remote agent cards (seconds)"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

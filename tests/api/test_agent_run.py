@@ -46,9 +46,13 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     mock_settings.billing_enabled = True
     mock_settings.billable_auth_methods = ["siwe", "email", "client_credentials"]
     mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
     mock_settings.app_env = "test"
 
     monkeypatch.setattr("app.settings", mock_settings)
+    # SIWE with zero balance falls through to x402 path → no header → 402
+    monkeypatch.setattr("app.get_credit_balance", AsyncMock(return_value=0))
     # Mock build_* so the 402 response body can be constructed without a
     # live billing server (_requirements_cache would be None otherwise)
     monkeypatch.setattr(
@@ -90,6 +94,8 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
     mock_settings.billing_enabled = True
     mock_settings.billable_auth_methods = ["siwe", "email", "client_credentials"]
     mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
     mock_settings.app_env = "test"
 
     monkeypatch.setattr("app.settings", mock_settings)
@@ -144,10 +150,14 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monke
     mock_settings.billing_enabled = False
     mock_settings.billable_auth_methods = []
     mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
     mock_settings.app_env = "test"
 
     monkeypatch.setattr("app.settings", mock_settings)
     monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
     monkeypatch.setattr("app.record_usage_event", AsyncMock())
     monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
 
@@ -176,10 +186,14 @@ async def test_agent_run_thread_id_scoped_to_user(api_client, monkeypatch):
     mock_settings.billing_enabled = False
     mock_settings.billable_auth_methods = []
     mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
     mock_settings.app_env = "test"
 
     monkeypatch.setattr("app.settings", mock_settings)
     monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
     monkeypatch.setattr("app.record_usage_event", AsyncMock())
     monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
 

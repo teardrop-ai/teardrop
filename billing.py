@@ -86,12 +86,11 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     if not settings.x402_pay_to_address:
         raise RuntimeError("billing_enabled=True but x402_pay_to_address is empty")
 
-    from x402.http import FacilitatorConfig, HTTPFacilitatorClient
+    from x402 import ResourceConfig, x402ResourceServer
+    from x402.http import HTTPFacilitatorClient
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
-    from x402.schemas import ResourceConfig
-    from x402.server import x402ResourceServer
 
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.x402_facilitator_url))
+    facilitator = HTTPFacilitatorClient(url=settings.x402_facilitator_url)
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
     server.initialize()
@@ -258,7 +257,7 @@ async def _rebuild_requirements_if_stale() -> None:
         return  # Price unchanged; nothing to do.
 
     settings = get_settings()
-    from x402.schemas import ResourceConfig
+    from x402 import ResourceConfig
 
     new_price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
     config = ResourceConfig(
@@ -1118,7 +1117,7 @@ def build_usdc_topup_requirements(amount_usdc: int) -> list:
     Raises RuntimeError if billing is not initialised (BILLING_ENABLED=false).
     The caller (endpoint) should translate RuntimeError to HTTP 503.
     """
-    from x402.schemas import ResourceConfig  # noqa: PLC0415
+    from x402 import ResourceConfig  # noqa: PLC0415
 
     settings = get_settings()
     server = _get_server()  # Raises RuntimeError if not initialised.
