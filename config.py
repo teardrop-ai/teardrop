@@ -279,6 +279,27 @@ class Settings(BaseSettings):
         default=300, description="TTL for caching remote agent cards (seconds)"
     )
 
+    # ── Marketplace (paid MCP tool hosting + author revenue share) ─────────────
+    marketplace_enabled: bool = Field(
+        default=False, description="Enable the paid MCP tool marketplace"
+    )
+    marketplace_default_revenue_share_bps: int = Field(
+        default=7000,
+        description="Default author revenue share in basis points (7000 = 70%)",
+    )
+    marketplace_minimum_withdrawal_usdc: int = Field(
+        default=100_000,
+        description="Minimum withdrawal amount in atomic USDC (100000 = $0.10)",
+    )
+    marketplace_withdrawal_cooldown_seconds: int = Field(
+        default=3600,
+        description="Minimum seconds between withdrawal requests per org",
+    )
+    rate_limit_mcp_rpm: int = Field(
+        default=60,
+        description="Per-user rate limit for MCP marketplace tool calls (requests per minute)",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -49,6 +49,8 @@ class OrgTool(BaseModel):
     has_auth: bool
     timeout_seconds: int
     is_active: bool
+    publish_as_mcp: bool = False
+    marketplace_description: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -156,6 +158,8 @@ async def create_org_tool(
     auth_header_value: str | None,
     timeout_seconds: int,
     actor_id: str,
+    publish_as_mcp: bool = False,
+    marketplace_description: str = "",
 ) -> OrgTool:
     """Insert a new custom tool.  Raises on duplicate name or quota exceeded."""
     pool = _get_pool()
@@ -176,14 +180,27 @@ async def create_org_tool(
     if auth_header_value:
         auth_enc = _encrypt_header(auth_header_value)
 
+    # Validate: publishing requires author config
+    if publish_as_mcp:
+        from marketplace import get_author_config
+
+        config = await get_author_config(org_id)
+        if config is None:
+            raise ValueError(
+                "Cannot publish tool to marketplace — register a settlement wallet first "
+                "via POST /marketplace/author-config"
+            )
+
     try:
         await pool.execute(
             "INSERT INTO org_tools"
             " (id, org_id, name, description, input_schema,"
             "  webhook_url, webhook_method,"
             "  auth_header_name, auth_header_enc,"
-            "  timeout_seconds, is_active, created_at, updated_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $11)",
+            "  timeout_seconds, is_active,"
+            "  publish_as_mcp, marketplace_description,"
+            "  created_at, updated_at)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $13)",
             tool_id,
             org_id,
             name,
@@ -194,6 +211,8 @@ async def create_org_tool(
             auth_header_name,
             auth_enc,
             timeout_seconds,
+            publish_as_mcp,
+            marketplace_description,
             now,
         )
     except asyncpg.UniqueViolationError:
@@ -201,6 +220,8 @@ async def create_org_tool(
 
     await _record_event(org_id, tool_id, name, "created", actor_id)
     await invalidate_org_tools_cache(org_id)
+    if publish_as_mcp:
+        await invalidate_marketplace_cache()
 
     return OrgTool(
         id=tool_id,
@@ -213,6 +234,8 @@ async def create_org_tool(
         has_auth=auth_header_name is not None,
         timeout_seconds=timeout_seconds,
         is_active=True,
+        publish_as_mcp=publish_as_mcp,
+        marketplace_description=marketplace_description,
         created_at=now,
         updated_at=now,
     )
@@ -234,6 +257,8 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         has_auth=row["auth_header_name"] is not None,
         timeout_seconds=row["timeout_seconds"],
         is_active=row["is_active"],
+        publish_as_mcp=row.get("publish_as_mcp", False),
+        marketplace_description=row.get("marketplace_description", ""),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -275,6 +300,8 @@ async def update_org_tool(
     auth_header_value: str | None = ...,  # type: ignore[assignment]
     timeout_seconds: int | None = None,
     is_active: bool | None = None,
+    publish_as_mcp: bool | None = None,
+    marketplace_description: str | None = None,
 ) -> OrgTool | None:
     """Partial-update a tool.  Returns updated OrgTool or None if not found."""
     pool = _get_pool()
@@ -308,6 +335,19 @@ async def update_org_tool(
         _add("timeout_seconds", timeout_seconds)
     if is_active is not None:
         _add("is_active", is_active)
+    if publish_as_mcp is not None:
+        # Validate: publishing requires author config
+        if publish_as_mcp:
+            from marketplace import get_author_config
+
+            config = await get_author_config(org_id)
+            if config is None:
+                raise ValueError(
+                    "Cannot publish tool to marketplace — register a settlement wallet first"
+                )
+        _add("publish_as_mcp", publish_as_mcp)
+    if marketplace_description is not None:
+        _add("marketplace_description", marketplace_description)
 
     # Handle auth header updates (sentinel ... means "not provided")
     if auth_header_name is not ...:
@@ -334,6 +374,9 @@ async def update_org_tool(
 
     await _record_event(org_id, tool_id, row["name"], "updated", actor_id)
     await invalidate_org_tools_cache(org_id)
+    # Invalidate marketplace cache if publishing status may have changed
+    if publish_as_mcp is not None or is_active is not None:
+        await invalidate_marketplace_cache()
 
     return _row_to_org_tool(updated) if updated else None
 
@@ -350,10 +393,14 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
     deleted = result.split()[-1] != "0"  # "UPDATE N"
     if deleted:
         # Fetch name for audit
-        row = await pool.fetchrow("SELECT name FROM org_tools WHERE id = $1", tool_id)
+        row = await pool.fetchrow(
+            "SELECT name, publish_as_mcp FROM org_tools WHERE id = $1", tool_id
+        )
         name = row["name"] if row else tool_id
         await _record_event(org_id, tool_id, name, "deleted", actor_id)
         await invalidate_org_tools_cache(org_id)
+        if row and row.get("publish_as_mcp"):
+            await invalidate_marketplace_cache()
     return deleted
 
 
@@ -424,6 +471,77 @@ async def invalidate_org_tools_cache(org_id: str) -> None:
             await redis.delete(f"teardrop:org_tools:{org_id}")
         except Exception:
             logger.warning("Redis org_tools cache invalidation failed (non-fatal)", exc_info=True)
+
+
+# ─── Marketplace tools cache ─────────────────────────────────────────────────
+
+_marketplace_cache: tuple[list[OrgTool], float] | None = None  # (tools, expiry)
+_marketplace_lock: asyncio.Lock | None = None
+
+
+def _get_marketplace_lock() -> asyncio.Lock:
+    global _marketplace_lock
+    if _marketplace_lock is None:
+        _marketplace_lock = asyncio.Lock()
+    return _marketplace_lock
+
+
+async def list_marketplace_tools() -> list[OrgTool]:
+    """Return all published marketplace tools with a TTL cache."""
+    global _marketplace_cache
+    settings = get_settings()
+    redis = get_redis()
+
+    # Redis path
+    if redis is not None:
+        try:
+            cached_json = await redis.get("teardrop:marketplace:tools")
+            if cached_json is not None:
+                items = json.loads(cached_json)
+                return [OrgTool(**item) for item in items]
+        except Exception:
+            logger.warning("Redis marketplace cache read failed; falling back", exc_info=True)
+
+    # In-process TTL cache
+    now = time.monotonic()
+    if _marketplace_cache is not None and now < _marketplace_cache[1]:
+        return _marketplace_cache[0]
+
+    async with _get_marketplace_lock():
+        if _marketplace_cache is not None and time.monotonic() < _marketplace_cache[1]:
+            return _marketplace_cache[0]
+
+        pool = _get_pool()
+        rows = await pool.fetch(
+            "SELECT * FROM org_tools WHERE publish_as_mcp = TRUE AND is_active = TRUE"
+            " ORDER BY name"
+        )
+        tools = [_row_to_org_tool(r) for r in rows]
+        ttl = settings.org_tools_cache_ttl_seconds
+        _marketplace_cache = (tools, time.monotonic() + ttl)
+
+        if (r := get_redis()) is not None:
+            try:
+                data = json.dumps([t.model_dump(mode="json") for t in tools])
+                await r.setex("teardrop:marketplace:tools", ttl, data)
+            except Exception:
+                logger.warning("Redis marketplace cache write failed (non-fatal)", exc_info=True)
+
+        return tools
+
+
+async def invalidate_marketplace_cache() -> None:
+    """Clear the marketplace tools cache.  Called after publish/unpublish mutations."""
+    global _marketplace_cache
+    _marketplace_cache = None
+    redis = get_redis()
+    if redis is not None:
+        try:
+            await redis.delete("teardrop:marketplace:tools")
+        except Exception:
+            logger.warning(
+                "Redis marketplace cache invalidation failed (non-fatal)", exc_info=True
+            )
 
 
 # ─── Dynamic Pydantic model from JSON Schema ─────────────────────────────────

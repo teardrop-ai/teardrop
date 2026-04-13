@@ -113,6 +113,21 @@ from memory import (
     recall_memories,
     store_memory,
 )
+from marketplace import (
+    close_marketplace_db,
+    complete_withdrawal,
+    get_author_balance,
+    get_author_config,
+    get_author_earnings_history,
+    get_marketplace_catalog,
+    get_marketplace_tool_by_name,
+    init_marketplace_db,
+    list_pending_withdrawals,
+    process_withdrawal,
+    record_tool_call_earnings,
+    request_withdrawal,
+    set_author_config,
+)
 from org_tools import (
     OrgTool,
     build_org_langchain_tools,
@@ -122,6 +137,7 @@ from org_tools import (
     get_org_tool,
     init_org_tools_db,
     invalidate_org_tools_cache,
+    list_marketplace_tools,
     list_org_tools,
     update_org_tool,
 )
@@ -268,6 +284,7 @@ async def lifespan(app: FastAPI):
     await init_org_tools_db(pool)
     await init_mcp_client_db(pool)
     await init_memory_db(pool)
+    await init_marketplace_db(pool)
 
     # Launch background workers.
     bg_tasks: list[asyncio.Task] = []
@@ -287,6 +304,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    await close_marketplace_db()
     await close_memory_db()
     await close_mcp_client_db()
     await close_org_tools_db()
@@ -536,6 +554,19 @@ async def mcp_server_card() -> JSONResponse:
         }
         for t in registry.list_latest()
     ]
+    # Include published marketplace tools
+    s = get_settings()
+    if s.marketplace_enabled:
+        try:
+            mp_tools = await list_marketplace_tools()
+            for mt in mp_tools:
+                tools.append({
+                    "name": mt.name,
+                    "description": mt.marketplace_description or mt.description,
+                    "inputSchema": mt.input_schema,
+                })
+        except Exception:
+            logger.debug("Failed to load marketplace tools for server card", exc_info=True)
     return JSONResponse(
         content={
             "serverInfo": {"name": "teardrop-tools", "version": app.version},
@@ -1832,6 +1863,8 @@ class CreateOrgToolRequest(BaseModel):
     auth_header_name: str | None = Field(default=None, max_length=64)
     auth_header_value: str | None = Field(default=None, max_length=4096)
     timeout_seconds: int = Field(default=10, ge=1, le=30)
+    publish_as_mcp: bool = False
+    marketplace_description: str | None = Field(default=None, max_length=1000)
 
 
 class UpdateOrgToolRequest(BaseModel):
@@ -1842,6 +1875,8 @@ class UpdateOrgToolRequest(BaseModel):
     auth_header_value: str | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=30)
     is_active: bool | None = None
+    publish_as_mcp: bool | None = None
+    marketplace_description: str | None = Field(default=None, max_length=1000)
 
 
 class OrgToolResponse(BaseModel):
@@ -1855,6 +1890,8 @@ class OrgToolResponse(BaseModel):
     has_auth: bool
     timeout_seconds: int
     is_active: bool
+    publish_as_mcp: bool
+    marketplace_description: str
     created_at: str
     updated_at: str
 
@@ -1872,6 +1909,8 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "has_auth": tool.has_auth,
         "timeout_seconds": tool.timeout_seconds,
         "is_active": tool.is_active,
+        "publish_as_mcp": tool.publish_as_mcp,
+        "marketplace_description": tool.marketplace_description,
         "created_at": tool.created_at.isoformat(),
         "updated_at": tool.updated_at.isoformat(),
     }
@@ -1943,6 +1982,8 @@ async def create_tool(
             auth_header_value=body.auth_header_value,
             timeout_seconds=body.timeout_seconds,
             actor_id=user_id,
+            publish_as_mcp=body.publish_as_mcp,
+            marketplace_description=body.marketplace_description or "",
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(
@@ -2017,6 +2058,7 @@ async def patch_tool(
         "description", "webhook_url", "webhook_method",
         "auth_header_name", "auth_header_value",
         "timeout_seconds", "is_active",
+        "publish_as_mcp", "marketplace_description",
     )
     for field_name in _updatable:
         val = getattr(body, field_name, None)
@@ -2464,6 +2506,474 @@ async def admin_delete_a2a_agent(
     if result == "DELETE 0":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return JSONResponse(content={"deleted": agent_id})
+
+
+# ─── MCP Marketplace – JSON-RPC Handler ─────────────────────────────────────
+
+
+async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[str, Any]) -> Any:
+    """Execute a published marketplace tool via its webhook.
+
+    ``tool_row`` is the raw DB row returned by ``get_marketplace_tool_by_name()``.
+    Follows the same SSRF-safe webhook pattern as ``_build_langchain_tool``.
+    """
+    import aiohttp  # noqa: PLC0415
+
+    from org_tools import _decrypt_header  # noqa: PLC0415
+    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
+
+    url = tool_row["webhook_url"]
+    method = tool_row.get("webhook_method", "POST")
+    timeout_sec = tool_row.get("timeout_seconds", 10)
+
+    url_err = validate_url(url)
+    if url_err:
+        return {"error": f"Webhook URL blocked: {url_err}"}
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    auth_name = tool_row.get("auth_header_name")
+    auth_enc = tool_row.get("auth_header_enc")
+    if auth_name and auth_enc:
+        try:
+            headers[auth_name] = _decrypt_header(auth_enc)
+        except Exception:
+            return {"error": "Failed to decrypt webhook auth header"}
+
+    timeout = aiohttp.ClientTimeout(total=timeout_sec)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            if method == "GET":
+                resp = await session.get(url, headers=headers, params=arguments)
+            elif method == "PUT":
+                resp = await session.put(url, headers=headers, json=arguments)
+            else:
+                resp = await session.post(url, headers=headers, json=arguments)
+
+            body = await resp.read()
+            # 512 KB response cap
+            if len(body) > 512 * 1024:
+                body = body[: 512 * 1024]
+
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                return json.loads(body)
+            return {"text": body.decode("utf-8", errors="replace")}
+    except asyncio.TimeoutError:
+        return {"error": f"Webhook timed out after {timeout_sec}s"}
+    except Exception as exc:
+        return {"error": f"Webhook request failed: {type(exc).__name__}"}
+
+
+def _jsonrpc_error(id_: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
+
+
+def _jsonrpc_result(id_: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": id_, "result": result}
+
+
+@app.post("/mcp/v1", tags=["MCP Marketplace"])
+async def mcp_jsonrpc_handler(
+    request: Request,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """MCP Streamable HTTP endpoint — JSON-RPC 2.0.
+
+    Implements the following MCP methods:
+      - ``initialize`` – returns server capabilities
+      - ``tools/list`` – returns available tool definitions with pricing
+      - ``tools/call`` – execute a tool (subject to billing gate)
+    """
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="MCP marketplace is not enabled.",
+        )
+
+    user_id: str = payload["sub"]
+    org_id: str = payload.get("org_id", "")
+
+    # Rate limit (separate MCP bucket)
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"mcp:{user_id}", s.rate_limit_mcp_rpm,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="MCP rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(s.rate_limit_mcp_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            content=_jsonrpc_error(None, -32700, "Parse error"),
+            status_code=200,
+        )
+
+    req_id = body.get("id")
+    method = body.get("method", "")
+
+    if body.get("jsonrpc") != "2.0":
+        return JSONResponse(content=_jsonrpc_error(req_id, -32600, "Invalid JSON-RPC version"))
+
+    # ── initialize ────────────────────────────────────────────────────────
+    if method == "initialize":
+        return JSONResponse(content=_jsonrpc_result(req_id, {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "teardrop-marketplace", "version": app.version},
+        }))
+
+    # ── tools/list ────────────────────────────────────────────────────────
+    if method == "tools/list":
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_price_usdc if pricing else 0
+
+        catalog = await get_marketplace_catalog(overrides, default_cost)
+
+        tools_list = [
+            {
+                "name": t.qualified_name,
+                "description": t.marketplace_description,
+                "inputSchema": t.input_schema,
+            }
+            for t in catalog
+        ]
+
+        # Include built-in tools as well
+        for bt in registry.list_latest():
+            tools_list.append({
+                "name": bt.name,
+                "description": bt.description,
+                "inputSchema": bt.input_schema.model_json_schema(),
+            })
+
+        return JSONResponse(content=_jsonrpc_result(req_id, {"tools": tools_list}))
+
+    # ── tools/call ────────────────────────────────────────────────────────
+    if method == "tools/call":
+        params = body.get("params", {})
+        tool_name = params.get("name", "")
+        arguments = params.get("arguments", {})
+
+        if not tool_name:
+            return JSONResponse(content=_jsonrpc_error(req_id, -32602, "Missing tool name"))
+
+        # Determine tool cost
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_price_usdc if pricing else 0
+
+        # Check if it's a marketplace tool (qualified_name = "org_slug/tool_name")
+        is_marketplace_tool = "/" in tool_name
+        actual_tool_name = tool_name.split("/", 1)[1] if is_marketplace_tool else tool_name
+        tool_cost = overrides.get(actual_tool_name, default_cost)
+
+        # ── Billing gate (credit-only for MCP calls) ──────────────────
+        billing = BillingResult()
+        if s.billing_enabled:
+            billing = await verify_credit(org_id, tool_cost)
+            if not billing.verified:
+                return JSONResponse(content=_jsonrpc_error(
+                    req_id, -32000,
+                    f"Insufficient credit balance. Required: {tool_cost} USDC atomic units.",
+                ))
+
+        # ── Resolve and execute tool ──────────────────────────────────
+        result: Any
+        author_org_id: str | None = None
+
+        if is_marketplace_tool:
+            tool_row = await get_marketplace_tool_by_name(actual_tool_name)
+            if tool_row is None:
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
+                )
+            author_org_id = tool_row.get("org_id")
+            result = await _execute_marketplace_tool(tool_row, arguments)
+        else:
+            # Built-in tool execution
+            tool_def = registry.get(tool_name)
+            if tool_def is None:
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
+                )
+            try:
+                result = await tool_def.implementation(**arguments)
+            except Exception as exc:
+                logger.error("MCP tool execution error: %s", exc, exc_info=True)
+                result = {"error": str(exc)}
+
+        # ── Debit credits ─────────────────────────────────────────────
+        if billing.verified and billing.billing_method == "credit":
+            await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+
+        # ── Record author earnings (fire-and-forget) ──────────────────
+        if author_org_id and tool_cost > 0:
+            try:
+                asyncio.create_task(
+                    record_tool_call_earnings(
+                        author_org_id=author_org_id,
+                        caller_org_id=org_id,
+                        tool_name=actual_tool_name,
+                        total_cost_usdc=tool_cost,
+                    )
+                )
+            except Exception:
+                logger.debug("Failed to record author earnings", exc_info=True)
+
+        # Format MCP-spec tool result
+        if isinstance(result, dict) and "error" in result:
+            return JSONResponse(content=_jsonrpc_result(req_id, {
+                "content": [{"type": "text", "text": json.dumps(result)}],
+                "isError": True,
+            }))
+
+        return JSONResponse(content=_jsonrpc_result(req_id, {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(result) if not isinstance(result, str) else result,
+                }
+            ],
+            "isError": False,
+        }))
+
+    # Unknown method
+    return JSONResponse(content=_jsonrpc_error(req_id, -32601, f"Method not found: {method}"))
+
+
+# ─── MCP Marketplace – REST API ──────────────────────────────────────────────
+
+
+class SetAuthorConfigRequest(BaseModel):
+    settlement_wallet: str = Field(..., min_length=42, max_length=42)
+    revenue_share_bps: int | None = Field(default=None, ge=0, le=10000)
+
+
+@app.post("/marketplace/author-config", tags=["Marketplace"])
+async def set_marketplace_author_config(
+    body: SetAuthorConfigRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Configure or update the marketplace author settings for the org."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    try:
+        config = await set_author_config(
+            org_id=org_id,
+            settlement_wallet=body.settlement_wallet,
+            revenue_share_bps=body.revenue_share_bps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return JSONResponse(content={
+        "org_id": config.org_id,
+        "settlement_wallet": config.settlement_wallet,
+        "revenue_share_bps": config.revenue_share_bps,
+        "created_at": config.created_at.isoformat(),
+        "updated_at": config.updated_at.isoformat(),
+    })
+
+
+@app.get("/marketplace/author-config", tags=["Marketplace"])
+async def get_marketplace_author_config_endpoint(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Get the marketplace author configuration for the authenticated org."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    config = await get_author_config(org_id)
+    if config is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Author config not set.")
+
+    return JSONResponse(content={
+        "org_id": config.org_id,
+        "settlement_wallet": config.settlement_wallet,
+        "revenue_share_bps": config.revenue_share_bps,
+        "created_at": config.created_at.isoformat(),
+        "updated_at": config.updated_at.isoformat(),
+    })
+
+
+@app.get("/marketplace/balance", tags=["Marketplace"])
+async def get_marketplace_balance(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Get the pending (unwithdrawn) earnings balance for the authenticated org."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    balance = await get_author_balance(org_id)
+    return JSONResponse(content={"org_id": org_id, "balance_usdc": balance})
+
+
+@app.get("/marketplace/earnings", tags=["Marketplace"])
+async def get_marketplace_earnings(
+    payload: dict = Depends(require_auth),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JSONResponse:
+    """Get paginated earnings history for the authenticated org."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor, limit=limit)
+    return JSONResponse(content={
+        "earnings": [
+            {
+                "id": e.id,
+                "tool_name": e.tool_name,
+                "caller_org_id": e.caller_org_id,
+                "total_cost_usdc": e.amount_usdc,
+                "author_share_usdc": e.author_share_usdc,
+                "platform_share_usdc": e.platform_share_usdc,
+                "status": e.status,
+                "created_at": e.created_at.isoformat(),
+            }
+            for e in earnings
+        ],
+        "next_cursor": next_cursor,
+    })
+
+
+class WithdrawRequest(BaseModel):
+    amount_usdc: int = Field(..., gt=0)
+
+
+@app.post("/marketplace/withdraw", tags=["Marketplace"])
+async def request_marketplace_withdrawal(
+    body: WithdrawRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Request a withdrawal of earnings to the settlement wallet."""
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    try:
+        withdrawal = await request_withdrawal(org_id, body.amount_usdc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content={
+        "id": withdrawal.id,
+        "org_id": withdrawal.org_id,
+        "amount_usdc": withdrawal.amount_usdc,
+        "wallet": withdrawal.wallet,
+        "status": withdrawal.status,
+        "created_at": withdrawal.created_at.isoformat(),
+    })
+
+
+@app.get("/marketplace/catalog", tags=["Marketplace"])
+async def get_marketplace_catalog_endpoint() -> JSONResponse:
+    """Public: browse available marketplace tools with pricing."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    overrides = await get_tool_pricing_overrides()
+    pricing = await get_current_pricing()
+    default_cost = pricing.tool_call_price_usdc if pricing else 0
+
+    catalog = await get_marketplace_catalog(overrides, default_cost)
+    return JSONResponse(content={
+        "tools": [
+            {
+                "name": t.qualified_name,
+                "description": t.marketplace_description,
+                "input_schema": t.input_schema,
+                "cost_usdc": t.cost_usdc,
+                "author": t.author_org_name,
+            }
+            for t in catalog
+        ]
+    })
+
+
+# ─── Marketplace Admin endpoints ─────────────────────────────────────────────
+
+
+@app.post("/admin/marketplace/process-withdrawal/{withdrawal_id}", tags=["Admin"])
+async def admin_process_withdrawal(
+    withdrawal_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: process a pending withdrawal (mark earnings as settled)."""
+    try:
+        withdrawal = await process_withdrawal(withdrawal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return JSONResponse(content={
+        "id": withdrawal.id,
+        "org_id": withdrawal.org_id,
+        "amount_usdc": withdrawal.amount_usdc,
+        "status": withdrawal.status,
+    })
+
+
+class CompleteWithdrawalRequest(BaseModel):
+    tx_hash: str = Field(..., min_length=10, max_length=100)
+
+
+@app.post("/admin/marketplace/complete-withdrawal/{withdrawal_id}", tags=["Admin"])
+async def admin_complete_withdrawal(
+    withdrawal_id: str,
+    body: CompleteWithdrawalRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: record the on-chain tx_hash for a processed withdrawal."""
+    try:
+        await complete_withdrawal(withdrawal_id, body.tx_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return JSONResponse(content={"status": "completed", "tx_hash": body.tx_hash})
+
+
+@app.get("/admin/marketplace/withdrawals", tags=["Admin"])
+async def admin_list_withdrawals(
+    org_id: str | None = Query(default=None),
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: list pending withdrawals, optionally filtered by org."""
+    withdrawals = await list_pending_withdrawals(org_id)
+    return JSONResponse(content={
+        "withdrawals": [
+            {
+                "id": w.id,
+                "org_id": w.org_id,
+                "amount_usdc": w.amount_usdc,
+                "wallet": w.wallet,
+                "status": w.status,
+                "created_at": w.created_at.isoformat(),
+                "settled_at": w.settled_at.isoformat() if w.settled_at else None,
+            }
+            for w in withdrawals
+        ]
+    })
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────
