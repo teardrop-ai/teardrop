@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage
 
 from agent.llm import create_llm, extract_usage, reset_llm
 
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -33,7 +32,7 @@ def _make_settings(**overrides):
 class TestCreateLlm:
     def test_anthropic_provider(self):
         settings = _make_settings(agent_provider="anthropic")
-        with patch("agent.llm.ChatAnthropic", autospec=True) as MockCls:
+        with patch("agent.llm.ChatAnthropic") as MockCls:
             llm = create_llm(settings)
             MockCls.assert_called_once_with(
                 model="claude-haiku-4-5-20251001",
@@ -45,7 +44,7 @@ class TestCreateLlm:
 
     def test_openai_provider(self):
         settings = _make_settings(agent_provider="openai", agent_model="gpt-4o-mini")
-        with patch("agent.llm.ChatOpenAI", autospec=True) as MockCls:
+        with patch("agent.llm.ChatOpenAI") as MockCls:
             llm = create_llm(settings)
             MockCls.assert_called_once_with(
                 model="gpt-4o-mini",
@@ -57,7 +56,7 @@ class TestCreateLlm:
 
     def test_google_provider(self):
         settings = _make_settings(agent_provider="google", agent_model="gemini-2.0-flash")
-        with patch("agent.llm.ChatGoogleGenerativeAI", autospec=True) as MockCls:
+        with patch("agent.llm.ChatGoogleGenerativeAI") as MockCls:
             llm = create_llm(settings)
             MockCls.assert_called_once_with(
                 model="gemini-2.0-flash",
@@ -74,13 +73,13 @@ class TestCreateLlm:
 
     def test_provider_is_case_insensitive(self):
         settings = _make_settings(agent_provider="ANTHROPIC")
-        with patch("agent.llm.ChatAnthropic", autospec=True) as MockCls:
+        with patch("agent.llm.ChatAnthropic") as MockCls:
             create_llm(settings)
             MockCls.assert_called_once()
 
     def test_empty_api_key_passes_none(self):
         settings = _make_settings(agent_provider="anthropic", anthropic_api_key="")
-        with patch("agent.llm.ChatAnthropic", autospec=True) as MockCls:
+        with patch("agent.llm.ChatAnthropic") as MockCls:
             create_llm(settings)
             MockCls.assert_called_once_with(
                 model="claude-haiku-4-5-20251001",
@@ -162,7 +161,7 @@ class TestSingleton:
         from agent.llm import get_llm
 
         with patch("agent.llm.create_llm") as mock_create:
-            mock_create.return_value = MagicMock()
+            mock_create.side_effect = lambda: MagicMock()
             a = get_llm()
             reset_llm()
             b = get_llm()

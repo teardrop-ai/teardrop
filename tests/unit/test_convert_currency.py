@@ -8,10 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from tools.definitions.convert_currency import (
-    ConvertCurrencyInput,
-    convert_currency,
     _CRYPTO_IDS,
     _FIAT_CODES,
+    ConvertCurrencyInput,
+    convert_currency,
 )
 
 
@@ -41,7 +41,7 @@ class TestConvertCurrency:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.convert_currency.aiohttp.ClientSession", return_value=mock_session):
+        with patch("tools.definitions.convert_currency.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
             result = await convert_currency(amount=100.0, from_currency="USD", to_currency="EUR")
 
         assert result["from_currency"] == "USD"

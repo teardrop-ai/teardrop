@@ -7,14 +7,12 @@ and X-RateLimit-* response headers.
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Import the rate limiter internals from app module.
 import app as app_module
-
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

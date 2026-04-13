@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 
 class _AwaitableValue:
     """A descriptor that returns an awaitable value, mimicking web3's async property."""

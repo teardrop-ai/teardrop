@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 
 class TestGetWalletPortfolio:
@@ -65,7 +63,9 @@ class TestGetWalletPortfolio:
             return 0
 
         mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
+        mock_contract.functions.balanceOf.return_value.call = AsyncMock(
+            side_effect=balance_side_effect
+        )
         mock_w3.eth.contract.return_value = mock_contract
 
         monkeypatch.setattr(
@@ -102,7 +102,9 @@ class TestGetWalletPortfolio:
             return 10_000_000_000  # 10000 USDC
 
         mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
+        mock_contract.functions.balanceOf.return_value.call = AsyncMock(
+            side_effect=balance_side_effect
+        )
         mock_w3.eth.contract.return_value = mock_contract
 
         monkeypatch.setattr(
@@ -110,7 +112,10 @@ class TestGetWalletPortfolio:
         )
 
         async def mock_fetch_prices(cg_ids):
-            prices = {"ethereum": 3000.0, "usd-coin": 1.0, "tether": 1.0, "dai": 1.0, "weth": 3000.0, "wrapped-bitcoin": 65000.0}
+            prices = {
+                "ethereum": 3000.0, "usd-coin": 1.0, "tether": 1.0,
+                "dai": 1.0, "weth": 3000.0, "wrapped-bitcoin": 65000.0,
+            }
             return {cid: prices.get(cid, 0.0) for cid in cg_ids}
 
         monkeypatch.setattr(

@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 
 class TestDecodeTransaction:
     async def test_eth_transfer_no_calldata(self, test_settings, monkeypatch):
@@ -113,7 +111,7 @@ class TestDecodeTransaction:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.decode_transaction.aiohttp.ClientSession", return_value=mock_session):
+        with patch("tools.definitions.decode_transaction.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
             result = await decode_transaction("0xdeadbeef", chain_id=1)
 
         assert result["function_name"] == "transfer(address,uint256)"

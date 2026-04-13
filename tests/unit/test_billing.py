@@ -1035,7 +1035,7 @@ class TestCreditUsdcTopup:
         assert result == 1_000_000  # initial 0 + 1_000_000
 
     async def test_credit_ledger_insert_called(self):
-        """Verify a ledger row with operation='topup' and reason prefixed 'usdc_onchain:' is inserted."""
+        """Verify a ledger row with operation='topup' and reason 'usdc_onchain:' is inserted."""
         pool = self._make_pool(guard_returns_row=True, initial_balance=0)
         with patch.object(billing_module, "_pool", pool):
             await credit_usdc_topup("org-1", 1_000_000, "0xledgertx")

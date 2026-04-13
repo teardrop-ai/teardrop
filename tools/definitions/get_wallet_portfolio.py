@@ -22,16 +22,16 @@ logger = logging.getLogger(__name__)
 
 _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
     1: [  # Ethereum mainnet
-        {"address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},
-        {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "cg_id": "tether", "decimals": "6"},
-        {"address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},
-        {"address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},
-        {"address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "cg_id": "wrapped-bitcoin", "decimals": "8"},
+        {"address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
+        {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "cg_id": "tether", "decimals": "6"},  # noqa: E501
+        {"address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
+        {"address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
+        {"address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "cg_id": "wrapped-bitcoin", "decimals": "8"},  # noqa: E501
     ],
     8453: [  # Base
-        {"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},
-        {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},
-        {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},
+        {"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
+        {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
+        {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
     ],
 }
 

@@ -88,9 +88,10 @@ async def init_billing(pool: asyncpg.Pool) -> None:
 
     from x402 import ResourceConfig, x402ResourceServer
     from x402.http import HTTPFacilitatorClient
+    from x402.http.facilitator_client_base import FacilitatorConfig
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
 
-    facilitator = HTTPFacilitatorClient(url=settings.x402_facilitator_url)
+    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.x402_facilitator_url))
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
     server.initialize()
@@ -603,7 +604,6 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
              + sum(override.get(name, tool_call_cost) for name in tool_names)
              + remaining_unnamed_calls * tool_call_cost
     """
-    from collections import Counter
 
     rule = await get_live_pricing()
     if rule is None:
@@ -930,10 +930,12 @@ async def create_stripe_embedded_session(
     """Create a Stripe Checkout session for embedded checkout (prepaid credit top-up).
 
     amount_cents is USD cents (100 = $1.00).
-    return_url must be an HTTPS URL containing {CHECKOUT_SESSION_ID} for Stripe template substitution.
+    return_url must be an HTTPS URL containing {CHECKOUT_SESSION_ID} for Stripe
+    template substitution.
     Unit conversion: 1 USD cent = 10_000 atomic USDC (1_000_000 = $1.00).
 
-    Returns a dict with 'client_secret' and 'session_id' for the frontend to render the embedded form.
+    Returns a dict with 'client_secret' and 'session_id' for the frontend to
+    render the embedded form.
     """
     import stripe  # noqa: PLC0415 — lazy import; only needed when Stripe is configured
 

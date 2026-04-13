@@ -142,7 +142,14 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
     # SSRF validation
     error = validate_url(url)
     if error:
-        return {"url": url, "title": None, "content": "", "content_length": 0, "truncated": False, "error": error}
+        return {
+            "url": url,
+            "title": None,
+            "content": "",
+            "content_length": 0,
+            "truncated": False,
+            "error": error,
+        }
 
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)

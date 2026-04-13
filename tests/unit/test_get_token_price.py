@@ -61,7 +61,7 @@ class TestGetTokenPrice:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):
+        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
             result = await get_token_price(tokens=["BTC"])
 
         assert result["vs_currency"] == "usd"
@@ -82,7 +82,7 @@ class TestGetTokenPrice:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):
+        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
             result = await get_token_price(tokens=["ETH"])
 
         assert result["prices"][0]["price"] is None

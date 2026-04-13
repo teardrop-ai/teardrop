@@ -39,6 +39,7 @@ def test_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "")
 
     # Clear the LRU cache so the patched env is picked up.
     config.get_settings.cache_clear()

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from tools.definitions.http_fetch import validate_url, http_fetch
+from tools.definitions.http_fetch import http_fetch, validate_url
 
 
 class TestValidateUrl:

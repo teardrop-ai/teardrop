@@ -134,7 +134,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch("agent.llm.get_llm", return_value=mock_llm),
+            patch("agent.nodes.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
@@ -152,7 +152,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch("agent.llm.get_llm", return_value=mock_llm),
+            patch("agent.nodes.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
@@ -169,7 +169,7 @@ class TestPlannerNode:
 
         state = _make_state()
         with (
-            patch("agent.llm.get_llm", return_value=mock_llm),
+            patch("agent.nodes.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
         ):
             result = await planner_node(state)
@@ -186,7 +186,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tokens_in": 10, "tokens_out": 5}})
         with (
-            patch("agent.llm.get_llm", return_value=mock_llm),
+            patch("agent.nodes.get_llm", return_value=mock_llm),
             patch.object(nodes_module, "_cached_tools", []),
         ):
             result = await planner_node(state)

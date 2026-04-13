@@ -32,6 +32,11 @@ class GetEthBalanceOutput(BaseModel):
 
 async def get_eth_balance(address: str, chain_id: int = 1) -> dict[str, Any]:
     """Return the native ETH balance in both wei and ether."""
+    if not Web3.is_checksum_address(address):
+        raise ValueError(
+            f"Address '{address}' is not a valid EIP-55 checksum address. "
+            "Use Web3.to_checksum_address() to convert it first."
+        )
     w3 = get_web3(chain_id)
     checksum = Web3.to_checksum_address(address)
     balance_wei = await w3.eth.get_balance(checksum)

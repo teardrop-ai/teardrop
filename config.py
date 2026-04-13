@@ -65,7 +65,9 @@ class Settings(BaseSettings):
 
     # ── Tool Providers ──────────────────────────────────────────────────────────
     tavily_api_key: str = Field(default="", description="Tavily API key for web search")
-    coingecko_api_key: str = Field(default="", description="CoinGecko demo API key (optional, raises rate limits)")
+    coingecko_api_key: str = Field(
+        default="", description="CoinGecko demo API key (optional, raises rate limits)"
+    )
     coingecko_api_url: str = Field(
         default="https://api.coingecko.com/api/v3",
         description="CoinGecko API base URL",
@@ -82,7 +84,8 @@ class Settings(BaseSettings):
         default=30, description="Per-user rate limit for /agent/run (requests per minute)"
     )
     rate_limit_auth_rpm: int = Field(
-        default=20, description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)"
+        default=20,
+        description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)",
     )
 
     # ── JWT Authentication ─────────────────────────────────────────────────────
@@ -225,7 +228,10 @@ class Settings(BaseSettings):
     )
     org_tool_encryption_key: str = Field(
         default="",
-        description="Fernet key for encrypting webhook auth headers (generate via Fernet.generate_key())",
+        description=(
+            "Fernet key for encrypting webhook auth headers"
+            " (generate via Fernet.generate_key())"
+        ),
     )
     org_tools_cache_ttl_seconds: int = Field(
         default=60, description="TTL for per-org tool cache in seconds"

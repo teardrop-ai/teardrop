@@ -83,6 +83,18 @@ from billing import (
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
+from mcp_client import (
+    OrgMcpServer,
+    build_mcp_langchain_tools,
+    close_mcp_client_db,
+    create_org_mcp_server,
+    delete_org_mcp_server,
+    discover_mcp_tools,
+    get_org_mcp_server,
+    init_mcp_client_db,
+    list_org_mcp_servers,
+    update_org_mcp_server,
+)
 from memory import (
     close_memory_db,
     count_memories,
@@ -93,19 +105,6 @@ from memory import (
     list_memories,
     recall_memories,
     store_memory,
-)
-from mcp_client import (
-    OrgMcpServer,
-    build_mcp_langchain_tools,
-    close_mcp_client_db,
-    create_org_mcp_server,
-    delete_org_mcp_server,
-    discover_mcp_tools,
-    get_org_mcp_server,
-    init_mcp_client_db,
-    invalidate_mcp_cache,
-    list_org_mcp_servers,
-    update_org_mcp_server,
 )
 from org_tools import (
     OrgTool,
@@ -737,7 +736,6 @@ async def agent_run(
     until the agent completes or errors.  Supports multi-turn via thread_id.
     Thread state is scoped to the authenticated user.
     """
-    client_ip = request.client.host if request.client else "unknown"
     user_id: str = payload["sub"]
     allowed, remaining, reset_at = await _check_rate_limit(
         f"run:{user_id}", settings.rate_limit_agent_rpm
@@ -1572,7 +1570,10 @@ async def billing_usdc_topup_requirements(
         ...,
         ge=1_000_000,
         le=10_000_000_000,
-        description="Amount in atomic USDC (6 decimals). Min $1.00 = 1_000_000. Max $10,000 = 10_000_000_000.",
+        description=(
+            "Amount in atomic USDC (6 decimals)."
+            " Min $1.00 = 1_000_000. Max $10,000 = 10_000_000_000."
+        ),
     ),
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -2046,7 +2047,9 @@ class CreateMcpServerRequest(BaseModel):
 
 
 class UpdateMcpServerRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    name: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
+    )
     url: str | None = Field(default=None, max_length=2048)
     auth_type: str | None = Field(default=None, pattern=r"^(none|bearer|header)$")
     auth_token: str | None = None
@@ -2152,7 +2155,11 @@ async def patch_mcp_server(
     user_id: str = payload.get("sub", "")
 
     kwargs: dict[str, Any] = {}
-    for field_name in ("name", "url", "auth_type", "auth_token", "auth_header_name", "timeout_seconds", "is_active"):
+    _mcp_updatable = (
+        "name", "url", "auth_type", "auth_token",
+        "auth_header_name", "timeout_seconds", "is_active",
+    )
+    for field_name in _mcp_updatable:
         val = getattr(body, field_name, None)
         if val is not None:
             kwargs[field_name] = val
@@ -2257,7 +2264,12 @@ async def admin_add_a2a_agent(
         )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
-        content={"id": agent_id, "org_id": body.org_id, "agent_url": body.agent_url, "label": body.label},
+        content={
+            "id": agent_id,
+            "org_id": body.org_id,
+            "agent_url": body.agent_url,
+            "label": body.label,
+        },
     )
 
 
@@ -2270,7 +2282,8 @@ async def admin_list_a2a_agents(
     """List all trusted A2A agents for an org."""
     pool: asyncpg.Pool = request.app.state.pool
     rows = await pool.fetch(
-        "SELECT id, org_id, agent_url, label, created_at FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
+        "SELECT id, org_id, agent_url, label, created_at"
+        " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
         org_id,
     )
     return JSONResponse(content=[

@@ -16,6 +16,22 @@ from langchain_core.messages import AIMessage
 
 from config import get_settings
 
+# ── Optional provider imports — None when package not installed ───────────────
+try:
+    from langchain_anthropic import ChatAnthropic
+except ImportError:
+    ChatAnthropic = None  # type: ignore[assignment,misc]
+
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None  # type: ignore[assignment,misc]
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+except ImportError:
+    ChatGoogleGenerativeAI = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 # ─── Singleton ────────────────────────────────────────────────────────────────
@@ -42,24 +58,30 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
     }
 
     if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
+        if ChatAnthropic is None:
+            raise RuntimeError(
+                "langchain-anthropic is not installed. Run: pip install langchain-anthropic"
+            )
         return ChatAnthropic(
             **common,
             api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
         )
 
     if provider == "openai":
-        from langchain_openai import ChatOpenAI
-
+        if ChatOpenAI is None:
+            raise RuntimeError(
+                "langchain-openai is not installed. Run: pip install langchain-openai"
+            )
         return ChatOpenAI(
             **common,
             api_key=settings.openai_api_key or None,  # type: ignore[arg-type]
         )
 
     if provider == "google":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
+        if ChatGoogleGenerativeAI is None:
+            raise RuntimeError(
+                "langchain-google-genai is not installed. Run: pip install langchain-google-genai"
+            )
         return ChatGoogleGenerativeAI(
             **common,
             google_api_key=settings.google_api_key or None,  # type: ignore[arg-type]
@@ -76,7 +98,8 @@ def get_llm() -> BaseChatModel:
     global _llm
     if _llm is None:
         _llm = create_llm()
-        logger.info("LLM initialised: provider=%s model=%s", get_settings().agent_provider, get_settings().agent_model)
+        _s = get_settings()
+        logger.info("LLM initialised: provider=%s model=%s", _s.agent_provider, _s.agent_model)
     return _llm
 
 
