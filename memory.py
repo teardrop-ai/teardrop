@@ -16,10 +16,11 @@ Provides:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -130,9 +131,10 @@ async def store_memory(
     content: str,
     source_run_id: str | None = None,
 ) -> MemoryEntry | None:
-    """Embed and store a single memory. Returns None on failure.
+    """Embed and store a single memory. Returns None on failure or duplicate.
 
-    Enforces max_memories_per_org limit. Never raises — logs errors instead.
+    Enforces max_memories_per_org limit. Deduplicates via content_hash.
+    Sets expires_at if memory_ttl_days > 0. Never raises — logs errors instead.
     """
     try:
         settings = get_settings()
@@ -152,6 +154,14 @@ async def store_memory(
         # Truncate content to 500 chars for safety.
         content = content[:500]
 
+        # Compute content hash for deduplication.
+        content_hash = hashlib.sha256(content.strip().lower().encode()).hexdigest()
+
+        # Compute expiry if TTL is configured.
+        expires_at = None
+        if settings.memory_ttl_days > 0:
+            expires_at = datetime.now(timezone.utc) + timedelta(days=settings.memory_ttl_days)
+
         embedding = await _generate_embedding(content)
         entry = MemoryEntry(
             org_id=org_id,
@@ -160,11 +170,15 @@ async def store_memory(
             source_run_id=source_run_id,
         )
 
-        await pool.execute(
+        result = await pool.fetchrow(
             """
             INSERT INTO org_memories
-                (id, org_id, user_id, content, embedding, source_run_id, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (id, org_id, user_id, content, embedding, source_run_id,
+                 content_hash, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (org_id, content_hash) WHERE content_hash IS NOT NULL
+            DO NOTHING
+            RETURNING id
             """,
             entry.id,
             entry.org_id,
@@ -172,8 +186,15 @@ async def store_memory(
             entry.content,
             embedding,
             entry.source_run_id,
+            content_hash,
+            expires_at,
             entry.created_at,
         )
+
+        if result is None:
+            logger.debug("Duplicate memory skipped for org_id=%s hash=%s", org_id, content_hash[:8])
+            return None
+
         return entry
 
     except Exception:
@@ -202,6 +223,7 @@ async def recall_memories(
             SELECT id, org_id, user_id, content, source_run_id, created_at
             FROM org_memories
             WHERE org_id = $1
+              AND (expires_at IS NULL OR expires_at > NOW())
             ORDER BY embedding <=> $2
             LIMIT $3
             """,
@@ -241,6 +263,7 @@ async def list_memories(
             SELECT id, org_id, user_id, content, source_run_id, created_at
             FROM org_memories
             WHERE org_id = $1
+              AND (expires_at IS NULL OR expires_at > NOW())
             ORDER BY created_at DESC
             LIMIT $2
             """,
@@ -253,6 +276,7 @@ async def list_memories(
             SELECT id, org_id, user_id, content, source_run_id, created_at
             FROM org_memories
             WHERE org_id = $1 AND created_at < $3
+              AND (expires_at IS NULL OR expires_at > NOW())
             ORDER BY created_at DESC
             LIMIT $2
             """,
@@ -309,6 +333,18 @@ async def delete_all_org_memories(org_id: str) -> int:
         org_id,
     )
     # asyncpg returns e.g. "DELETE 42"
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def cleanup_expired_memories() -> int:
+    """Delete memories past their TTL. Returns count of deleted rows."""
+    pool = _get_pool()
+    result = await pool.execute(
+        "DELETE FROM org_memories WHERE expires_at IS NOT NULL AND expires_at < NOW()"
+    )
     try:
         return int(result.split()[-1])
     except (ValueError, IndexError):

@@ -149,35 +149,73 @@ class TestCalculateRunCostUsdc:
 # ─── verify_credit ────────────────────────────────────────────────────────────
 
 
+def _mock_pool_for_verify(balance=50_000, spending_limit=0, is_paused=False, daily_spend=0):
+    """Create a mock pool that returns the given credit row and daily spend."""
+    credit_row = {"balance_usdc": balance, "spending_limit_usdc": spending_limit, "is_paused": is_paused}
+    daily_row = {"daily_spend": daily_spend}
+    mock_pool = MagicMock()
+    mock_pool.fetchrow = AsyncMock(side_effect=[credit_row, daily_row])
+    return mock_pool
+
+
 class TestVerifyCredit:
     async def test_sufficient_balance_returns_verified(self):
-        with patch("billing.get_credit_balance", new=AsyncMock(return_value=50_000)):
+        mock_pool = _mock_pool_for_verify(balance=50_000)
+        with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
         assert result.verified is True
         assert result.billing_method == "credit"
         assert result.error == ""
 
     async def test_insufficient_balance_returns_not_verified(self):
-        with patch("billing.get_credit_balance", new=AsyncMock(return_value=5_000)):
+        mock_pool = _mock_pool_for_verify(balance=5_000)
+        with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
         assert result.verified is False
         assert "Insufficient credit" in result.error
         assert "5000" in result.error
 
     async def test_exact_balance_passes(self):
-        with patch("billing.get_credit_balance", new=AsyncMock(return_value=10_000)):
+        mock_pool = _mock_pool_for_verify(balance=10_000)
+        with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
         assert result.verified is True
 
     async def test_zero_min_balance_always_passes(self):
-        with patch("billing.get_credit_balance", new=AsyncMock(return_value=0)):
+        mock_pool = _mock_pool_for_verify(balance=0)
+        with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 0)
         assert result.verified is True
 
     async def test_error_message_includes_required_amount(self):
-        with patch("billing.get_credit_balance", new=AsyncMock(return_value=0)):
+        mock_pool = _mock_pool_for_verify(balance=0)
+        with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 25_000)
         assert "25000" in result.error
+
+    async def test_paused_org_returns_error(self):
+        mock_pool = _mock_pool_for_verify(balance=50_000, is_paused=True)
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is False
+        assert "paused" in result.error.lower()
+
+    async def test_daily_spending_limit_exceeded(self):
+        mock_pool = _mock_pool_for_verify(
+            balance=100_000, spending_limit=50_000, daily_spend=45_000,
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is False
+        assert "spending limit" in result.error.lower()
+
+    async def test_daily_spending_limit_within_budget(self):
+        mock_pool = _mock_pool_for_verify(
+            balance=100_000, spending_limit=50_000, daily_spend=30_000,
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is True
 
 
 # ─── get_credit_balance ───────────────────────────────────────────────────────

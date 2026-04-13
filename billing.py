@@ -792,11 +792,29 @@ async def get_credit_balance(org_id: str) -> int:
 
 
 async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
-    """Check that org has sufficient credit to cover at least min_balance_usdc.
+    """Check that org has sufficient credit and is within spending limits.
 
     Returns BillingResult(verified=True, billing_method='credit') on success.
+    Checks: (1) not paused, (2) sufficient balance, (3) daily spending limit.
     """
-    balance = await get_credit_balance(org_id)
+    pool = _get_pool()
+
+    # Fetch credit row with spending config in one query.
+    row = await pool.fetchrow(
+        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
+        org_id,
+    )
+    balance = int(row["balance_usdc"]) if row else 0
+    spending_limit = int(row["spending_limit_usdc"]) if row else 0
+    is_paused = bool(row["is_paused"]) if row else False
+
+    # Check 1: admin pause.
+    if is_paused:
+        return BillingResult(
+            error="Org billing is paused by admin. Contact your administrator."
+        )
+
+    # Check 2: sufficient balance.
     if balance < min_balance_usdc:
         return BillingResult(
             error=(
@@ -804,6 +822,28 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
                 f"required {min_balance_usdc}. Top up via POST /admin/credits/topup."
             )
         )
+
+    # Check 3: daily spending limit (24h rolling window).
+    if spending_limit > 0:
+        daily_row = await pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
+            FROM org_credit_ledger
+            WHERE org_id = $1
+              AND operation = 'debit'
+              AND created_at >= NOW() - INTERVAL '24 hours'
+            """,
+            org_id,
+        )
+        daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+        if daily_spend + min_balance_usdc > spending_limit:
+            return BillingResult(
+                error=(
+                    f"Daily spending limit reached: {daily_spend} of "
+                    f"{spending_limit} atomic USDC used in the last 24 hours."
+                )
+            )
+
     return BillingResult(verified=True, billing_method="credit")
 
 
@@ -1261,3 +1301,270 @@ async def credit_usdc_topup(org_id: str, amount_usdc: int, tx_hash: str) -> int 
         tx_hash,
     )
     return new_balance
+
+
+# ─── Settlement retry queue ───────────────────────────────────────────────────
+
+
+async def enqueue_failed_settlement(
+    usage_event_id: str,
+    org_id: str,
+    run_id: str,
+    billing_method: str,
+    amount_usdc: int,
+    payment_payload: str | None = None,
+) -> None:
+    """Insert a failed settlement into the retry queue.
+
+    Fire-and-forget safe — logs errors but never raises.
+    """
+    try:
+        pool = _get_pool()
+        settings = get_settings()
+        await pool.execute(
+            """
+            INSERT INTO pending_settlements
+                (id, usage_event_id, org_id, run_id, billing_method,
+                 amount_usdc, payment_payload, max_retries, next_retry_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '2 seconds')
+            """,
+            str(uuid.uuid4()),
+            usage_event_id,
+            org_id,
+            run_id,
+            billing_method,
+            amount_usdc,
+            payment_payload,
+            settings.settlement_max_retries,
+        )
+        logger.info(
+            "Enqueued failed settlement for retry: run_id=%s method=%s",
+            run_id,
+            billing_method,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to enqueue settlement for retry: run_id=%s", run_id
+        )
+
+
+async def process_pending_settlements() -> int:
+    """Process pending settlements that are due for retry.
+
+    Returns the number of settlements successfully processed.
+    Called by the background retry worker in app.py.
+    """
+    pool = _get_pool()
+    processed = 0
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT id, usage_event_id, org_id, run_id, billing_method,
+                   amount_usdc, payment_payload, retry_count, max_retries
+            FROM pending_settlements
+            WHERE status IN ('pending', 'retrying')
+              AND next_retry_at <= NOW()
+            ORDER BY next_retry_at
+            LIMIT 20
+            FOR UPDATE SKIP LOCKED
+            """,
+        )
+    except Exception:
+        logger.exception("Failed to query pending settlements")
+        return 0
+
+    for row in rows:
+        settlement_id = row["id"]
+        billing_method = row["billing_method"]
+        retry_count = row["retry_count"] + 1
+        max_retries = row["max_retries"]
+        success = False
+        error_msg = ""
+
+        try:
+            if billing_method == "credit":
+                success = await debit_credit(
+                    row["org_id"], row["amount_usdc"], reason=f"run:{row['run_id']}"
+                )
+                if not success:
+                    error_msg = "debit_credit returned False"
+            else:
+                # x402: re-attempt settlement is not possible after the fact
+                # (the payment payload is single-use). Mark as exhausted.
+                error_msg = "x402 settlements cannot be retried after initial failure"
+                retry_count = max_retries  # force exhaustion
+        except Exception as exc:
+            error_msg = str(exc)
+            logger.warning(
+                "Settlement retry failed: id=%s error=%s", settlement_id, exc
+            )
+
+        if success:
+            await pool.execute(
+                """
+                UPDATE pending_settlements
+                SET status = 'settled', retry_count = $2, last_error = ''
+                WHERE id = $1
+                """,
+                settlement_id,
+                retry_count,
+            )
+            await record_settlement(
+                row["usage_event_id"], row["amount_usdc"], "", "settled"
+            )
+            processed += 1
+            logger.info(
+                "Settlement retry succeeded: id=%s run_id=%s attempt=%d",
+                settlement_id,
+                row["run_id"],
+                retry_count,
+            )
+        elif retry_count >= max_retries:
+            await pool.execute(
+                """
+                UPDATE pending_settlements
+                SET status = 'exhausted', retry_count = $2, last_error = $3
+                WHERE id = $1
+                """,
+                settlement_id,
+                retry_count,
+                error_msg,
+            )
+            logger.error(
+                "Settlement exhausted after %d retries: id=%s run_id=%s error=%s",
+                retry_count,
+                settlement_id,
+                row["run_id"],
+                error_msg,
+            )
+        else:
+            # Exponential backoff: 2^retry_count seconds, capped at 300s (5 min)
+            backoff_seconds = min(2**retry_count, 300)
+            await pool.execute(
+                """
+                UPDATE pending_settlements
+                SET status = 'retrying',
+                    retry_count = $2,
+                    last_error = $3,
+                    next_retry_at = NOW() + ($4 || ' seconds')::INTERVAL
+                WHERE id = $1
+                """,
+                settlement_id,
+                retry_count,
+                error_msg,
+                str(backoff_seconds),
+            )
+
+    return processed
+
+
+async def get_pending_settlements(
+    status_filter: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """List pending/retrying/exhausted settlements (admin reconciliation)."""
+    pool = _get_pool()
+    params: list = [limit]
+    where = ""
+    if status_filter is not None:
+        params.append(status_filter)
+        where = f"WHERE status = ${len(params)}"
+    rows = await pool.fetch(
+        f"""
+        SELECT id, usage_event_id, org_id, run_id, billing_method,
+               amount_usdc, retry_count, max_retries, next_retry_at,
+               last_error, status, created_at
+        FROM pending_settlements
+        {where}
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        *params,
+    )
+    return [dict(r) for r in rows]
+
+
+async def reset_exhausted_settlement(settlement_id: str) -> bool:
+    """Reset an exhausted settlement back to pending (admin manual retry)."""
+    pool = _get_pool()
+    result = await pool.execute(
+        """
+        UPDATE pending_settlements
+        SET status = 'pending', retry_count = 0, next_retry_at = NOW()
+        WHERE id = $1 AND status = 'exhausted'
+        """,
+        settlement_id,
+    )
+    return result == "UPDATE 1"
+
+
+# ─── Spending limits helpers ─────────────────────────────────────────────────
+
+
+async def get_org_spending_config(org_id: str) -> dict:
+    """Return spending config for an org (balance, limit, pause state, daily spend)."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
+        org_id,
+    )
+    balance = int(row["balance_usdc"]) if row else 0
+    spending_limit = int(row["spending_limit_usdc"]) if row else 0
+    is_paused = bool(row["is_paused"]) if row else False
+
+    # 24-hour rolling window daily spend from the credit ledger
+    daily_row = await pool.fetchrow(
+        """
+        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
+        FROM org_credit_ledger
+        WHERE org_id = $1
+          AND operation = 'debit'
+          AND created_at >= NOW() - INTERVAL '24 hours'
+        """,
+        org_id,
+    )
+    daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+
+    return {
+        "org_id": org_id,
+        "balance_usdc": balance,
+        "spending_limit_usdc": spending_limit,
+        "is_paused": is_paused,
+        "daily_spend_usdc": daily_spend,
+    }
+
+
+async def update_org_spending_config(
+    org_id: str,
+    spending_limit_usdc: int | None = None,
+    is_paused: bool | None = None,
+) -> dict | None:
+    """Update spending limit and/or pause state for an org.
+
+    Returns updated config dict, or None if org_credits row doesn't exist.
+    """
+    pool = _get_pool()
+    updates = []
+    params: list = [org_id]
+
+    if spending_limit_usdc is not None:
+        params.append(spending_limit_usdc)
+        updates.append(f"spending_limit_usdc = ${len(params)}")
+    if is_paused is not None:
+        params.append(is_paused)
+        updates.append(f"is_paused = ${len(params)}")
+
+    if not updates:
+        return await get_org_spending_config(org_id)
+
+    updates.append("updated_at = NOW()")
+    set_clause = ", ".join(updates)
+
+    result = await pool.execute(
+        f"UPDATE org_credits SET {set_clause} WHERE org_id = $1",
+        *params,
+    )
+    if result == "UPDATE 0":
+        return None
+    return await get_org_spending_config(org_id)

@@ -199,6 +199,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Settlement retry ─────────────────────────────────────────────────────
+    settlement_retry_interval_seconds: int = Field(
+        default=10, description="Background worker poll interval for retrying failed settlements"
+    )
+    settlement_max_retries: int = Field(
+        default=5, description="Max retry attempts before marking a settlement as exhausted"
+    )
+
     # ── Persistent Memory (per-org RAG) ─────────────────────────────────────
     memory_enabled: bool = Field(
         default=True,
@@ -209,6 +217,12 @@ class Settings(BaseSettings):
     )
     memory_max_per_org: int = Field(
         default=1000, description="Maximum stored memories per organisation"
+    )
+    memory_ttl_days: int = Field(
+        default=0, description="Memory expiry in days (0 = never expire)"
+    )
+    memory_cleanup_interval_seconds: int = Field(
+        default=3600, description="Background worker interval for deleting expired memories"
     )
     embedding_model: str = Field(
         default="text-embedding-3-small",

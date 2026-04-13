@@ -63,19 +63,25 @@ from billing import (
     credit_usdc_topup,
     debit_credit,
     delete_tool_pricing_override,
+    enqueue_failed_settlement,
     get_billing_history,
     get_credit_balance,
     get_credit_history,
     get_current_pricing,
     get_invoice_by_run,
     get_invoices,
+    get_org_spending_config,
+    get_pending_settlements,
     get_revenue_summary,
     get_stripe_session_status,
     get_tool_pricing_overrides,
     handle_stripe_webhook,
     init_billing,
+    process_pending_settlements,
     record_settlement,
+    reset_exhausted_settlement,
     settle_payment,
+    update_org_spending_config,
     upsert_tool_pricing_override,
     verify_and_settle_usdc_topup,
     verify_credit,
@@ -96,6 +102,7 @@ from mcp_client import (
     update_org_mcp_server,
 )
 from memory import (
+    cleanup_expired_memories,
     close_memory_db,
     count_memories,
     delete_all_org_memories,
@@ -208,6 +215,36 @@ def _validate_production_config(s: "Settings") -> None:
     )
 
 
+async def _settlement_retry_loop() -> None:
+    """Periodically retry failed settlements (runs as background task)."""
+    interval = settings.settlement_retry_interval_seconds
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            processed = await process_pending_settlements()
+            if processed:
+                logger.info("Settlement retry: processed %d pending settlements", processed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Settlement retry loop error")
+
+
+async def _memory_cleanup_loop() -> None:
+    """Periodically delete expired memories (runs as background task)."""
+    interval = settings.memory_cleanup_interval_seconds
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            deleted = await cleanup_expired_memories()
+            if deleted:
+                logger.info("Memory cleanup: deleted %d expired memories", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Memory cleanup loop error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
@@ -231,7 +268,25 @@ async def lifespan(app: FastAPI):
     await init_org_tools_db(pool)
     await init_mcp_client_db(pool)
     await init_memory_db(pool)
+
+    # Launch background workers.
+    bg_tasks: list[asyncio.Task] = []
+    if settings.billing_enabled:
+        bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
+    if settings.memory_enabled and settings.memory_ttl_days > 0:
+        bg_tasks.append(asyncio.create_task(_memory_cleanup_loop()))
+
     yield
+
+    # Cancel background workers.
+    for task in bg_tasks:
+        task.cancel()
+    for task in bg_tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     await close_memory_db()
     await close_mcp_client_db()
     await close_org_tools_db()
@@ -264,7 +319,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
 
@@ -390,13 +445,27 @@ async def health_check(request: Request) -> JSONResponse:
             )
     else:
         postgres = "starting"
+
+    # Redis status.
+    redis = get_redis()
+    if redis is not None:
+        try:
+            await redis.ping()
+            redis_status = "ok"
+        except Exception:
+            redis_status = "error"
+    else:
+        redis_status = "disabled"
+
+    overall = "ok" if postgres == "ok" and redis_status != "error" else "degraded"
     return JSONResponse(
         content={
-            "status": "ok",
+            "status": overall,
             "service": "teardrop",
             "version": app.version,
             "environment": settings.app_env,
             "postgres": postgres,
+            "redis": redis_status,
         }
     )
 
@@ -996,6 +1065,9 @@ async def agent_run(
                     )
                 else:
                     await record_settlement(usage_event.id, cost_usdc, "", "failed")
+                    await enqueue_failed_settlement(
+                        usage_event.id, org_id, run_id, "credit", cost_usdc,
+                    )
                     logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
                 # x402 on-chain settlement.
@@ -1018,6 +1090,10 @@ async def agent_run(
                     )
                 else:
                     await record_settlement(usage_event.id, 0, "", "failed")
+                    await enqueue_failed_settlement(
+                        usage_event.id, org_id, run_id, "x402", cost_usdc,
+                        payment_payload=str(billing.payment_payload) if billing.payment_payload else None,
+                    )
                     logger.warning(
                         "Settlement failed run_id=%s: %s",
                         run_id,
@@ -1382,7 +1458,14 @@ async def billing_balance(
             detail="No org_id in token — credit balance requires an org-scoped credential.",
         )
     balance = await get_credit_balance(org_id)
-    return JSONResponse(content={"org_id": org_id, "balance_usdc": balance})
+    spending = await get_org_spending_config(org_id)
+    return JSONResponse(content={
+        "org_id": org_id,
+        "balance_usdc": balance,
+        "spending_limit_usdc": spending["spending_limit_usdc"],
+        "is_paused": spending["is_paused"],
+        "daily_spend_usdc": spending["daily_spend_usdc"],
+    })
 
 
 @app.get("/billing/invoices", tags=["Billing"])
@@ -1429,6 +1512,74 @@ async def admin_credits_topup(
         status_code=status.HTTP_200_OK,
         content={"org_id": body.org_id, "new_balance_usdc": new_balance},
     )
+
+
+@app.get("/admin/billing/pending", tags=["Admin"])
+async def admin_billing_pending(
+    _admin: dict = Depends(require_admin),
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = 50,
+) -> JSONResponse:
+    """List pending/failed settlements for reconciliation (admin only)."""
+    rows = await get_pending_settlements(status_filter, min(limit, 200))
+    serialized = []
+    for r in rows:
+        row = dict(r)
+        for key in ("next_retry_at", "created_at"):
+            if key in row and row[key] is not None:
+                row[key] = row[key].isoformat()
+        serialized.append(row)
+    return JSONResponse(content={"items": serialized})
+
+
+@app.post("/admin/billing/pending/{settlement_id}/retry", tags=["Admin"])
+async def admin_billing_retry(
+    settlement_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Reset an exhausted settlement for manual retry (admin only)."""
+    ok = await reset_exhausted_settlement(settlement_id)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Settlement not found or not in 'exhausted' status",
+        )
+    return JSONResponse(content={"settlement_id": settlement_id, "status": "pending"})
+
+
+class SpendingConfigUpdate(BaseModel):
+    spending_limit_usdc: int | None = None
+    is_paused: bool | None = None
+
+
+@app.get("/admin/orgs/{org_id}/spending", tags=["Admin"])
+async def admin_get_spending(
+    org_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Get spending configuration for an org (admin only)."""
+    config = await get_org_spending_config(org_id)
+    return JSONResponse(content=config)
+
+
+@app.patch("/admin/orgs/{org_id}/spending", tags=["Admin"])
+async def admin_update_spending(
+    org_id: str,
+    body: SpendingConfigUpdate,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Update spending limit or pause/unpause an org (admin only)."""
+    result = await update_org_spending_config(
+        org_id,
+        spending_limit_usdc=body.spending_limit_usdc,
+        is_paused=body.is_paused,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Org not found in credit system",
+        )
+    return JSONResponse(content=result)
 
 
 @app.get("/billing/credit-history", tags=["Billing"])

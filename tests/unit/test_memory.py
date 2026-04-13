@@ -58,7 +58,8 @@ class TestMemoryEntry:
 class TestStoreMemory:
     async def test_stores_successfully(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(5,))  # count < limit
+        # First fetchrow: count_memories returns (5,), second: INSERT RETURNING id
+        pool.fetchrow = AsyncMock(side_effect=[(5,), {"id": "m-new"}])
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -68,7 +69,7 @@ class TestStoreMemory:
 
         assert entry is not None
         assert entry.content == "a fact"
-        pool.execute.assert_called_once()
+        assert pool.fetchrow.call_count == 2
 
     async def test_returns_none_when_limit_reached(self, test_settings):
         pool = _pool()
@@ -81,11 +82,12 @@ class TestStoreMemory:
             entry = await memory_module.store_memory("org-1", "user-1", "new fact")
 
         assert entry is None
-        pool.execute.assert_not_called()
+        # Only the count_memories fetchrow should have been called
+        assert pool.fetchrow.call_count == 1
 
     async def test_truncates_content_to_500_chars(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(0,))
+        pool.fetchrow = AsyncMock(side_effect=[(0,), {"id": "m-trunc"}])
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -99,8 +101,7 @@ class TestStoreMemory:
 
     async def test_swallows_exceptions(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(0,))
-        pool.execute = AsyncMock(side_effect=Exception("DB error"))
+        pool.fetchrow = AsyncMock(side_effect=[(0,), Exception("DB error")])
 
         with (
             patch.object(memory_module, "_pool", pool),
