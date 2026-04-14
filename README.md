@@ -102,7 +102,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `BILLING_ENABLED` | `true` to activate x402 payments |
 | `X402_PAY_TO_ADDRESS` | Treasury wallet (USDC recipient) |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
-| `SIWE_DOMAIN` | Your public domain (e.g. `teardrop.onrender.com`) |
+| `SIWE_DOMAIN` | Your public domain (e.g. `api.teardrop.dev`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 
 ---

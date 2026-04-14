@@ -32,7 +32,7 @@ services:
         sync: false
 
       # ── Recommended ───────────────────────────────────────────────────────
-      # Set to your Render service URL, e.g. https://teardrop.onrender.com
+      # Set to your API domain, e.g. https://api.teardrop.dev
       - key: SIWE_DOMAIN
         sync: false
 
