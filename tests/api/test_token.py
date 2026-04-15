@@ -8,6 +8,11 @@ import jwt
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _bypass_rate_limit(monkeypatch):
+    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+
 @pytest.mark.anyio
 async def test_token_email_flow_success(anon_client, monkeypatch):
     from datetime import datetime, timezone
@@ -27,6 +32,7 @@ async def test_token_email_flow_success(anon_client, monkeypatch):
 
     monkeypatch.setattr("app.get_user_by_email", AsyncMock(return_value=mock_user))
     monkeypatch.setattr("app.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="rt-test"))
 
     resp = await anon_client.post(
         "/token",

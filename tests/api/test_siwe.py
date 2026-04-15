@@ -7,6 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _bypass_rate_limit(monkeypatch):
+    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+
 @pytest.mark.anyio
 async def test_get_siwe_nonce(anon_client, monkeypatch):
     monkeypatch.setattr("app.create_nonce", AsyncMock(return_value="test-nonce-abc"))
@@ -45,6 +50,7 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
 
     monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=True))
     monkeypatch.setattr("app.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
+    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="siwe-rt"))
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(

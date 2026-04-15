@@ -7,6 +7,13 @@ Endpoints
 GET  /                       – redirect to /docs
 GET  /health                 – health check
 POST /token                  – tri-mode auth (client-creds, email+secret, SIWE)
+POST /register               – self-serve org + user registration
+GET  /auth/verify-email      – verify email address via one-time token
+POST /auth/resend-verification – resend verification email
+POST /auth/refresh           – exchange refresh token for new access + refresh tokens
+POST /auth/logout            – revoke refresh token
+POST /org/invite             – create an org invite link
+POST /register/invite        – accept an org invite and create account
 GET  /auth/me                – return the authenticated user's identity
 GET  /auth/siwe/nonce        – generate a single-use SIWE nonce
 POST /agent/run              – AG-UI streaming endpoint (SSE)
@@ -41,7 +48,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
@@ -113,6 +120,7 @@ from memory import (
     recall_memories,
     store_memory,
 )
+from email_utils import send_invite_email, send_verification_email
 from marketplace import (
     close_marketplace_db,
     complete_withdrawal,
@@ -154,14 +162,24 @@ from usage import (
 )
 from users import (
     close_user_db,
+    consume_org_invite,
+    consume_refresh_token,
+    consume_verification_token,
     create_client_credential,
     create_org,
+    create_org_invite,
+    create_refresh_token,
     create_user,
+    create_verification_token,
     get_client_credential_by_id,
     get_org_by_name,
+    get_org_invite,
     get_user_by_email,
     get_user_by_org_id,
     init_user_db,
+    mark_user_verified,
+    register_org_and_user,
+    revoke_refresh_token,
     verify_secret,
 )
 from wallets import (
@@ -624,20 +642,31 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid user credentials",
             )
-        access_token = create_access_token(
-            subject=user.id,
-            extra_claims={
-                "org_id": user.org_id,
-                "email": user.email,
-                "role": user.role,
-                "auth_method": "email",
-            },
+        if settings.require_email_verification and not user.is_verified:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Please verify your email before signing in.",
+            )
+        extra_claims = {
+            "org_id": user.org_id,
+            "email": user.email,
+            "role": user.role,
+            "auth_method": "email",
+        }
+        access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
+        refresh_token = await create_refresh_token(
+            user_id=user.id,
+            org_id=user.org_id,
+            auth_method="email",
+            extra_claims=extra_claims,
+            expire_days=settings.refresh_token_expire_days,
         )
         return JSONResponse(
             content={
                 "access_token": access_token,
                 "token_type": "bearer",
                 "expires_in": settings.jwt_access_token_expire_minutes * 60,
+                "refresh_token": refresh_token,
             }
         )
 
@@ -761,22 +790,28 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
         )
         logger.info("SIWE auto-registered user=%s address=%s", user.id, address)
 
-    access_token = create_access_token(
-        subject=wallet.user_id,
-        extra_claims={
-            "org_id": wallet.org_id,
-            "address": address,
-            "chain_id": chain_id,
-            "auth_method": "siwe",
-            "role": "user",
-            "email": f"{address.lower()}@wallet",
-        },
+    siwe_claims = {
+        "org_id": wallet.org_id,
+        "address": address,
+        "chain_id": chain_id,
+        "auth_method": "siwe",
+        "role": "user",
+        "email": f"{address.lower()}@wallet",
+    }
+    access_token = create_access_token(subject=wallet.user_id, extra_claims=siwe_claims)
+    siwe_refresh = await create_refresh_token(
+        user_id=wallet.user_id,
+        org_id=wallet.org_id,
+        auth_method="siwe",
+        extra_claims=siwe_claims,
+        expire_days=settings.refresh_token_expire_days,
     )
     return JSONResponse(
         content={
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": settings.jwt_access_token_expire_minutes * 60,
+            "refresh_token": siwe_refresh,
         }
     )
 
@@ -822,6 +857,308 @@ async def siwe_nonce(request: Request) -> JSONResponse:
         )
     nonce = await create_nonce()
     return JSONResponse(content={"nonce": nonce})
+
+
+# ─── Self-serve registration & email verification ──────────────────────────────
+
+
+class RegisterRequest(BaseModel):
+    org_name: str = Field(..., min_length=1, max_length=200)
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+@app.post("/register", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+async def register(body: RegisterRequest, request: Request) -> JSONResponse:
+    """Self-serve org and user registration. Returns a JWT immediately.
+
+    A verification email is sent when RESEND_API_KEY is configured.
+    Set REQUIRE_EMAIL_VERIFICATION=true to gate /token login until verified.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
+    try:
+        org, user = await register_org_and_user(
+            org_name=body.org_name,
+            email=body.email,
+            secret=body.password,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with that email or organisation name already exists.",
+        )
+    verification_token = await create_verification_token(user.id)
+    asyncio.create_task(
+        send_verification_email(user.email, verification_token, settings.app_base_url)
+    )
+    extra_claims = {
+        "org_id": user.org_id,
+        "email": user.email,
+        "role": user.role,
+        "auth_method": "email",
+    }
+    access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
+    refresh_token = await create_refresh_token(
+        user_id=user.id,
+        org_id=user.org_id,
+        auth_method="email",
+        extra_claims=extra_claims,
+        expire_days=settings.refresh_token_expire_days,
+    )
+    logger.info("register org=%s user=%s", org.id, user.id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.jwt_access_token_expire_minutes * 60,
+            "refresh_token": refresh_token,
+        },
+    )
+
+
+@app.get("/auth/verify-email", tags=["Auth"])
+async def verify_email(token: str = Query(...)) -> JSONResponse:
+    """Verify an email address via a one-time token."""
+    user_id = await consume_verification_token(token)
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Verification token is invalid, expired, or already used.",
+        )
+    await mark_user_verified(user_id)
+    return JSONResponse(content={"verified": True})
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+
+
+@app.post("/auth/resend-verification", tags=["Auth"])
+async def resend_verification(body: ResendVerificationRequest, request: Request) -> JSONResponse:
+    """Re-send a verification email. Always returns 200 to prevent email oracle attacks."""
+    client_ip = request.client.host if request.client else "unknown"
+    resend_limit = max(1, settings.rate_limit_auth_rpm // 4)
+    allowed, remaining, reset_at = await _check_rate_limit(f"resend:{client_ip}", resend_limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(resend_limit),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
+    user = await get_user_by_email(body.email)
+    if user is not None and not user.is_verified:
+        verification_token = await create_verification_token(user.id)
+        asyncio.create_task(
+            send_verification_email(user.email, verification_token, settings.app_base_url)
+        )
+    return JSONResponse(
+        content={"message": "If that email is registered, a verification link has been sent."}
+    )
+
+
+# ─── Refresh tokens ────────────────────────────────────────────────────────────
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post("/auth/refresh", tags=["Auth"])
+async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSONResponse:
+    """Exchange a refresh token for a new access token and rotated refresh token."""
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
+    record = await consume_refresh_token(body.refresh_token)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid, expired, or revoked refresh token.",
+        )
+    access_token = create_access_token(subject=record.user_id, extra_claims=record.extra_claims)
+    new_refresh = await create_refresh_token(
+        user_id=record.user_id,
+        org_id=record.org_id,
+        auth_method=record.auth_method,
+        extra_claims=record.extra_claims,
+        expire_days=settings.refresh_token_expire_days,
+    )
+    return JSONResponse(
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.jwt_access_token_expire_minutes * 60,
+            "refresh_token": new_refresh,
+        }
+    )
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post("/auth/logout", tags=["Auth"])
+async def logout(
+    body: LogoutRequest,
+    payload: dict = Depends(require_auth),
+) -> Response:
+    """Revoke a refresh token (logout)."""
+    await revoke_refresh_token(body.refresh_token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ─── Org invites ───────────────────────────────────────────────────────────────
+
+
+class CreateInviteRequest(BaseModel):
+    email: str | None = Field(default=None, max_length=320)
+    role: str = "user"
+
+
+@app.post("/org/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+async def create_invite(
+    body: CreateInviteRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Create an org invite link. Any authenticated org member may invite."""
+    org_id = payload.get("org_id", "")
+    user_id = payload["sub"]
+    invite = await create_org_invite(
+        org_id=org_id,
+        invited_by=user_id,
+        email=body.email,
+        role=body.role,
+    )
+    invite_url = (
+        f"{settings.app_base_url.rstrip('/')}/register/invite?token={invite.token}"
+        if settings.app_base_url
+        else None
+    )
+    if body.email:
+        asyncio.create_task(
+            send_invite_email(body.email, invite.token, org_id, settings.app_base_url)
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "token": invite.token,
+            "invite_url": invite_url,
+            "expires_at": invite.expires_at.isoformat(),
+        },
+    )
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+@app.post("/register/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JSONResponse:
+    """Accept an org invite token and create a new user account."""
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, remaining, reset_at = await _check_rate_limit(
+        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
+    invite = await get_org_invite(body.token)
+    if invite is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite token is invalid, expired, or already used.",
+        )
+    # Enforce email match if the invite was issued for a specific address.
+    if invite.email and invite.email.lower() != body.email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This invite was sent to a different email address.",
+        )
+    consumed = await consume_org_invite(body.token)
+    if not consumed:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite token is invalid, expired, or already used.",
+        )
+    try:
+        user = await create_user(
+            email=body.email,
+            secret=body.password,
+            org_id=invite.org_id,
+            role=invite.role,
+            is_verified=True,  # accepting the invite is the trust signal
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with that email already exists.",
+        )
+    extra_claims = {
+        "org_id": user.org_id,
+        "email": user.email,
+        "role": user.role,
+        "auth_method": "email",
+    }
+    access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
+    refresh_token = await create_refresh_token(
+        user_id=user.id,
+        org_id=user.org_id,
+        auth_method="email",
+        extra_claims=extra_claims,
+        expire_days=settings.refresh_token_expire_days,
+    )
+    logger.info("register_via_invite org=%s user=%s", user.org_id, user.id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.jwt_access_token_expire_minutes * 60,
+            "refresh_token": refresh_token,
+        },
+    )
 
 
 @app.post("/agent/run", tags=["Agent"])

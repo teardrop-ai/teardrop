@@ -300,6 +300,29 @@ class Settings(BaseSettings):
         description="Per-user rate limit for MCP marketplace tool calls (requests per minute)",
     )
 
+    # ── Email / Resend ────────────────────────────────────────────────────────
+    require_email_verification: bool = Field(
+        default=False,
+        description=(
+            "When True, email-based login is blocked until the user verifies their email. "
+            "Safe to enable after marketing push — admin-created users default to verified."
+        ),
+    )
+    resend_api_key: str = Field(default="", description="Resend API key for transactional email")
+    resend_from_email: str = Field(
+        default="hello@teardrop.dev",
+        description="Sender address for verification and invite emails",
+    )
+    app_base_url: str = Field(
+        default="",
+        description="Public base URL (e.g. https://teardrop.dev) used to build email links",
+    )
+
+    # ── Refresh Tokens ────────────────────────────────────────────────────────
+    refresh_token_expire_days: int = Field(
+        default=30, description="Refresh token validity window in days"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

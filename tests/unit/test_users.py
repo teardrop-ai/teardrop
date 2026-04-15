@@ -110,6 +110,7 @@ class TestGetUserByEmail:
             "salt": "def",
             "role": "user",
             "is_active": True,
+            "is_verified": True,
             "created_at": datetime.now(timezone.utc),
         }
         pool = _pool()
@@ -130,6 +131,7 @@ class TestGetUserByEmail:
             "salt": "def",
             "role": "user",
             "is_active": False,
+            "is_verified": True,
             "created_at": datetime.now(timezone.utc),
         }
         pool = _pool()
