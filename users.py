@@ -18,6 +18,7 @@ import hmac
 import json as _json
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 class Org(BaseModel):
     id: str
     name: str
+    slug: str = ""
     created_at: datetime
 
 
@@ -364,11 +366,12 @@ async def register_org_and_user(
     now = datetime.now(timezone.utc)
     org_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
+    slug = re.sub(r'[^a-z0-9]+', '-', org_name.lower()).strip('-')[:40]
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "INSERT INTO orgs (id, name, created_at) VALUES ($1, $2, $3)",
-                org_id, org_name, now,
+                "INSERT INTO orgs (id, name, slug, created_at) VALUES ($1, $2, $3, $4)",
+                org_id, org_name, slug, now,
             )
             await conn.execute(
                 "INSERT INTO users"
@@ -377,7 +380,7 @@ async def register_org_and_user(
                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                 user_id, email, org_id, hashed, salt_hex, "user", True, False, now,
             )
-    org = Org(id=org_id, name=org_name, created_at=now)
+    org = Org(id=org_id, name=org_name, slug=slug, created_at=now)
     user = User(
         id=user_id,
         email=email,

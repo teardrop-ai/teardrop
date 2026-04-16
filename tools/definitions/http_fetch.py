@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import socket
@@ -43,7 +44,11 @@ def _is_ip_blocked(ip_str: str) -> bool:
 
 
 def validate_url(url: str) -> str | None:
-    """Validate a URL for SSRF safety. Returns error message or None if safe."""
+    """Validate a URL for SSRF safety (sync, blocking DNS). Returns error or None if safe.
+
+    WARNING: Calls socket.getaddrinfo() which blocks the thread.  Hot-path async
+    callers should use ``async_validate_url`` instead.
+    """
     try:
         parsed = urlparse(url)
     except Exception:
@@ -77,6 +82,15 @@ def validate_url(url: str) -> str | None:
         return f"DNS resolution failed for: {hostname}"
 
     return None  # Safe
+
+
+async def async_validate_url(url: str) -> str | None:
+    """Async wrapper around validate_url — runs DNS in a thread pool executor.
+
+    Use this from async request handlers to avoid blocking the event loop
+    during DNS resolution (can take 100ms–2s per call).
+    """
+    return await asyncio.to_thread(validate_url, url)
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────

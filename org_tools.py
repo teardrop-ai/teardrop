@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, create_model
 
 from cache import get_redis
 from config import get_settings
-from tools.definitions.http_fetch import validate_url
+from tools.definitions.http_fetch import async_validate_url, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -602,8 +602,8 @@ def _build_langchain_tool(
     _header_enc = auth_header_enc
 
     async def _call_webhook(**kwargs: Any) -> dict[str, Any]:
-        # SSRF re-check at call time (DNS rebinding defense)
-        url_error = validate_url(_url)
+        # SSRF re-check at call time (DNS rebinding defense) — use async validator to avoid blocking event loop
+        url_error = await async_validate_url(_url)
         if url_error is not None:
             return {"error": f"Webhook URL blocked: {url_error}"}
 

@@ -75,11 +75,17 @@ async def test_get_author_config_success(api_client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_get_author_config_not_found(api_client, monkeypatch):
+async def test_get_author_config_not_configured(api_client, monkeypatch):
+    """When no config exists the endpoint returns 200 with null fields so the
+    dashboard can render the 'not yet configured' state instead of treating it
+    as an error."""
     monkeypatch.setattr("app.get_author_config", AsyncMock(return_value=None))
 
     resp = await api_client.get("/marketplace/author-config")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["settlement_wallet"] is None
+    assert body["revenue_share_bps"] is None
 
 
 # ─── GET /marketplace/balance ────────────────────────────────────────────────

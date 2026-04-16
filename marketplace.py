@@ -106,12 +106,13 @@ def validate_eip55_address(address: str) -> str | None:
     if not _EIP55_PATTERN.match(address):
         return "Invalid Ethereum address format (expected 0x + 40 hex characters)"
 
-    # EIP-55 checksum verification
+    # EIP-55 checksum verification using Keccak-256 (not SHA3-256 — they differ in padding)
     try:
-        import hashlib
+        from web3 import Web3
 
         addr_lower = address[2:].lower()
-        addr_hash = hashlib.sha3_256(addr_lower.encode()).hexdigest()
+        # Web3.keccak returns bytes; hex() gives the lowercase hex digest without 0x prefix
+        addr_hash = Web3.keccak(text=addr_lower).hex()[2:]
         for i, char in enumerate(addr_lower):
             if char in "0123456789":
                 continue
@@ -262,8 +263,13 @@ async def get_author_earnings_history(
     org_id: str,
     limit: int = 50,
     cursor: datetime | None = None,
-) -> list[AuthorEarning]:
-    """Return earnings history for an org, cursor-paginated by created_at DESC."""
+) -> tuple[list[AuthorEarning], str | None]:
+    """Return earnings history for an org, cursor-paginated by created_at DESC.
+
+    Returns a tuple of (earnings, next_cursor) where next_cursor is an ISO
+    timestamp string to pass as ``cursor`` in the next request, or ``None``
+    if there are no further pages.
+    """
     pool = _get_pool()
     if cursor is None:
         rows = await pool.fetch(
@@ -292,7 +298,9 @@ async def get_author_earnings_history(
             limit,
             cursor,
         )
-    return [AuthorEarning(**dict(r)) for r in rows]
+    earnings = [AuthorEarning(**dict(r)) for r in rows]
+    next_cursor = earnings[-1].created_at.isoformat() if len(earnings) == limit else None
+    return earnings, next_cursor
 
 
 # ─── Withdrawals ──────────────────────────────────────────────────────────────
@@ -416,8 +424,14 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
             for er in earnings_rows:
                 if remaining <= 0:
                     break
+                row_share = er["author_share_usdc"]
+                # Skip rows that exceed remaining balance — continue to find smaller rows that fit.
+                # This is "best-effort" settlement: settle as much as we can without overshooting.
+                # Example: withdrawal of $0.50 against rows [$0.30, $0.60, $0.10] settles $0.30 + $0.10 = $0.40.
+                if row_share > remaining:
+                    continue
                 settled_ids.append(er["id"])
-                remaining -= er["author_share_usdc"]
+                remaining -= row_share
 
             if settled_ids:
                 await conn.execute(
@@ -548,11 +562,12 @@ async def get_marketplace_catalog(
 
 async def get_marketplace_tool_by_name(
     tool_name: str,
+    org_slug: str,
 ) -> dict[str, Any] | None:
-    """Look up a published tool by name.  Returns raw row dict or None.
+    """Look up a published tool by name and org slug.  Returns raw row dict or None.
 
-    Used by the MCP handler to resolve tool calls.  Includes auth data
-    for webhook execution.
+    Both ``tool_name`` and ``org_slug`` must match to prevent cross-org tool
+    name collisions from returning the wrong webhook.
     """
     pool = _get_pool()
     row = await pool.fetchrow(
@@ -560,9 +575,10 @@ async def get_marketplace_tool_by_name(
         SELECT t.*, o.slug AS org_slug, o.name AS org_name
         FROM org_tools t
         JOIN orgs o ON o.id = t.org_id
-        WHERE t.name = $1 AND t.publish_as_mcp = TRUE AND t.is_active = TRUE
+        WHERE t.name = $1 AND o.slug = $2 AND t.publish_as_mcp = TRUE AND t.is_active = TRUE
         """,
         tool_name,
+        org_slug,
     )
     if row is None:
         return None

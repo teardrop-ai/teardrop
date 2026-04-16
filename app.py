@@ -44,6 +44,7 @@ import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -237,6 +238,29 @@ def _validate_production_config(s: "Settings") -> None:
             "%s ⚠  SIWE_DOMAIN is not set — SIWE wallet auth will fail domain validation",
             prefix,
         )
+
+    # Marketplace requires billing to be enabled — without billing, tool calls are
+    # free but earnings are still recorded, creating uncollectable phantom entries.
+    if s.marketplace_enabled and not s.billing_enabled:
+        msg = (
+            "MARKETPLACE_ENABLED=true requires BILLING_ENABLED=true. "
+            "Without billing, callers are not charged but author earnings are recorded, "
+            "creating phantom ledger entries that can never be collected."
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        logger.warning("%s ⚠  %s", prefix, msg)
+
+    # Marketplace requires the org tool encryption key for webhook auth decryption.
+    if s.marketplace_enabled and not s.org_tool_encryption_key:
+        msg = (
+            "MARKETPLACE_ENABLED=true requires ORG_TOOL_ENCRYPTION_KEY to be set. "
+            "Generate one with: "
+            'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        logger.warning("%s ⚠  %s", prefix, msg)
 
     # Log a concise summary so operators can see the active config at a glance.
     logger.info(
@@ -2857,13 +2881,13 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
     import aiohttp  # noqa: PLC0415
 
     from org_tools import _decrypt_header  # noqa: PLC0415
-    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
+    from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
 
     url = tool_row["webhook_url"]
     method = tool_row.get("webhook_method", "POST")
     timeout_sec = tool_row.get("timeout_seconds", 10)
 
-    url_err = validate_url(url)
+    url_err = await async_validate_url(url)
     if url_err:
         return {"error": f"Webhook URL blocked: {url_err}"}
 
@@ -2973,7 +2997,7 @@ async def mcp_jsonrpc_handler(
     if method == "tools/list":
         overrides = await get_tool_pricing_overrides()
         pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_price_usdc if pricing else 0
+        default_cost = pricing.tool_call_cost if pricing else 0
 
         catalog = await get_marketplace_catalog(overrides, default_cost)
 
@@ -3008,11 +3032,14 @@ async def mcp_jsonrpc_handler(
         # Determine tool cost
         overrides = await get_tool_pricing_overrides()
         pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_price_usdc if pricing else 0
+        default_cost = pricing.tool_call_cost if pricing else 0
 
         # Check if it's a marketplace tool (qualified_name = "org_slug/tool_name")
         is_marketplace_tool = "/" in tool_name
-        actual_tool_name = tool_name.split("/", 1)[1] if is_marketplace_tool else tool_name
+        if is_marketplace_tool:
+            tool_org_slug, actual_tool_name = tool_name.split("/", 1)
+        else:
+            tool_org_slug, actual_tool_name = "", tool_name
         tool_cost = overrides.get(actual_tool_name, default_cost)
 
         # ── Billing gate (credit-only for MCP calls) ──────────────────
@@ -3030,7 +3057,7 @@ async def mcp_jsonrpc_handler(
         author_org_id: str | None = None
 
         if is_marketplace_tool:
-            tool_row = await get_marketplace_tool_by_name(actual_tool_name)
+            tool_row = await get_marketplace_tool_by_name(actual_tool_name, tool_org_slug)
             if tool_row is None:
                 return JSONResponse(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
@@ -3051,11 +3078,14 @@ async def mcp_jsonrpc_handler(
                 result = {"error": str(exc)}
 
         # ── Debit credits ─────────────────────────────────────────────
+        debited = False
         if billing.verified and billing.billing_method == "credit":
-            await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            debited = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
 
         # ── Record author earnings (fire-and-forget) ──────────────────
-        if author_org_id and tool_cost > 0:
+        # Only record earnings when the caller was actually charged to prevent
+        # phantom earnings entries when billing is disabled or debit failed.
+        if author_org_id and tool_cost > 0 and debited:
             try:
                 asyncio.create_task(
                     record_tool_call_earnings(
@@ -3140,7 +3170,13 @@ async def get_marketplace_author_config_endpoint(
 
     config = await get_author_config(org_id)
     if config is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Author config not set.")
+        return JSONResponse(content={
+            "org_id": org_id,
+            "settlement_wallet": None,
+            "revenue_share_bps": None,
+            "created_at": None,
+            "updated_at": None,
+        })
 
     return JSONResponse(content={
         "org_id": config.org_id,
@@ -3175,7 +3211,17 @@ async def get_marketplace_earnings(
     if not org_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
 
-    earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor, limit=limit)
+    cursor_dt: datetime | None = None
+    if cursor is not None:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid cursor format — must be an ISO 8601 timestamp.",
+            )
+
+    earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor_dt, limit=limit)
     return JSONResponse(content={
         "earnings": [
             {
@@ -3232,7 +3278,7 @@ async def get_marketplace_catalog_endpoint() -> JSONResponse:
 
     overrides = await get_tool_pricing_overrides()
     pricing = await get_current_pricing()
-    default_cost = pricing.tool_call_price_usdc if pricing else 0
+    default_cost = pricing.tool_call_cost if pricing else 0
 
     catalog = await get_marketplace_catalog(overrides, default_cost)
     return JSONResponse(content={
