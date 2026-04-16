@@ -406,6 +406,112 @@ async def get_current_pricing() -> PricingRule | None:
     return PricingRule(**dict(row))
 
 
+async def get_current_pricing_for_model(provider: str, model: str) -> PricingRule | None:
+    """Return the most specific pricing rule for a provider/model (direct DB query).
+
+    Resolution order: exact model match → provider-level → global default.
+    """
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT id, name, run_price_usdc, tokens_in_cost_per_1k,
+               tokens_out_cost_per_1k, tool_call_cost, effective_from, created_at
+        FROM pricing_rules
+        WHERE effective_from <= NOW()
+          AND (
+            (provider = $1 AND model = $2)
+            OR (provider = $1 AND model = '')
+            OR (provider = '' AND model = '')
+          )
+        ORDER BY
+          CASE
+            WHEN provider = $1 AND model = $2 THEN 0
+            WHEN provider = $1 AND model = '' THEN 1
+            ELSE 2
+          END,
+          effective_from DESC
+        LIMIT 1
+        """,
+        provider,
+        model,
+    )
+    if row is None:
+        return None
+    return PricingRule(**dict(row))
+
+
+# ─── Per-model pricing TTL cache ─────────────────────────────────────────────
+
+_model_pricing_cache: dict[str, tuple[PricingRule | None, float]] = {}
+_model_pricing_lock: asyncio.Lock | None = None
+
+
+async def get_live_pricing_for_model(
+    provider: str, model: str
+) -> PricingRule | None:
+    """Return model-specific pricing using a TTL cache.
+
+    Falls back through: model-specific → provider-level → global default.
+    """
+    global _model_pricing_lock
+
+    if not provider and not model:
+        return await get_live_pricing()
+
+    settings = get_settings()
+    cache_key = f"{provider}:{model}"
+    redis = get_redis()
+
+    # Redis path
+    if redis is not None:
+        try:
+            rkey = f"teardrop:pricing:{provider}:{model}"
+            cached_json = await redis.get(rkey)
+            if cached_json is not None:
+                data = json.loads(cached_json)
+                if data is None:
+                    return None
+                return PricingRule(**data)
+        except Exception as exc:
+            logger.warning("Redis model pricing cache read failed: %s", exc)
+
+    # In-process fast path
+    entry = _model_pricing_cache.get(cache_key)
+    if entry is not None and time.monotonic() < entry[1]:
+        return entry[0]
+
+    if _pool is None:
+        return None
+
+    if _model_pricing_lock is None:
+        _model_pricing_lock = asyncio.Lock()
+
+    async with _model_pricing_lock:
+        entry = _model_pricing_cache.get(cache_key)
+        if entry is not None and time.monotonic() < entry[1]:
+            return entry[0]
+
+        try:
+            rule = await get_current_pricing_for_model(provider, model)
+            expires = time.monotonic() + settings.pricing_cache_ttl_seconds
+            _model_pricing_cache[cache_key] = (rule, expires)
+
+            if (redis := get_redis()) is not None:
+                try:
+                    rkey = f"teardrop:pricing:{provider}:{model}"
+                    payload = json.dumps(rule.model_dump(mode="json") if rule else None, default=str)
+                    await redis.setex(rkey, settings.pricing_cache_ttl_seconds, payload)
+                except Exception as exc:
+                    logger.warning("Redis model pricing cache write failed: %s", exc)
+
+            return rule
+        except Exception:
+            logger.warning("Failed to refresh model pricing cache", exc_info=True)
+            if entry is not None:
+                return entry[0]
+            return None
+
+
 async def get_live_pricing() -> PricingRule | None:
     """Return the current pricing rule using a TTL cache.
 
@@ -584,12 +690,17 @@ async def delete_tool_pricing_override(tool_name: str) -> bool:
     return deleted
 
 
-async def calculate_run_cost_usdc(usage_data: dict) -> int:
+async def calculate_run_cost_usdc(
+    usage_data: dict, provider: str = "", model: str = ""
+) -> int:
     """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
 
     Uses per-unit token and tool-call rates from the live pricing rule when
     they are non-zero (usage-based pricing).  Falls back to run_price_usdc as
     a flat rate when the active rule has no per-unit rates configured.
+
+    When *provider* and *model* are given, attempts to use a model-specific
+    pricing rule first, falling back to the global default.
 
     When tool_names is provided in usage_data, each tool is billed at its
     individual override cost (from tool_pricing_overrides table) with the
@@ -605,7 +716,10 @@ async def calculate_run_cost_usdc(usage_data: dict) -> int:
              + remaining_unnamed_calls * tool_call_cost
     """
 
-    rule = await get_live_pricing()
+    if provider and model:
+        rule = await get_live_pricing_for_model(provider, model)
+    else:
+        rule = await get_live_pricing()
     if rule is None:
         return 0
 

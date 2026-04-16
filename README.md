@@ -7,9 +7,10 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using yo
 
 ## Requirements
 
-- Python 3.11+
-- An API key for your chosen LLM provider: [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), or [Google AI](https://aistudio.google.com/)
+- Python 3.12+
+- An API key for your chosen LLM provider: [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), or [Google AI](https://aistudio.google.com/) (optional if using BYOK or self-hosted)
 - A Postgres database (local via Docker, or [Neon](https://neon.tech) for production)
+- Redis (optional, for caching — falls back to in-memory with TTL)
 
 ---
 
@@ -45,13 +46,17 @@ Copy-Item .env.example .env
 
 Minimum required contents:
 ```
-# LLM provider: anthropic | openai | google (default: anthropic)
+# Global LLM provider fallback: anthropic | openai | google (default: anthropic)
+# Note: Each org can override via PUT /llm-config
 AGENT_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...      # required if AGENT_PROVIDER=anthropic
 # OPENAI_API_KEY=sk-...           # required if AGENT_PROVIDER=openai
 # GOOGLE_API_KEY=...              # required if AGENT_PROVIDER=google
 
 DATABASE_URL=postgresql://teardrop:teardrop@localhost:5432/teardrop
+
+# Optional: Redis for distributed caching
+# REDIS_URL=redis://localhost:6379/0
 ```
 
 **5. Generate RSA keys**
@@ -145,6 +150,143 @@ SIWE lets Ethereum wallet holders authenticate without a password. The JWT issue
 ```
 
 SIWE tokens are the only auth method that can use x402 on-chain payments. New wallet addresses are auto-registered on first login.
+
+---
+
+## LLM Configuration (Per-Org)
+
+Organizations can configure their preferred LLM provider, model, routing strategy, and optionally bring their own API keys (BYOK). This unlocks:
+
+- **Multi-provider choice**: Use Anthropic, OpenAI, Google, or point at self-hosted endpoints (vLLM, Ollama, OpenRouter)
+- **Bring Your Own Key (BYOK)**: Encrypt and store your own API credentials — Teardrop never sees your keys
+- **Smart routing**: Automatically select models based on cost, speed, or quality
+- **Self-hosted support**: Use any OpenAI-compatible endpoint via `api_base` parameter
+
+### Org LLM config endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/llm-config` | Bearer | Get your org's LLM config (or global defaults if not configured) |
+| `PUT` | `/llm-config` | Bearer | Set or update org LLM config |
+| `DELETE` | `/llm-config` | Bearer | Delete config, revert to global defaults |
+
+### Example: Set org's LLM to GPT-4o with cost-based routing
+
+```powershell
+$token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
+    -Method Post -ContentType "application/json" `
+    -Body '{"client_id":"teardrop-client","client_secret":"<secret>"}').access_token
+
+# Set provider + model + routing strategy
+Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
+    -Method Put -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $token" } `
+    -Body @{
+        provider = "openai"
+        model = "gpt-4o"
+        routing_preference = "cost"  # or "speed", "quality", "default"
+        max_tokens = 4096
+        temperature = 0.7
+    } | ConvertTo-Json
+```
+
+### Example: BYOK — use your own OpenAI key
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
+    -Method Put -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $token" } `
+    -Body @{
+        provider = "openai"
+        model = "gpt-4o"
+        api_key = "sk-..."  # your key (encrypted at rest)
+    } | ConvertTo-Json
+```
+
+### Example: Self-hosted vLLM or Ollama
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
+    -Method Put -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $token" } `
+    -Body @{
+        provider = "openai"
+        model = "meta-llama/Llama-2-7b-chat"
+        api_base = "http://gpu-cluster.internal:8000/v1"
+        api_key = "your-local-key-or-token"
+    } | ConvertTo-Json
+```
+
+### Routing preferences
+
+When you set `routing_preference` to a value other than `"default"`, Teardrop will automatically select a model from its standard pool based on your criteria:
+
+| Preference | Behavior |
+|------------|----------|
+| `default` | Use the provider/model you configured |
+| `cost` | Select the cheapest model (by tokens-in + tokens-out pricing) |
+| `speed` | Select the fastest model (by average latency from live benchmarks) |
+| `quality` | Select the highest quality model (Claude Sonnet > Claude Haiku, etc.) |
+
+**Note**: If you set BYOK (custom API key), routing is disabled — you always use your configured model.
+
+---
+
+## Model Benchmarks
+
+Teardrop continuously tracks operational metrics for every LLM deployed. These benchmarks help you make informed routing decisions.
+
+### Benchmarks endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/models/benchmarks` | — | Public: all models with catalogue metadata + live metrics |
+| `GET` | `/models/benchmarks/org` | Bearer | Org-scoped: metrics for your org's usage only |
+
+### Example response
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/models/benchmarks" | ConvertTo-Json | ForEach-Object { $_ | Out-String }
+```
+
+Returns:
+```json
+{
+  "models": [
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5-20251001",
+      "display_name": "Claude Haiku 4.5",
+      "context_window": 200000,
+      "supports_tools": true,
+      "quality_tier": 2,
+      "pricing": {
+        "tokens_in_cost_per_1k": 0.80,
+        "tokens_out_cost_per_1k": 4.00,
+        "tool_call_cost": 0.001
+      },
+      "benchmarks": {
+        "total_runs_7d": 156,
+        "avg_latency_ms": 450.2,
+        "p95_latency_ms": 1200.5,
+        "avg_cost_usdc_per_run": 0.015,
+        "avg_tokens_per_sec": 52.3
+      }
+    },
+    ...
+  ],
+  "updated_at": "2026-04-16T14:22:00Z"
+}
+```
+
+### Understanding the metrics
+
+- **total_runs_7d**: Number of runs using this model in the last 7 days (benchmarks only included if >= 10 runs)
+- **avg_latency_ms**: Average time (ms) from start to completion
+- **p95_latency_ms**: 95th percentile latency — the slowest 5% of runs
+- **avg_cost_usdc_per_run**: Average cost per run (input + output tokens + tools)
+- **avg_tokens_per_sec**: Streaming throughput (useful for real-time applications)
+- **quality_tier**: Static tier (1=best, 2=good) for quality-based routing
 
 ---
 
@@ -243,6 +385,21 @@ Invoke-RestMethod -Uri "http://localhost:8000/admin/credits/topup" `
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card |
 | `GET` | `/docs` | — | Swagger UI |
 | `GET` | `/redoc` | — | ReDoc UI |
+
+### LLM Configuration
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/llm-config` | Bearer | Get org's LLM config (or defaults if not set) |
+| `PUT` | `/llm-config` | Bearer | Set or update org's LLM configuration |
+| `DELETE` | `/llm-config` | Bearer | Delete org config, revert to global defaults |
+
+### Models
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/models/benchmarks` | — | Public: all models with benchmarks |
+| `GET` | `/models/benchmarks/org` | Bearer | Org-scoped: benchmarks for your org's usage |
 
 ### Auth
 

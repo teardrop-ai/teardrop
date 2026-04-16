@@ -106,21 +106,15 @@ def validate_eip55_address(address: str) -> str | None:
     if not _EIP55_PATTERN.match(address):
         return "Invalid Ethereum address format (expected 0x + 40 hex characters)"
 
-    # EIP-55 checksum verification using Keccak-256 (not SHA3-256 — they differ in padding)
+    # EIP-55 checksum verification — delegate to web3.py's canonical implementation
+    # Note: Web3.keccak().hex() in hexbytes>=1.0 does NOT include the 0x prefix,
+    # so manual nibble-walking against hex()[2:] is unreliable.  to_checksum_address
+    # is the maintained, tested path and handles all edge cases correctly.
     try:
         from web3 import Web3
 
-        addr_lower = address[2:].lower()
-        # Web3.keccak returns bytes; hex() gives the lowercase hex digest without 0x prefix
-        addr_hash = Web3.keccak(text=addr_lower).hex()[2:]
-        for i, char in enumerate(addr_lower):
-            if char in "0123456789":
-                continue
-            expected_upper = int(addr_hash[i], 16) >= 8
-            if expected_upper and address[2 + i] != char.upper():
-                return "Address fails EIP-55 checksum — use checksummed format"
-            if not expected_upper and address[2 + i] != char.lower():
-                return "Address fails EIP-55 checksum — use checksummed format"
+        if address != Web3.to_checksum_address(address.lower()):
+            return "Address fails EIP-55 checksum — use checksummed format"
     except Exception:
         return "Address checksum validation failed"
 

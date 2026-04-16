@@ -15,7 +15,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
-from agent.llm import extract_usage, get_llm
+from agent.llm import extract_usage, get_llm, get_llm_for_request
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from config import get_settings
 from tools import registry
@@ -98,7 +98,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     tools = _get_cached_tools()
     org_tools = state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
-    llm = get_llm().bind_tools(all_tools)  # type: ignore[arg-type]
+    llm_config = state.metadata.get("_llm_config")
+    llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
 
     # ── Inject retrieved memories into the system prompt ──────────────────
     system_prompt = _PLANNER_SYSTEM
@@ -230,8 +231,9 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
             settings = get_settings()
             prompt = f"{_UI_GENERATOR_SYSTEM}\n\nAssistant message:\n{text}"
             try:
+                llm_config = state.metadata.get("_llm_config")
                 result: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
-                    get_llm().ainvoke(prompt),
+                    get_llm_for_request(llm_config).ainvoke(prompt),
                     timeout=settings.agent_ui_generator_timeout_seconds,
                 )
                 raw = result.content if isinstance(result.content, str) else str(result.content)

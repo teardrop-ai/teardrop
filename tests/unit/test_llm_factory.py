@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from agent.llm import create_llm, extract_usage, reset_llm
+from agent.llm import (
+    ALLOWED_PROVIDERS,
+    _cache_key,
+    clear_llm_cache,
+    create_llm,
+    create_llm_from_config,
+    extract_usage,
+    get_llm_for_request,
+    reset_llm,
+)
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -167,3 +176,149 @@ class TestSingleton:
             b = get_llm()
             assert a is not b
             assert mock_create.call_count == 2
+
+
+# ─── Per-request LLM (Phase 2) ───────────────────────────────────────────────
+
+
+def _make_config(**overrides) -> dict:
+    defaults = {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5-20251001",
+        "api_key": "sk-test-key-12345",
+        "api_base": None,
+        "max_tokens": 4096,
+        "temperature": 0.0,
+        "timeout_seconds": 120,
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+class TestAllowedProviders:
+    def test_contains_expected(self):
+        assert "anthropic" in ALLOWED_PROVIDERS
+        assert "openai" in ALLOWED_PROVIDERS
+        assert "google" in ALLOWED_PROVIDERS
+
+    def test_rejects_unknown(self):
+        assert "mistral" not in ALLOWED_PROVIDERS
+
+
+class TestCreateLlmFromConfig:
+    @patch("agent.llm.ChatAnthropic")
+    def test_anthropic(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="anthropic")
+        result = create_llm_from_config(config)
+        assert result is mock_cls.return_value
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+        assert call_kwargs["max_tokens"] == 4096
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openai(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="openai", model="gpt-4o-mini")
+        result = create_llm_from_config(config)
+        assert result is mock_cls.return_value
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openai_with_base_url(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openai",
+            model="llama3",
+            api_base="http://gpu.example.com:8000/v1",
+        )
+        create_llm_from_config(config)
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["base_url"] == "http://gpu.example.com:8000/v1"
+
+    @patch("agent.llm.ChatGoogleGenerativeAI")
+    def test_google(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="google", model="gemini-2.0-flash")
+        result = create_llm_from_config(config)
+        assert result is mock_cls.return_value
+
+    def test_invalid_provider_raises(self):
+        config = _make_config(provider="mistral")
+        with pytest.raises(ValueError, match="Unknown provider"):
+            create_llm_from_config(config)
+
+    @patch("agent.llm.ChatAnthropic")
+    def test_anthropic_with_base_url(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="anthropic",
+            api_base="https://custom.anthropic.proxy.com/v1",
+        )
+        create_llm_from_config(config)
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["base_url"] == "https://custom.anthropic.proxy.com/v1"
+
+
+class TestCacheKey:
+    def test_deterministic(self):
+        k1 = _cache_key("anthropic", "claude-haiku-4-5-20251001", "sk-123")
+        k2 = _cache_key("anthropic", "claude-haiku-4-5-20251001", "sk-123")
+        assert k1 == k2
+
+    def test_different_keys_differ(self):
+        k1 = _cache_key("anthropic", "claude-haiku-4-5-20251001", "sk-123")
+        k2 = _cache_key("anthropic", "claude-haiku-4-5-20251001", "sk-456")
+        assert k1 != k2
+
+    def test_never_contains_raw_key(self):
+        key = _cache_key("anthropic", "model", "super-secret-api-key")
+        assert "super-secret-api-key" not in key
+
+    def test_is_16_chars(self):
+        key = _cache_key("a", "b", "c")
+        assert len(key) == 16
+
+
+class TestGetLlmForRequest:
+    def setup_method(self):
+        clear_llm_cache()
+
+    def teardown_method(self):
+        clear_llm_cache()
+
+    @patch("agent.llm.get_llm")
+    def test_none_config_falls_back_to_singleton(self, mock_get_llm):
+        mock_get_llm.return_value = MagicMock()
+        result = get_llm_for_request(None)
+        assert result is mock_get_llm.return_value
+
+    @patch("agent.llm.create_llm_from_config")
+    def test_config_creates_new_llm(self, mock_create):
+        mock_create.return_value = MagicMock()
+        config = _make_config()
+        result = get_llm_for_request(config)
+        assert result is mock_create.return_value
+
+    @patch("agent.llm.create_llm_from_config")
+    def test_identical_configs_cached(self, mock_create):
+        mock_llm = MagicMock()
+        mock_create.return_value = mock_llm
+        config = _make_config()
+
+        r1 = get_llm_for_request(config)
+        r2 = get_llm_for_request(config)
+
+        assert r1 is r2
+        assert mock_create.call_count == 1
+
+    @patch("agent.llm.create_llm_from_config")
+    def test_different_configs_not_cached(self, mock_create):
+        mock_create.side_effect = [MagicMock(), MagicMock()]
+        c1 = _make_config(provider="anthropic")
+        c2 = _make_config(provider="openai", model="gpt-4o-mini", api_key="sk-other")
+
+        r1 = get_llm_for_request(c1)
+        r2 = get_llm_for_request(c2)
+
+        assert r1 is not r2
+        assert mock_create.call_count == 2

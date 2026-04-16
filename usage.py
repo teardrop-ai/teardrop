@@ -39,6 +39,8 @@ class UsageEvent(BaseModel):
     cost_usdc: int = 0
     settlement_tx: str = ""
     settlement_status: str = "none"
+    provider: str = ""
+    model: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -114,8 +116,8 @@ async def record_usage_event(event: UsageEvent) -> None:
             INSERT INTO usage_events
                 (id, user_id, org_id, thread_id, run_id, tokens_in, tokens_out,
                  tool_calls, tool_names, duration_ms, cost_usdc, settlement_tx,
-                 settlement_status, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 settlement_status, provider, model, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             """,
             event.id,
             event.user_id,
@@ -130,6 +132,8 @@ async def record_usage_event(event: UsageEvent) -> None:
             event.cost_usdc,
             event.settlement_tx,
             event.settlement_status,
+            event.provider,
+            event.model,
             event.created_at,
         )
     except Exception:

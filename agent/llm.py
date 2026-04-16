@@ -2,13 +2,18 @@
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Multi-provider LLM factory for Teardrop.
 
-Provides a singleton ``BaseChatModel`` instance selected by
-``settings.agent_provider`` (anthropic | openai | google).
+Provides:
+- A global singleton ``BaseChatModel`` via ``get_llm()`` (backward compat).
+- Per-request LLM via ``get_llm_for_request(config)`` for multi-org routing.
+- ``create_llm_from_config(config)`` for explicit provider/model/key combos.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import threading
+from collections import OrderedDict
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -34,7 +39,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ─── Singleton ────────────────────────────────────────────────────────────────
+# ── Allowed providers (validated at config and request boundaries) ────────────
+
+ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "google"})
+
+# ─── Global singleton (backward compat) ──────────────────────────────────────
 
 _llm: BaseChatModel | None = None
 
@@ -107,6 +116,125 @@ def reset_llm() -> None:
     """Clear the cached LLM singleton (used by tests)."""
     global _llm
     _llm = None
+
+
+# ─── Per-request LLM construction + cache ────────────────────────────────────
+
+_LLM_CACHE_MAX = 64
+_llm_cache: OrderedDict[str, BaseChatModel] = OrderedDict()
+_llm_cache_lock = threading.Lock()
+
+
+def _cache_key(provider: str, model: str, api_key: str) -> str:
+    """Build a cache key from provider+model+key hash.  Never stores raw keys."""
+    raw = f"{provider}:{model}:{api_key}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
+    """Construct a ``BaseChatModel`` from an explicit config dict.
+
+    Expected keys:
+        provider        — "anthropic" | "openai" | "google"
+        model           — model identifier string
+        api_key         — provider API key (required)
+        api_base         — optional custom base URL (OpenAI-compatible endpoints)
+        max_tokens      — int (default 4096)
+        temperature     — float (default 0.0)
+        timeout_seconds — int (default 120)
+    """
+    provider = config["provider"].lower()
+    if provider not in ALLOWED_PROVIDERS:
+        raise ValueError(
+            f"Unknown provider '{provider}'. Supported: {', '.join(sorted(ALLOWED_PROVIDERS))}."
+        )
+
+    api_key = config.get("api_key") or ""
+    model = config["model"]
+    api_base = config.get("api_base")
+
+    common: dict[str, Any] = {
+        "model": model,
+        "max_tokens": config.get("max_tokens", 4096),
+        "temperature": config.get("temperature", 0.0),
+    }
+
+    if provider == "anthropic":
+        if ChatAnthropic is None:
+            raise RuntimeError(
+                "langchain-anthropic is not installed. Run: pip install langchain-anthropic"
+            )
+        kwargs: dict[str, Any] = {**common, "api_key": api_key or None}
+        if api_base:
+            kwargs["base_url"] = api_base
+        return ChatAnthropic(**kwargs)  # type: ignore[arg-type]
+
+    if provider == "openai":
+        if ChatOpenAI is None:
+            raise RuntimeError(
+                "langchain-openai is not installed. Run: pip install langchain-openai"
+            )
+        kwargs = {**common, "api_key": api_key or None}
+        if api_base:
+            kwargs["base_url"] = api_base
+        return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
+
+    if provider == "google":
+        if ChatGoogleGenerativeAI is None:
+            raise RuntimeError(
+                "langchain-google-genai is not installed. Run: pip install langchain-google-genai"
+            )
+        kwargs = {**common, "google_api_key": api_key or None}
+        return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
+
+    # Should be unreachable due to ALLOWED_PROVIDERS check above.
+    raise ValueError(f"Unknown provider '{provider}'.")
+
+
+def get_llm_for_request(llm_config: dict[str, Any] | None = None) -> BaseChatModel:
+    """Resolve an LLM for a single agent run.
+
+    If *llm_config* is ``None``, falls back to the global singleton (backward
+    compatible — existing orgs without config are unaffected).
+
+    Identical configs (same provider+model+key) share a cached instance to
+    avoid re-creating HTTP clients on every request.
+    """
+    if llm_config is None:
+        return get_llm()
+
+    key = _cache_key(
+        llm_config["provider"],
+        llm_config["model"],
+        llm_config.get("api_key", ""),
+    )
+
+    with _llm_cache_lock:
+        if key in _llm_cache:
+            _llm_cache.move_to_end(key)
+            return _llm_cache[key]
+
+    # Build outside the lock to avoid blocking other coroutines.
+    llm = create_llm_from_config(llm_config)
+    logger.info(
+        "LLM created for request: provider=%s model=%s",
+        llm_config["provider"],
+        llm_config["model"],
+    )
+
+    with _llm_cache_lock:
+        _llm_cache[key] = llm
+        _llm_cache.move_to_end(key)
+        while len(_llm_cache) > _LLM_CACHE_MAX:
+            _llm_cache.popitem(last=False)
+
+    return llm
+
+
+def clear_llm_cache() -> None:
+    """Purge the per-request LLM cache (used by tests)."""
+    with _llm_cache_lock:
+        _llm_cache.clear()
 
 
 # ─── Usage normalisation ─────────────────────────────────────────────────────

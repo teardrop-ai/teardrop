@@ -8,7 +8,7 @@ from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -251,6 +251,16 @@ class Settings(BaseSettings):
         default=60, description="TTL for per-org tool cache in seconds"
     )
 
+    # ── LLM Config Encryption ─────────────────────────────────────────────────
+    llm_config_encryption_key: str = Field(
+        default="",
+        description=(
+            "Separate Fernet key for encrypting BYOK LLM API keys at rest. "
+            "Falls back to org_tool_encryption_key if empty. "
+            "Generate via: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+        ),
+    )
+
     # ── MCP Client (per-org external MCP servers) ─────────────────────────────
     max_org_mcp_servers: int = Field(
         default=5, description="Maximum external MCP servers per organisation"
@@ -279,6 +289,20 @@ class Settings(BaseSettings):
         default=300, description="TTL for caching remote agent cards (seconds)"
     )
 
+    # ── Multi-LLM Gateway ─────────────────────────────────────────────────────
+    allow_private_llm_endpoints: bool = Field(
+        default=False,
+        description="Allow LLM api_base URLs pointing to private IPs (for self-hosted inference)",
+    )
+    default_model_pool: list[dict[str, str]] = Field(
+        default=[
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "google", "model": "gemini-2.0-flash"},
+        ],
+        description="Models available for smart routing (Teardrop holds shared keys)",
+    )
+
     # ── Marketplace (paid MCP tool hosting + author revenue share) ─────────────
     marketplace_enabled: bool = Field(
         default=False, description="Enable the paid MCP tool marketplace"
@@ -296,7 +320,7 @@ class Settings(BaseSettings):
         description="Minimum seconds between withdrawal requests per org",
     )
     rate_limit_mcp_rpm: int = Field(
-        default=60,
+        default=30,
         description="Per-user rate limit for MCP marketplace tool calls (requests per minute)",
     )
 
@@ -322,6 +346,24 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(
         default=30, description="Refresh token validity window in days"
     )
+
+    # ── Validators ─────────────────────────────────────────────────────────────
+
+    @model_validator(mode="after")
+    def _validate_model_pool(self) -> "Settings":
+        """Ensure every entry in default_model_pool has a valid provider."""
+        from agent.llm import ALLOWED_PROVIDERS
+
+        for entry in self.default_model_pool:
+            provider = entry.get("provider", "")
+            if provider not in ALLOWED_PROVIDERS:
+                raise ValueError(
+                    f"default_model_pool contains unknown provider '{provider}'. "
+                    f"Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}"
+                )
+            if not entry.get("model"):
+                raise ValueError("default_model_pool entry missing 'model' key")
+        return self
 
 
 @lru_cache

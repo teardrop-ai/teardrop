@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from billing import BillingResult
 from marketplace import AuthorConfig, AuthorEarning, AuthorWithdrawal, MarketplaceTool
 
 _NOW = datetime.now(timezone.utc)
@@ -348,3 +349,149 @@ async def test_mcp_disabled(api_client, monkeypatch):
     assert resp.status_code == 404
 
     config.get_settings.cache_clear()
+
+
+# ─── POST /mcp/v1 — tools/call ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_call_success(api_client, monkeypatch):
+    """Marketplace tool call executes webhook and returns isError:false."""
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("app.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("app.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "app.get_marketplace_tool_by_name",
+        AsyncMock(return_value={"org_id": "author-org-id", "name": "my_tool"}),
+    )
+    monkeypatch.setattr(
+        "app._execute_marketplace_tool",
+        AsyncMock(return_value={"answer": 42}),
+    )
+
+    import config
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post("/mcp/v1", json={
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {"name": "acme/my_tool", "arguments": {}},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "result" in data
+    assert data["result"]["isError"] is False
+    assert data["result"]["content"][0]["type"] == "text"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
+    """Billing gate rejects calls when org has insufficient credit."""
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("app.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("app.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "app.verify_credit",
+        AsyncMock(return_value=BillingResult(verified=False, error="Insufficient balance")),
+    )
+
+    import config
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post("/mcp/v1", json={
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {"name": "acme/my_tool", "arguments": {}},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data
+    assert data["error"]["code"] == -32000
+
+    config.get_settings.cache_clear()
+
+
+# ─── Admin marketplace endpoints ─────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_admin_process_withdrawal_success(admin_api_client, monkeypatch):
+    withdrawal = AuthorWithdrawal(
+        id="w-1",
+        org_id="test-org-id",
+        amount_usdc=200_000,
+        tx_hash="",
+        wallet=_VALID_ADDR,
+        status="settled",
+        created_at=_NOW,
+        settled_at=_NOW,
+    )
+    monkeypatch.setattr("app.process_withdrawal", AsyncMock(return_value=withdrawal))
+
+    resp = await admin_api_client.post("/admin/marketplace/process-withdrawal/w-1")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "w-1"
+    assert data["status"] == "settled"
+
+
+@pytest.mark.anyio
+async def test_admin_process_withdrawal_not_found(admin_api_client, monkeypatch):
+    monkeypatch.setattr(
+        "app.process_withdrawal",
+        AsyncMock(side_effect=ValueError("Withdrawal not found or not in 'pending' status")),
+    )
+
+    resp = await admin_api_client.post("/admin/marketplace/process-withdrawal/bad-id")
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_complete_withdrawal_success(admin_api_client, monkeypatch):
+    monkeypatch.setattr("app.complete_withdrawal", AsyncMock(return_value=None))
+
+    resp = await admin_api_client.post(
+        "/admin/marketplace/complete-withdrawal/w-1",
+        json={"tx_hash": "0xabcdef1234567890"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "completed"
+    assert data["tx_hash"] == "0xabcdef1234567890"
+
+
+@pytest.mark.anyio
+async def test_admin_list_withdrawals(admin_api_client, monkeypatch):
+    withdrawal = AuthorWithdrawal(
+        id="w-1",
+        org_id="test-org-id",
+        amount_usdc=200_000,
+        tx_hash="",
+        wallet=_VALID_ADDR,
+        status="pending",
+        created_at=_NOW,
+    )
+    monkeypatch.setattr("app.list_pending_withdrawals", AsyncMock(return_value=[withdrawal]))
+
+    resp = await admin_api_client.get("/admin/marketplace/withdrawals")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["withdrawals"]) == 1
+    assert data["withdrawals"][0]["id"] == "w-1"
+
+
+@pytest.mark.anyio
+async def test_admin_list_withdrawals_org_filter(admin_api_client, monkeypatch):
+    mock_list = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.list_pending_withdrawals", mock_list)
+
+    resp = await admin_api_client.get("/admin/marketplace/withdrawals?org_id=some-org")
+    assert resp.status_code == 200
+    mock_list.assert_called_once_with("some-org")
