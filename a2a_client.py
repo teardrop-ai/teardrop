@@ -242,6 +242,7 @@ async def send_message(
     message_text: str,
     *,
     timeout: int = 120,
+    auth_header: str | None = None,
 ) -> A2ASendMessageResponse:
     """Send a task message to a remote A2A agent via POST /message:send.
 
@@ -251,6 +252,7 @@ async def send_message(
         base_url: The base URL of the remote agent.
         message_text: The user-role message text to send.
         timeout: HTTP request timeout in seconds.
+        auth_header: Optional Bearer token to attach as Authorization header.
 
     Raises:
         ValueError: If the URL fails SSRF validation.
@@ -270,15 +272,19 @@ async def send_message(
         },
     }
 
-    logger.info("send_message: POST %s", endpoint)
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if auth_header:
+        headers["Authorization"] = f"Bearer {auth_header}"
+
+    logger.info("send_message: POST %s (auth=%s)", endpoint, bool(auth_header))
 
     async with httpx.AsyncClient(
         timeout=timeout,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        headers=headers,
         follow_redirects=False,
     ) as client:
         resp = await client.post(endpoint, json=payload)
@@ -329,3 +335,131 @@ def extract_result_text(response: A2ASendMessageResponse) -> str:
                 return part.text
 
     return f"Remote agent completed with state: {task.status.state}"
+
+
+# ─── Allowlist enforcement ────────────────────────────────────────────────────
+
+
+async def check_delegation_allowed(
+    org_id: str, agent_url: str, pool
+) -> tuple[bool, dict | None]:
+    """Check if *agent_url* is in the org's a2a_allowed_agents table.
+
+    Returns (allowed, row_dict) — row_dict contains max_cost_usdc and
+    require_x402 when the agent is found, or None when not found.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT id, agent_url, label, max_cost_usdc, require_x402, created_at
+        FROM a2a_allowed_agents
+        WHERE org_id = $1 AND agent_url = $2
+        """,
+        org_id,
+        agent_url.rstrip("/"),
+    )
+    if row is None:
+        return False, None
+    return True, dict(row)
+
+
+# ─── x402-aware outbound delegation ──────────────────────────────────────────
+
+
+async def send_message_with_payment(
+    base_url: str,
+    message_text: str,
+    *,
+    signer=None,
+    timeout: int = 120,
+    auth_header: str | None = None,
+) -> A2ASendMessageResponse:
+    """Send a task message to a remote A2A agent, handling x402 payment if required.
+
+    If the remote agent returns HTTP 402, this function extracts the payment
+    requirements, signs a payment using *signer*, and retries the request with
+    the ``X-PAYMENT`` header attached.
+
+    Falls back to ``send_message()`` behaviour when *signer* is None or the
+    remote agent does not require payment.
+    """
+    base_url = base_url.rstrip("/")
+
+    ssrf_err = validate_url(base_url)
+    if ssrf_err:
+        raise ValueError(f"SSRF blocked: {ssrf_err}")
+
+    endpoint = f"{base_url}/message:send"
+    payload: dict[str, Any] = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": message_text}],
+        },
+    }
+
+    headers = {
+        "User-Agent": _USER_AGENT,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if auth_header:
+        headers["Authorization"] = f"Bearer {auth_header}"
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        headers=headers,
+        follow_redirects=False,
+    ) as client:
+        resp = await client.post(endpoint, json=payload)
+
+        # ── Handle 402 Payment Required ───────────────────────────────────
+        if resp.status_code == 402 and signer is not None:
+            payment_header = _sign_x402_payment(resp, signer)
+            if payment_header:
+                resp = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers={"X-PAYMENT": payment_header},
+                )
+
+        resp.raise_for_status()
+
+    data = resp.json()
+    return _parse_send_response(data)
+
+
+def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
+    """Extract payment requirements from a 402 response and return a signed header.
+
+    Returns None if parsing or signing fails.
+    """
+    import base64
+
+    try:
+        # Try header first (x402 standard), then body fallback.
+        raw_header = resp.headers.get("X-PAYMENT-REQUIRED", "")
+        if raw_header:
+            import json as _json
+            reqs_data = _json.loads(base64.b64decode(raw_header))
+        else:
+            body = resp.json()
+            reqs_data = body.get("accepts", [])
+
+        if not reqs_data:
+            logger.warning("_sign_x402_payment: no payment requirements found")
+            return None
+
+        from x402 import build_payment_payload
+
+        req = reqs_data[0] if isinstance(reqs_data, list) else reqs_data
+        payload = build_payment_payload(req, signer)
+
+        # Encode payload for the X-PAYMENT header.
+        import json as _json
+        payload_json = _json.dumps(
+            payload.model_dump() if hasattr(payload, "model_dump") else payload,
+            default=str,
+        )
+        return base64.b64encode(payload_json.encode()).decode()
+    except Exception:
+        logger.exception("_sign_x402_payment: failed to sign payment")
+        return None

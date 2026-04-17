@@ -94,6 +94,19 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.x402_facilitator_url))
     server = x402ResourceServer(facilitator)
     server.register(settings.x402_network, ExactEvmServerScheme())
+
+    # Register upto scheme alongside exact when the operator has opted in.
+    if settings.x402_scheme == "upto":
+        try:
+            from x402.mechanisms.evm.upto import UptoEvmServerScheme # type: ignore[import]
+        except ImportError as exc:
+            raise RuntimeError(
+                "x402 upto scheme is not available in the installed package. "
+                "Run: pip install 'x402[fastapi,evm] @ git+https://github.com/x402-foundation/x402.git@main#subdirectory=python'"
+            ) from exc
+
+        server.register(settings.x402_network, UptoEvmServerScheme())
+
     server.initialize()
     _server = server
 
@@ -106,11 +119,17 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         price_str = settings.x402_run_price
         logger.warning("No pricing_rules row found; using config fallback price=%s", price_str)
 
+    # For upto, advertise the max_amount ceiling instead of the exact run price.
+    if settings.x402_scheme == "upto":
+        advertised_price = settings.x402_upto_max_amount
+    else:
+        advertised_price = price_str
+
     config = ResourceConfig(
         scheme=settings.x402_scheme,
         network=settings.x402_network,
         pay_to=settings.x402_pay_to_address,
-        price=price_str,
+        price=advertised_price,
     )
     _requirements_cache = server.build_payment_requirements(config)
 
@@ -118,7 +137,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         "Billing initialised: network=%s pay_to=%s price=%s scheme=%s",
         settings.x402_network,
         settings.x402_pay_to_address,
-        price_str,
+        advertised_price,
         settings.x402_scheme,
     )
 
@@ -185,6 +204,9 @@ class BillingResult(BaseModel):
     # Distinguishes on-chain x402 settlement from off-chain credit debit.
     # Set by verify_payment ("x402") or verify_credit ("credit").
     billing_method: str = "x402"
+    # Distinguishes exact vs upto within x402. Controls whether settle_payment()
+    # passes actual_cost_usdc to the facilitator.
+    scheme: str = "exact"
 
 
 # ─── Price conversion ────────────────────────────────────────────────────────
@@ -261,11 +283,18 @@ async def _rebuild_requirements_if_stale() -> None:
     from x402 import ResourceConfig
 
     new_price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
+
+    # For upto, the 402 response advertises the max ceiling, not the run price.
+    if settings.x402_scheme == "upto":
+        advertised_price = settings.x402_upto_max_amount
+    else:
+        advertised_price = new_price_str
+
     config = ResourceConfig(
         scheme=settings.x402_scheme,
         network=settings.x402_network,
         pay_to=settings.x402_pay_to_address,
-        price=new_price_str,
+        price=advertised_price,
     )
     _requirements_cache = _server.build_payment_requirements(config)
     _last_requirements_price_usdc = rule.run_price_usdc
@@ -315,15 +344,27 @@ async def verify_payment(payment_header: str) -> BillingResult:
         logger.warning("Payment verification failed: %s (payer=%s)", reason, result.payer)
         return BillingResult(error=f"Payment verification failed: {reason}")
 
+    # Detect scheme from the matched requirement so settle_payment() knows
+    # whether to pass actual_cost_usdc.
+    detected_scheme = getattr(requirement, "scheme", "exact") or "exact"
+
     return BillingResult(
         verified=True,
         payment_payload=payload,
         payment_requirements=requirement,
+        scheme=detected_scheme,
     )
 
 
-async def settle_payment(billing_result: BillingResult) -> BillingResult:
+async def settle_payment(
+    billing_result: BillingResult,
+    actual_cost_usdc: int | None = None,
+) -> BillingResult:
     """Settle a verified payment on-chain via the facilitator.
+
+    For upto scheme, *actual_cost_usdc* is the computed usage cost that the
+    facilitator will settle (must be ≤ the max_amount the client signed).
+    For exact scheme, this parameter is ignored.
 
     Mutates and returns the BillingResult with settlement details.
     """
@@ -334,10 +375,19 @@ async def settle_payment(billing_result: BillingResult) -> BillingResult:
     server = _get_server()
 
     try:
-        result = await server.settle_payment(
-            billing_result.payment_payload,
-            billing_result.payment_requirements,
-        )
+        if billing_result.scheme == "upto" and actual_cost_usdc is not None:
+            # upto: tell the facilitator the actual amount to settle.
+            actual_price_str = atomic_usdc_to_price_str(actual_cost_usdc)
+            result = await server.settle_payment(
+                billing_result.payment_payload,
+                billing_result.payment_requirements,
+                actual_amount=actual_price_str,
+            )
+        else:
+            result = await server.settle_payment(
+                billing_result.payment_payload,
+                billing_result.payment_requirements,
+            )
     except Exception as exc:
         logger.error("Payment settlement error: %s", exc, exc_info=True)
         billing_result.error = f"Settlement failed: {exc}"
@@ -351,9 +401,13 @@ async def settle_payment(billing_result: BillingResult) -> BillingResult:
     billing_result.tx_hash = (
         getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
     )
-    # Extract settled amount from the requirement
-    req = billing_result.payment_requirements
-    billing_result.amount_usdc = int(getattr(req, "amount", "0") or "0")
+
+    # For upto, record the actual cost we settled; for exact, use the requirement amount.
+    if billing_result.scheme == "upto" and actual_cost_usdc is not None:
+        billing_result.amount_usdc = actual_cost_usdc
+    else:
+        req = billing_result.payment_requirements
+        billing_result.amount_usdc = int(getattr(req, "amount", "0") or "0")
 
     return billing_result
 
@@ -1682,3 +1736,154 @@ async def update_org_spending_config(
     if result == "UPDATE 0":
         return None
     return await get_org_spending_config(org_id)
+
+
+# ─── A2A Delegation billing ──────────────────────────────────────────────────
+
+
+async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str | None:
+    """Pre-flight check: can the org afford a delegation of *estimated_cost_usdc*?
+
+    Returns None on success, or an error string describing the shortfall.
+    Does NOT debit — that happens after the delegation completes.
+    """
+    settings = get_settings()
+    if not settings.a2a_delegation_billing_enabled:
+        return None  # billing disabled — allow unconditionally
+
+    # Apply global cap.
+    cap = settings.a2a_delegation_max_cost_usdc
+    if estimated_cost_usdc > cap:
+        return (
+            f"Estimated delegation cost ({estimated_cost_usdc} atomic USDC) "
+            f"exceeds global cap ({cap})."
+        )
+
+    # Check credit balance.
+    balance = await get_credit_balance(org_id)
+    if balance < estimated_cost_usdc:
+        return (
+            f"Insufficient credit for delegation: balance {balance} atomic USDC, "
+            f"estimated cost {estimated_cost_usdc}."
+        )
+
+    return None
+
+
+def apply_platform_fee(cost_usdc: int) -> int:
+    """Add the platform fee (in basis points) to a raw delegation cost.
+
+    Example: cost=10000, fee=500 bps (5%) → 10500
+    """
+    settings = get_settings()
+    fee_bps = settings.a2a_delegation_platform_fee_bps
+    return cost_usdc + (cost_usdc * fee_bps) // 10_000
+
+
+async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:
+    """Debit *cost_usdc* from org credit balance for an outbound delegation.
+
+    Wraps ``debit_credit`` with a delegation-specific reason string.
+    Returns True on success, False if the debit failed (e.g. insufficient funds).
+    """
+    reason = f"a2a_delegation run={run_id} agent={agent_url}"
+    return await debit_credit(org_id, cost_usdc, reason)
+
+
+async def record_delegation_event(
+    org_id: str,
+    run_id: str,
+    agent_url: str,
+    agent_name: str,
+    task_status: str,
+    cost_usdc: int,
+    billing_method: str = "credit",
+    settlement_tx: str = "",
+    error: str = "",
+) -> None:
+    """Insert a row into a2a_delegation_events for audit trail.
+
+    Fire-and-forget: logs but never raises on DB errors so the caller's
+    critical path is not interrupted.
+    """
+    try:
+        pool = _get_pool()
+        await pool.execute(
+            """
+            INSERT INTO a2a_delegation_events
+                (id, org_id, run_id, agent_url, agent_name,
+                 task_status, cost_usdc, billing_method, settlement_tx, error, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+            """,
+            str(uuid.uuid4()),
+            org_id,
+            run_id,
+            agent_url,
+            agent_name,
+            task_status,
+            cost_usdc,
+            billing_method,
+            settlement_tx,
+            error,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record delegation event org=%s run=%s agent=%s",
+            org_id, run_id, agent_url,
+        )
+
+
+async def get_delegation_events(
+    org_id: str,
+    limit: int = 50,
+    cursor: datetime | None = None,
+) -> list[dict]:
+    """Return delegation events for an org (cursor-paginated, newest first)."""
+    pool = _get_pool()
+    if cursor is None:
+        rows = await pool.fetch(
+            """
+            SELECT id, org_id, run_id, agent_url, agent_name,
+                   task_status, cost_usdc, billing_method, settlement_tx, error, created_at
+            FROM a2a_delegation_events
+            WHERE org_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            org_id,
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, org_id, run_id, agent_url, agent_name,
+                   task_status, cost_usdc, billing_method, settlement_tx, error, created_at
+            FROM a2a_delegation_events
+            WHERE org_id = $1 AND created_at < $3
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            org_id,
+            limit,
+            cursor,
+        )
+    return [dict(r) for r in rows]
+
+
+def get_treasury_signer():
+    """Return an x402 EthAccountSigner backed by the treasury private key.
+
+    Raises RuntimeError if the key is not configured.
+    """
+    settings = get_settings()
+    if not settings.x402_treasury_private_key:
+        raise RuntimeError(
+            "x402_treasury_private_key is not configured — "
+            "cannot sign outbound x402 delegation payments"
+        )
+
+    from eth_account import Account
+    from x402.mechanisms.evm import EthAccountSigner
+
+    account = Account.from_key(settings.x402_treasury_private_key)
+    return EthAccountSigner(account)

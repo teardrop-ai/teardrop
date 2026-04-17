@@ -1,7 +1,48 @@
 # teardrop
-Intelligence beyond the browser
-
 Teardrop is a streaming AI agent API. You send it a message; it reasons using your configured LLM (Anthropic, OpenAI, or Google), optionally calls tools, builds a structured UI component tree, and streams everything back as Server-Sent Events. It implements four open protocols simultaneously: **AG-UI** (streaming events), **A2A** (agent discoverability), **MCP** (tool serving), and **x402** (per-request payments in USDC on Base, no subscription required).
+
+---
+
+## Core Features
+
+### Agent-to-Agent (A2A) Delegation
+
+Agents can securely delegate tasks to other agents via `POST /delegate` or the `delegate_to_agent` tool. Features:
+- **Allowlist control**: Restrict which agents your org can delegate to
+- **JWT forwarding**: Automatically forward authentication context when delegating (set `jwt_forward: true` on agent rules)
+- **Per-run quotas**: Limit delegation calls per agent run (configurable via `A2A_DELEGATION_MAX_PER_RUN`)
+- **Optional billing**: Debit credits for delegations with per-agent cost caps
+
+**Environment variables:**
+```
+A2A_DELEGATION_ENABLED=true                      # Enable agent-to-agent delegation
+A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: false)
+A2A_DELEGATION_MAX_PER_RUN=10                    # Max delegations per run
+A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
+A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
+A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
+```
+
+### Marketplace Settlement & USDC Sweeping
+
+Organizations can monetize their agents via a Marketplace. Earned fees are settled to organization wallets on-chain via Coinbase Developer Platform (CDP).
+
+**Auto-sweep settings** (configure in `.env`):
+```
+MARKETPLACE_SETTLEMENT_CDP_ACCOUNT=td-marketplace   # CDP account for settlement transfers
+MARKETPLACE_SETTLEMENT_CHAIN_ID=84532               # Chain ID (Base Sepolia=84532, Base=8453)
+MARKETPLACE_AUTO_SWEEP_ENABLED=true                # Enable automatic earnings sweep
+MARKETPLACE_SWEEP_INTERVAL_SECONDS=86400           # Sweep cadence (86400 = 1 day)
+```
+
+**Admin APIs:**
+- `POST /admin/marketplace/sweep` — Manually trigger earnings sweep for pending orgs
+- `GET /admin/marketplace/settlement-balance` — Query the settlement wallet USDC balance
+
+When an org requests a withdrawal, Teardrop:
+1. Settles earned fees to a ledger entry (pending)
+2. Attempts on-chain USDC transfer via CDP to the org's specified address
+3. Records the tx_hash on success, or reverts to pending on failure
 
 ---
 
@@ -109,6 +150,12 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
 | `SIWE_DOMAIN` | Your public domain (e.g. `api.teardrop.dev`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
+| `AGENT_WALLET_ENABLED` | `true` to enable per-org CDP-backed wallets |
+| `CDP_API_KEY_ID` | Coinbase Developer Platform API key ID |
+| `CDP_API_KEY_SECRET` | CDP API key secret (Ed25519 / ECDSA) |
+| `CDP_WALLET_SECRET` | CDP wallet secret (decrypts TEE-stored keys) |
+| `CDP_NETWORK` | CDP network: `base-sepolia` (testnet) or `base` (mainnet) |
+| `AGENT_WALLET_MAX_BALANCE_USDC` | Max USDC per agent wallet (default: 100000000 = $100) |
 
 ---
 
@@ -309,17 +356,26 @@ Client                         Teardrop                     x402 Facilitator
   │                               │◄─ verified ───────────────────│
   │◄── SSE stream ────────────────│                               │
   │   (TEXT, TOOL, SURFACE...)    │                               │
-  │   BILLING_SETTLEMENT          │── settle on-chain ───────────►│
+  │   BILLING_SETTLEMENT          │── settle (actual cost*) ─────►│
   │   { tx_hash, amount_usdc }    │◄─ tx confirmed ───────────────│
 ```
+
+\* **exact**: settles the signed amount. **upto**: settles actual usage cost ≤ client-signed ceiling.
 
 ### Payment methods by auth type
 
 | Auth method | Payment mechanism |
 |-------------|-------------------|
-| `siwe` | x402 on-chain (USDC, `exact` scheme, per-request) |
+| `siwe` | x402 on-chain (USDC, `exact` or `upto` scheme, per-request) |
 | `client_credentials` | Org prepaid credit balance (off-chain debit) |
 | `email` | Org prepaid credit balance (off-chain debit) |
+
+### x402 payment schemes
+
+| Scheme | How it works | Config |
+|--------|-------------|--------|
+| `exact` (default) | Client signs the exact run price; facilitator settles that amount. | `X402_SCHEME=exact` |
+| `upto` | Client signs a ceiling (`X402_UPTO_MAX_AMOUNT`); after the run, Teardrop settles the actual usage cost (≤ ceiling) via Permit2. | `X402_SCHEME=upto` |
 
 ### Configuration
 
@@ -328,6 +384,8 @@ BILLING_ENABLED=true
 X402_PAY_TO_ADDRESS=0xYourTreasuryWallet
 X402_NETWORK=eip155:8453          # Base mainnet (eip155:84532 = Base Sepolia)
 X402_FACILITATOR_URL=https://x402.org/facilitator
+X402_SCHEME=upto                  # "exact" (default) or "upto" (usage-based settlement)
+X402_UPTO_MAX_AMOUNT=$0.50        # Max ceiling per-run for upto (ignored for exact)
 BILLABLE_AUTH_METHODS=["siwe"]    # Add "client_credentials","email" to bill those too
 ```
 
@@ -369,6 +427,140 @@ Invoke-RestMethod -Uri "http://localhost:8000/admin/credits/topup" `
     -Method Post -ContentType "application/json" `
     -Headers @{ Authorization = "Bearer $adminToken" } `
     -Body '{"org_id":"org-123","amount_usdc":1000000}'   # $1.00
+```
+
+---
+
+## A2A Delegation & Cross-Agent Revenue Routing
+
+Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and charge those delegations back to the calling organisation. This enables:
+
+- **Network effect**: Agents discover and call each other via published Agent Cards
+- **Specialisation**: Route complex tasks to domain-expert agents
+- **Revenue sharing**: Collect payments from delegations and distribute to specialist agent operators
+- **Budget control**: Per-agent cost caps and global delegation spending limits
+
+### How it works
+
+```
+Local Agent                     Teardrop                          Remote Agent
+  │                               │                                    │
+  │ calls delegate_to_agent ──────│                                    │
+  │  + agent_url                  │                                    │
+  │  + task_description           │                                    │
+  │                               │─ GET /.well-known/agent-card.json ►│
+  │                               │◄─ agent capabilities ──────────────│
+  │                               │                                    │
+  │                               │─ POST /message:send ──────────────►│
+  │                               │   (with optional x402 payment)      │
+  │                               │◄─ task result ────────────────────│
+  │◄──────────  result ───────────│                                    │
+  │  + cost_usdc (debited)        │                                    │
+  │                               │                                    │
+  └─ Credits debited from org ────│                                    │
+```
+
+### Configuration
+
+```
+# Enable A2A delegation
+A2A_DELEGATION_ENABLED=true
+A2A_DELEGATION_TIMEOUT_SECONDS=120
+A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
+
+# Enable billing for delegations
+A2A_DELEGATION_BILLING_ENABLED=true
+A2A_DELEGATION_PLATFORM_FEE_BPS=500  # Platform fee: 500 bps = 5%
+A2A_DELEGATION_MAX_COST_USDC=100000  # Global delegation cost cap ($0.10)
+
+# For x402 delegations (optional):
+X402_TREASURY_PRIVATE_KEY=0x...      # Treasury wallet private key (hex-encoded)
+```
+
+### Allowlist & Budget Control
+
+Organisations must explicitly add remote agents to their allowlist before delegating to them:
+
+```powershell
+# Add a trusted agent to the allowlist
+$token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
+    -Method Post -ContentType "application/json" `
+    -Body '{"client_id":"teardrop-client","client_secret":"<secret>"}').access_token
+
+Invoke-RestMethod -Uri "http://localhost:8000/a2a/agents" `
+    -Method Post -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $token" } `
+    -Body @{
+        agent_url = "https://specialist.agents.example.com"
+        label = "Code Review Specialist"
+        max_cost_usdc = 50_000           # Per-delegation cap: $0.05
+        require_x402 = $false            # Use org credits (not x402)
+    } | ConvertTo-Json
+```
+
+### Payment methods for delegations
+
+| Setting | Billing Method | When to use |
+|---------|---|---|
+| `require_x402=false` | Org prepaid credits | Default: instant, requires upfront org credit balance |
+| `require_x402=true` | x402 on-chain (USDC) | Agent requires on-chain payment; uses treasury wallet to sign |
+
+### Delegation events & audit trail
+
+Every delegation is recorded in the `a2a_delegation_events` table:
+
+```powershell
+# List delegation events for your org
+Invoke-RestMethod -Uri "http://localhost:8000/a2a/delegations?limit=50" `
+    -Method Get `
+    -Headers @{ Authorization = "Bearer $token" } | ConvertTo-Json
+```
+
+Response:
+```json
+[
+  {
+    "id": "evt-abc123",
+    "run_id": "run-xyz",
+    "agent_url": "https://specialist.agents.example.com",
+    "agent_name": "CodeReviewBot",
+    "task_status": "completed",
+    "cost_usdc": 52500,
+    "billing_method": "credit",
+    "settlement_tx": "",
+    "error": null,
+    "created_at": "2026-04-16T14:22:00Z"
+  }
+]
+```
+
+### Delegation in SSE stream
+
+When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BILLING_SETTLEMENT` events include the delegation cost breakdown:
+
+```json
+{
+  "event": "USAGE_SUMMARY",
+  "data": {
+    "run_id": "run-123",
+    "tokens_in": 1500,
+    "tokens_out": 800,
+    "tool_calls": 3,
+    "cost_usdc": 15000,
+    "delegation_cost_usdc": 52500
+  }
+}
+
+{
+  "event": "BILLING_SETTLEMENT",
+  "data": {
+    "run_id": "run-123",
+    "amount_usdc": 67500,
+    "tx_hash": "",
+    "network": "credit",
+    "delegation_cost_usdc": 52500
+  }
+}
 ```
 
 ---
@@ -426,11 +618,46 @@ Invoke-RestMethod -Uri "http://localhost:8000/admin/credits/topup" `
 
 ### Wallets
 
+#### User Wallets (SIWE-linked)
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/wallets/link` | Bearer | Link additional wallet via SIWE |
 | `GET` | `/wallets/me` | Bearer | List your linked wallets |
 | `DELETE` | `/wallets/{wallet_id}` | Bearer | Unlink a wallet |
+
+#### Agent Wallets (CDP-managed, per-org)
+
+Each org can provision a single CDP-backed USDC wallet per chain for receiving delegation payments and marketplace earnings. Enable with `AGENT_WALLET_ENABLED=true` and set CDP credentials.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/wallets/agent` | Bearer | Provision a CDP-backed agent wallet for your org |
+| `GET` | `/wallets/agent` | Bearer | Get org's agent wallet; optionally include on-chain USDC balance |
+| `DELETE` | `/wallets/agent` | Admin | Deactivate the org's agent wallet |
+
+**Example: Provision an agent wallet**
+
+```powershell
+$token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
+    -Method Post -ContentType "application/json" `
+    -Body '{"client_id":"teardrop-client","client_secret":"<secret>"}').access_token
+
+Invoke-RestMethod -Uri "http://localhost:8000/wallets/agent" `
+    -Method Post -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $token" } | ConvertTo-Json
+```
+
+**Example: Get agent wallet with balance**
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/wallets/agent?include_balance=true" `
+    -Method Get `
+    -Headers @{ Authorization = "Bearer $token" } | ConvertTo-Json
+```
+
+Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
+
 
 ### Usage
 
@@ -490,6 +717,25 @@ Connect external MCP servers to your org. Their tools are discovered and made av
 | `PATCH` | `/mcp/servers/{server_id}` | Bearer | Update an MCP server |
 | `DELETE` | `/mcp/servers/{server_id}` | Bearer | Remove an MCP server |
 | `POST` | `/mcp/servers/{server_id}/discover` | Bearer | Trigger tool re-discovery from an MCP server |
+
+### A2A Delegation
+
+Agent allowlist and delegation history. Agents must be added to the allowlist before delegating to them.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/a2a/agents` | Bearer | Add a trusted A2A agent to your org's allowlist |
+| `GET` | `/a2a/agents` | Bearer | List all trusted agents in your allowlist |
+| `DELETE` | `/a2a/agents/{agent_id}` | Bearer | Remove an agent from your allowlist |
+| `GET` | `/a2a/delegations` | Bearer | List delegation events for your org (cursor paginated) |
+
+**Admin A2A endpoints:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/admin/a2a/agents` | Admin | Add a trusted agent to an org's allowlist (admin can add to any org) |
+| `GET` | `/admin/a2a/agents/{org_id}` | Admin | List trusted agents for a specific org |
+| `DELETE` | `/admin/a2a/agents/{agent_id}` | Admin | Remove an agent from an org's allowlist |
 
 ### Calling the agent (PowerShell)
 
@@ -570,13 +816,14 @@ Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-ba
 
 ### Tools (`tools/definitions/`)
 
-Sixteen tools are available to the agent and served via MCP:
+Seventeen tools are available to the agent and served via MCP:
 
 | Tool | Description |
 |------|-------------|
 | `calculate` | Evaluates arithmetic expressions safely (no `eval`). Supports `+`, `-`, `*`, `/`, `**`, `%`, `sqrt`, `abs`, `round`, `floor`, `ceil`, `log`, `sin`, `cos`, `tan`, `pi`, `e`. |
 | `convert_currency` | Converts between fiat and crypto currencies using CoinGecko and live fiat exchange rates. |
 | `decode_transaction` | Decodes transaction calldata into human-readable form using the supplied ABI or 4byte.directory. |
+| `delegate_to_agent` | Delegate a task to a remote A2A-compliant agent. Discovers capabilities, sends a message, handles optional x402 payment, debits org credits, and records audit events. |
 | `get_block` | Block metadata (timestamp, gas, miner, tx count) by number or `"latest"`. |
 | `get_datetime` | Returns current UTC date/time. Accepts an optional `strftime` format string. |
 | `get_erc20_balance` | ERC-20 token balance for an address. |
@@ -633,6 +880,8 @@ python -m migrations.runner
 | `010_org_tools.sql` | Per-org custom webhook tools (`org_tools`) and audit events |
 | `011_org_memories.sql` | Enables `pgvector`; creates `org_memories` table with HNSW index |
 | `012_org_mcp_servers.sql` | Per-org MCP server connections (`org_mcp_servers`) and audit events |
+| `024_a2a_delegation_billing.sql` | A2A delegation billing: extends `a2a_allowed_agents` with cost caps; creates `a2a_delegation_events` audit table |
+| `025_org_agent_wallets.sql` | CDP-backed agent wallets (`org_agent_wallets`) and audit events (`agent_wallet_events`) |
 
 ### Neon (production)
 
@@ -653,7 +902,8 @@ mcp_client.py       # Per-org MCP client: CRUD, session pool, tool discovery
 org_tools.py        # Per-org custom webhook tools: CRUD, caching, execution
 usage.py            # UsageEvent model, usage recording and aggregation
 users.py            # Org + User models, CRUD, PBKDF2-SHA256 password hashing
-wallets.py          # Wallet management, SIWE nonce lifecycle
+wallets.py          # User wallet management, SIWE nonce lifecycle
+agent_wallets.py    # CDP-backed agent wallet provisioning, balance queries, audit
 agent/
   graph.py          # LangGraph StateGraph definition and routing
   llm.py            # Multi-provider LLM factory (Anthropic, OpenAI, Google)
@@ -672,6 +922,31 @@ scripts/
   init_neon.py      # Initialize Neon Postgres schema
   seed_users.py     # Create default org + admin user for local dev
 ```
+
+---
+
+## Coinbase Developer Platform Integration
+
+Teardrop can provision per-org USDC wallets via Coinbase Developer Platform (CDP) for receiving delegation payments and marketplace earnings. This requires:
+
+1. **CDP Account**: Create one at [https://cdp.coinbase.com](https://cdp.coinbase.com)
+2. **API Credentials**:
+   - Go to Developer Settings → API Keys
+   - Create a key with `wallet:create` permission
+   - Note the **Key ID** and **Key Secret** (Ed25519 or ECDSA)
+   - Note the **Wallet Secret** (used to decrypt keys stored in AWS Nitro Enclaves)
+3. **Environment variables**:
+   ```
+   AGENT_WALLET_ENABLED=true
+   CDP_API_KEY_ID=<your-key-id>
+   CDP_API_KEY_SECRET=<your-key-secret>
+   CDP_WALLET_SECRET=<your-wallet-secret>
+   CDP_NETWORK=base-sepolia       # or 'base' for mainnet
+   AGENT_WALLET_MAX_BALANCE_USDC=100000000  # $100 balance cap (optional)
+   ```
+4. **Pricing**: CDP charges $0.005 per operation. Free tier includes 5,000 ops/month.
+
+Each org can hold one wallet per chain (e.g., Base Sepolia testnet, Base mainnet). Wallets auto-receive delegation payments and MCP marketplace earnings.
 
 ---
 

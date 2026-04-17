@@ -176,6 +176,13 @@ class Settings(BaseSettings):
             "upto support)"
         ),
     )
+    x402_upto_max_amount: str = Field(
+        default="$0.50",
+        description=(
+            "Maximum per-run amount advertised in upto scheme 402 response. "
+            "Client signs this as the ceiling; actual settlement is based on usage."
+        ),
+    )
     pricing_cache_ttl_seconds: int = Field(
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
@@ -285,9 +292,62 @@ class Settings(BaseSettings):
     a2a_delegation_max_per_run: int = Field(
         default=3, description="Maximum delegate_to_agent calls allowed per agent run"
     )
+    a2a_delegation_require_allowlist: bool = Field(
+        default=False,
+        description="When true, delegation fails if the target agent is not on the org's allowlist",
+    )
     a2a_agent_card_cache_ttl_seconds: int = Field(
         default=300, description="TTL for caching remote agent cards (seconds)"
     )
+
+    # ── A2A Delegation Billing ────────────────────────────────────────────────
+    a2a_delegation_billing_enabled: bool = Field(
+        default=False,
+        description="Enable billing for outbound A2A delegations (fund from org credits or x402)",
+    )
+    a2a_delegation_platform_fee_bps: int = Field(
+        default=500,
+        description="Platform fee on delegations in basis points (500 = 5%%)",
+    )
+    a2a_delegation_max_cost_usdc: int = Field(
+        default=100_000,
+        description="Global per-delegation cost cap in atomic USDC (default $0.10)",
+    )
+    x402_treasury_private_key: str = Field(
+        default="",
+        description="Hex-encoded private key for the platform treasury wallet (signs outbound x402 payments)",
+    )
+
+    # ── CDP Agent Wallets (per-org managed wallets via Coinbase Developer Platform) ─
+    agent_wallet_enabled: bool = Field(
+        default=False,
+        description="Enable CDP-backed agent wallets (per-org USDC wallets for A2A payments)",
+    )
+    cdp_api_key_id: str = Field(
+        default="",
+        description="Coinbase Developer Platform API key ID",
+    )
+    cdp_api_key_secret: str = Field(
+        default="",
+        description="Coinbase Developer Platform API key secret (Ed25519 / ECDSA)",
+    )
+    cdp_wallet_secret: str = Field(
+        default="",
+        description="Coinbase Developer Platform wallet secret (decrypts TEE-stored keys)",
+    )
+    cdp_network: str = Field(
+        default="base-sepolia",
+        description="CDP network name: 'base-sepolia' (testnet) or 'base' (mainnet)",
+    )
+    agent_wallet_max_balance_usdc: int = Field(
+        default=100_000_000,
+        description="Maximum USDC balance per agent wallet in atomic units (100_000_000 = $100)",
+    )
+
+    @property
+    def cdp_configured(self) -> bool:
+        """True when all three CDP secrets are set."""
+        return bool(self.cdp_api_key_id and self.cdp_api_key_secret and self.cdp_wallet_secret)
 
     # ── Multi-LLM Gateway ─────────────────────────────────────────────────────
     allow_private_llm_endpoints: bool = Field(
@@ -318,6 +378,22 @@ class Settings(BaseSettings):
     marketplace_withdrawal_cooldown_seconds: int = Field(
         default=3600,
         description="Minimum seconds between withdrawal requests per org",
+    )
+    marketplace_settlement_cdp_account: str = Field(
+        default="td-marketplace",
+        description="CDP account name for the marketplace settlement pool wallet",
+    )
+    marketplace_settlement_chain_id: int = Field(
+        default=84532,
+        description="EIP-155 chain ID for marketplace settlements (84532=Base Sepolia, 8453=Base)",
+    )
+    marketplace_auto_sweep_enabled: bool = Field(
+        default=False,
+        description="Enable background task to auto-process withdrawals for qualifying orgs",
+    )
+    marketplace_sweep_interval_seconds: int = Field(
+        default=86400,
+        description="Interval in seconds between marketplace auto-sweep runs (default: 24h)",
     )
     rate_limit_mcp_rpm: int = Field(
         default=30,

@@ -58,6 +58,14 @@ from sse_starlette.sse import EventSourceResponse
 
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState
+from agent_wallets import (
+    close_agent_wallets_db,
+    create_agent_wallet,
+    deactivate_agent_wallet,
+    get_agent_wallet,
+    get_agent_wallet_balance,
+    init_agent_wallets_db,
+)
 from auth import create_access_token, require_auth
 from benchmarks import (
     build_benchmarks_response,
@@ -347,6 +355,7 @@ async def lifespan(app: FastAPI):
     await init_marketplace_db(pool)
     await init_llm_config_db(pool)
     await init_benchmarks_db(pool)
+    await init_agent_wallets_db(pool)
 
     # Launch background workers.
     bg_tasks: list[asyncio.Task] = []
@@ -354,6 +363,10 @@ async def lifespan(app: FastAPI):
         bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
     if settings.memory_enabled and settings.memory_ttl_days > 0:
         bg_tasks.append(asyncio.create_task(_memory_cleanup_loop()))
+    if settings.marketplace_auto_sweep_enabled:
+        from marketplace import _marketplace_sweep_loop
+
+        bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
 
     yield
 
@@ -366,6 +379,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    await close_agent_wallets_db()
     await close_benchmarks_db()
     await close_llm_config_db()
     await close_marketplace_db()
@@ -577,6 +591,9 @@ async def agent_card() -> JSONResponse:
                     "network": settings.x402_network,
                     "payment_endpoint": "/agent/run",
                     "pricing_endpoint": "/billing/pricing",
+                    **({
+                        "max_amount": settings.x402_upto_max_amount,
+                    } if settings.x402_scheme == "upto" else {}),
                 },
             },
             "protocols": ["ag-ui", "a2a", "mcp"],
@@ -756,7 +773,7 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
 
     # ── SIWE flow (Sign-In with Ethereum) ──────────────────────────────────
     if body.siwe_message and body.siwe_signature:
-        return await _handle_siwe_login(body.siwe_message, body.siwe_signature)
+        return JSONResponse(content=await _handle_siwe_login(body.siwe_message, body.siwe_signature))
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -764,7 +781,7 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     )
 
 
-async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResponse:
+async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
     """Verify a SIWE message, auto-register if needed, and return a JWT."""
     import siwe as siwe_errors
     from siwe import SiweMessage
@@ -852,14 +869,12 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> JSONResp
         extra_claims=siwe_claims,
         expire_days=settings.refresh_token_expire_days,
     )
-    return JSONResponse(
-        content={
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.jwt_access_token_expire_minutes * 60,
-            "refresh_token": siwe_refresh,
-        }
-    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": settings.jwt_access_token_expire_minutes * 60,
+        "refresh_token": siwe_refresh,
+    }
 
 
 @app.get("/auth/me", tags=["Auth"])
@@ -1344,6 +1359,8 @@ async def agent_run(
                 "_org_tools_by_name": org_tools_by_name,
                 "_memories": recalled,
                 "_llm_config": llm_config,
+                "_db_pool": request.app.state.pool,
+                "_jwt_token": (request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None),
             },
         )
         config = {"configurable": {"thread_id": scoped_thread_id}}
@@ -1474,6 +1491,8 @@ async def agent_run(
                 logger.debug("Memory extraction kickoff failed", exc_info=True)
 
         # ── Settlement / credit debit (after usage recorded) ─────────────
+        delegation_spend = usage_data.get("delegation_spend_usdc", 0)
+
         if billing.verified:
             if billing.billing_method == "credit":
                 # Debit actual run cost from org's prepaid balance.
@@ -1487,6 +1506,7 @@ async def agent_run(
                             "amount_usdc": cost_usdc,
                             "tx_hash": "",
                             "network": "credit",
+                            "delegation_cost_usdc": delegation_spend,
                         },
                     )
                 else:
@@ -1497,7 +1517,9 @@ async def agent_run(
                     logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
                 # x402 on-chain settlement.
-                billing_settled = await settle_payment(billing)
+                billing_settled = await settle_payment(
+                    billing, actual_cost_usdc=cost_usdc,
+                )
                 if billing_settled.settled:
                     await record_settlement(
                         usage_event.id,
@@ -1512,6 +1534,7 @@ async def agent_run(
                             "amount_usdc": billing_settled.amount_usdc,
                             "tx_hash": billing_settled.tx_hash,
                             "network": settings.x402_network,
+                            "delegation_cost_usdc": delegation_spend,
                         },
                     )
                 else:
@@ -1535,6 +1558,7 @@ async def agent_run(
                 "tool_calls": usage_event.tool_calls,
                 "duration_ms": usage_event.duration_ms,
                 "cost_usdc": usage_event.cost_usdc,
+                "delegation_cost_usdc": delegation_spend,
             },
         )
         yield _sse_event(_EV_RUN_FINISHED, {"run_id": run_id})
@@ -1710,6 +1734,97 @@ async def list_wallets(
             for w in wallets
         ]
     )
+
+
+# ─── Agent Wallet endpoints ──────────────────────────────────────────────────
+
+
+@app.post("/wallets/agent", tags=["Agent Wallets"])
+async def provision_agent_wallet(
+    payload: dict = Depends(require_auth),
+    chain_id: int | None = None,
+) -> JSONResponse:
+    """Provision a CDP-backed agent wallet for the caller's org."""
+    settings = get_settings()
+    if not settings.agent_wallet_enabled:
+        raise HTTPException(status_code=501, detail="Agent wallets are not enabled")
+    try:
+        wallet = await create_agent_wallet(
+            org_id=payload.get("org_id", ""),
+            actor_id=payload["sub"],
+            chain_id=chain_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": wallet.id,
+            "address": wallet.address,
+            "chain_id": wallet.chain_id,
+            "wallet_type": wallet.wallet_type,
+            "is_active": wallet.is_active,
+            "created_at": wallet.created_at.isoformat(),
+        },
+    )
+
+
+@app.get("/wallets/agent", tags=["Agent Wallets"])
+async def get_agent_wallet_info(
+    payload: dict = Depends(require_auth),
+    chain_id: int | None = None,
+    include_balance: bool = False,
+) -> JSONResponse:
+    """Return the org's agent wallet, optionally including on-chain USDC balance."""
+    settings = get_settings()
+    if not settings.agent_wallet_enabled:
+        raise HTTPException(status_code=501, detail="Agent wallets are not enabled")
+    wallet = await get_agent_wallet(
+        org_id=payload.get("org_id", ""),
+        chain_id=chain_id,
+    )
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="No agent wallet found for this org")
+    result: dict = {
+        "id": wallet.id,
+        "address": wallet.address,
+        "chain_id": wallet.chain_id,
+        "wallet_type": wallet.wallet_type,
+        "is_active": wallet.is_active,
+        "created_at": wallet.created_at.isoformat(),
+    }
+    if include_balance:
+        try:
+            balance_info = await get_agent_wallet_balance(
+                org_id=payload.get("org_id", ""),
+                chain_id=chain_id,
+            )
+            result["balance_usdc"] = balance_info["balance_usdc"]
+        except Exception:
+            result["balance_usdc"] = None
+            result["balance_error"] = "Failed to fetch on-chain balance"
+    return JSONResponse(content=result)
+
+
+@app.delete("/wallets/agent", tags=["Agent Wallets"])
+async def deactivate_org_agent_wallet(
+    _admin: dict = Depends(require_admin),
+    chain_id: int | None = None,
+) -> JSONResponse:
+    """Deactivate the org's agent wallet (admin only)."""
+    settings = get_settings()
+    if not settings.agent_wallet_enabled:
+        raise HTTPException(status_code=501, detail="Agent wallets are not enabled")
+    deactivated = await deactivate_agent_wallet(
+        org_id=_admin.get("org_id", ""),
+        actor_id=_admin["sub"],
+        chain_id=chain_id,
+    )
+    if not deactivated:
+        raise HTTPException(status_code=404, detail="No active agent wallet found")
+    return JSONResponse(content={"status": "deactivated"})
 
 
 @app.delete("/wallets/{wallet_id}", tags=["Wallets"])
@@ -3012,6 +3127,9 @@ class CreateA2AAgentRequest(BaseModel):
     org_id: str
     agent_url: str = Field(..., min_length=10, max_length=2000)
     label: str | None = Field(default=None, max_length=200)
+    max_cost_usdc: int = Field(default=0, description="Per-delegation cost cap in atomic USDC (0 = global default)")
+    require_x402: bool = Field(default=False, description="Require x402 payment for this agent")
+    jwt_forward: bool = Field(default=False, description="Forward caller JWT as Authorization header to this agent")
 
 
 @app.post("/admin/a2a/agents", tags=["Admin"])
@@ -3026,13 +3144,16 @@ async def admin_add_a2a_agent(
     try:
         await pool.execute(
             """
-            INSERT INTO a2a_allowed_agents (id, org_id, agent_url, label)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO a2a_allowed_agents (id, org_id, agent_url, label, max_cost_usdc, require_x402, jwt_forward)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             """,
             agent_id,
             body.org_id,
             body.agent_url.rstrip("/"),
             body.label,
+            body.max_cost_usdc,
+            body.require_x402,
+            body.jwt_forward,
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(
@@ -3046,6 +3167,9 @@ async def admin_add_a2a_agent(
             "org_id": body.org_id,
             "agent_url": body.agent_url,
             "label": body.label,
+            "max_cost_usdc": body.max_cost_usdc,
+            "require_x402": body.require_x402,
+            "jwt_forward": body.jwt_forward,
         },
     )
 
@@ -3059,7 +3183,7 @@ async def admin_list_a2a_agents(
     """List all trusted A2A agents for an org."""
     pool: asyncpg.Pool = request.app.state.pool
     rows = await pool.fetch(
-        "SELECT id, org_id, agent_url, label, created_at"
+        "SELECT id, org_id, agent_url, label, max_cost_usdc, require_x402, jwt_forward, created_at"
         " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
         org_id,
     )
@@ -3069,6 +3193,9 @@ async def admin_list_a2a_agents(
             "org_id": r["org_id"],
             "agent_url": r["agent_url"],
             "label": r["label"],
+            "max_cost_usdc": r["max_cost_usdc"],
+            "require_x402": r["require_x402"],
+            "jwt_forward": r["jwt_forward"],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
         for r in rows
@@ -3090,6 +3217,134 @@ async def admin_delete_a2a_agent(
     if result == "DELETE 0":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return JSONResponse(content={"deleted": agent_id})
+
+
+# ─── A2A Delegation – Org-scoped Agent Management ────────────────────────────
+
+
+class OrgCreateA2AAgentRequest(BaseModel):
+    agent_url: str = Field(..., min_length=10, max_length=2000)
+    label: str | None = Field(default=None, max_length=200)
+    max_cost_usdc: int = Field(default=0, description="Per-delegation cost cap in atomic USDC (0 = global default)")
+    require_x402: bool = Field(default=False, description="Require x402 payment for this agent")
+    jwt_forward: bool = Field(default=False, description="Forward caller JWT as Authorization header to this agent")
+
+
+@app.post("/a2a/agents", tags=["A2A"])
+async def add_a2a_agent(
+    request: Request,
+    body: OrgCreateA2AAgentRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Add a trusted A2A agent to the authenticated org's allowlist."""
+    org_id: str = payload.get("org_id", payload["sub"])
+    pool: asyncpg.Pool = request.app.state.pool
+    agent_id = str(uuid.uuid4())
+    try:
+        await pool.execute(
+            """
+            INSERT INTO a2a_allowed_agents (id, org_id, agent_url, label, max_cost_usdc, require_x402, jwt_forward)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            agent_id,
+            org_id,
+            body.agent_url.rstrip("/"),
+            body.label,
+            body.max_cost_usdc,
+            body.require_x402,
+            body.jwt_forward,
+        )
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This agent URL is already in your allowlist",
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": agent_id,
+            "org_id": org_id,
+            "agent_url": body.agent_url,
+            "label": body.label,
+            "max_cost_usdc": body.max_cost_usdc,
+            "require_x402": body.require_x402,
+            "jwt_forward": body.jwt_forward,
+        },
+    )
+
+
+@app.get("/a2a/agents", tags=["A2A"])
+async def list_a2a_agents(
+    request: Request,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List all trusted A2A agents for the authenticated org."""
+    org_id: str = payload.get("org_id", payload["sub"])
+    pool: asyncpg.Pool = request.app.state.pool
+    rows = await pool.fetch(
+        "SELECT id, org_id, agent_url, label, max_cost_usdc, require_x402, jwt_forward, created_at"
+        " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
+        org_id,
+    )
+    return JSONResponse(content=[
+        {
+            "id": r["id"],
+            "agent_url": r["agent_url"],
+            "label": r["label"],
+            "max_cost_usdc": r["max_cost_usdc"],
+            "require_x402": r["require_x402"],
+            "jwt_forward": r["jwt_forward"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ])
+
+
+@app.delete("/a2a/agents/{agent_id}", tags=["A2A"])
+async def delete_a2a_agent(
+    request: Request,
+    agent_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Remove an A2A agent from the authenticated org's allowlist."""
+    org_id: str = payload.get("org_id", payload["sub"])
+    pool: asyncpg.Pool = request.app.state.pool
+    result = await pool.execute(
+        "DELETE FROM a2a_allowed_agents WHERE id = $1 AND org_id = $2",
+        agent_id,
+        org_id,
+    )
+    if result == "DELETE 0":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return JSONResponse(content={"deleted": agent_id})
+
+
+@app.get("/a2a/delegations", tags=["A2A"])
+async def list_delegation_events(
+    request: Request,
+    limit: int = 50,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List delegation events for the authenticated org (newest first)."""
+    from billing import get_delegation_events
+
+    org_id: str = payload.get("org_id", payload["sub"])
+    events = await get_delegation_events(org_id, limit=min(limit, 200))
+    return JSONResponse(content=[
+        {
+            "id": e["id"],
+            "run_id": e["run_id"],
+            "agent_url": e["agent_url"],
+            "agent_name": e["agent_name"],
+            "task_status": e["task_status"],
+            "cost_usdc": e["cost_usdc"],
+            "billing_method": e["billing_method"],
+            "settlement_tx": e["settlement_tx"],
+            "error": e["error"],
+            "created_at": e["created_at"].isoformat() if e["created_at"] else None,
+        }
+        for e in events
+    ])
 
 
 # ─── MCP Marketplace – JSON-RPC Handler ─────────────────────────────────────
@@ -3579,6 +3834,54 @@ async def admin_list_withdrawals(
             }
             for w in withdrawals
         ]
+    })
+
+
+@app.post("/admin/marketplace/sweep", tags=["Admin"])
+async def admin_marketplace_sweep(
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: manually trigger a marketplace withdrawal sweep."""
+    from marketplace import marketplace_sweep_once
+
+    count = await marketplace_sweep_once()
+    return JSONResponse(content={"processed": count})
+
+
+@app.get("/admin/marketplace/settlement-balance", tags=["Admin"])
+async def admin_marketplace_settlement_balance(
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: query the USDC balance of the marketplace settlement CDP wallet."""
+    from agent_wallets import _get_cdp_client, _require_cdp_enabled, _chain_id_to_network
+
+    settings = get_settings()
+    _require_cdp_enabled()
+    chain_id = settings.marketplace_settlement_chain_id
+    network = _chain_id_to_network(chain_id)
+    account_name = settings.marketplace_settlement_cdp_account
+
+    balance_usdc = 0
+    async with _get_cdp_client() as cdp:
+        account = await cdp.evm.get_or_create_account(name=account_name)
+        balances = await cdp.evm.list_token_balances(
+            address=account.address, network=network
+        )
+        for tb in balances:
+            symbol = getattr(tb, "symbol", "") or ""
+            if symbol.upper() == "USDC":
+                from decimal import Decimal
+
+                amt = getattr(tb, "amount", None)
+                if amt is not None:
+                    balance_usdc = int(Decimal(str(amt)) * Decimal("1_000_000"))
+                break
+
+    return JSONResponse(content={
+        "account": account_name,
+        "address": account.address,
+        "chain_id": chain_id,
+        "balance_usdc": balance_usdc,
     })
 
 

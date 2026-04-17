@@ -153,11 +153,13 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
 
 async def _execute_single_tool(
-    call: dict[str, Any], tools_by_name: dict
+    call: dict[str, Any], tools_by_name: dict, metadata: dict[str, Any] | None = None
 ) -> tuple[ToolMessage, str]:
     """Execute one tool call; returns (ToolMessage, tool_name).
 
     Errors are caught per-tool so a single failure does not abort sibling calls.
+    For ``delegate_to_agent``, injects org context from *metadata* so billing
+    and allowlist enforcement can operate.
     """
     tool_name: str = call["name"]
     tool_args: dict[str, Any] = call["args"]
@@ -168,7 +170,38 @@ async def _execute_single_tool(
         content = f"Tool '{tool_name}' not found."
     else:
         try:
-            result = await tool.ainvoke(tool_args)
+            # delegate_to_agent needs org context for billing — call the raw
+            # implementation directly so we can pass the config dict.
+            if tool_name == "delegate_to_agent" and metadata:
+                # Enforce per-run delegation quota
+                from config import get_settings as _get_settings
+
+                _s = _get_settings()
+                usage = metadata.get("_usage", {})
+                delegation_count = usage.get("delegation_count", 0)
+                if delegation_count >= _s.a2a_delegation_max_per_run:
+                    content = json.dumps({
+                        "agent_name": "unknown",
+                        "status": "failed",
+                        "result": "",
+                        "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
+                        "cost_usdc": 0,
+                    })
+                    return ToolMessage(content=content, tool_call_id=call_id), tool_name
+
+                from tools.definitions.delegate_to_agent import delegate_to_agent
+
+                config = {
+                    "configurable": {
+                        "org_id": metadata.get("org_id", ""),
+                        "run_id": metadata.get("run_id", ""),
+                        "db_pool": metadata.get("_db_pool"),
+                        "jwt_token": metadata.get("_jwt_token"),
+                    }
+                }
+                result = await delegate_to_agent(config=config, **tool_args)
+            else:
+                result = await tool.ainvoke(tool_args)
             content = json.dumps(result) if not isinstance(result, str) else result
         except Exception as exc:
             logger.warning("tool %s failed: %s", tool_name, exc)
@@ -194,13 +227,27 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
     results = await asyncio.gather(
-        *[_execute_single_tool(call, tools_by_name) for call in last_msg.tool_calls]
+        *[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls]
     )
     tool_messages = [msg for msg, _ in results]
     tool_names_acc.extend(name for _, name in results)
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
     usage["tool_names"] = tool_names_acc
+
+    # ── Accumulate delegation spend from delegate_to_agent results ────────
+    delegation_spend = usage.get("delegation_spend_usdc", 0)
+    delegation_count = usage.get("delegation_count", 0)
+    for msg, name in results:
+        if name == "delegate_to_agent":
+            delegation_count += 1
+            try:
+                result_data = json.loads(msg.content)
+                delegation_spend += int(result_data.get("cost_usdc", 0))
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+    usage["delegation_spend_usdc"] = delegation_spend
+    usage["delegation_count"] = delegation_count
 
     return {
         "messages": tool_messages,

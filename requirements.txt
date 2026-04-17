@@ -25,7 +25,9 @@ siwe>=4.4.0
 web3>=7.0.0
 
 # ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────
-x402[fastapi,evm]>=2.5.0
+# Using PyPI release. The upto scheme (X402_SCHEME=upto) requires >=2.8.0 once it ships.
+# Until then, upto is gated behind a try/except in init_billing() with a clear error message.
+x402[fastapi,evm]>=2.7.0
 
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.10.0
@@ -51,6 +53,9 @@ anyio>=4.0.0
 
 # ─── Stripe (prepaid credit top-up) ───────────────────────────────────────────
 stripe>=10.0.0
+
+# ─── Coinbase CDP (agent wallets) ─────────────────────────────────────────────
+cdp-sdk>=1.42.0
 
 # ─── Utilities ─────────────────────────────────────────────────────
 python-multipart>=0.0.18

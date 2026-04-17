@@ -72,6 +72,9 @@ async def test_list_a2a_agents(admin_api_client):
             "org_id": "org-1",
             "agent_url": "https://agent1.example.com",
             "label": "Agent One",
+            "max_cost_usdc": 0,
+            "require_x402": False,
+            "jwt_forward": False,
             "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         },
     ]

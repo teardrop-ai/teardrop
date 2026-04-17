@@ -377,17 +377,18 @@ async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
 
 
 async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
-    """Process a pending withdrawal (admin-triggered).
+    """Process a pending withdrawal: settle earnings + auto-transfer USDC via CDP.
 
-    Marks matching pending earnings as 'settled' up to the withdrawal amount
-    and updates the withdrawal status.
+    1. Marks matching pending earnings as 'settled' (oldest first, up to amount).
+    2. Transfers USDC from the platform settlement wallet to the author's
+       settlement wallet using CDP SDK.
+    3. Records the tx_hash on the withdrawal row.
 
-    On-chain USDC transfer is NOT implemented in Phase 1 — this function
-    handles the ledger bookkeeping only.  The admin should execute the
-    on-chain transfer manually and provide the tx_hash via
-    complete_withdrawal().
+    If CDP transfer fails, earnings are reverted to 'pending' and the
+    withdrawal is marked 'failed'.
     """
     pool = _get_pool()
+    settings = get_settings()
 
     row = await pool.fetchrow(
         "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
@@ -398,11 +399,11 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
 
     org_id = row["org_id"]
     amount = row["amount_usdc"]
+    dest_wallet = row["wallet"]
 
     # Mark earnings as settled (oldest first, up to withdrawal amount)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Lock and fetch pending earnings for this org
             earnings_rows = await conn.fetch(
                 """
                 SELECT id, author_share_usdc FROM tool_author_earnings
@@ -415,16 +416,15 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
 
             remaining = amount
             settled_ids: list[str] = []
+            settled_total = 0
             for er in earnings_rows:
                 if remaining <= 0:
                     break
                 row_share = er["author_share_usdc"]
-                # Skip rows that exceed remaining balance — continue to find smaller rows that fit.
-                # This is "best-effort" settlement: settle as much as we can without overshooting.
-                # Example: withdrawal of $0.50 against rows [$0.30, $0.60, $0.10] settles $0.30 + $0.10 = $0.40.
                 if row_share > remaining:
                     continue
                 settled_ids.append(er["id"])
+                settled_total += row_share
                 remaining -= row_share
 
             if settled_ids:
@@ -437,15 +437,73 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                     settled_ids,
                 )
 
-            # Mark the withdrawal as settled
+            # Attempt CDP transfer
+            tx_hash = ""
+            transfer_failed = False
+            if settled_total > 0 and settings.agent_wallet_enabled:
+                try:
+                    from agent_wallets import transfer_usdc
+
+                    tx_hash = await transfer_usdc(
+                        from_cdp_account=settings.marketplace_settlement_cdp_account,
+                        to_address=dest_wallet,
+                        amount_usdc=settled_total,
+                        chain_id=settings.marketplace_settlement_chain_id,
+                    )
+                    logger.info(
+                        "process_withdrawal: transfer ok id=%s tx=%s amount=%d",
+                        withdrawal_id,
+                        tx_hash,
+                        settled_total,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "process_withdrawal: CDP transfer failed id=%s: %s",
+                        withdrawal_id,
+                        exc,
+                    )
+                    transfer_failed = True
+                    # Revert earnings back to pending
+                    if settled_ids:
+                        await conn.execute(
+                            """
+                            UPDATE tool_author_earnings
+                            SET status = 'pending'
+                            WHERE id = ANY($1::text[])
+                            """,
+                            settled_ids,
+                        )
+
             now = datetime.now(timezone.utc)
+            if transfer_failed:
+                await conn.execute(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'failed', settled_at = $2
+                    WHERE id = $1
+                    """,
+                    withdrawal_id,
+                    now,
+                )
+                return AuthorWithdrawal(
+                    id=withdrawal_id,
+                    org_id=org_id,
+                    amount_usdc=amount,
+                    tx_hash="",
+                    wallet=dest_wallet,
+                    status="failed",
+                    created_at=row["created_at"],
+                    settled_at=now,
+                )
+
             await conn.execute(
                 """
                 UPDATE tool_author_withdrawals
-                SET status = 'settled', settled_at = $2
+                SET status = 'settled', tx_hash = $2, settled_at = $3
                 WHERE id = $1
                 """,
                 withdrawal_id,
+                tx_hash,
                 now,
             )
 
@@ -453,8 +511,8 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
         id=withdrawal_id,
         org_id=org_id,
         amount_usdc=amount,
-        tx_hash="",
-        wallet=row["wallet"],
+        tx_hash=tx_hash,
+        wallet=dest_wallet,
         status="settled",
         created_at=row["created_at"],
         settled_at=now,
@@ -577,3 +635,59 @@ async def get_marketplace_tool_by_name(
     if row is None:
         return None
     return dict(row)
+
+
+# ─── Background sweep ────────────────────────────────────────────────────────
+
+import asyncio  # noqa: E402
+
+
+async def marketplace_sweep_once() -> int:
+    """Auto-create and process withdrawals for qualifying orgs.
+
+    Returns the number of orgs successfully processed.
+    """
+    pool = _get_pool()
+    settings = get_settings()
+    min_amount = settings.marketplace_minimum_withdrawal_usdc
+
+    # Find orgs with pending earnings >= minimum threshold
+    rows = await pool.fetch(
+        """
+        SELECT org_id, SUM(author_share_usdc) AS total
+        FROM tool_author_earnings
+        WHERE status = 'pending'
+        GROUP BY org_id
+        HAVING SUM(author_share_usdc) >= $1
+        LIMIT 50
+        """,
+        min_amount,
+    )
+
+    processed = 0
+    for r in rows:
+        org_id = r["org_id"]
+        total = int(r["total"])
+        try:
+            withdrawal = await request_withdrawal(org_id, total)
+            await process_withdrawal(withdrawal.id)
+            processed += 1
+            logger.info("marketplace_sweep: processed org=%s amount=%d", org_id, total)
+        except Exception:
+            logger.warning("marketplace_sweep: failed for org=%s", org_id, exc_info=True)
+    return processed
+
+
+async def _marketplace_sweep_loop() -> None:
+    """Background task: periodically auto-process qualifying withdrawals."""
+    settings = get_settings()
+    interval = settings.marketplace_sweep_interval_seconds
+    logger.info("marketplace_sweep_loop: started (interval=%ds)", interval)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            count = await marketplace_sweep_once()
+            if count:
+                logger.info("marketplace_sweep_loop: processed %d orgs", count)
+        except Exception:
+            logger.warning("marketplace_sweep_loop: cycle failed", exc_info=True)

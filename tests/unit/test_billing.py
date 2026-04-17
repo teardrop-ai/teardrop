@@ -253,6 +253,7 @@ def _payment_fixture(mock_parse_return=None, mock_parse_side_effect=None):
         mock_x402.parse_payment_payload.return_value = mock_parse_return or MagicMock()
     mock_server = MagicMock()
     mock_req = MagicMock()
+    mock_req.scheme = "exact"
     return mock_server, mock_req, mock_x402
 
 
@@ -1086,3 +1087,107 @@ class TestCreditUsdcTopup:
         # Reason arg should start with 'usdc_onchain:'
         reason_arg = execute_calls[0][0][5]
         assert reason_arg.startswith("usdc_onchain:")
+
+
+# ─── upto scheme ──────────────────────────────────────────────────────────────
+
+
+class TestUptoScheme:
+    """Tests for upto-specific billing paths (scheme detection, settlement with actual cost)."""
+
+    async def test_verify_payment_detects_upto_scheme(self):
+        """When the matched requirement has scheme='upto', BillingResult.scheme is 'upto'."""
+        mock_payload = MagicMock()
+        mock_verify = MagicMock(is_valid=True)
+        mock_server, mock_req, mock_x402 = _payment_fixture(mock_parse_return=mock_payload)
+        mock_req.scheme = "upto"
+        mock_server.verify_payment = AsyncMock(return_value=mock_verify)
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [mock_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"valid").decode())
+        assert result.verified is True
+        assert result.scheme == "upto"
+
+    async def test_verify_payment_defaults_to_exact_scheme(self):
+        """When the requirement has scheme='exact', BillingResult.scheme is 'exact'."""
+        mock_payload = MagicMock()
+        mock_verify = MagicMock(is_valid=True)
+        mock_server, mock_req, mock_x402 = _payment_fixture(mock_parse_return=mock_payload)
+        mock_req.scheme = "exact"
+        mock_server.verify_payment = AsyncMock(return_value=mock_verify)
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [mock_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"valid").decode())
+        assert result.verified is True
+        assert result.scheme == "exact"
+
+    async def test_settle_upto_passes_actual_amount(self):
+        """Upto settlement passes actual_amount to server.settle_payment."""
+        mock_settle = MagicMock(success=True, tx_hash="0xuptotx", transaction_hash=None)
+        mock_server = MagicMock()
+        mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        verified = BillingResult(
+            verified=True,
+            payment_payload=MagicMock(),
+            payment_requirements=MagicMock(amount="500000"),
+            scheme="upto",
+        )
+        actual_cost = 150_000  # $0.15 actual usage
+        with patch.object(billing_module, "_server", mock_server):
+            result = await settle_payment(verified, actual_cost_usdc=actual_cost)
+        assert result.settled is True
+        assert result.tx_hash == "0xuptotx"
+        assert result.amount_usdc == actual_cost
+        # Verify actual_amount kwarg was passed
+        call_kwargs = mock_server.settle_payment.call_args
+        assert call_kwargs.kwargs["actual_amount"] == "$0.15"
+
+    async def test_settle_exact_ignores_actual_cost(self):
+        """Exact settlement does NOT pass actual_amount even if provided."""
+        mock_settle = MagicMock(success=True, tx_hash="0xexacttx", transaction_hash=None)
+        mock_server = MagicMock()
+        mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        verified = BillingResult(
+            verified=True,
+            payment_payload=MagicMock(),
+            payment_requirements=MagicMock(amount="10000"),
+            scheme="exact",
+        )
+        with patch.object(billing_module, "_server", mock_server):
+            result = await settle_payment(verified, actual_cost_usdc=5_000)
+        assert result.settled is True
+        # Exact scheme uses the requirement amount, not actual_cost_usdc.
+        assert result.amount_usdc == 10_000
+        # Verify actual_amount was NOT passed
+        call_kwargs = mock_server.settle_payment.call_args
+        assert "actual_amount" not in (call_kwargs.kwargs or {})
+
+    async def test_settle_upto_without_actual_cost_uses_requirement(self):
+        """Upto settlement without actual_cost_usdc falls back to requirement amount."""
+        mock_settle = MagicMock(success=True, tx_hash="0xfallback", transaction_hash=None)
+        mock_server = MagicMock()
+        mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        verified = BillingResult(
+            verified=True,
+            payment_payload=MagicMock(),
+            payment_requirements=MagicMock(amount="500000"),
+            scheme="upto",
+        )
+        with patch.object(billing_module, "_server", mock_server):
+            result = await settle_payment(verified)  # no actual_cost_usdc
+        assert result.settled is True
+        # Falls back to requirement amount path (no actual_amount sent)
+        assert result.amount_usdc == 500_000
+
+    def test_billing_result_scheme_defaults_to_exact(self):
+        """BillingResult.scheme defaults to 'exact'."""
+        br = BillingResult()
+        assert br.scheme == "exact"
