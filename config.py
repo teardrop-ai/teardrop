@@ -87,6 +87,19 @@ class Settings(BaseSettings):
         default=20,
         description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)",
     )
+    rate_limit_org_agent_rpm: int = Field(
+        default=100,
+        description=(
+            "Per-org aggregate rate limit for /agent/run (requests per minute). "
+            "Applies across all users in the org. Prevents noisy-neighbor saturation."
+        ),
+    )
+    rate_limit_org_mcp_rpm: int = Field(
+        default=200,
+        description=(
+            "Per-org aggregate rate limit for MCP requests via the gateway (requests per minute)."
+        ),
+    )
 
     # ── JWT Authentication ─────────────────────────────────────────────────────
     jwt_private_key_path: str = Field(
@@ -293,8 +306,8 @@ class Settings(BaseSettings):
         default=3, description="Maximum delegate_to_agent calls allowed per agent run"
     )
     a2a_delegation_require_allowlist: bool = Field(
-        default=False,
-        description="When true, delegation fails if the target agent is not on the org's allowlist",
+        default=True,
+        description="When true, delegation fails if the target agent is not on the org's allowlist. Security-first default.",
     )
     a2a_agent_card_cache_ttl_seconds: int = Field(
         default=300, description="TTL for caching remote agent cards (seconds)"
@@ -395,9 +408,34 @@ class Settings(BaseSettings):
         default=86400,
         description="Interval in seconds between marketplace auto-sweep runs (default: 24h)",
     )
+    marketplace_max_sweep_retries: int = Field(
+        default=5,
+        description=(
+            "Max sweep attempts per withdrawal before marking it 'exhausted'. "
+            "Backoff: min(2^attempt * 60s, 86400s). Matches settlement_max_retries default."
+        ),
+    )
     rate_limit_mcp_rpm: int = Field(
         default=30,
         description="Per-user rate limit for MCP marketplace tool calls (requests per minute)",
+    )
+
+    # ── MCP Gateway (auth / billing / x402) ───────────────────────────────────
+    mcp_auth_enabled: bool = Field(
+        default=False,
+        description="Require a valid Teardrop JWT to access /tools/mcp (Phase 1)",
+    )
+    mcp_auth_audience: str = Field(
+        default="teardrop-mcp",
+        description="Expected JWT 'aud' claim for MCP tokens (security: prevents tokens from other apps)",
+    )
+    mcp_billing_enabled: bool = Field(
+        default=False,
+        description="Debit org credits for each MCP tools/call request (Phase 2)",
+    )
+    mcp_x402_enabled: bool = Field(
+        default=False,
+        description="Accept x402 on-chain payment for anonymous MCP callers (Phase 3)",
     )
 
     # ── Email / Resend ────────────────────────────────────────────────────────

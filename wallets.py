@@ -64,7 +64,8 @@ async def init_wallets_db(pool: asyncpg.Pool) -> None:
         CREATE TABLE IF NOT EXISTS siwe_nonces (
             nonce      TEXT PRIMARY KEY,
             created_at TIMESTAMPTZ NOT NULL,
-            used       BOOLEAN NOT NULL DEFAULT FALSE
+            used       BOOLEAN NOT NULL DEFAULT FALSE,
+            address    TEXT
         )
         """
     )
@@ -206,18 +207,30 @@ async def create_nonce() -> str:
     return nonce
 
 
-async def consume_nonce(nonce: str, ttl_seconds: int = 300) -> bool:
+async def consume_nonce(nonce: str, ttl_seconds: int = 300, *, expected_address: str | None = None) -> bool:
     """Consume a nonce. Returns True if valid (exists, unused, within TTL).
+
+    If *expected_address* is provided, the nonce must either have no bound
+    address (pre-030 migration backward compat) or match the given address
+    (case-insensitive).  This prevents cross-address nonce theft.
 
     Uses Redis if available (atomic GETDEL), otherwise falls back to Postgres.
     """
+    norm_addr = expected_address.lower() if expected_address else None
+
     # ── Redis path (atomic get+delete) ─────────────────────────────────────
     if (redis := get_redis()) is not None:
         try:
             key = f"teardrop:nonce:{nonce}"
             # GETDEL is atomic: get the value and delete it in one operation (Redis 6.2+)
             result = await redis.getdel(key)
-            return result is not None
+            if result is None:
+                return False
+            # Address binding check: value is "1" (legacy) or a stored address
+            if norm_addr and result != "1" and result.lower() != norm_addr:
+                logger.warning("Nonce address mismatch: stored=%s expected=%s", result, norm_addr)
+                return False
+            return True
         except Exception as exc:
             logger.warning("Redis nonce consumption failed; falling back to Postgres: %s", exc)
 
@@ -230,9 +243,11 @@ async def consume_nonce(nonce: str, ttl_seconds: int = 300) -> bool:
          WHERE nonce = $1
            AND used = FALSE
            AND created_at > NOW() - INTERVAL '1 second' * $2
+           AND (address IS NULL OR LOWER(address) = LOWER($3) OR $3 IS NULL)
         RETURNING nonce
         """,
         nonce,
         float(ttl_seconds),
+        expected_address,
     )
     return row is not None

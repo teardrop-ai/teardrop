@@ -25,9 +25,8 @@ siwe>=4.4.0
 web3>=7.0.0
 
 # ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────
-# Using PyPI release. The upto scheme (X402_SCHEME=upto) requires >=2.8.0 once it ships.
-# Until then, upto is gated behind a try/except in init_billing() with a clear error message.
-x402[fastapi,evm]>=2.7.0
+# 2.8.0 (released 2026-04-17) added upto scheme (X402_SCHEME=upto) and Arbitrum support.
+x402[fastapi,evm]>=2.8.0
 
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.10.0

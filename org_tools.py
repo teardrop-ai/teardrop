@@ -51,6 +51,7 @@ class OrgTool(BaseModel):
     is_active: bool
     publish_as_mcp: bool = False
     marketplace_description: str = ""
+    base_price_usdc: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -160,6 +161,7 @@ async def create_org_tool(
     actor_id: str,
     publish_as_mcp: bool = False,
     marketplace_description: str = "",
+    base_price_usdc: int = 0,
 ) -> OrgTool:
     """Insert a new custom tool.  Raises on duplicate name or quota exceeded."""
     pool = _get_pool()
@@ -198,9 +200,9 @@ async def create_org_tool(
             "  webhook_url, webhook_method,"
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
-            "  publish_as_mcp, marketplace_description,"
+            "  publish_as_mcp, marketplace_description, base_price_usdc,"
             "  created_at, updated_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $13)",
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $14, $14)",
             tool_id,
             org_id,
             name,
@@ -213,6 +215,7 @@ async def create_org_tool(
             timeout_seconds,
             publish_as_mcp,
             marketplace_description,
+            base_price_usdc,
             now,
         )
     except asyncpg.UniqueViolationError:
@@ -236,6 +239,7 @@ async def create_org_tool(
         is_active=True,
         publish_as_mcp=publish_as_mcp,
         marketplace_description=marketplace_description,
+        base_price_usdc=base_price_usdc,
         created_at=now,
         updated_at=now,
     )
@@ -259,6 +263,7 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         is_active=row["is_active"],
         publish_as_mcp=row.get("publish_as_mcp", False),
         marketplace_description=row.get("marketplace_description", ""),
+        base_price_usdc=row.get("base_price_usdc", 0),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -302,6 +307,7 @@ async def update_org_tool(
     is_active: bool | None = None,
     publish_as_mcp: bool | None = None,
     marketplace_description: str | None = None,
+    base_price_usdc: int | None = None,
 ) -> OrgTool | None:
     """Partial-update a tool.  Returns updated OrgTool or None if not found."""
     pool = _get_pool()
@@ -348,6 +354,8 @@ async def update_org_tool(
         _add("publish_as_mcp", publish_as_mcp)
     if marketplace_description is not None:
         _add("marketplace_description", marketplace_description)
+    if base_price_usdc is not None:
+        _add("base_price_usdc", base_price_usdc)
 
     # Handle auth header updates (sentinel ... means "not provided")
     if auth_header_name is not ...:
@@ -401,6 +409,16 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
         await invalidate_org_tools_cache(org_id)
         if row and row.get("publish_as_mcp"):
             await invalidate_marketplace_cache()
+            # Deactivate all marketplace subscriptions for this tool so subscribers
+            # are not silently left with a dead tool reference.
+            org_row = await pool.fetchrow("SELECT slug FROM orgs WHERE id = $1", org_id)
+            if org_row:
+                qualified_name = f"{org_row['slug']}/{name}"
+                await pool.execute(
+                    "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
+                    " WHERE qualified_tool_name = $1 AND is_active = TRUE",
+                    qualified_name,
+                )
     return deleted
 
 

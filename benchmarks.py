@@ -33,6 +33,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 2,
+        "default_latency_ms": 600,
     },
     "anthropic:claude-sonnet-4-20250514": {
         "provider": "anthropic",
@@ -42,6 +43,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 1,
+        "default_latency_ms": 1800,
     },
     "openai:gpt-4o-mini": {
         "provider": "openai",
@@ -51,6 +53,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 2,
+        "default_latency_ms": 500,
     },
     "openai:gpt-4o": {
         "provider": "openai",
@@ -60,6 +63,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 1,
+        "default_latency_ms": 1500,
     },
     "google:gemini-2.0-flash": {
         "provider": "google",
@@ -69,6 +73,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 2,
+        "default_latency_ms": 400,
     },
     "google:gemini-2.5-pro": {
         "provider": "google",
@@ -78,6 +83,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_tools": True,
         "supports_streaming": True,
         "quality_tier": 1,
+        "default_latency_ms": 2000,
     },
 }
 

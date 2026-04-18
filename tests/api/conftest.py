@@ -6,6 +6,8 @@ so we don't need LifespanManager and can simply mock DB functions per-test.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -29,6 +31,12 @@ async def api_client(test_settings):
         }
 
     app.dependency_overrides[require_auth] = _mock_auth
+    # Lifespan doesn't run in test transport — seed a dummy pool so any code
+    # that reads request.app.state.pool doesn't AttributeError. Use AsyncMock
+    # so health-check's `await pool.execute(...)` succeeds without hitting DB.
+    mock_pool = MagicMock()
+    mock_pool.execute = AsyncMock(return_value=None)
+    app.state.pool = mock_pool
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 

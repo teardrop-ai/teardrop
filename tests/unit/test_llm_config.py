@@ -18,6 +18,8 @@ from llm_config import (
     _encrypt_llm_key,
     _resolve_shared_key,
     _row_to_config,
+    _select_cheapest,
+    _select_fastest,
     _select_highest_quality,
     build_llm_config_dict,
     get_org_llm_config,
@@ -317,6 +319,150 @@ class TestSelectHighestQuality:
         models = [{"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}]
         result = _select_highest_quality(models)
         assert result["model"] == "claude-haiku-4-5-20251001"
+
+
+# ─── Fastest routing ─────────────────────────────────────────────────────────
+
+
+class TestSelectFastest:
+    @pytest.mark.asyncio
+    async def test_selects_lowest_p95_latency(self):
+        """p95 latency wins over avg_latency and static fallback."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "google", "model": "gemini-2.0-flash"},
+        ]
+        live = {
+            "anthropic:claude-haiku-4-5-20251001": {"p95_latency_ms": 900.0, "avg_latency_ms": 600.0},
+            "openai:gpt-4o-mini": {"p95_latency_ms": 700.0, "avg_latency_ms": 500.0},
+            "google:gemini-2.0-flash": {"p95_latency_ms": 500.0, "avg_latency_ms": 400.0},
+        }
+        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
+            result = await _select_fastest(models)
+        assert result["model"] == "gemini-2.0-flash"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_avg_when_no_p95(self):
+        """When p95 is absent, avg_latency_ms is used."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+        ]
+        live = {
+            "anthropic:claude-haiku-4-5-20251001": {"avg_latency_ms": 600.0},
+            "openai:gpt-4o-mini": {"avg_latency_ms": 450.0},
+        }
+        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
+            result = await _select_fastest(models)
+        assert result["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_static_when_no_benchmarks(self):
+        """Empty live benchmarks → static default_latency_ms from catalogue."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},  # 600ms
+            {"provider": "openai", "model": "gpt-4o-mini"},                    # 500ms
+            {"provider": "google", "model": "gemini-2.0-flash"},               # 400ms
+        ]
+        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
+            result = await _select_fastest(models)
+        assert result["model"] == "gemini-2.0-flash"
+
+    @pytest.mark.asyncio
+    async def test_single_model_returns_it(self):
+        models = [{"provider": "openai", "model": "gpt-4o-mini"}]
+        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
+            result = await _select_fastest(models)
+        assert result["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_benchmark_exception_returns_first_and_logs(self):
+        """Exception from get_model_benchmarks → falls back to static, logs warning."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},  # 600ms static
+            {"provider": "openai", "model": "gpt-4o-mini"},                    # 500ms static
+        ]
+        with patch(
+            "benchmarks.get_model_benchmarks",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db down"),
+        ), patch("llm_config.logger") as mock_log:
+            result = await _select_fastest(models)
+        # Static fallback: gpt-4o-mini (500ms) is faster than claude-haiku (600ms)
+        assert result["model"] == "gpt-4o-mini"
+        mock_log.warning.assert_called_once()
+
+
+# ─── Cheapest routing ────────────────────────────────────────────────────────
+
+
+class TestSelectCheapest:
+    @pytest.mark.asyncio
+    async def test_selects_cheapest_by_token_cost(self):
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+            {"provider": "google", "model": "gemini-2.0-flash"},
+        ]
+
+        def _make_rule(tokens_in, tokens_out):
+            r = MagicMock()
+            r.tokens_in_cost_per_1k = tokens_in
+            r.tokens_out_cost_per_1k = tokens_out
+            return r
+
+        pricing = {
+            ("anthropic", "claude-haiku-4-5-20251001"): _make_rule(0.25, 1.25),
+            ("openai", "gpt-4o-mini"): _make_rule(0.15, 0.60),
+            ("google", "gemini-2.0-flash"): _make_rule(0.10, 0.40),
+        }
+
+        async def mock_pricing(provider, model):
+            return pricing.get((provider, model))
+
+        with patch("billing.get_live_pricing_for_model", side_effect=mock_pricing):
+            result = await _select_cheapest(models)
+        assert result["model"] == "gemini-2.0-flash"
+
+    @pytest.mark.asyncio
+    async def test_no_pricing_returns_first(self):
+        """When all pricing lookups return None, first model is returned."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+        ]
+        with patch(
+            "billing.get_live_pricing_for_model",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await _select_cheapest(models)
+        assert result["model"] == "claude-haiku-4-5-20251001"
+
+    @pytest.mark.asyncio
+    async def test_pricing_exception_skips_model(self):
+        """A model that raises on pricing lookup is skipped; next cheapest wins."""
+        models = [
+            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openai", "model": "gpt-4o-mini"},
+        ]
+
+        call_count = 0
+
+        async def flaky_pricing(provider, model):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("pricing db error")
+            r = MagicMock()
+            r.tokens_in_cost_per_1k = 0.15
+            r.tokens_out_cost_per_1k = 0.60
+            return r
+
+        with patch("billing.get_live_pricing_for_model", side_effect=flaky_pricing):
+            result = await _select_cheapest(models)
+        assert result["model"] == "gpt-4o-mini"
 
 
 # ─── resolve_llm_config ──────────────────────────────────────────────────────

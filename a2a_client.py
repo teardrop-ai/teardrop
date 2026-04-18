@@ -345,12 +345,12 @@ async def check_delegation_allowed(
 ) -> tuple[bool, dict | None]:
     """Check if *agent_url* is in the org's a2a_allowed_agents table.
 
-    Returns (allowed, row_dict) — row_dict contains max_cost_usdc and
-    require_x402 when the agent is found, or None when not found.
+    Returns (allowed, row_dict) — row_dict contains max_cost_usdc,
+    require_x402, and jwt_forward when the agent is found, or None when not found.
     """
     row = await pool.fetchrow(
         """
-        SELECT id, agent_url, label, max_cost_usdc, require_x402, created_at
+        SELECT id, agent_url, label, max_cost_usdc, require_x402, jwt_forward, created_at
         FROM a2a_allowed_agents
         WHERE org_id = $1 AND agent_url = $2
         """,

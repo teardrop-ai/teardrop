@@ -72,6 +72,7 @@ async def test_token_email_flow_wrong_credentials(anon_client, monkeypatch):
 async def test_token_client_credentials_success(anon_client, test_settings, monkeypatch):
     # DB lookup returns None → falls back to config credential
     monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.settings", test_settings)
     resp = await anon_client.post(
         "/token",
         json={
@@ -189,6 +190,7 @@ async def test_token_unknown_client_id_falls_back_to_config(
 ):
     """Unknown client_id (not in DB) falls back to config-based check."""
     monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("app.settings", test_settings)
 
     resp = await anon_client.post(
         "/token",

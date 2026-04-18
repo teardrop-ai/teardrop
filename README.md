@@ -148,6 +148,8 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `BILLING_ENABLED` | `true` to activate x402 payments |
 | `X402_PAY_TO_ADDRESS` | Treasury wallet (USDC recipient) |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
+| `X402_SCHEME` | Payment scheme: `exact` (default) or `upto` (usage-based via Permit2) |
+| `X402_UPTO_MAX_AMOUNT` | Max ceiling per run for upto scheme (default: `$0.50`) |
 | `SIWE_DOMAIN` | Your public domain (e.g. `api.teardrop.dev`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `AGENT_WALLET_ENABLED` | `true` to enable per-org CDP-backed wallets |
@@ -272,7 +274,7 @@ When you set `routing_preference` to a value other than `"default"`, Teardrop wi
 |------------|----------|
 | `default` | Use the provider/model you configured |
 | `cost` | Select the cheapest model (by tokens-in + tokens-out pricing) |
-| `speed` | Select the fastest model (by average latency from live benchmarks) |
+| `speed` | Select the fastest model (by p95 latency from live benchmarks; falls back to official specs for new deployments) |
 | `quality` | Select the highest quality model (Claude Sonnet > Claude Haiku, etc.) |
 
 **Note**: If you set BYOK (custom API key), routing is disabled — you always use your configured model.
@@ -417,6 +419,9 @@ Invoke-RestMethod -Uri "http://localhost:8000/agent/run" `
 ```
 
 The stream will include a `BILLING_SETTLEMENT` event with the on-chain `tx_hash` after the run completes.
+
+> **upto client requirement**: Before using `X402_SCHEME=upto`, the paying wallet must approve Permit2 for USDC on the target chain once:
+> `IERC20(USDC).approve(PERMIT2_ADDRESS, type(uint256).max)`. This is a one-time on-chain transaction per wallet. Clients that have not approved Permit2 can always use `scheme: exact` from the `accepts` array in the 402 response as a fallback.
 
 ### Credit top-up (machine callers)
 

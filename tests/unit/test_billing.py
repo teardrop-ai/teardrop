@@ -720,6 +720,26 @@ class TestBuild402ResponseBody:
         assert result["x402Version"] == 2
         assert len(result["accepts"]) == 1
 
+    def test_dual_requirements_upto_first_exact_second(self):
+        """When upto is enabled, 402 body has two accepts: upto first, exact second."""
+        from billing import build_402_response_body
+
+        upto_req = MagicMock()
+        upto_req.model_dump.return_value = {
+            "scheme": "upto", "network": "base", "amount": "500000",
+        }
+        exact_req = MagicMock()
+        exact_req.model_dump.return_value = {
+            "scheme": "exact", "network": "base", "amount": "10000",
+        }
+
+        with patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]):
+            result = build_402_response_body()
+
+        assert len(result["accepts"]) == 2
+        assert result["accepts"][0]["scheme"] == "upto"
+        assert result["accepts"][1]["scheme"] == "exact"
+
 
 # ─── build_402_headers ────────────────────────────────────────────────────────
 
@@ -1130,14 +1150,20 @@ class TestUptoScheme:
         assert result.scheme == "exact"
 
     async def test_settle_upto_passes_actual_amount(self):
-        """Upto settlement passes actual_amount to server.settle_payment."""
+        """Upto settlement clones requirements with actual cost in atomic units.
+
+        x402ResourceServer.settle_payment() has no actual_amount kwarg.  The correct
+        pattern is model_copy(update={"amount": str(actual_cost_usdc)}) then pass the
+        cloned requirements as a positional argument.
+        """
         mock_settle = MagicMock(success=True, tx_hash="0xuptotx", transaction_hash=None)
         mock_server = MagicMock()
         mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        mock_req = MagicMock(amount="500000")
         verified = BillingResult(
             verified=True,
             payment_payload=MagicMock(),
-            payment_requirements=MagicMock(amount="500000"),
+            payment_requirements=mock_req,
             scheme="upto",
         )
         actual_cost = 150_000  # $0.15 actual usage
@@ -1146,9 +1172,16 @@ class TestUptoScheme:
         assert result.settled is True
         assert result.tx_hash == "0xuptotx"
         assert result.amount_usdc == actual_cost
-        # Verify actual_amount kwarg was passed
-        call_kwargs = mock_server.settle_payment.call_args
-        assert call_kwargs.kwargs["actual_amount"] == "$0.15"
+        # requirements.model_copy called with atomic units as string, NOT
+        # a dollar string.
+        mock_req.model_copy.assert_called_once_with(
+            update={"amount": "150000"},
+        )
+        # settle_payment receives the cloned requirements as a positional
+        # arg; no actual_amount kwarg.
+        call_args = mock_server.settle_payment.call_args
+        assert call_args.args[1] is mock_req.model_copy.return_value
+        assert "actual_amount" not in (call_args.kwargs or {})
 
     async def test_settle_exact_ignores_actual_cost(self):
         """Exact settlement does NOT pass actual_amount even if provided."""
@@ -1187,7 +1220,173 @@ class TestUptoScheme:
         # Falls back to requirement amount path (no actual_amount sent)
         assert result.amount_usdc == 500_000
 
+    async def test_settle_upto_zero_cost_clones_with_zero_atomic(self):
+        """Zero-cost upto settlement sets amount='0' (not '$0.00') in cloned requirements."""
+        mock_settle = MagicMock(success=True, tx_hash="0xzerotx", transaction_hash=None)
+        mock_server = MagicMock()
+        mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        mock_req = MagicMock(amount="500000")
+        verified = BillingResult(
+            verified=True,
+            payment_payload=MagicMock(),
+            payment_requirements=mock_req,
+            scheme="upto",
+        )
+        with patch.object(billing_module, "_server", mock_server):
+            result = await settle_payment(verified, actual_cost_usdc=0)
+        assert result.settled is True
+        assert result.amount_usdc == 0
+        mock_req.model_copy.assert_called_once_with(update={"amount": "0"})
+        call_args = mock_server.settle_payment.call_args
+        assert call_args.args[1] is mock_req.model_copy.return_value
+
     def test_billing_result_scheme_defaults_to_exact(self):
         """BillingResult.scheme defaults to 'exact'."""
         br = BillingResult()
         assert br.scheme == "exact"
+
+    # ─── Multi-requirement iteration ──────────────────────────────────────
+
+    async def test_verify_iterates_reqs_exact_payload_falls_through_to_exact(self):
+        """When reqs=[upto, exact] and upto fails, exact requirement succeeds."""
+        mock_payload = MagicMock()
+        mock_x402 = MagicMock()
+        mock_x402.parse_payment_payload.return_value = mock_payload
+
+        upto_req = MagicMock()
+        upto_req.scheme = "upto"
+        exact_req = MagicMock()
+        exact_req.scheme = "exact"
+
+        # upto verify fails, exact verify succeeds
+        upto_fail = MagicMock(
+            is_valid=False, invalid_reason="wrong scheme",
+            payer="0xabc", invalid_message=None,
+        )
+        exact_pass = MagicMock(is_valid=True)
+
+        mock_server = MagicMock()
+        mock_server.verify_payment = AsyncMock(side_effect=[upto_fail, exact_pass])
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"exact-signed").decode())
+
+        assert result.verified is True
+        assert result.scheme == "exact"
+        assert result.payment_requirements is exact_req
+        assert mock_server.verify_payment.call_count == 2
+
+    async def test_verify_iterates_reqs_upto_matches_first(self):
+        """When reqs=[upto, exact] and upto succeeds, exact is never tried."""
+        mock_payload = MagicMock()
+        mock_x402 = MagicMock()
+        mock_x402.parse_payment_payload.return_value = mock_payload
+
+        upto_req = MagicMock()
+        upto_req.scheme = "upto"
+        exact_req = MagicMock()
+        exact_req.scheme = "exact"
+
+        upto_pass = MagicMock(is_valid=True)
+        mock_server = MagicMock()
+        mock_server.verify_payment = AsyncMock(return_value=upto_pass)
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"upto-signed").decode())
+
+        assert result.verified is True
+        assert result.scheme == "upto"
+        # Only called once — exact was never tried
+        assert mock_server.verify_payment.call_count == 1
+
+    async def test_verify_iterates_reqs_all_fail_returns_last_error(self):
+        """When all requirements fail, returns the last error message."""
+        mock_payload = MagicMock()
+        mock_x402 = MagicMock()
+        mock_x402.parse_payment_payload.return_value = mock_payload
+
+        upto_req = MagicMock()
+        upto_req.scheme = "upto"
+        exact_req = MagicMock()
+        exact_req.scheme = "exact"
+
+        upto_fail = MagicMock(
+            is_valid=False, invalid_reason="bad permit2 sig",
+            payer="0xabc", invalid_message=None,
+        )
+        exact_fail = MagicMock(
+            is_valid=False, invalid_reason="wrong amount",
+            payer="0xabc", invalid_message=None,
+        )
+
+        mock_server = MagicMock()
+        mock_server.verify_payment = AsyncMock(side_effect=[upto_fail, exact_fail])
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"bad-payload").decode())
+
+        assert result.verified is False
+        assert "wrong amount" in result.error
+
+    async def test_verify_iterates_exception_continues_to_next(self):
+        """When one requirement throws an exception, the next is still tried."""
+        mock_payload = MagicMock()
+        mock_x402 = MagicMock()
+        mock_x402.parse_payment_payload.return_value = mock_payload
+
+        upto_req = MagicMock()
+        upto_req.scheme = "upto"
+        exact_req = MagicMock()
+        exact_req.scheme = "exact"
+
+        exact_pass = MagicMock(is_valid=True)
+        mock_server = MagicMock()
+        mock_server.verify_payment = AsyncMock(
+            side_effect=[Exception("permit2 decode error"), exact_pass]
+        )
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]),
+            patch("billing._rebuild_requirements_if_stale", new=AsyncMock()),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_payment(base64.b64encode(b"exact-signed").decode())
+
+        assert result.verified is True
+        assert result.scheme == "exact"
+
+    # ─── Negative actual_cost_usdc guard ──────────────────────────────────
+
+    async def test_settle_upto_negative_cost_floors_to_zero(self):
+        """Negative actual_cost_usdc is floored to 0 to prevent contract revert."""
+        mock_settle = MagicMock(success=True, tx_hash="0xguardtx", transaction_hash=None)
+        mock_server = MagicMock()
+        mock_server.settle_payment = AsyncMock(return_value=mock_settle)
+        mock_req = MagicMock(amount="500000")
+        verified = BillingResult(
+            verified=True,
+            payment_payload=MagicMock(),
+            payment_requirements=mock_req,
+            scheme="upto",
+        )
+        with patch.object(billing_module, "_server", mock_server):
+            result = await settle_payment(verified, actual_cost_usdc=-100)
+        assert result.settled is True
+        assert result.amount_usdc == 0
+        mock_req.model_copy.assert_called_once_with(update={"amount": "0"})

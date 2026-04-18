@@ -78,24 +78,7 @@ class TestSetAuthorConfig:
             await set_author_config(
                 "org-1",
                 settlement_wallet="bad-address",
-                revenue_share_bps=7000,
             )
-
-    @pytest.mark.anyio
-    async def test_bps_out_of_range_raises(self, monkeypatch):
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock()
-        monkeypatch.setattr("marketplace._pool", mock_pool)
-        with pytest.raises(ValueError, match="bps"):
-            await set_author_config("org-1", settlement_wallet=_VALID_ADDR, revenue_share_bps=15000)
-
-    @pytest.mark.anyio
-    async def test_bps_negative_raises(self, monkeypatch):
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock()
-        monkeypatch.setattr("marketplace._pool", mock_pool)
-        with pytest.raises(ValueError, match="bps"):
-            await set_author_config("org-1", settlement_wallet=_VALID_ADDR, revenue_share_bps=-1)
 
     @pytest.mark.anyio
     async def test_success_returns_config(self, monkeypatch):
@@ -106,11 +89,9 @@ class TestSetAuthorConfig:
         config = await set_author_config(
             "org-1",
             settlement_wallet=_VALID_ADDR,
-            revenue_share_bps=7000,
         )
         assert isinstance(config, AuthorConfig)
         assert config.settlement_wallet == _VALID_ADDR
-        assert config.revenue_share_bps == 7000
 
 
 # ─── record_tool_call_earnings ────────────────────────────────────────────────

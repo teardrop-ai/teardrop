@@ -105,6 +105,9 @@ async def test_link_wallet_expired_nonce_returns_401(api_client, monkeypatch):
     mock_msg = MagicMock()
     mock_msg.domain = "0.0.0.0"
     mock_msg.nonce = "oldnonce123"
+    mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    mock_msg.chain_id = "1"
+    mock_msg.verify = MagicMock()  # signature valid, but nonce expired
 
     class FakeSiwe:
         @staticmethod
@@ -123,8 +126,10 @@ async def test_link_wallet_expired_nonce_returns_401(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch):
-    """An invalid SIWE signature should return 401."""
+    """An invalid SIWE signature should return 401 WITHOUT consuming nonce."""
     import siwe as siwe_errors
+
+    consume_mock = AsyncMock(return_value=True)
 
     mock_msg = MagicMock()
     mock_msg.domain = "0.0.0.0"
@@ -137,13 +142,15 @@ async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch
             return mock_msg
 
     monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
-    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.consume_nonce", consume_mock)
 
     resp = await api_client.post(
         "/wallets/link",
         json={"siwe_message": "any", "siwe_signature": "0xbadsig"},
     )
     assert resp.status_code == 401
+    # Nonce must NOT be consumed when signature is invalid
+    consume_mock.assert_not_called()
 
 
 @pytest.mark.anyio

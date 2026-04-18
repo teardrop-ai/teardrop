@@ -27,6 +27,11 @@ class TestModelCatalogue:
         for key, entry in MODEL_CATALOGUE.items():
             assert key == f"{entry['provider']}:{entry['model']}"
 
+    def test_all_entries_have_default_latency_ms(self):
+        for key, entry in MODEL_CATALOGUE.items():
+            assert "default_latency_ms" in entry, f"{key} missing default_latency_ms"
+            assert entry["default_latency_ms"] > 0, f"{key} default_latency_ms must be > 0"
+
 
 class TestBuildBenchmarksResponse:
     @pytest.mark.asyncio

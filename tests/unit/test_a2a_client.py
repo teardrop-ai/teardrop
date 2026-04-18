@@ -15,6 +15,7 @@ from a2a_client import (
     A2ATaskStatus,
     _agent_card_cache,
     _is_ip_blocked,
+    check_delegation_allowed,
     discover_agent_card,
     extract_result_text,
     send_message,
@@ -282,3 +283,60 @@ class TestExtractResultText:
         response = A2ASendMessageResponse()
         result = extract_result_text(response)
         assert "No response" in result
+
+
+# ─── Allowlist enforcement ────────────────────────────────────────────────────
+
+
+class _FakeRecord(dict):
+    """Minimal asyncpg Record shim: dict() works because we inherit dict."""
+
+
+class TestCheckDelegationAllowed:
+    def _pool(self, row):
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value=row)
+        return pool
+
+    async def test_agent_found_includes_jwt_forward_true(self):
+        """Row returned from DB includes jwt_forward; check_delegation_allowed exposes it."""
+        row = _FakeRecord(
+            id="rule-1",
+            agent_url="https://agent.example.com",
+            label="test",
+            max_cost_usdc=0,
+            require_x402=False,
+            jwt_forward=True,
+            created_at=None,
+        )
+        allowed, result = await check_delegation_allowed(
+            "org-1", "https://agent.example.com", self._pool(row)
+        )
+        assert allowed is True
+        assert result is not None
+        assert result["jwt_forward"] is True
+
+    async def test_agent_not_found_returns_false_none(self):
+        """When the DB returns no row, function returns (False, None)."""
+        allowed, result = await check_delegation_allowed(
+            "org-1", "https://unknown.example.com", self._pool(None)
+        )
+        assert allowed is False
+        assert result is None
+
+    async def test_agent_found_with_jwt_forward_false(self):
+        """jwt_forward=False in DB is faithfully returned as False."""
+        row = _FakeRecord(
+            id="rule-2",
+            agent_url="https://no-jwt.example.com",
+            label="no-jwt",
+            max_cost_usdc=0,
+            require_x402=False,
+            jwt_forward=False,
+            created_at=None,
+        )
+        allowed, result = await check_delegation_allowed(
+            "org-1", "https://no-jwt.example.com", self._pool(row)
+        )
+        assert allowed is True
+        assert result["jwt_forward"] is False

@@ -149,6 +149,7 @@ from llm_config import (
     upsert_org_llm_config,
 )
 from marketplace import (
+    check_org_subscription,
     close_marketplace_db,
     complete_withdrawal,
     get_author_balance,
@@ -419,6 +420,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
 )
 
+# ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
+from mcp_gateway import MCPGatewayMiddleware  # noqa: E402
+
+app.add_middleware(MCPGatewayMiddleware)
+
 # ─── MCP Streamable HTTP endpoint (Smithery / direct MCP clients) ────────────
 app.mount("/tools/mcp", _mcp_server.http_app())
 
@@ -564,6 +570,32 @@ async def health_check(request: Request) -> JSONResponse:
             "redis": redis_status,
         }
     )
+
+
+@app.get("/.well-known/jwks.json", tags=["System"])
+async def jwks() -> JSONResponse:
+    """Expose the RS256 public key in JWKS format for external JWT verification."""
+    import base64
+
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+    pub = load_pem_public_key(settings.jwt_public_key.encode())
+    nums = pub.public_numbers()  # type: ignore[union-attr]
+
+    def _b64url(n: int) -> str:
+        length = (n.bit_length() + 7) // 8
+        return base64.urlsafe_b64encode(n.to_bytes(length, "big")).rstrip(b"=").decode()
+
+    return JSONResponse(content={
+        "keys": [{
+            "kty": "RSA",
+            "use": "sig",
+            "alg": "RS256",
+            "kid": "teardrop-rs256",
+            "n": _b64url(nums.n),
+            "e": _b64url(nums.e),
+        }],
+    })
 
 
 @app.get("/.well-known/agent-card.json", tags=["A2A"])
@@ -796,11 +828,10 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
     if msg.domain != expected_domain:
         raise HTTPException(status_code=400, detail=f"Domain mismatch: expected {expected_domain}")
 
-    # Consume nonce (single-use + TTL)
-    if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds):
-        raise HTTPException(status_code=401, detail="Invalid or expired nonce")
-
-    # Verify EIP-191 signature
+    # Verify EIP-191 signature BEFORE consuming nonce.
+    # This prevents nonce-exhaustion DoS: an invalid signature must never burn
+    # a legitimate nonce. The nonce is embedded in the signed SIWE message, so
+    # an attacker cannot forge a valid signature for someone else's nonce.
     try:
         msg.verify(signature=siwe_signature)
     except (
@@ -819,6 +850,11 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
 
     address = Web3.to_checksum_address(msg.address)
     chain_id = int(msg.chain_id) if msg.chain_id else 1
+
+    # Consume nonce AFTER signature verification (single-use + TTL + address binding)
+    if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds, expected_address=address):
+        raise HTTPException(status_code=401, detail="Invalid or expired nonce")
+    logger.info("SIWE nonce consumed for address=%s chain=%d", address, chain_id)
 
     # Look up existing wallet
     wallet = await get_wallet_by_address(address, chain_id)
@@ -1251,6 +1287,27 @@ async def agent_run(
         )
 
     org_id: str = payload.get("org_id", "")
+
+    # ── Per-org aggregate rate limit ────────────────────────────────────────
+    # Guards against a single org saturating the LLM pool across many users.
+    org_rpm: int = settings.rate_limit_org_agent_rpm
+    if org_id and isinstance(org_rpm, int):
+        org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
+            f"run:org:{org_id}", org_rpm
+        )
+        if not org_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Organization rate limit exceeded. Please slow down.",
+                headers={
+                    "X-RateLimit-Limit": str(org_rpm),
+                    "X-RateLimit-Remaining": str(org_remaining),
+                    "X-RateLimit-Reset": str(org_reset_at),
+                    "Retry-After": "60",
+                    "X-RateLimit-Scope": "org",
+                },
+            )
+
     run_id = str(uuid.uuid4())
     scoped_thread_id = f"{user_id}:{body.thread_id}"
     logger.info(
@@ -1328,6 +1385,17 @@ async def agent_run(
             org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
         except Exception:
             logger.debug("MCP tool discovery failed for org_id=%s", org_id, exc_info=True)
+
+        # ── Merge subscribed marketplace tools ────────────────────────────
+        mp_by_name: dict[str, Any] = {}
+        try:
+            from marketplace import build_subscribed_marketplace_tools
+
+            mp_tools, mp_by_name = await build_subscribed_marketplace_tools(org_id)
+            org_lc_tools = list(org_lc_tools) + mp_tools
+            org_tools_by_name = {**org_tools_by_name, **mp_by_name}
+        except Exception:
+            logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
 
         # ── Recall relevant memories for this org ─────────────────────────
         recalled: list[str] = []
@@ -1549,6 +1617,34 @@ async def agent_run(
                         billing_settled.error,
                     )
 
+        # ── Record marketplace tool earnings for subscribed tools ────────
+        try:
+            tool_names_used = usage_data.get("tool_names", [])
+            if mp_by_name and tool_names_used:
+                overrides = await get_tool_pricing_overrides()
+                pricing = await get_current_pricing()
+                default_cost = pricing.tool_call_cost if pricing else 0
+
+                for tname in tool_names_used:
+                    if tname in mp_by_name and "/" in tname:
+                        t_slug, t_bare = tname.split("/", 1)
+                        t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
+                        if t_row:
+                            author_price = t_row.get("base_price_usdc", 0)
+                            t_cost = overrides.get(tname, overrides.get(t_bare, author_price or default_cost))
+                            author_oid = t_row.get("org_id")
+                            if author_oid and t_cost > 0:
+                                asyncio.create_task(
+                                    record_tool_call_earnings(
+                                        author_org_id=author_oid,
+                                        caller_org_id=org_id,
+                                        tool_name=t_bare,
+                                        total_cost_usdc=t_cost,
+                                    )
+                                )
+        except Exception:
+            logger.debug("Marketplace earnings recording failed", exc_info=True)
+
         yield _sse_event(
             _EV_USAGE_SUMMARY,
             {
@@ -1678,9 +1774,7 @@ async def link_wallet(
     if msg.domain != expected_domain:
         raise HTTPException(status_code=400, detail=f"Domain mismatch: expected {expected_domain}")
 
-    if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds):
-        raise HTTPException(status_code=401, detail="Invalid or expired nonce")
-
+    # Verify signature BEFORE consuming nonce (prevent nonce-exhaustion DoS)
     try:
         msg.verify(signature=body.siwe_signature)
     except (
@@ -1698,6 +1792,11 @@ async def link_wallet(
 
     address = Web3.to_checksum_address(msg.address)
     chain_id = int(msg.chain_id) if msg.chain_id else 1
+
+    # Consume nonce AFTER signature verification (single-use + TTL + address binding)
+    if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds, expected_address=address):
+        raise HTTPException(status_code=401, detail="Invalid or expired nonce")
+    logger.info("SIWE nonce consumed for address=%s chain=%d", address, chain_id)
 
     existing = await get_wallet_by_address(address, chain_id)
     if existing is not None:
@@ -1937,13 +2036,21 @@ async def admin_upsert_tool_pricing(
 ) -> JSONResponse:
     """Set or update the per-call cost for a specific tool (admin only).
 
-    Rejects tool names that are not registered in the tool registry.
+    Accepts built-in tool names or qualified marketplace names (e.g. 'acme/weather').
     """
     known_names = {t.name for t in registry.list_latest(include_deprecated=True)}
-    if body.tool_name not in known_names:
+    tool_valid = body.tool_name in known_names
+
+    # Also accept qualified marketplace tool names
+    if not tool_valid and "/" in body.tool_name:
+        slug, tname = body.tool_name.split("/", 1)
+        mp_tool = await get_marketplace_tool_by_name(tname, slug)
+        tool_valid = mp_tool is not None
+
+    if not tool_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown tool name: {body.tool_name!r}. Must be one of: {sorted(known_names)}",
+            detail=f"Unknown tool name: {body.tool_name!r}. Must be a registered tool or qualified marketplace name.",
         )
     await upsert_tool_pricing_override(body.tool_name, body.cost_usdc, body.description)
     return JSONResponse(
@@ -2375,6 +2482,7 @@ class CreateOrgToolRequest(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     publish_as_mcp: bool = False
     marketplace_description: str | None = Field(default=None, max_length=1000)
+    base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
 
 
 class UpdateOrgToolRequest(BaseModel):
@@ -2387,6 +2495,7 @@ class UpdateOrgToolRequest(BaseModel):
     is_active: bool | None = None
     publish_as_mcp: bool | None = None
     marketplace_description: str | None = Field(default=None, max_length=1000)
+    base_price_usdc: int | None = Field(default=None, ge=0, le=100_000_000)
 
 
 class OrgToolResponse(BaseModel):
@@ -2402,6 +2511,7 @@ class OrgToolResponse(BaseModel):
     is_active: bool
     publish_as_mcp: bool
     marketplace_description: str
+    base_price_usdc: int
     created_at: str
     updated_at: str
 
@@ -2421,6 +2531,7 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "is_active": tool.is_active,
         "publish_as_mcp": tool.publish_as_mcp,
         "marketplace_description": tool.marketplace_description,
+        "base_price_usdc": tool.base_price_usdc,
         "created_at": tool.created_at.isoformat(),
         "updated_at": tool.updated_at.isoformat(),
     }
@@ -2494,6 +2605,7 @@ async def create_tool(
             actor_id=user_id,
             publish_as_mcp=body.publish_as_mcp,
             marketplace_description=body.marketplace_description or "",
+            base_price_usdc=body.base_price_usdc,
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(
@@ -2569,6 +2681,7 @@ async def patch_tool(
         "auth_header_name", "auth_header_value",
         "timeout_seconds", "is_active",
         "publish_as_mcp", "marketplace_description",
+        "base_price_usdc",
     )
     for field_name in _updatable:
         val = getattr(body, field_name, None)
@@ -3518,7 +3631,21 @@ async def mcp_jsonrpc_handler(
             tool_org_slug, actual_tool_name = tool_name.split("/", 1)
         else:
             tool_org_slug, actual_tool_name = "", tool_name
-        tool_cost = overrides.get(actual_tool_name, default_cost)
+
+        # Subscription gate: marketplace tools require an active subscription.
+        if is_marketplace_tool:
+            if not await check_org_subscription(org_id, tool_name):
+                logger.info(
+                    "mcp/v1 subscription check failed org_id=%s tool=%s", org_id, tool_name
+                )
+                return JSONResponse(content=_jsonrpc_error(
+                    req_id, -32001,
+                    f"Not subscribed to marketplace tool '{tool_name}'. "
+                    "Subscribe via POST /marketplace/subscriptions.",
+                ))
+
+        # Price resolution: admin override (qualified) > admin override (bare) > author price > default
+        tool_cost = overrides.get(tool_name, overrides.get(actual_tool_name, default_cost))
 
         # ── Billing gate (credit-only for MCP calls) ──────────────────
         billing = BillingResult()
@@ -3541,6 +3668,10 @@ async def mcp_jsonrpc_handler(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
                 )
             author_org_id = tool_row.get("org_id")
+            # Refine cost with author base_price_usdc if no admin override exists
+            author_price = tool_row.get("base_price_usdc", 0)
+            if tool_name not in overrides and actual_tool_name not in overrides and author_price:
+                tool_cost = author_price
             result = await _execute_marketplace_tool(tool_row, arguments)
         else:
             # Built-in tool execution
@@ -3602,7 +3733,6 @@ async def mcp_jsonrpc_handler(
 
 class SetAuthorConfigRequest(BaseModel):
     settlement_wallet: str = Field(..., min_length=42, max_length=42)
-    revenue_share_bps: int | None = Field(default=None, ge=0, le=10000)
 
 
 @app.post("/marketplace/author-config", tags=["Marketplace"])
@@ -3623,7 +3753,6 @@ async def set_marketplace_author_config(
         config = await set_author_config(
             org_id=org_id,
             settlement_wallet=body.settlement_wallet,
-            revenue_share_bps=body.revenue_share_bps,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -3631,7 +3760,6 @@ async def set_marketplace_author_config(
     return JSONResponse(content={
         "org_id": config.org_id,
         "settlement_wallet": config.settlement_wallet,
-        "revenue_share_bps": config.revenue_share_bps,
         "created_at": config.created_at.isoformat(),
         "updated_at": config.updated_at.isoformat(),
     })
@@ -3651,7 +3779,6 @@ async def get_marketplace_author_config_endpoint(
         return JSONResponse(content={
             "org_id": org_id,
             "settlement_wallet": None,
-            "revenue_share_bps": None,
             "created_at": None,
             "updated_at": None,
         })
@@ -3659,7 +3786,6 @@ async def get_marketplace_author_config_endpoint(
     return JSONResponse(content={
         "org_id": config.org_id,
         "settlement_wallet": config.settlement_wallet,
-        "revenue_share_bps": config.revenue_share_bps,
         "created_at": config.created_at.isoformat(),
         "updated_at": config.updated_at.isoformat(),
     })
@@ -3683,8 +3809,12 @@ async def get_marketplace_earnings(
     payload: dict = Depends(require_auth),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    tool_name: str | None = Query(default=None, max_length=64),
 ) -> JSONResponse:
-    """Get paginated earnings history for the authenticated org."""
+    """Get paginated earnings history for the authenticated org.
+
+    Optionally filter by ``tool_name`` to see earnings for a specific tool.
+    """
     org_id: str = payload.get("org_id", "")
     if not org_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
@@ -3699,7 +3829,9 @@ async def get_marketplace_earnings(
                 detail="Invalid cursor format — must be an ISO 8601 timestamp.",
             )
 
-    earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor_dt, limit=limit)
+    earnings, next_cursor = await get_author_earnings_history(
+        org_id, cursor=cursor_dt, limit=limit, tool_name=tool_name
+    )
     return JSONResponse(content={
         "earnings": [
             {
@@ -3747,12 +3879,67 @@ async def request_marketplace_withdrawal(
     })
 
 
+@app.get("/marketplace/withdrawals", tags=["Marketplace"])
+async def get_marketplace_withdrawals(
+    payload: dict = Depends(require_auth),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JSONResponse:
+    """Get paginated withdrawal history (all statuses) for the authenticated org."""
+    from marketplace import list_org_withdrawals
+
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+
+    cursor_dt: datetime | None = None
+    if cursor is not None:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid cursor format — must be an ISO 8601 timestamp.",
+            )
+
+    withdrawals, next_cursor = await list_org_withdrawals(org_id, limit=limit, cursor=cursor_dt)
+    return JSONResponse(content={
+        "withdrawals": [
+            {
+                "id": w.id,
+                "amount_usdc": w.amount_usdc,
+                "wallet": w.wallet,
+                "tx_hash": w.tx_hash,
+                "status": w.status,
+                "created_at": w.created_at.isoformat(),
+                "settled_at": w.settled_at.isoformat() if w.settled_at else None,
+            }
+            for w in withdrawals
+        ],
+        "next_cursor": next_cursor,
+    })
+
+
 @app.get("/marketplace/catalog", tags=["Marketplace"])
-async def get_marketplace_catalog_endpoint() -> JSONResponse:
+async def get_marketplace_catalog_endpoint(request: Request) -> JSONResponse:
     """Public: browse available marketplace tools with pricing."""
     s = get_settings()
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    allowed, remaining, reset_at = await _check_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={
+                "X-RateLimit-Limit": str(s.rate_limit_auth_rpm),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(reset_at),
+                "Retry-After": "60",
+            },
+        )
 
     overrides = await get_tool_pricing_overrides()
     pricing = await get_current_pricing()
@@ -3771,6 +3958,75 @@ async def get_marketplace_catalog_endpoint() -> JSONResponse:
             for t in catalog
         ]
     })
+
+
+# ─── Marketplace Subscriptions ────────────────────────────────────────────────
+
+
+class SubscribeRequest(BaseModel):
+    qualified_tool_name: str = Field(..., min_length=3, max_length=128, pattern=r"^[a-z0-9_-]+/[a-z0-9_]+$")
+
+
+@app.post("/marketplace/subscriptions", tags=["Marketplace"])
+async def subscribe_to_marketplace_tool(
+    body: SubscribeRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Subscribe the authenticated org to a marketplace tool for /agent/run injection."""
+    from marketplace import subscribe_to_tool
+
+    org_id: str = payload.get("org_id", "")
+    try:
+        sub = await subscribe_to_tool(org_id, body.qualified_tool_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": sub.id,
+            "org_id": sub.org_id,
+            "qualified_tool_name": sub.qualified_tool_name,
+            "is_active": sub.is_active,
+            "subscribed_at": sub.subscribed_at.isoformat(),
+        },
+    )
+
+
+@app.get("/marketplace/subscriptions", tags=["Marketplace"])
+async def list_marketplace_subscriptions(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List active marketplace subscriptions for the authenticated org."""
+    from marketplace import get_org_subscriptions
+
+    org_id: str = payload.get("org_id", "")
+    subs = await get_org_subscriptions(org_id)
+    return JSONResponse(content={
+        "subscriptions": [
+            {
+                "id": s.id,
+                "qualified_tool_name": s.qualified_tool_name,
+                "subscribed_at": s.subscribed_at.isoformat(),
+            }
+            for s in subs
+        ]
+    })
+
+
+@app.delete("/marketplace/subscriptions/{subscription_id}", tags=["Marketplace"])
+async def unsubscribe_from_marketplace_tool(
+    subscription_id: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Unsubscribe from a marketplace tool."""
+    from marketplace import unsubscribe_from_tool
+
+    org_id: str = payload.get("org_id", "")
+    ok = await unsubscribe_from_tool(subscription_id, org_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found.")
+    return JSONResponse(content={"unsubscribed": True})
 
 
 # ─── Marketplace Admin endpoints ─────────────────────────────────────────────
@@ -3846,6 +4102,73 @@ async def admin_marketplace_sweep(
 
     count = await marketplace_sweep_once()
     return JSONResponse(content={"processed": count})
+
+
+@app.get("/admin/marketplace/sweep-status", tags=["Admin"])
+async def admin_marketplace_sweep_status(
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: return pending/failed/exhausted withdrawal state for operator review.
+
+    Useful for diagnosing why an org's earnings have not been settled.
+    """
+    from marketplace import list_exhausted_withdrawals, list_pending_withdrawals
+
+    pending = await list_pending_withdrawals()
+    exhausted = await list_exhausted_withdrawals()
+
+    def _fmt(w: object) -> dict:
+        from marketplace import AuthorWithdrawal  # noqa: PLC0415
+        assert isinstance(w, AuthorWithdrawal)
+        return {
+            "id": w.id,
+            "org_id": w.org_id,
+            "amount_usdc": w.amount_usdc,
+            "status": w.status,
+            "sweep_attempt_count": w.sweep_attempt_count,
+            "last_sweep_error": w.last_sweep_error,
+            "next_sweep_at": w.next_sweep_at.isoformat() if w.next_sweep_at else None,
+            "created_at": w.created_at.isoformat(),
+        }
+
+    return JSONResponse(content={
+        "pending": [_fmt(w) for w in pending],
+        "exhausted": [_fmt(w) for w in exhausted],
+    })
+
+
+@app.post("/admin/marketplace/sweep-retry/{withdrawal_id}", tags=["Admin"])
+async def admin_marketplace_sweep_retry(
+    withdrawal_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: reset a failed or exhausted withdrawal so the next sweep retries it."""
+    from marketplace import reset_withdrawal
+
+    found = await reset_withdrawal(withdrawal_id)
+    if not found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Withdrawal not found or not in 'failed'/'exhausted' status.",
+        )
+    return JSONResponse(content={"status": "pending", "id": withdrawal_id})
+
+
+@app.post("/admin/marketplace/reset-withdrawal/{withdrawal_id}", tags=["Admin"])
+async def admin_reset_withdrawal(
+    withdrawal_id: str,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Admin: reset a failed withdrawal to pending so it can be re-processed."""
+    from marketplace import reset_withdrawal
+
+    found = await reset_withdrawal(withdrawal_id)
+    if not found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Withdrawal not found or not in 'failed' status.",
+        )
+    return JSONResponse(content={"status": "pending", "id": withdrawal_id})
 
 
 @app.get("/admin/marketplace/settlement-balance", tags=["Admin"])

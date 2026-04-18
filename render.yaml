@@ -82,3 +82,29 @@ services:
 
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+
+      # ── MCP Gateway: Auth + Billing + x402 ────────────────────────────────
+      # Phase 1: JWT authentication (required to access /tools/mcp)
+      - key: MCP_AUTH_ENABLED
+        value: "true"
+
+      - key: MCP_AUTH_AUDIENCE
+        value: "teardrop-mcp"
+
+      # Phase 2: Credit billing (charge org credits per MCP tool call)
+      - key: MCP_BILLING_ENABLED
+        value: "true"
+
+      # Phase 3: x402 on-chain payment (allow anonymous callers to pay via USDC)
+      - key: MCP_X402_ENABLED
+        value: "true"
+
+      # ── Marketplace: Paid MCP tool hosting + author revenue share ────────
+      - key: MARKETPLACE_ENABLED
+        value: "true"
+
+      - key: MARKETPLACE_DEFAULT_REVENUE_SHARE_BPS
+        value: "7000"
+
+      - key: MARKETPLACE_SETTLEMENT_CHAIN_ID
+        value: "8453"

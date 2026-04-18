@@ -93,6 +93,9 @@ async def test_siwe_login_expired_nonce(anon_client, monkeypatch, test_settings)
 
 @pytest.mark.anyio
 async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings):
+    """Invalid signature must reject WITHOUT consuming the nonce."""
+    consume_mock = AsyncMock(return_value=True)
+
     mock_msg = MagicMock()
     mock_msg.address = "0xaddr"
     mock_msg.chain_id = "1"
@@ -102,7 +105,7 @@ async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings)
     mock_siwe_cls = MagicMock()
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
-    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.consume_nonce", consume_mock)
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -114,6 +117,82 @@ async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings)
         )
 
     assert resp.status_code in (400, 401)
+    # Nonce must NOT have been consumed — verify happens before consume
+    consume_mock.assert_not_called()
+
+
+# ── Nonce consumption ordering tests ──────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_siwe_login_valid_sig_consumes_nonce_with_address(anon_client, monkeypatch, test_settings):
+    """After valid signature, consume_nonce is called with expected_address."""
+    from datetime import datetime, timezone
+
+    from wallets import Wallet
+
+    mock_wallet = Wallet(
+        id="wallet-1",
+        address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+        chain_id=1,
+        user_id="user-siwe",
+        org_id="org-1",
+        is_primary=True,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    consume_mock = AsyncMock(return_value=True)
+
+    mock_msg = MagicMock()
+    mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    mock_msg.chain_id = "1"
+    mock_msg.nonce = "test-nonce-xyz"
+    mock_msg.domain = test_settings.effective_siwe_domain
+    mock_msg.verify = MagicMock()
+
+    mock_siwe_cls = MagicMock()
+    mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
+
+    monkeypatch.setattr("app.consume_nonce", consume_mock)
+    monkeypatch.setattr("app.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
+    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="siwe-rt"))
+
+    with patch("siwe.SiweMessage", mock_siwe_cls):
+        resp = await anon_client.post(
+            "/token",
+            json={"siwe_message": "some-siwe-message", "siwe_signature": "0xsig"},
+        )
+
+    assert resp.status_code == 200
+    consume_mock.assert_called_once()
+    # Verify expected_address kwarg was passed
+    call_kwargs = consume_mock.call_args
+    assert call_kwargs[1].get("expected_address") == "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+
+
+@pytest.mark.anyio
+async def test_siwe_login_nonce_address_mismatch(anon_client, monkeypatch, test_settings):
+    """When consume_nonce rejects due to address mismatch, return 401."""
+    mock_msg = MagicMock()
+    mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    mock_msg.chain_id = "1"
+    mock_msg.nonce = "test-nonce-xyz"
+    mock_msg.domain = test_settings.effective_siwe_domain
+    mock_msg.verify = MagicMock()
+
+    mock_siwe_cls = MagicMock()
+    mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
+
+    # consume_nonce returns False (simulates address mismatch)
+    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=False))
+
+    with patch("siwe.SiweMessage", mock_siwe_cls):
+        resp = await anon_client.post(
+            "/token",
+            json={"siwe_message": "some-siwe-message", "siwe_signature": "0xvalid"},
+        )
+
+    assert resp.status_code == 401
 
 
 # ── GET /auth/me ──────────────────────────────────────────────────────────────

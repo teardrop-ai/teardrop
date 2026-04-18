@@ -12,13 +12,17 @@ All USDC amounts use atomic units (6 decimals): 1_000_000 = $1.00.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
+from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from config import get_settings
@@ -37,7 +41,6 @@ class AuthorConfig(BaseModel):
 
     org_id: str
     settlement_wallet: str
-    revenue_share_bps: int
     created_at: datetime
     updated_at: datetime
 
@@ -64,9 +67,13 @@ class AuthorWithdrawal(BaseModel):
     amount_usdc: int
     tx_hash: str
     wallet: str
-    status: str  # "pending" | "settled" | "failed"
+    status: str  # "pending" | "settled" | "failed" | "exhausted"
     created_at: datetime
     settled_at: datetime | None = None
+    # Sweep retry metadata (populated by auto-sweep worker; 0/'' for manual withdrawals)
+    sweep_attempt_count: int = 0
+    last_sweep_error: str = ""
+    next_sweep_at: datetime | None = None
 
 
 # ─── Database pool ────────────────────────────────────────────────────────────
@@ -132,49 +139,39 @@ async def set_author_config(
     org_id: str,
     *,
     settlement_wallet: str,
-    revenue_share_bps: int | None = None,
 ) -> AuthorConfig:
     """Create or update the author's marketplace configuration.
 
     Validates the settlement wallet as a valid EIP-55 checksummed address.
+    The platform always uses the fixed default revenue share (70/30 = 7000 bps).
     Raises ValueError on invalid input.
     """
     pool = _get_pool()
-    settings = get_settings()
 
     # Validate wallet
     wallet_error = validate_eip55_address(settlement_wallet)
     if wallet_error is not None:
         raise ValueError(wallet_error)
 
-    # Validate revenue share bps
-    if revenue_share_bps is None:
-        revenue_share_bps = settings.marketplace_default_revenue_share_bps
-    if not (0 <= revenue_share_bps <= 10_000):
-        raise ValueError("revenue_share_bps must be between 0 and 10000")
-
     now = datetime.now(timezone.utc)
 
     await pool.execute(
         """
         INSERT INTO tool_author_config
-            (org_id, settlement_wallet, revenue_share_bps, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
+            (org_id, settlement_wallet, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
         ON CONFLICT (org_id) DO UPDATE
             SET settlement_wallet = EXCLUDED.settlement_wallet,
-                revenue_share_bps = EXCLUDED.revenue_share_bps,
                 updated_at = EXCLUDED.updated_at
         """,
         org_id,
         settlement_wallet,
-        revenue_share_bps,
         now,
     )
 
     return AuthorConfig(
         org_id=org_id,
         settlement_wallet=settlement_wallet,
-        revenue_share_bps=revenue_share_bps,
         created_at=now,
         updated_at=now,
     )
@@ -184,7 +181,7 @@ async def get_author_config(org_id: str) -> AuthorConfig | None:
     """Return the author config for an org, or None if not configured."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT org_id, settlement_wallet, revenue_share_bps, created_at, updated_at"
+        "SELECT org_id, settlement_wallet, created_at, updated_at"
         " FROM tool_author_config WHERE org_id = $1",
         org_id,
     )
@@ -219,7 +216,9 @@ async def record_tool_call_earnings(
             )
             return
 
-        bps = config.revenue_share_bps
+        # Always use platform default revenue share (70/30 = 7000 bps).
+        # Per-author overrides are not supported — all authors receive the same rate.
+        bps = get_settings().marketplace_default_revenue_share_bps
         author_share = (total_cost_usdc * bps) // 10_000
         platform_share = total_cost_usdc - author_share
 
@@ -257,39 +256,49 @@ async def get_author_earnings_history(
     org_id: str,
     limit: int = 50,
     cursor: datetime | None = None,
+    tool_name: str | None = None,
 ) -> tuple[list[AuthorEarning], str | None]:
     """Return earnings history for an org, cursor-paginated by created_at DESC.
 
     Returns a tuple of (earnings, next_cursor) where next_cursor is an ISO
     timestamp string to pass as ``cursor`` in the next request, or ``None``
     if there are no further pages.
+
+    If ``tool_name`` is provided, only earnings for that tool are returned.
     """
     pool = _get_pool()
+    base_where = "WHERE org_id = $1"
+    params: list = [org_id, limit]
+
+    if tool_name is not None:
+        base_where += " AND tool_name = $3"
+        params.append(tool_name)
+
     if cursor is None:
         rows = await pool.fetch(
-            """
+            f"""
             SELECT id, org_id, tool_name, caller_org_id, amount_usdc,
                    author_share_usdc, platform_share_usdc, status, created_at
             FROM tool_author_earnings
-            WHERE org_id = $1
+            {base_where}
             ORDER BY created_at DESC
             LIMIT $2
             """,
-            org_id,
-            limit,
+            *params,
         )
     else:
+        # Insert cursor condition at the right position
+        cursor_placeholder = f"${len(params) + 1}"
         rows = await pool.fetch(
-            """
+            f"""
             SELECT id, org_id, tool_name, caller_org_id, amount_usdc,
                    author_share_usdc, platform_share_usdc, status, created_at
             FROM tool_author_earnings
-            WHERE org_id = $1 AND created_at < $3
+            {base_where} AND created_at < {cursor_placeholder}
             ORDER BY created_at DESC
             LIMIT $2
             """,
-            org_id,
-            limit,
+            *params,
             cursor,
         )
     earnings = [AuthorEarning(**dict(r)) for r in rows]
@@ -440,6 +449,7 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
             # Attempt CDP transfer
             tx_hash = ""
             transfer_failed = False
+            transfer_error = ""
             if settled_total > 0 and settings.agent_wallet_enabled:
                 try:
                     from agent_wallets import transfer_usdc
@@ -463,6 +473,7 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                         exc,
                     )
                     transfer_failed = True
+                    transfer_error = str(exc)
                     # Revert earnings back to pending
                     if settled_ids:
                         await conn.execute(
@@ -479,11 +490,12 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                 await conn.execute(
                     """
                     UPDATE tool_author_withdrawals
-                    SET status = 'failed', settled_at = $2
+                    SET status = 'failed', settled_at = $2, last_sweep_error = $3
                     WHERE id = $1
                     """,
                     withdrawal_id,
                     now,
+                    transfer_error,
                 )
                 return AuthorWithdrawal(
                     id=withdrawal_id,
@@ -492,6 +504,7 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                     tx_hash="",
                     wallet=dest_wallet,
                     status="failed",
+                    last_sweep_error=transfer_error,
                     created_at=row["created_at"],
                     settled_at=now,
                 )
@@ -546,6 +559,66 @@ async def list_pending_withdrawals(org_id: str | None = None) -> list[AuthorWith
     return [AuthorWithdrawal(**dict(r)) for r in rows]
 
 
+async def list_org_withdrawals(
+    org_id: str,
+    limit: int = 50,
+    cursor: datetime | None = None,
+) -> tuple[list[AuthorWithdrawal], str | None]:
+    """Return all withdrawals (any status) for an org, cursor-paginated by created_at DESC."""
+    pool = _get_pool()
+    if cursor is None:
+        rows = await pool.fetch(
+            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1"
+            " ORDER BY created_at DESC LIMIT $2",
+            org_id,
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND created_at < $3"
+            " ORDER BY created_at DESC LIMIT $2",
+            org_id,
+            limit,
+            cursor,
+        )
+    withdrawals = [AuthorWithdrawal(**dict(r)) for r in rows]
+    next_cursor = withdrawals[-1].created_at.isoformat() if len(withdrawals) == limit else None
+    return withdrawals, next_cursor
+
+
+async def reset_withdrawal(withdrawal_id: str) -> bool:
+    """Reset a failed or exhausted withdrawal back to pending for re-processing.
+
+    Clears retry metadata so the sweep worker will attempt it immediately.
+    Returns True if the withdrawal was found and reset.
+    """
+    pool = _get_pool()
+    result = await pool.execute(
+        """
+        UPDATE tool_author_withdrawals
+        SET status = 'pending',
+            settled_at = NULL,
+            sweep_attempt_count = 0,
+            last_sweep_error = '',
+            next_sweep_at = NULL
+        WHERE id = $1 AND status IN ('failed', 'exhausted')
+        """,
+        withdrawal_id,
+    )
+    return result.split()[-1] != "0"
+
+
+async def list_exhausted_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:
+    """Return exhausted withdrawals for admin inspection (newest first)."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT * FROM tool_author_withdrawals WHERE status = 'exhausted'"
+        " ORDER BY created_at DESC LIMIT $1",
+        limit,
+    )
+    return [AuthorWithdrawal(**dict(r)) for r in rows]
+
+
 # ─── Marketplace catalog queries ─────────────────────────────────────────────
 
 
@@ -575,6 +648,7 @@ async def get_marketplace_catalog(
     rows = await pool.fetch(
         """
         SELECT t.name, t.description, t.marketplace_description, t.input_schema,
+               t.base_price_usdc,
                o.name AS org_name, o.slug AS org_slug
         FROM org_tools t
         JOIN orgs o ON o.id = t.org_id
@@ -595,7 +669,9 @@ async def get_marketplace_catalog(
             raw_schema = _json.loads(raw_schema)
 
         qualified = f"{r['org_slug']}/{r['name']}"
-        cost = tool_overrides.get(r["name"], default_tool_cost)
+        # Price resolution: admin override (qualified) > admin override (bare) > author price > default
+        author_price = r.get("base_price_usdc", 0)
+        cost = tool_overrides.get(qualified, tool_overrides.get(r["name"], author_price or default_tool_cost))
 
         catalog.append(
             MarketplaceTool(
@@ -637,28 +713,306 @@ async def get_marketplace_tool_by_name(
     return dict(row)
 
 
+# ─── Marketplace subscriptions ───────────────────────────────────────────────
+
+
+class MarketplaceSubscription(BaseModel):
+    """A subscription linking an org to a marketplace tool."""
+
+    id: str
+    org_id: str
+    qualified_tool_name: str
+    is_active: bool
+    subscribed_at: datetime
+
+
+async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
+    """Subscribe an org to a marketplace tool by qualified name (e.g. 'acme/weather').
+
+    Validates the tool exists and is published.  Raises ValueError on invalid input.
+    """
+    pool = _get_pool()
+
+    if "/" not in qualified_tool_name:
+        raise ValueError("Tool name must be qualified: {org_slug}/{tool_name}")
+
+    org_slug, tool_name = qualified_tool_name.split("/", 1)
+    tool_row = await get_marketplace_tool_by_name(tool_name, org_slug)
+    if tool_row is None:
+        raise ValueError(f"Marketplace tool not found: {qualified_tool_name}")
+
+    sub_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    try:
+        await pool.execute(
+            """
+            INSERT INTO org_marketplace_subscriptions
+                (id, org_id, qualified_tool_name, is_active, subscribed_at)
+            VALUES ($1, $2, $3, TRUE, $4)
+            ON CONFLICT (org_id, qualified_tool_name) DO UPDATE
+                SET is_active = TRUE, subscribed_at = EXCLUDED.subscribed_at
+            RETURNING id
+            """,
+            sub_id,
+            org_id,
+            qualified_tool_name,
+            now,
+        )
+    except Exception:
+        raise ValueError(f"Failed to subscribe to {qualified_tool_name}")
+
+    _invalidate_subscription_cache(org_id)
+    return MarketplaceSubscription(
+        id=sub_id,
+        org_id=org_id,
+        qualified_tool_name=qualified_tool_name,
+        is_active=True,
+        subscribed_at=now,
+    )
+
+
+async def unsubscribe_from_tool(subscription_id: str, org_id: str) -> bool:
+    """Soft-delete a subscription.  Returns True if found and deactivated."""
+    pool = _get_pool()
+    result = await pool.execute(
+        "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
+        " WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
+        subscription_id,
+        org_id,
+    )
+    _invalidate_subscription_cache(org_id)
+    return result.split()[-1] != "0"
+
+
+async def get_org_subscriptions(org_id: str) -> list[MarketplaceSubscription]:
+    """Return all active marketplace subscriptions for an org."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT id, org_id, qualified_tool_name, is_active, subscribed_at"
+        " FROM org_marketplace_subscriptions"
+        " WHERE org_id = $1 AND is_active = TRUE"
+        " ORDER BY subscribed_at",
+        org_id,
+    )
+    return [MarketplaceSubscription(**dict(r)) for r in rows]
+
+
+# ─── Subscription cache ───────────────────────────────────────────────────────
+# Module-level TTL dict: org_id → (frozenset of qualified names, expiry_monotonic)
+# Same pattern as _PRICING_CACHE in billing.py.  TTL matches org_tools_cache_ttl_seconds.
+_SUBSCRIPTION_CACHE: dict[str, tuple[frozenset[str], float]] = {}
+
+
+def _invalidate_subscription_cache(org_id: str) -> None:
+    """Drop the cached subscription set for *org_id* (e.g. after subscribe/unsubscribe)."""
+    _SUBSCRIPTION_CACHE.pop(org_id, None)
+
+
+async def check_org_subscription(org_id: str, qualified_tool_name: str) -> bool:
+    """Return True when *org_id* holds an active subscription to *qualified_tool_name*.
+
+    Results are cached per-org for ``org_tools_cache_ttl_seconds`` (default 60 s).
+    Cache is invalidated immediately on subscribe/unsubscribe so the hot path
+    (subscribe then call) sees consistent state.
+    """
+    now = time.monotonic()
+    cached = _SUBSCRIPTION_CACHE.get(org_id)
+    if cached is not None and now < cached[1]:
+        return qualified_tool_name in cached[0]
+    subs = await get_org_subscriptions(org_id)
+    names = frozenset(s.qualified_tool_name for s in subs)
+    ttl = get_settings().org_tools_cache_ttl_seconds
+    _SUBSCRIPTION_CACHE[org_id] = (names, now + ttl)
+    return qualified_tool_name in names
+
+
+async def build_subscribed_marketplace_tools(
+    org_id: str,
+) -> tuple[list, dict[str, Any]]:
+    """Build LangChain StructuredTool wrappers for subscribed marketplace tools.
+
+    Returns ``(tools_list, tools_by_name_dict)`` matching the signature of
+    ``build_org_langchain_tools()``.
+    """
+    subs = await get_org_subscriptions(org_id)
+    if not subs:
+        return [], {}
+
+    from langchain_core.tools import StructuredTool
+
+    tools_list: list[StructuredTool] = []
+    tools_by_name: dict[str, Any] = {}
+
+    for sub in subs:
+        qualified = sub.qualified_tool_name
+        if "/" not in qualified:
+            continue
+
+        org_slug, tool_name = qualified.split("/", 1)
+        tool_row = await get_marketplace_tool_by_name(tool_name, org_slug)
+        if tool_row is None:
+            logger.debug("Subscribed tool %s no longer published; skipping", qualified)
+            continue
+
+        try:
+            lc_tool = _build_marketplace_langchain_tool(tool_row, qualified)
+            tools_list.append(lc_tool)
+            tools_by_name[qualified] = lc_tool
+        except Exception:
+            logger.warning("Failed to build subscribed tool %s", qualified, exc_info=True)
+
+    return tools_list, tools_by_name
+
+
+def _build_marketplace_langchain_tool(
+    tool_row: dict[str, Any],
+    qualified_name: str,
+) -> "StructuredTool":
+    """Wrap a marketplace tool row as a LangChain StructuredTool via webhook."""
+    import json as _json
+
+    import aiohttp
+    from pydantic import BaseModel as _BM
+    from pydantic import Field as _Field
+    from pydantic import create_model
+
+    from org_tools import _decrypt_header
+    from tools.definitions.http_fetch import async_validate_url
+
+    raw_schema = tool_row.get("input_schema", {})
+    if isinstance(raw_schema, str):
+        raw_schema = _json.loads(raw_schema)
+
+    # Build a simple Pydantic model from JSON Schema properties.
+    _type_map = {"string": str, "integer": int, "number": float, "boolean": bool}
+    properties = raw_schema.get("properties", {})
+    required_set = set(raw_schema.get("required", []))
+    fields: dict[str, Any] = {}
+    for fname, fdef in properties.items():
+        py_type = _type_map.get(fdef.get("type", "string"), str)
+        desc = fdef.get("description", "")
+        if fname in required_set:
+            fields[fname] = (py_type, _Field(..., description=desc))
+        else:
+            fields[fname] = (py_type | None, _Field(default=None, description=desc))
+
+    model_name = f"MPTool_{qualified_name.replace('/', '_')}_Input"
+    args_model = create_model(model_name, **fields)
+
+    _url = tool_row["webhook_url"]
+    _method = tool_row.get("webhook_method", "POST")
+    _timeout_sec = tool_row.get("timeout_seconds", 10)
+    _auth_name = tool_row.get("auth_header_name")
+    _auth_enc = tool_row.get("auth_header_enc")
+
+    async def _call(**kwargs: Any) -> dict[str, Any]:
+        url_err = await async_validate_url(_url)
+        if url_err:
+            return {"error": f"Webhook URL blocked: {url_err}"}
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if _auth_name and _auth_enc:
+            try:
+                headers[_auth_name] = _decrypt_header(_auth_enc)
+            except Exception:
+                return {"error": "Failed to decrypt webhook auth header"}
+
+        timeout = aiohttp.ClientTimeout(total=_timeout_sec)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if _method == "GET":
+                    resp = await session.get(_url, headers=headers, params=kwargs)
+                elif _method == "PUT":
+                    resp = await session.put(_url, headers=headers, json=kwargs)
+                else:
+                    resp = await session.post(_url, headers=headers, json=kwargs)
+
+                body = await resp.read()
+                if len(body) > 512 * 1024:
+                    body = body[: 512 * 1024]
+
+                content_type = resp.headers.get("Content-Type", "")
+                if "application/json" in content_type:
+                    return _json.loads(body)
+                return {"text": body.decode("utf-8", errors="replace")}
+        except asyncio.TimeoutError:
+            return {"error": f"Webhook timed out after {_timeout_sec}s"}
+        except Exception as exc:
+            return {"error": f"Webhook request failed: {type(exc).__name__}"}
+
+    return StructuredTool.from_function(
+        coroutine=_call,
+        name=qualified_name,
+        description=tool_row.get("marketplace_description") or tool_row.get("description", ""),
+        args_schema=args_model,
+    )
+
+
 # ─── Background sweep ────────────────────────────────────────────────────────
 
-import asyncio  # noqa: E402
+
+def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:
+    """Derive a deterministic withdrawal ID for a sweep cycle.
+
+    Using the same org + hour produces the same UUID, so a worker restart
+    within the same sweep cycle won't create a duplicate withdrawal record
+    (the INSERT will hit the PK conflict and be ignored).
+    """
+    raw = hashlib.sha256(f"sweep:{org_id}:{epoch_hour}".encode()).digest()
+    # Re-format as RFC 4122 variant-1 UUID (version 5 shape)
+    hex_str = raw[:16].hex()
+    return f"{hex_str[:8]}-{hex_str[8:12]}-5{hex_str[13:16]}-{hex_str[16:20]}-{hex_str[20:32]}"
+
+
+def _sweep_backoff_seconds(attempt: int) -> int:
+    """Exponential backoff for failed sweep attempts.
+
+    attempt=1 → 2 min, attempt=2 → 4 min, …, capped at 24 h.
+    Longer intervals than billing retry (seconds) because on-chain CDP
+    transfers are expensive and rate-limited.
+    """
+    return min(2**attempt * 60, 86_400)
 
 
 async def marketplace_sweep_once() -> int:
-    """Auto-create and process withdrawals for qualifying orgs.
+    """Auto-create and settle withdrawals for all qualifying orgs.
 
-    Returns the number of orgs successfully processed.
+    Design decisions:
+    - Deterministic withdrawal IDs prevent duplicates on worker restart.
+    - Orgs with an existing pending/failed withdrawal that is still in backoff
+      are skipped; the withdrawal is retried once next_sweep_at elapses.
+    - On CDP failure the withdrawal is marked 'failed' and a backoff timestamp
+      set; after max_retries it is marked 'exhausted' for admin review.
+    - The earnings query uses a subquery to exclude orgs already being
+      processed by another concurrent sweep call (rare but safe).
+
+    Returns the number of orgs whose withdrawal was successfully settled.
     """
     pool = _get_pool()
     settings = get_settings()
     min_amount = settings.marketplace_minimum_withdrawal_usdc
+    max_retries = settings.marketplace_max_sweep_retries
+    now = datetime.now(timezone.utc)
+    # Floor to the current sweep epoch (1-hour buckets) for deterministic IDs.
+    epoch_hour = int(now.timestamp()) // 3600
 
-    # Find orgs with pending earnings >= minimum threshold
+    # Orgs with enough pending earnings that are not currently in backoff.
+    # LEFT JOIN excludes orgs whose most recent non-settled withdrawal still
+    # has next_sweep_at in the future (backoff not yet elapsed).
     rows = await pool.fetch(
         """
-        SELECT org_id, SUM(author_share_usdc) AS total
-        FROM tool_author_earnings
-        WHERE status = 'pending'
-        GROUP BY org_id
-        HAVING SUM(author_share_usdc) >= $1
+        SELECT e.org_id, SUM(e.author_share_usdc) AS total
+        FROM tool_author_earnings e
+        WHERE e.status = 'pending'
+          AND NOT EXISTS (
+              SELECT 1 FROM tool_author_withdrawals w
+              WHERE w.org_id = e.org_id
+                AND w.status IN ('pending', 'failed')
+                AND (w.next_sweep_at IS NULL OR w.next_sweep_at > NOW())
+          )
+        GROUP BY e.org_id
+        HAVING SUM(e.author_share_usdc) >= $1
         LIMIT 50
         """,
         min_amount,
@@ -668,26 +1022,132 @@ async def marketplace_sweep_once() -> int:
     for r in rows:
         org_id = r["org_id"]
         total = int(r["total"])
+        withdrawal_id = _sweep_withdrawal_id(org_id, epoch_hour)
         try:
-            withdrawal = await request_withdrawal(org_id, total)
-            await process_withdrawal(withdrawal.id)
-            processed += 1
-            logger.info("marketplace_sweep: processed org=%s amount=%d", org_id, total)
-        except Exception:
-            logger.warning("marketplace_sweep: failed for org=%s", org_id, exc_info=True)
+            # Idempotent insert: if this ID already exists the withdrawal was
+            # created in a previous (crashed) run — just process it.
+            existing = await pool.fetchrow(
+                "SELECT id, status FROM tool_author_withdrawals WHERE id = $1",
+                withdrawal_id,
+            )
+            if existing is None:
+                config = await get_author_config(org_id)
+                if config is None:
+                    logger.warning(
+                        "marketplace_sweep: org=%s has no author config, skipping",
+                        org_id,
+                    )
+                    continue
+                await pool.execute(
+                    """
+                    INSERT INTO tool_author_withdrawals
+                        (id, org_id, amount_usdc, wallet, status, created_at,
+                         sweep_attempt_count, last_sweep_error, next_sweep_at)
+                    VALUES ($1, $2, $3, $4, 'pending', NOW(), 0, '', NULL)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    withdrawal_id,
+                    org_id,
+                    total,
+                    config.settlement_wallet,
+                )
+            elif existing["status"] == "settled":
+                # Already processed in this epoch — count as success and move on.
+                processed += 1
+                continue
+
+            result = await process_withdrawal(withdrawal_id)
+
+            if result.status == "settled":
+                processed += 1
+                logger.info(
+                    "marketplace_sweep: settled org=%s amount=%d tx=%s",
+                    org_id,
+                    total,
+                    result.tx_hash,
+                )
+            else:
+                # CDP transfer failed inside process_withdrawal — apply backoff.
+                row = await pool.fetchrow(
+                    "SELECT sweep_attempt_count FROM tool_author_withdrawals WHERE id = $1",
+                    withdrawal_id,
+                )
+                attempt = int(row["sweep_attempt_count"]) + 1 if row else 1
+                error_detail = result.last_sweep_error or "CDP transfer failed"
+
+                if attempt >= max_retries:
+                    await pool.execute(
+                        """
+                        UPDATE tool_author_withdrawals
+                        SET status = 'exhausted',
+                            sweep_attempt_count = $2,
+                            last_sweep_error = $3,
+                            next_sweep_at = NULL
+                        WHERE id = $1
+                        """,
+                        withdrawal_id,
+                        attempt,
+                        error_detail,
+                    )
+                    logger.error(
+                        "marketplace_sweep: exhausted org=%s attempts=%d error=%s",
+                        org_id,
+                        attempt,
+                        error_detail,
+                    )
+                else:
+                    backoff = _sweep_backoff_seconds(attempt)
+                    await pool.execute(
+                        """
+                        UPDATE tool_author_withdrawals
+                        SET sweep_attempt_count = $2,
+                            last_sweep_error = $3,
+                            next_sweep_at = NOW() + ($4 * INTERVAL '1 second')
+                        WHERE id = $1
+                        """,
+                        withdrawal_id,
+                        attempt,
+                        error_detail,
+                        backoff,
+                    )
+                    logger.warning(
+                        "marketplace_sweep: failed org=%s attempt=%d/%d retry_in=%ds",
+                        org_id,
+                        attempt,
+                        max_retries,
+                        backoff,
+                    )
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "marketplace_sweep: unexpected error org=%s: %s",
+                org_id,
+                exc,
+                exc_info=True,
+            )
+
     return processed
 
 
 async def _marketplace_sweep_loop() -> None:
-    """Background task: periodically auto-process qualifying withdrawals."""
+    """Background task: periodically auto-process qualifying withdrawals.
+
+    Propagates asyncio.CancelledError so the lifespan shutdown is clean.
+    """
     settings = get_settings()
     interval = settings.marketplace_sweep_interval_seconds
     logger.info("marketplace_sweep_loop: started (interval=%ds)", interval)
     while True:
-        await asyncio.sleep(interval)
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            logger.info("marketplace_sweep_loop: cancelled, shutting down")
+            raise
         try:
             count = await marketplace_sweep_once()
             if count:
-                logger.info("marketplace_sweep_loop: processed %d orgs", count)
+                logger.info("marketplace_sweep_loop: settled %d orgs", count)
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.warning("marketplace_sweep_loop: cycle failed", exc_info=True)
+            logger.warning("marketplace_sweep_loop: cycle error", exc_info=True)

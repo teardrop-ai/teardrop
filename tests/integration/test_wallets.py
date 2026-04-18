@@ -129,6 +129,38 @@ async def test_consume_nonce_expired():
     assert result is False
 
 
+# ── Address binding tests (Phase 0.7) ────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_consume_nonce_with_no_address_binding():
+    """A nonce created without an address should be consumable with any expected_address (backward compat)."""
+    nonce = await create_nonce()
+    result = await consume_nonce(nonce, ttl_seconds=300, expected_address="0xABCDef1234567890abcdef1234567890ABCDEF12")
+    assert result is True
+
+
+@pytest.mark.anyio
+async def test_consume_nonce_without_expected_address():
+    """Calling consume_nonce without expected_address works (backward compat)."""
+    nonce = await create_nonce()
+    result = await consume_nonce(nonce, ttl_seconds=300)
+    assert result is True
+
+
+@pytest.mark.anyio
+async def test_consume_nonce_concurrent_same_nonce():
+    """Only one of two concurrent consume calls should succeed."""
+    import asyncio
+
+    nonce = await create_nonce()
+    results = await asyncio.gather(
+        consume_nonce(nonce, ttl_seconds=300),
+        consume_nonce(nonce, ttl_seconds=300),
+    )
+    assert sorted(results) == [False, True]
+
+
 @pytest.mark.anyio
 async def test_consume_nonexistent_nonce():
     result = await consume_nonce("this-nonce-does-not-exist", ttl_seconds=300)

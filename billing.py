@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 _server = None  # x402ResourceServer instance
 _requirements_cache: list | None = None  # cached PaymentRequirements for /agent/run
+_exact_requirements_cache: list | None = None  # exact-scheme requirements (always built)
+_upto_requirements_cache: list | None = None   # upto-scheme requirements (when opted in)
 
 # ─── Pricing TTL cache ────────────────────────────────────────────────────────
 
@@ -73,6 +75,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     Call during app lifespan startup.
     """
     global _server, _requirements_cache, _pool, _last_requirements_price_usdc
+    global _exact_requirements_cache, _upto_requirements_cache
 
     settings = get_settings()
 
@@ -98,11 +101,13 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     # Register upto scheme alongside exact when the operator has opted in.
     if settings.x402_scheme == "upto":
         try:
-            from x402.mechanisms.evm.upto import UptoEvmServerScheme # type: ignore[import]
+            from x402.mechanisms.evm.upto import (  # type: ignore[import]
+                UptoEvmServerScheme,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "x402 upto scheme is not available in the installed package. "
-                "Run: pip install 'x402[fastapi,evm] @ git+https://github.com/x402-foundation/x402.git@main#subdirectory=python'"
+                "Upgrade: pip install 'x402[fastapi,evm]>=2.8.0'"
             ) from exc
 
         server.register(settings.x402_network, UptoEvmServerScheme())
@@ -119,20 +124,34 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         price_str = settings.x402_run_price
         logger.warning("No pricing_rules row found; using config fallback price=%s", price_str)
 
-    # For upto, advertise the max_amount ceiling instead of the exact run price.
-    if settings.x402_scheme == "upto":
-        advertised_price = settings.x402_upto_max_amount
-    else:
-        advertised_price = price_str
-
-    config = ResourceConfig(
-        scheme=settings.x402_scheme,
+    # Always build exact requirements (backward-compat fallback for all clients).
+    exact_config = ResourceConfig(
+        scheme="exact",
         network=settings.x402_network,
         pay_to=settings.x402_pay_to_address,
-        price=advertised_price,
+        price=price_str,
     )
-    _requirements_cache = server.build_payment_requirements(config)
+    _exact_requirements_cache = server.build_payment_requirements(exact_config)
 
+    if settings.x402_scheme == "upto":
+        # Build upto requirements with the max_amount ceiling.
+        upto_config = ResourceConfig(
+            scheme="upto",
+            network=settings.x402_network,
+            pay_to=settings.x402_pay_to_address,
+            price=settings.x402_upto_max_amount,
+        )
+        _upto_requirements_cache = server.build_payment_requirements(upto_config)
+        # Advertise upto first (preferred), exact second (fallback for clients
+        # that haven't approved the Permit2 contract yet).
+        _requirements_cache = [*_upto_requirements_cache, *_exact_requirements_cache]
+    else:
+        _upto_requirements_cache = None
+        _requirements_cache = list(_exact_requirements_cache)
+
+    advertised_price = (
+        settings.x402_upto_max_amount if settings.x402_scheme == "upto" else price_str
+    )
     logger.info(
         "Billing initialised: network=%s pay_to=%s price=%s scheme=%s",
         settings.x402_network,
@@ -145,10 +164,13 @@ async def init_billing(pool: asyncpg.Pool) -> None:
 async def close_billing() -> None:
     """Release billing resources."""
     global _server, _requirements_cache, _pool
+    global _exact_requirements_cache, _upto_requirements_cache
     global _pricing_cache, _pricing_cache_expires, _last_requirements_price_usdc
     global _tool_overrides_cache, _tool_overrides_cache_expires
     _server = None
     _requirements_cache = None
+    _exact_requirements_cache = None
+    _upto_requirements_cache = None
     _pool = None
     _pricing_cache = None
     _pricing_cache_expires = 0.0
@@ -268,6 +290,7 @@ async def _rebuild_requirements_if_stale() -> None:
     get_live_pricing() serves from a TTL cache so DB hits are rare.
     """
     global _requirements_cache, _last_requirements_price_usdc
+    global _exact_requirements_cache, _upto_requirements_cache
 
     if _server is None:
         return
@@ -284,19 +307,28 @@ async def _rebuild_requirements_if_stale() -> None:
 
     new_price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
 
-    # For upto, the 402 response advertises the max ceiling, not the run price.
-    if settings.x402_scheme == "upto":
-        advertised_price = settings.x402_upto_max_amount
-    else:
-        advertised_price = new_price_str
-
-    config = ResourceConfig(
-        scheme=settings.x402_scheme,
+    # Always rebuild exact requirements.
+    exact_config = ResourceConfig(
+        scheme="exact",
         network=settings.x402_network,
         pay_to=settings.x402_pay_to_address,
-        price=advertised_price,
+        price=new_price_str,
     )
-    _requirements_cache = _server.build_payment_requirements(config)
+    _exact_requirements_cache = _server.build_payment_requirements(exact_config)
+
+    if settings.x402_scheme == "upto":
+        upto_config = ResourceConfig(
+            scheme="upto",
+            network=settings.x402_network,
+            pay_to=settings.x402_pay_to_address,
+            price=settings.x402_upto_max_amount,
+        )
+        _upto_requirements_cache = _server.build_payment_requirements(upto_config)
+        _requirements_cache = [*_upto_requirements_cache, *_exact_requirements_cache]
+    else:
+        _upto_requirements_cache = None
+        _requirements_cache = list(_exact_requirements_cache)
+
     _last_requirements_price_usdc = rule.run_price_usdc
     logger.info(
         "Payment requirements updated: run_price_usdc=%d price=%s",
@@ -331,29 +363,35 @@ async def verify_payment(payment_header: str) -> BillingResult:
         logger.warning("Failed to parse payment header: %s", exc)
         return BillingResult(error=f"Malformed payment header: {exc}")
 
-    # Verify against the first (only) requirement
-    requirement = reqs[0]
-    try:
-        result = await server.verify_payment(payload, requirement)
-    except Exception as exc:
-        logger.error("Payment verification error: %s", exc, exc_info=True)
-        return BillingResult(error=f"Verification failed: {exc}")
+    # Try each requirement (e.g. [upto, exact]) — the first valid match wins.
+    # This allows clients with Permit2 approval to use upto while clients
+    # without it fall back to exact.
+    last_error = "No payment requirements matched"
+    for requirement in reqs:
+        try:
+            result = await server.verify_payment(payload, requirement)
+        except Exception as exc:
+            logger.debug("Verification attempt failed for scheme=%s: %s",
+                         getattr(requirement, "scheme", "?"), exc)
+            last_error = f"Verification failed: {exc}"
+            continue
 
-    if not result.is_valid:
+        if result.is_valid:
+            detected_scheme = getattr(requirement, "scheme", "exact") or "exact"
+            return BillingResult(
+                verified=True,
+                payment_payload=payload,
+                payment_requirements=requirement,
+                scheme=detected_scheme,
+            )
+
         reason = result.invalid_reason or result.invalid_message or "invalid signature or amount"
-        logger.warning("Payment verification failed: %s (payer=%s)", reason, result.payer)
-        return BillingResult(error=f"Payment verification failed: {reason}")
+        logger.debug("Payment verification failed for scheme=%s: %s (payer=%s)",
+                     getattr(requirement, "scheme", "?"), reason, result.payer)
+        last_error = f"Payment verification failed: {reason}"
 
-    # Detect scheme from the matched requirement so settle_payment() knows
-    # whether to pass actual_cost_usdc.
-    detected_scheme = getattr(requirement, "scheme", "exact") or "exact"
-
-    return BillingResult(
-        verified=True,
-        payment_payload=payload,
-        payment_requirements=requirement,
-        scheme=detected_scheme,
-    )
+    logger.warning("All payment requirements failed verification: %s", last_error)
+    return BillingResult(error=last_error)
 
 
 async def settle_payment(
@@ -376,12 +414,17 @@ async def settle_payment(
 
     try:
         if billing_result.scheme == "upto" and actual_cost_usdc is not None:
-            # upto: tell the facilitator the actual amount to settle.
-            actual_price_str = atomic_usdc_to_price_str(actual_cost_usdc)
+            # Guard: floor at zero to prevent contract revert on negative amount.
+            actual_cost_usdc = max(0, actual_cost_usdc)
+            # upto: settle the actual usage cost, not the max the client signed.
+            # x402ResourceServer.settle_payment() has no actual_amount param — the
+            # correct pattern is to clone requirements with amount overridden to the
+            # actual cost in atomic units before passing to the facilitator.
+            req = billing_result.payment_requirements
+            settled_req = req.model_copy(update={"amount": str(actual_cost_usdc)})
             result = await server.settle_payment(
                 billing_result.payment_payload,
-                billing_result.payment_requirements,
-                actual_amount=actual_price_str,
+                settled_req,
             )
         else:
             result = await server.settle_payment(

@@ -7,17 +7,19 @@ Performs:
   2. Sign SIWE message (EIP-191)
   3. Get JWT via SIWE
   4. Call /agent/run → get 402 Payment Required
-  5. Sign x402 payment (EIP-3009 USDC transfer)
+  5. Sign x402 payment (exact EIP-3009 or upto Permit2)
   6. Retry /agent/run with signed payment
   7. Parse SSE stream for BILLING_SETTLEMENT event
 
 Usage:
-  python test_x402_payment.py <private_key_hex> <base_url>
+  python test_x402_payment.py <private_key_hex> <base_url> [--scheme exact|upto]
 
 Example:
   python test_x402_payment.py 0xabc123... https://teardrop.onrender.com
+  python test_x402_payment.py 0xabc123... https://teardrop.onrender.com --scheme upto
 """
 
+import argparse
 import base64
 import json
 import sys
@@ -28,6 +30,7 @@ import requests
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from siwe import SiweMessage
+from web3 import Web3
 
 
 def get_nonce(base_url: str) -> str:
@@ -157,6 +160,79 @@ def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
     return base64.b64encode(payload_json.encode()).decode()
 
 
+# ─── Permit2 constants (Base Sepolia) ───────────────────────────────────────
+
+PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+ERC20_ALLOWANCE_ABI = [
+    {
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "spender", "type": "address"},
+        ],
+        "name": "allowance",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+
+def check_permit2_allowance(
+    rpc_url: str,
+    usdc_address: str,
+    owner_address: str,
+) -> int:
+    """Check USDC allowance granted to the Permit2 contract."""
+    w3 = Web3(Web3.HTTPProvider(rpc_url))
+    usdc = w3.eth.contract(
+        address=Web3.to_checksum_address(usdc_address),
+        abi=ERC20_ALLOWANCE_ABI,
+    )
+    return usdc.functions.allowance(
+        Web3.to_checksum_address(owner_address),
+        Web3.to_checksum_address(PERMIT2_ADDRESS),
+    ).call()
+
+
+def sign_upto_payment(
+    payment_required_body: dict, private_key: str,
+) -> str:
+    """Sign x402 payment using Permit2 (upto scheme).
+
+    Uses x402ClientSync with UptoEvmScheme to create a properly signed
+    PaymentPayload, then base64-encodes it for the X-PAYMENT header.
+    """
+    from x402 import parse_payment_required, x402ClientSync
+    from x402.mechanisms.evm.upto import UptoEvmScheme
+
+    account = Account.from_key(private_key)
+    payment_required = parse_payment_required(payment_required_body)
+
+    # Find the upto accept entry
+    upto_req = None
+    for accept in payment_required.accepts:
+        if getattr(accept, "scheme", None) == "upto":
+            upto_req = accept
+            break
+
+    if upto_req is None:
+        print("✗ No upto accept entry in 402 response, falling back to exact")
+        return sign_x402_payment(payment_required_body, private_key)
+
+    print(f"   Signing upto payment: {upto_req.amount} atomic USDC → {upto_req.pay_to}")
+    print(f"   Network: {upto_req.network}, Asset: {upto_req.asset}")
+
+    scheme = UptoEvmScheme(signer=account)
+    network = upto_req.network
+    client = x402ClientSync()
+    client.register(network, scheme)
+    payload = client.create_payment_payload(payment_required)
+
+    print(f"   PaymentPayload created (x402_version={payload.x402_version})")
+    payload_json = payload.model_dump_json()
+    return base64.b64encode(payload_json.encode()).decode()
+
+
 def call_agent_run_with_payment(
     base_url: str,
     jwt: str,
@@ -220,14 +296,28 @@ def call_agent_run_with_payment(
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python test_x402_payment.py <private_key> <base_url>")
-        print("\nExample:")
-        print("  python test_x402_payment.py 0xabc123... https://teardrop.onrender.com")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Test x402 payment flow")
+    parser.add_argument("private_key", help="Hex private key (0x-prefixed)")
+    parser.add_argument("base_url", help="Teardrop base URL")
+    parser.add_argument(
+        "--scheme", choices=["exact", "upto"], default="exact",
+        help="Payment scheme to use (default: exact)",
+    )
+    parser.add_argument(
+        "--rpc-url",
+        default="https://sepolia.base.org",
+        help="RPC URL for Permit2 allowance check (upto only)",
+    )
+    parser.add_argument(
+        "--usdc-address",
+        default="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        help="USDC contract address (default: Base Sepolia)",
+    )
+    args = parser.parse_args()
 
-    private_key = sys.argv[1]
-    base_url = sys.argv[2].rstrip("/")
+    private_key = args.private_key
+    base_url = args.base_url.rstrip("/")
+    scheme = args.scheme
 
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
@@ -240,7 +330,24 @@ def main():
     print(f"🔑 Address: {address}")
     print(f"🌐 Domain: {domain}")
     print(f"🔗 Base URL: {base_url}")
+    print(f"📋 Scheme: {scheme}")
     print()
+
+    # Upto: check Permit2 allowance before proceeding
+    if scheme == "upto":
+        print("→ Pre-check: Verifying Permit2 allowance...")
+        allowance = check_permit2_allowance(
+            args.rpc_url, args.usdc_address, address,
+        )
+        if allowance == 0:
+            print("✗ No Permit2 allowance for USDC.")
+            print(
+                "  You must first approve the Permit2 contract: "
+                f"USDC.approve({PERMIT2_ADDRESS}, type(uint256).max)"
+            )
+            sys.exit(1)
+        print(f"✓ Permit2 allowance: {allowance} atomic USDC")
+        print()
 
     # Step 1: Get nonce
     print("→ Step 1: Getting SIWE nonce...")
@@ -268,17 +375,19 @@ def main():
         print("⚠ No payment requirements in 402 response")
         print(f"   Full response: {payment_required['body']}")
         sys.exit(1)
-    get_amount = payment_requirements[0].get("amount")
-    get_network = payment_requirements[0].get("network")
-    print(f"   Payment: {get_amount} atomic USDC on {get_network}")
-    print(f"   Asset: {payment_requirements[0].get('asset')}")
-    print(f"   pay_to: {payment_requirements[0].get('payTo')}")
-    print(f"   extra: {payment_requirements[0].get('extra')}")
 
-    # Step 5: Sign x402 payment
-    print("\n→ Step 5: Signing x402 payment...")
+    # Display all advertised schemes
+    for i, req in enumerate(payment_requirements):
+        s = req.get("scheme", "exact")
+        print(f"   [{i}] scheme={s} amount={req.get('amount')} network={req.get('network')}")
+
+    # Step 5: Sign x402 payment with the chosen scheme
+    print(f"\n→ Step 5: Signing x402 payment (scheme={scheme})...")
     try:
-        payment_sig = sign_x402_payment(payment_required["body"], private_key)
+        if scheme == "upto":
+            payment_sig = sign_upto_payment(payment_required["body"], private_key)
+        else:
+            payment_sig = sign_x402_payment(payment_required["body"], private_key)
         print(f"✓ Signed payment: {payment_sig[:50]}...")
     except Exception as e:
         print(f"✗ Error signing payment: {e}")

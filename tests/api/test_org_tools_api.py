@@ -219,3 +219,29 @@ async def test_admin_list_tools_requires_admin(api_client, monkeypatch):
 
     resp = await api_client.get("/admin/tools/test-org-id")
     assert resp.status_code == 403
+
+
+# ─── publish_as_mcp validation ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_create_tool_publish_requires_author_config(api_client, monkeypatch):
+    """POST /tools with publish_as_mcp=true must reject when no settlement wallet is registered."""
+    monkeypatch.setattr("app.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr(
+        "app.create_org_tool",
+        AsyncMock(side_effect=ValueError(
+            "Cannot publish tool to marketplace — register a settlement wallet first "
+            "via POST /marketplace/author-config"
+        )),
+    )
+
+    body = {
+        **_CREATE_BODY,
+        "publish_as_mcp": True,
+        "marketplace_description": "A published tool",
+        "base_price_usdc": 1_000_000,
+    }
+    resp = await api_client.post("/tools", json=body)
+    assert resp.status_code == 409
+    assert "settlement wallet" in resp.json()["detail"].lower()

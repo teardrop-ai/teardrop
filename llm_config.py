@@ -514,22 +514,48 @@ async def _select_cheapest(models: list[dict[str, str]]) -> dict[str, str]:
 
 
 async def _select_fastest(models: list[dict[str, str]]) -> dict[str, str]:
-    """Select the fastest model based on operational benchmarks."""
-    try:
-        from benchmarks import get_model_benchmarks
+    """Select the fastest model by p95 latency (live benchmarks) with static fallback."""
+    from benchmarks import MODEL_CATALOGUE, get_model_benchmarks
 
-        benchmarks = await get_model_benchmarks()
-        best = models[0]
-        best_latency = float("inf")
-        for m in models:
-            key = f"{m['provider']}:{m['model']}"
-            bm = benchmarks.get(key)
-            if bm and bm.get("avg_latency_ms", float("inf")) < best_latency:
-                best_latency = bm["avg_latency_ms"]
-                best = m
-        return best
+    try:
+        live = await get_model_benchmarks()
     except Exception:
-        return models[0]
+        logger.warning(
+            "_select_fastest: failed to query benchmarks, using static fallback",
+            exc_info=True,
+        )
+        live = {}
+
+    best = models[0]
+    best_latency = float("inf")
+
+    for m in models:
+        key = f"{m['provider']}:{m['model']}"
+        bm = live.get(key, {})
+        # Priority: live p95 → live avg → static catalogue default
+        latency = (
+            bm.get("p95_latency_ms")
+            or bm.get("avg_latency_ms")
+            or (MODEL_CATALOGUE.get(key) or {}).get("default_latency_ms")
+            or float("inf")
+        )
+        if latency < best_latency:
+            best_latency = latency
+            best = m
+
+    best_key = f"{best['provider']}:{best['model']}"
+    best_bm = live.get(best_key, {})
+    if best_bm.get("p95_latency_ms"):
+        source = "live_p95"
+    elif best_bm.get("avg_latency_ms"):
+        source = "live_avg"
+    else:
+        source = "static"
+    logger.debug(
+        "_select_fastest: selected %s/%s latency=%.1f source=%s candidates=%d",
+        best["provider"], best["model"], best_latency, source, len(models),
+    )
+    return best
 
 
 def _select_highest_quality(models: list[dict[str, str]]) -> dict[str, str]:

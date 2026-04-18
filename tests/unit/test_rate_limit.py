@@ -173,3 +173,65 @@ class TestRateLimitKeying:
             # Run limit for a user should be unaffected.
             run_allowed, _, _ = await app_module._check_rate_limit("run:user-xyz", 30)
             assert run_allowed is True
+
+
+# ─── Per-org keying ───────────────────────────────────────────────────────────
+
+
+class TestOrgRateLimitKeying:
+    """Verify org-scoped keys are independent from user and cross-org."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        _reset_rate_counters()
+        yield
+        _reset_rate_counters()
+
+    async def test_org_key_format(self):
+        """Org agent-run keys use 'run:org:{org_id}' format."""
+        with patch.object(app_module, "get_redis", return_value=None):
+            await app_module._check_rate_limit("run:org:org-abc", 100)
+            assert "run:org:org-abc" in app_module._rate_counters
+
+    async def test_org_key_independent_from_user_key(self):
+        """Exhausting a user key must not consume org quota."""
+        with patch.object(app_module, "get_redis", return_value=None):
+            limit = 3
+            for _ in range(limit):
+                await app_module._check_rate_limit("run:user-u1", limit)
+            user_allowed, _, _ = await app_module._check_rate_limit("run:user-u1", limit)
+            assert user_allowed is False
+
+            # Org bucket is untouched.
+            org_allowed, _, _ = await app_module._check_rate_limit("run:org:org-u1", 100)
+            assert org_allowed is True
+
+    async def test_two_orgs_are_isolated(self):
+        """Exhausting org-A's bucket must not block org-B."""
+        with patch.object(app_module, "get_redis", return_value=None):
+            limit = 3
+            for _ in range(limit):
+                await app_module._check_rate_limit("run:org:org-a", limit)
+            allowed_a, _, _ = await app_module._check_rate_limit("run:org:org-a", limit)
+            assert allowed_a is False
+
+            allowed_b, _, _ = await app_module._check_rate_limit("run:org:org-b", limit)
+            assert allowed_b is True
+
+    async def test_org_mcp_key_format(self):
+        """MCP org keys use 'mcp:org:{org_id}' format."""
+        with patch.object(app_module, "get_redis", return_value=None):
+            await app_module._check_rate_limit("mcp:org:org-xyz", 200)
+            assert "mcp:org:org-xyz" in app_module._rate_counters
+
+    async def test_mcp_org_key_independent_from_run_org_key(self):
+        """Exhausting the MCP org bucket must not affect the run org bucket."""
+        with patch.object(app_module, "get_redis", return_value=None):
+            limit = 2
+            for _ in range(limit):
+                await app_module._check_rate_limit("mcp:org:org-shared", limit)
+            mcp_allowed, _, _ = await app_module._check_rate_limit("mcp:org:org-shared", limit)
+            assert mcp_allowed is False
+
+            run_allowed, _, _ = await app_module._check_rate_limit("run:org:org-shared", 100)
+            assert run_allowed is True
