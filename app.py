@@ -86,6 +86,7 @@ from billing import (
     delete_tool_pricing_override,
     enqueue_failed_settlement,
     get_billing_history,
+    get_byok_platform_fee,
     get_credit_balance,
     get_credit_history,
     get_current_pricing,
@@ -1326,15 +1327,24 @@ async def agent_run(
     # Note: the siwe-with-balance path is the upto workaround — SIWE users who
     # top up via /billing/topup/usdc are billed calculate_run_cost_usdc() actual
     # cost post-run rather than the fixed x402 exact price.
+    #
+    # BYOK orgs are charged a flat platform fee instead of LLM cost.
     billing = BillingResult()
     auth_method = payload.get("auth_method", "")
+
+    # Resolve BYOK status early so the billing gate uses the right minimum.
+    _org_llm_cfg = await get_org_llm_config_cached(org_id)
+    is_byok = _org_llm_cfg.is_byok if _org_llm_cfg else False
+    platform_fee = get_byok_platform_fee(is_byok)
+
     if settings.billing_enabled and auth_method in settings.billable_auth_methods:
         if auth_method == "siwe":
             # Prefer credit billing when the org has a prepaid balance.
             siwe_credit_balance = await get_credit_balance(org_id)
             if siwe_credit_balance > 0:
                 pricing = await get_current_pricing()
-                min_required = pricing.run_price_usdc if pricing is not None else 0
+                default_min = pricing.run_price_usdc if pricing is not None else 0
+                min_required = platform_fee if is_byok else default_min
                 billing = await verify_credit(org_id, min_required)
                 if not billing.verified:
                     raise HTTPException(
@@ -1363,7 +1373,8 @@ async def agent_run(
             # Credit-based billing: ensure org has enough balance to cover at
             # least one run at the current flat-rate floor.
             pricing = await get_current_pricing()
-            min_required = pricing.run_price_usdc if pricing is not None else 0
+            default_min = pricing.run_price_usdc if pricing is not None else 0
+            min_required = platform_fee if is_byok else default_min
             billing = await verify_credit(org_id, min_required)
             if not billing.verified:
                 raise HTTPException(
@@ -1542,6 +1553,7 @@ async def agent_run(
             tool_names=usage_data.get("tool_names", []),
             duration_ms=duration_ms,
             cost_usdc=cost_usdc,
+            platform_fee_usdc=platform_fee,
             provider=llm_config["provider"] if llm_config else settings.agent_provider,
             model=llm_config["model"] if llm_config else settings.agent_model,
         )
@@ -1562,25 +1574,31 @@ async def agent_run(
         delegation_spend = usage_data.get("delegation_spend_usdc", 0)
 
         if billing.verified:
+            # For BYOK orgs, debit only the platform fee (they pay the LLM
+            # provider directly).  For non-BYOK, debit the full LLM cost
+            # (platform_fee is 0 in that case, so debit_amount == cost_usdc).
+            debit_amount = platform_fee if is_byok else cost_usdc
+
             if billing.billing_method == "credit":
-                # Debit actual run cost from org's prepaid balance.
-                success = await debit_credit(org_id, cost_usdc, reason=f"run:{run_id}")
+                # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
+                success = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
                 if success:
-                    await record_settlement(usage_event.id, cost_usdc, "", "settled")
+                    await record_settlement(usage_event.id, debit_amount, "", "settled")
                     yield _sse_event(
                         _EV_BILLING_SETTLEMENT,
                         {
                             "run_id": run_id,
-                            "amount_usdc": cost_usdc,
+                            "amount_usdc": debit_amount,
                             "tx_hash": "",
                             "network": "credit",
                             "delegation_cost_usdc": delegation_spend,
+                            "platform_fee_usdc": platform_fee,
                         },
                     )
                 else:
-                    await record_settlement(usage_event.id, cost_usdc, "", "failed")
+                    await record_settlement(usage_event.id, debit_amount, "", "failed")
                     await enqueue_failed_settlement(
-                        usage_event.id, org_id, run_id, "credit", cost_usdc,
+                        usage_event.id, org_id, run_id, "credit", debit_amount,
                     )
                     logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
@@ -1603,6 +1621,7 @@ async def agent_run(
                             "tx_hash": billing_settled.tx_hash,
                             "network": settings.x402_network,
                             "delegation_cost_usdc": delegation_spend,
+                            "platform_fee_usdc": platform_fee,
                         },
                     )
                 else:
@@ -1654,6 +1673,7 @@ async def agent_run(
                 "tool_calls": usage_event.tool_calls,
                 "duration_ms": usage_event.duration_ms,
                 "cost_usdc": usage_event.cost_usdc,
+                "platform_fee_usdc": platform_fee,
                 "delegation_cost_usdc": delegation_spend,
             },
         )

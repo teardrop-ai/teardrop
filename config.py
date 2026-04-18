@@ -200,6 +200,14 @@ class Settings(BaseSettings):
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
     )
+    byok_platform_fee_usdc: int = Field(
+        default=1000,
+        description=(
+            "Flat platform fee in atomic USDC charged per /agent/run when the org "
+            "uses a BYOK (Bring Your Own Key) LLM config. 1000 = $0.001. "
+            "Set to 0 to disable the fee."
+        ),
+    )
     # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
     stripe_secret_key: str = Field(
         default="", description="Stripe secret key (sk_live_... or sk_test_...)"

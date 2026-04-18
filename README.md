@@ -23,6 +23,22 @@ A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (a
 A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
 ```
 
+### Platform Tool Marketplace
+
+Teardrop exposes five built-in, metered tools through the marketplace catalog. Any caller with credits can invoke them via the MCP gateway at `GET /tools/mcp`. Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
+
+| Tool | Price/call |
+|------|------------|
+| `get_wallet_portfolio` | $0.004 (4,000 atomic) |
+| `web_search` | $0.010 (10,000 atomic) |
+| `get_token_price` | $0.002 (2,000 atomic) |
+| `http_fetch` | $0.002 (2,000 atomic) |
+| `convert_currency` | $0.002 (2,000 atomic) |
+
+Enable with `MARKETPLACE_ENABLED=true`. Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`. Per-org pricing overrides are supported via the existing `POST /admin/pricing/tools` endpoint.
+
+---
+
 ### Marketplace Settlement & USDC Sweeping
 
 Organizations can monetize their agents via a Marketplace. Earned fees are settled to organization wallets on-chain via Coinbase Developer Platform (CDP).
@@ -158,6 +174,11 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `CDP_WALLET_SECRET` | CDP wallet secret (decrypts TEE-stored keys) |
 | `CDP_NETWORK` | CDP network: `base-sepolia` (testnet) or `base` (mainnet) |
 | `AGENT_WALLET_MAX_BALANCE_USDC` | Max USDC per agent wallet (default: 100000000 = $100) |
+| `MARKETPLACE_ENABLED` | `true` to activate the tool marketplace catalog and platform tool billing in the MCP gateway |
+| `MARKETPLACE_SETTLEMENT_CDP_ACCOUNT` | CDP account name for settlement transfers (default: `td-marketplace`) |
+| `MARKETPLACE_SETTLEMENT_CHAIN_ID` | Chain for USDC sweeps (`84532` = Base Sepolia, `8453` = Base mainnet) |
+| `MARKETPLACE_AUTO_SWEEP_ENABLED` | `true` to auto-sweep org earnings on a schedule |
+| `MARKETPLACE_SWEEP_INTERVAL_SECONDS` | Sweep cadence in seconds (default: `86400` = 1 day) |
 
 ---
 
@@ -278,6 +299,8 @@ When you set `routing_preference` to a value other than `"default"`, Teardrop wi
 | `quality` | Select the highest quality model (Claude Sonnet > Claude Haiku, etc.) |
 
 **Note**: If you set BYOK (custom API key), routing is disabled — you always use your configured model.
+
+**BYOK Platform Fee**: BYOK orgs are charged a flat per-run infrastructure fee (`BYOK_PLATFORM_FEE_USDC`, default `1000` = $0.001) instead of LLM token costs. The fee appears as `platform_fee_usdc` in usage events and SSE billing events.
 
 ---
 

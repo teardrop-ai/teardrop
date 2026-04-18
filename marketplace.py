@@ -641,7 +641,8 @@ async def get_marketplace_catalog(
 ) -> list[MarketplaceTool]:
     """Return all published marketplace tools with pricing and author info.
 
-    Combines data from org_tools, orgs, and tool_pricing_overrides.
+    Combines org-published tools (org_tools) and platform-owned tools
+    (marketplace_platform_tools) into a single catalog.
     """
     pool = _get_pool()
 
@@ -685,6 +686,32 @@ async def get_marketplace_catalog(
                 author_org_slug=r["org_slug"],
             )
         )
+
+    # ── Platform tools (no org owner, execute in-process) ─────────────────
+    platform_rows = await pool.fetch(
+        """
+        SELECT tool_name, display_name, description, base_price_usdc
+        FROM marketplace_platform_tools
+        WHERE is_active = TRUE
+        ORDER BY tool_name
+        """
+    )
+    for pr in platform_rows:
+        name = pr["tool_name"]
+        cost = tool_overrides.get(name, pr["base_price_usdc"] or default_tool_cost)
+        catalog.append(
+            MarketplaceTool(
+                name=name,
+                qualified_name=f"platform/{name}",
+                description=pr["description"],
+                marketplace_description=pr["description"],
+                input_schema={},
+                cost_usdc=cost,
+                author_org_name="Teardrop",
+                author_org_slug="platform",
+            )
+        )
+
     return catalog
 
 
@@ -711,6 +738,41 @@ async def get_marketplace_tool_by_name(
     if row is None:
         return None
     return dict(row)
+
+
+# ─── Platform tool pricing cache ─────────────────────────────────────────────
+# Module-level TTL cache: tool_name → (price_usdc, expiry_monotonic).
+# Keeps the hot billing path from hitting Postgres on every MCP call.
+_PLATFORM_TOOL_CACHE: dict[str, tuple[int, float]] = {}
+_PLATFORM_TOOL_CACHE_TTL = 60.0  # seconds
+
+
+def _invalidate_platform_tool_cache() -> None:
+    """Drop the entire platform tool price cache (e.g. after admin price update)."""
+    _PLATFORM_TOOL_CACHE.clear()
+
+
+async def get_platform_tool_price(tool_name: str) -> int | None:
+    """Return base_price_usdc for a platform-owned marketplace tool, or None if not found.
+
+    Results are cached per-tool for 60 s.
+    """
+    now = time.monotonic()
+    cached = _PLATFORM_TOOL_CACHE.get(tool_name)
+    if cached is not None and now < cached[1]:
+        return cached[0]
+
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT base_price_usdc FROM marketplace_platform_tools"
+        " WHERE tool_name = $1 AND is_active = TRUE",
+        tool_name,
+    )
+    if row is None:
+        return None
+    price = int(row["base_price_usdc"])
+    _PLATFORM_TOOL_CACHE[tool_name] = (price, now + _PLATFORM_TOOL_CACHE_TTL)
+    return price
 
 
 # ─── Marketplace subscriptions ───────────────────────────────────────────────

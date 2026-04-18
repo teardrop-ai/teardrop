@@ -867,7 +867,7 @@ async def get_billing_history(
         rows = await pool.fetch(
             """
             SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
-                   cost_usdc, settlement_tx, settlement_status, created_at
+                   cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
             FROM usage_events
             WHERE user_id = $1 AND settlement_status != 'none'
             ORDER BY created_at DESC
@@ -880,7 +880,7 @@ async def get_billing_history(
         rows = await pool.fetch(
             """
             SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
-                   cost_usdc, settlement_tx, settlement_status, created_at
+                   cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
             FROM usage_events
             WHERE user_id = $1 AND settlement_status != 'none'
               AND created_at < $3
@@ -941,7 +941,7 @@ async def get_invoices(
         rows = await pool.fetch(
             """
             SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
-                   tool_names, duration_ms, cost_usdc, settlement_tx,
+                   tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
                    settlement_status, created_at
             FROM usage_events
             WHERE user_id = $1
@@ -955,7 +955,7 @@ async def get_invoices(
         rows = await pool.fetch(
             """
             SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
-                   tool_names, duration_ms, cost_usdc, settlement_tx,
+                   tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
                    settlement_status, created_at
             FROM usage_events
             WHERE user_id = $1 AND created_at < $3
@@ -978,7 +978,7 @@ async def get_invoice_by_run(run_id: str, user_id: str) -> dict | None:
     row = await pool.fetchrow(
         """
         SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
-               tool_names, duration_ms, cost_usdc, settlement_tx,
+               tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
                settlement_status, created_at
         FROM usage_events
         WHERE run_id = $1 AND user_id = $2
@@ -1821,6 +1821,13 @@ def apply_platform_fee(cost_usdc: int) -> int:
     settings = get_settings()
     fee_bps = settings.a2a_delegation_platform_fee_bps
     return cost_usdc + (cost_usdc * fee_bps) // 10_000
+
+
+def get_byok_platform_fee(is_byok: bool) -> int:
+    """Return the flat per-run platform fee for BYOK orgs, or 0 for non-BYOK."""
+    if not is_byok:
+        return 0
+    return get_settings().byok_platform_fee_usdc
 
 
 async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:

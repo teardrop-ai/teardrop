@@ -232,6 +232,18 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         actual_tool_name = tool_name.split("/", 1)[-1] if "/" in tool_name else tool_name
         tool_cost = overrides.get(actual_tool_name, default_cost)
 
+        # ── Platform tool pricing ─────────────────────────────────────────
+        # Platform tools (tools/definitions/) are not qualified with "/".
+        # Look up their marketplace price from marketplace_platform_tools.
+        is_platform_tool = False
+        if "/" not in tool_name and settings.marketplace_enabled:
+            from marketplace import get_platform_tool_price
+
+            platform_price = await get_platform_tool_price(tool_name)
+            if platform_price is not None:
+                tool_cost = overrides.get(tool_name, platform_price)
+                is_platform_tool = True
+
         # Subscription gate: marketplace tools require an active subscription.
         if "/" in tool_name and settings.marketplace_enabled:
             from marketplace import check_org_subscription
