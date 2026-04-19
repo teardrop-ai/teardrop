@@ -235,6 +235,7 @@ async def upsert_org_llm_config(
     provider: str,
     model: str,
     api_key: str | None = None,
+    clear_api_key: bool = False,
     api_base: str | None = None,
     max_tokens: int = 4096,
     temperature: float = 0.0,
@@ -244,7 +245,10 @@ async def upsert_org_llm_config(
     """Insert or update an org's LLM configuration.
 
     If *api_key* is provided, it is encrypted at rest via Fernet.
-    If *api_key* is ``None`` on an update, the existing key is preserved.
+    If *api_key* is ``None`` and *clear_api_key* is ``False``, the existing
+    key is preserved on update.
+    If *api_key* is ``None`` and *clear_api_key* is ``True``, any stored key
+    is removed and ``is_byok`` is set to ``False``.
     """
     pool = _get_pool()
     is_byok = api_key is not None
@@ -280,9 +284,37 @@ async def upsert_org_llm_config(
             max_tokens, temperature, timeout_seconds,
             routing_preference, is_byok, now,
         )
-    else:
-        # Upsert preserving existing api_key_enc
+    elif clear_api_key:
+        # Explicitly clear BYOK key while preserving other config
         await pool.execute(
+            """
+            INSERT INTO org_llm_config
+                (org_id, provider, model, api_key_enc, api_base,
+                 max_tokens, temperature, timeout_seconds,
+                 routing_preference, is_byok, created_at, updated_at)
+            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, FALSE, $9, $9)
+            ON CONFLICT (org_id) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                api_key_enc = NULL,
+                api_base = EXCLUDED.api_base,
+                max_tokens = EXCLUDED.max_tokens,
+                temperature = EXCLUDED.temperature,
+                timeout_seconds = EXCLUDED.timeout_seconds,
+                routing_preference = EXCLUDED.routing_preference,
+                is_byok = FALSE,
+                updated_at = EXCLUDED.updated_at
+            """,
+            org_id, provider, model, api_base,
+            max_tokens, temperature, timeout_seconds,
+            routing_preference, now,
+        )
+        is_byok = False
+        has_key = False
+    else:
+        # Upsert preserving existing api_key_enc — use RETURNING to
+        # reflect actual DB state in the returned object.
+        row = await pool.fetchrow(
             """
             INSERT INTO org_llm_config
                 (org_id, provider, model, api_base,
@@ -298,11 +330,18 @@ async def upsert_org_llm_config(
                 timeout_seconds = EXCLUDED.timeout_seconds,
                 routing_preference = EXCLUDED.routing_preference,
                 updated_at = EXCLUDED.updated_at
+            RETURNING is_byok, (api_key_enc IS NOT NULL) AS has_api_key
             """,
             org_id, provider, model, api_base,
             max_tokens, temperature, timeout_seconds,
             routing_preference, now,
         )
+        is_byok = row["is_byok"] if row else False
+        has_key = row["has_api_key"] if row else False
+
+    # For the api_key branch, both flags are trivially True.
+    if api_key_enc is not None:
+        has_key = True
 
     await invalidate_llm_config_cache(org_id)
 
@@ -310,7 +349,7 @@ async def upsert_org_llm_config(
         org_id=org_id,
         provider=provider,
         model=model,
-        has_api_key=is_byok or (api_key_enc is not None),
+        has_api_key=has_key,
         api_base=api_base,
         max_tokens=max_tokens,
         temperature=temperature,

@@ -2883,6 +2883,7 @@ async def upsert_llm_config_endpoint(
         provider=body.provider.lower(),
         model=body.model,
         api_key=body.api_key,
+        clear_api_key="api_key" in body.model_fields_set and body.api_key is None,
         api_base=body.api_base,
         max_tokens=body.max_tokens,
         temperature=body.temperature,

@@ -627,6 +627,7 @@ class TestUpsertOrgLlmConfig:
     @pytest.mark.asyncio
     async def test_upsert_without_api_key(self, mock_settings):
         pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value={"is_byok": False, "has_api_key": False})
         llm_config._pool = pool
 
         with patch("llm_config.get_settings", return_value=mock_settings), \
@@ -637,7 +638,44 @@ class TestUpsertOrgLlmConfig:
 
         assert cfg.is_byok is False
         assert cfg.has_api_key is False
+        pool.fetchrow.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserve_existing_byok_key(self, mock_settings):
+        """Omitting api_key on an existing BYOK row preserves the key and is_byok state."""
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value={"is_byok": True, "has_api_key": True})
+        llm_config._pool = pool
+
+        with patch("llm_config.get_settings", return_value=mock_settings), \
+             patch("llm_config.get_redis", return_value=None):
+            cfg = await upsert_org_llm_config(
+                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+            )
+
+        assert cfg.is_byok is True
+        assert cfg.has_api_key is True
+        pool.fetchrow.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_upsert_clear_api_key(self, mock_settings):
+        """Passing clear_api_key=True removes the BYOK key without deleting the config."""
+        pool = AsyncMock()
+        llm_config._pool = pool
+
+        with patch("llm_config.get_settings", return_value=mock_settings), \
+             patch("llm_config.get_redis", return_value=None):
+            cfg = await upsert_org_llm_config(
+                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+                clear_api_key=True,
+            )
+
+        assert cfg.is_byok is False
+        assert cfg.has_api_key is False
         pool.execute.assert_called_once()
+        sql = pool.execute.call_args[0][0]
+        assert "api_key_enc = NULL" in sql
+        assert "is_byok = FALSE" in sql
 
     @pytest.mark.asyncio
     async def test_upsert_invalidates_cache(self, mock_settings):
