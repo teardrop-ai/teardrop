@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from tools.definitions.get_token_price import (
     GetTokenPriceInput,
     _resolve_id,
+    _token_cache,
     get_token_price,
 )
 
@@ -41,8 +42,7 @@ class TestResolveId:
 class TestGetTokenPrice:
     async def test_returns_prices(self, test_settings, monkeypatch):
         # Clear cache
-        monkeypatch.setattr("tools.definitions.get_token_price._price_cache", {})
-        monkeypatch.setattr("tools.definitions.get_token_price._price_cache_expires", 0.0)
+        monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})
 
         mock_session = MagicMock()
         mock_resp = AsyncMock()
@@ -70,8 +70,7 @@ class TestGetTokenPrice:
         assert result["prices"][0]["symbol"] == "BTC"
 
     async def test_api_failure_returns_none_prices(self, test_settings, monkeypatch):
-        monkeypatch.setattr("tools.definitions.get_token_price._price_cache", {})
-        monkeypatch.setattr("tools.definitions.get_token_price._price_cache_expires", 0.0)
+        monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})
 
         mock_session = MagicMock()
         mock_resp = AsyncMock()

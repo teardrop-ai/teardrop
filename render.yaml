@@ -108,3 +108,7 @@ services:
 
       - key: MARKETPLACE_SETTLEMENT_CHAIN_ID
         value: "8453"
+
+      # ── Optional: CoinGecko API key ───────────────────────────────────────────
+      - key: COINGECKO_API_KEY
+        sync: false

@@ -11,15 +11,18 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field
 
+from config import get_settings
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-# ─── In-process TTL cache ─────────────────────────────────────────────────────
+# ─── In-process TTL cache (per-token) ───────────────────────────────────────
+# Keyed by "{cg_id}:{vs_currency}"; value is (expires_at, raw_coingecko_entry).
+# Per-token storage means a cached ETH price is reused whether the caller
+# requests [ETH] or [BTC, ETH] — drastically reduces upstream API calls.
 
-_price_cache: dict[str, dict[str, Any]] = {}
-_price_cache_expires: float = 0.0
-_PRICE_CACHE_TTL = 60  # seconds
+_token_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_PRICE_CACHE_TTL = 120  # seconds
 
 # Well-known symbol → CoinGecko ID mappings
 _SYMBOL_TO_ID: dict[str, str] = {
@@ -93,69 +96,76 @@ class GetTokenPriceOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def get_token_price(
-    tokens: list[str], vs_currency: str = "usd"
-) -> dict[str, Any]:
-    """Get current prices for one or more crypto tokens."""
-    global _price_cache, _price_cache_expires
-
-    vs = vs_currency.strip().lower()
-    ids = [_resolve_id(t) for t in tokens]
-    ids_str = ",".join(ids)
-    cache_key = f"{ids_str}:{vs}"
-
-    # Check cache
-    if time.monotonic() < _price_cache_expires and cache_key in _price_cache:
-        return _price_cache[cache_key]
-
+async def _fetch_from_coingecko(
+    ids: list[str], vs: str
+) -> dict[str, dict[str, Any]]:
+    """Call CoinGecko for the given IDs. Returns raw per-ID data dict."""
     url = (
         f"https://api.coingecko.com/api/v3/simple/price"
-        f"?ids={ids_str}&vs_currencies={vs}"
+        f"?ids={','.join(ids)}&vs_currencies={vs}"
         f"&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true"
     )
-
-    # Optionally use API key if configured
     headers: dict[str, str] = {}
     try:
-        from config import get_settings
         api_key = get_settings().coingecko_api_key
         if api_key:
             headers["x-cg-demo-api-key"] = api_key
     except Exception:
         pass
 
-    data: dict[str, Any] = {}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                else:
-                    logger.warning("CoinGecko returned status %d", resp.status)
+                    return await resp.json()
+                logger.warning("CoinGecko returned status %d", resp.status)
     except Exception as exc:
         logger.warning("CoinGecko request failed: %s", exc)
+    return {}
 
-    prices = []
-    for original, cg_id in zip(tokens, ids):
-        entry = data.get(cg_id, {})
-        prices.append({
+
+async def get_token_price(
+    tokens: list[str], vs_currency: str = "usd"
+) -> dict[str, Any]:
+    """Get current prices for one or more crypto tokens."""
+    vs = vs_currency.strip().lower()
+    ids = [_resolve_id(t) for t in tokens]
+    now = time.monotonic()
+
+    # Split into cached vs uncached — only fetch what we don't already have
+    cached: dict[str, dict[str, Any]] = {}
+    missing_ids: list[str] = []
+
+    for cg_id in ids:
+        entry = _token_cache.get(f"{cg_id}:{vs}")
+        if entry and now < entry[0]:
+            cached[cg_id] = entry[1]
+        else:
+            missing_ids.append(cg_id)
+
+    if missing_ids:
+        fetched = await _fetch_from_coingecko(missing_ids, vs)
+        expires_at = now + _PRICE_CACHE_TTL
+        for cg_id in missing_ids:
+            data = fetched.get(cg_id, {})
+            _token_cache[f"{cg_id}:{vs}"] = (expires_at, data)
+            cached[cg_id] = data
+
+    prices = [
+        {
             "id": cg_id,
             "symbol": original.upper(),
-            "price": entry.get(vs),
-            "market_cap": entry.get(f"{vs}_market_cap"),
-            "volume_24h": entry.get(f"{vs}_24h_vol"),
-            "change_24h_pct": entry.get(f"{vs}_24h_change"),
-        })
+            "price": cached.get(cg_id, {}).get(vs),
+            "market_cap": cached.get(cg_id, {}).get(f"{vs}_market_cap"),
+            "volume_24h": cached.get(cg_id, {}).get(f"{vs}_24h_vol"),
+            "change_24h_pct": cached.get(cg_id, {}).get(f"{vs}_24h_change"),
+        }
+        for original, cg_id in zip(tokens, ids)
+    ]
 
-    result = {"vs_currency": vs, "prices": prices}
-
-    # Update cache
-    _price_cache[cache_key] = result
-    _price_cache_expires = time.monotonic() + _PRICE_CACHE_TTL
-
-    return result
+    return {"vs_currency": vs, "prices": prices}
 
 
 # ─── Tool definition ─────────────────────────────────────────────────────────
