@@ -349,6 +349,36 @@ async def get_client_credential_by_id(client_id: str) -> "OrgClientCredential | 
     )
 
 
+async def list_org_client_credentials(org_id: str) -> list["OrgClientCredential"]:
+    """Return all client credentials for an org, ordered by creation date."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT client_id, org_id, hashed_secret, salt, created_at"
+        " FROM org_client_credentials WHERE org_id = $1"
+        " ORDER BY created_at DESC",
+        org_id,
+    )
+    return [
+        OrgClientCredential(
+            client_id=r["client_id"],
+            org_id=r["org_id"],
+            hashed_secret=r["hashed_secret"],
+            salt=r["salt"],
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
+async def delete_org_client_credentials(org_id: str) -> None:
+    """Delete all client credentials for an org (used during secret rotation)."""
+    pool = _get_pool()
+    await pool.execute(
+        "DELETE FROM org_client_credentials WHERE org_id = $1",
+        org_id,
+    )
+
+
 # ─── Self-serve registration ──────────────────────────────────────────────────
 
 

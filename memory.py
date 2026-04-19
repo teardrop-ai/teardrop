@@ -61,14 +61,7 @@ async def init_memory_db(pool: asyncpg.Pool) -> None:
         logger.warning("Memory disabled — openai_api_key is not set")
         return
 
-    try:
-        from pgvector.asyncpg import register_vector
-
-        async with pool.acquire() as conn:
-            await register_vector(conn)
-        logger.info("Memory DB ready (pgvector types registered)")
-    except Exception:
-        logger.exception("Failed to register pgvector types — memory features unavailable")
+    logger.info("Memory DB ready (pgvector types registered per-connection via pool init)")
 
 
 async def close_memory_db() -> None:

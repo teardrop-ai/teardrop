@@ -189,13 +189,14 @@ async def _execute_single_tool(
                     })
                     return ToolMessage(content=content, tool_call_id=call_id), tool_name
 
+                from billing import _get_pool as _get_billing_pool
                 from tools.definitions.delegate_to_agent import delegate_to_agent
 
                 config = {
                     "configurable": {
                         "org_id": metadata.get("org_id", ""),
                         "run_id": metadata.get("run_id", ""),
-                        "db_pool": metadata.get("_db_pool"),
+                        "db_pool": _get_billing_pool(),
                         "jwt_token": metadata.get("_jwt_token"),
                     }
                 }

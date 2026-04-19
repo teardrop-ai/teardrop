@@ -200,8 +200,10 @@ from users import (
     create_refresh_token,
     create_user,
     create_verification_token,
+    delete_org_client_credentials,
     get_client_credential_by_id,
     get_org_by_name,
+    list_org_client_credentials,
     get_org_invite,
     get_user_by_email,
     get_user_by_org_id,
@@ -342,7 +344,14 @@ async def lifespan(app: FastAPI):
     # Warn on insecure defaults; raise on critical misconfigurations in production.
     _validate_production_config(settings)
 
-    pool = await asyncpg.create_pool(settings.pg_dsn)
+    async def _init_conn(conn: asyncpg.Connection) -> None:
+        try:
+            from pgvector.asyncpg import register_vector
+            await register_vector(conn)
+        except Exception:
+            pass  # pgvector unavailable; memory features will be disabled
+
+    pool = await asyncpg.create_pool(settings.pg_dsn, init=_init_conn)
     app.state.pool = pool
     await apply_pending(pool)
     await init_redis(settings.redis_url)
@@ -1439,7 +1448,6 @@ async def agent_run(
                 "_org_tools_by_name": org_tools_by_name,
                 "_memories": recalled,
                 "_llm_config": llm_config,
-                "_db_pool": request.app.state.pool,
                 "_jwt_token": (request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None),
             },
         )
@@ -1741,6 +1749,57 @@ async def admin_create_user(
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"id": user.id, "email": user.email, "org_id": user.org_id, "role": user.role},
+    )
+
+
+# ─── Org credentials endpoints (member-accessible) ──────────────────────────
+
+
+@app.get("/org/credentials", tags=["Credentials"])
+async def get_org_credentials(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List all M2M client credentials for the authenticated org.
+
+    Returns client_id and created_at only — secrets are never stored in plain
+    text and cannot be retrieved after creation.
+    """
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — credentials require an org-scoped session.",
+        )
+    credentials = await list_org_client_credentials(org_id)
+    return JSONResponse(content=[
+        {"client_id": c.client_id, "created_at": c.created_at.isoformat()}
+        for c in credentials
+    ])
+
+
+@app.post("/org/credentials/regenerate", tags=["Credentials"])
+async def regenerate_org_credentials(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Rotate org M2M credentials: delete all existing and issue a new pair.
+
+    The new client_secret is returned exactly once — store it immediately.
+    """
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token — credentials require an org-scoped session.",
+        )
+    await delete_org_client_credentials(org_id)
+    cred, plaintext_secret = await create_client_credential(org_id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "client_id": cred.client_id,
+            "client_secret": plaintext_secret,
+            "created_at": cred.created_at.isoformat(),
+        },
     )
 
 
