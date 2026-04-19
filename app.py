@@ -417,8 +417,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "PATCH", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-RateLimit-Scope", "Retry-After"],
 )
 
 # ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
