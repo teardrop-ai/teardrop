@@ -249,6 +249,22 @@ async def get_user_by_email(email: str) -> User | None:
     return user
 
 
+async def get_org_by_id(org_id: str) -> Org | None:
+    """Look up an organisation by its ID. Returns None if not found."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT id, name, created_at FROM orgs WHERE id = $1",
+        org_id,
+    )
+    if row is None:
+        return None
+    return Org(
+        id=row["id"],
+        name=row["name"],
+        created_at=row["created_at"],
+    )
+
+
 async def get_org_by_name(name: str) -> Org | None:
     """Look up an organisation by name. Returns None if not found."""
     pool = _get_pool()

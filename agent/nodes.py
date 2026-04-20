@@ -11,12 +11,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
 from agent.llm import extract_usage, get_llm, get_llm_for_request
 from agent.state import A2UIComponent, AgentState, TaskStatus
+from benchmarks import get_model_context_specs
 from config import get_settings
 from tools import registry
 
@@ -114,6 +116,61 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             "Use them as background context only — do not repeat them verbatim unless asked.\n"
             f"{memory_block}"
         )
+
+    # ── Inject runtime context (date/time, model, org, billing) ───────────
+    # Placed after static content to maximise prompt cache hit rate.
+    now = datetime.now(timezone.utc)
+    _cfg = llm_config or {}
+    _provider = _cfg.get("provider", settings.agent_provider)
+    _model = _cfg.get("model", settings.agent_model)
+    _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
+    _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
+    model_specs = get_model_context_specs(_provider, _model)
+
+    context_lines = [
+        f"- **Date & Time (UTC)**: {now.strftime('%A, %B %d, %Y at %H:%M:%S UTC')}",
+        f"- **ISO 8601**: {now.isoformat()}",
+        f"- **Model**: {_provider}/{_model}",
+        f"- **Model Knowledge Cutoff**: {model_specs['knowledge_cutoff']} "
+        f"({model_specs['training_cutoff_note']})",
+        f"- **Context Window**: {model_specs['context_window']:,} tokens",
+        f"- **Max Response Tokens**: {_max_tokens:,}",
+        f"- **Request Timeout**: {_timeout}s",
+    ]
+
+    _org_name: str = state.metadata.get("_org_name", "")
+    _user_role: str = state.metadata.get("_user_role", "user")
+    if _org_name:
+        # Sanitise to guard against prompt injection via org name.
+        context_lines.append(f"- **Organisation**: {_org_name.replace('```', '---')}")
+    context_lines.append(f"- **User Role**: {_user_role.replace('```', '---')}")
+
+    _credit_balance_usdc: int | None = state.metadata.get("_credit_balance_usdc")
+    if _credit_balance_usdc is not None:
+        balance_usd = _credit_balance_usdc / 1_000_000
+        context_lines.append(f"- **Remaining Credit Balance**: ${balance_usd:.4f} USD")
+
+    system_prompt += (
+        "\n\n## Current Runtime Context\n"
+        "Use this information to ground your responses in current reality. "
+        "When answering questions about 'today', 'this year', 'last year', recent events, "
+        "or any time-relative analysis, always anchor to the date above — "
+        "never assume dates based on your training data.\n"
+        + "\n".join(context_lines)
+    )
+
+    # ── Available tools summary ────────────────────────────────────────────
+    # Listing tools explicitly helps smaller models plan without trial-and-error.
+    if all_tools:
+        tool_lines = [
+            f"- **{t.name}**: {t.description.splitlines()[0]}"
+            for t in all_tools
+        ]
+        system_prompt += (
+            "\n\n## Available Tools\n"
+            + "\n".join(tool_lines)
+        )
+
     messages = [SystemMessage(content=system_prompt), *state.messages]
 
     try:

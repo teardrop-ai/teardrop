@@ -34,6 +34,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 2,
         "default_latency_ms": 600,
+        "knowledge_cutoff": "2025-10",
+        "training_cutoff_note": "Training data through October 2025",
     },
     "anthropic:claude-sonnet-4-20250514": {
         "provider": "anthropic",
@@ -44,6 +46,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 1,
         "default_latency_ms": 1800,
+        "knowledge_cutoff": "2025-05",
+        "training_cutoff_note": "Training data through May 2025",
     },
     "openai:gpt-4o-mini": {
         "provider": "openai",
@@ -54,6 +58,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 2,
         "default_latency_ms": 500,
+        "knowledge_cutoff": "2024-07",
+        "training_cutoff_note": "Training data through July 2024",
     },
     "openai:gpt-4o": {
         "provider": "openai",
@@ -64,6 +70,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 1,
         "default_latency_ms": 1500,
+        "knowledge_cutoff": "2024-04",
+        "training_cutoff_note": "Training data through April 2024",
     },
     "google:gemini-2.0-flash": {
         "provider": "google",
@@ -74,6 +82,8 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 2,
         "default_latency_ms": 400,
+        "knowledge_cutoff": "2025-01",
+        "training_cutoff_note": "Training data through January 2025",
     },
     "google:gemini-2.5-pro": {
         "provider": "google",
@@ -84,8 +94,39 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "supports_streaming": True,
         "quality_tier": 1,
         "default_latency_ms": 2000,
+        "knowledge_cutoff": "2025-01",
+        "training_cutoff_note": "Training data through January 2025",
     },
 }
+
+# ─── Model spec lookup (used for runtime context injection) ──────────────────
+
+_DEFAULT_MODEL_SPECS: dict[str, Any] = {
+    "context_window": 128_000,
+    "knowledge_cutoff": "Unknown",
+    "training_cutoff_note": "Training cutoff date unknown",
+    "supports_tools": True,
+    "quality_tier": 1,
+}
+
+
+def get_model_context_specs(provider: str, model: str) -> dict[str, Any]:
+    """Return static specs for a provider/model pair from MODEL_CATALOGUE.
+
+    Falls back to ``_DEFAULT_MODEL_SPECS`` if the model is not catalogued.
+    Used by ``planner_node`` to inject grounding context into the system prompt.
+    """
+    key = f"{provider}:{model}"
+    entry = MODEL_CATALOGUE.get(key)
+    if entry is None:
+        return dict(_DEFAULT_MODEL_SPECS)
+    return {
+        "context_window": entry.get("context_window", _DEFAULT_MODEL_SPECS["context_window"]),
+        "knowledge_cutoff": entry.get("knowledge_cutoff", _DEFAULT_MODEL_SPECS["knowledge_cutoff"]),
+        "training_cutoff_note": entry.get("training_cutoff_note", _DEFAULT_MODEL_SPECS["training_cutoff_note"]),
+        "supports_tools": entry.get("supports_tools", True),
+        "quality_tier": entry.get("quality_tier", 1),
+    }
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 

@@ -202,6 +202,7 @@ from users import (
     create_verification_token,
     delete_org_client_credentials,
     get_client_credential_by_id,
+    get_org_by_id,
     get_org_by_name,
     list_org_client_credentials,
     get_org_invite,
@@ -1436,6 +1437,24 @@ async def agent_run(
         except Exception:
             logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
 
+        # ── Fetch org name for context injection ──────────────────────────
+        _org_name: str = ""
+        if org_id:
+            try:
+                _org = await get_org_by_id(org_id)
+                if _org is not None:
+                    _org_name = _org.name
+            except Exception:
+                logger.debug("Org name fetch failed for org_id=%s", org_id, exc_info=True)
+
+        # ── Fetch credit balance for context injection (credit billing only) ─
+        _credit_balance_usdc: int | None = None
+        if settings.billing_enabled and billing.verified and billing.billing_method == "credit":
+            try:
+                _credit_balance_usdc = await get_credit_balance(org_id)
+            except Exception:
+                logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
+
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
             metadata={
@@ -1449,6 +1468,9 @@ async def agent_run(
                 "_org_tools_by_name": org_tools_by_name,
                 "_memories": recalled,
                 "_llm_config": llm_config,
+                "_org_name": _org_name,
+                "_user_role": payload.get("role", "user"),
+                "_credit_balance_usdc": _credit_balance_usdc,
                 "_jwt_token": (request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None),
             },
         )
