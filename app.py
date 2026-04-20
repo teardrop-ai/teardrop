@@ -512,6 +512,7 @@ _EV_USAGE_SUMMARY = "USAGE_SUMMARY"
 _EV_BILLING_SETTLEMENT = "BILLING_SETTLEMENT"
 _EV_ERROR = "ERROR"
 _EV_DONE = "DONE"
+_EV_CUSTOM = "Custom"  # ag-ui Custom event for application-defined structured payloads
 
 
 # ─── Request / response models ────────────────────────────────────────────────
@@ -1486,12 +1487,37 @@ async def agent_run(
 
                 # --- Tool call end ---
                 elif event_name == "on_tool_end":
+                    tool_call_id = event.get("run_id", "")
+                    raw_output = event_data.get("output", "")
                     yield _sse_event(
                         _EV_TOOL_CALL_END,
                         {
-                            "tool_call_id": event.get("run_id", ""),
+                            "tool_call_id": tool_call_id,
                             "tool_name": node_name,
-                            "output": str(event_data.get("output", "")),
+                            "output": str(raw_output),
+                        },
+                    )
+                    # Emit structured tool output as a Custom event (ag-ui spec).
+                    # TEXT_MESSAGE_CONTENT carries human-readable text only;
+                    # TOOL_OUTPUT carries machine-readable structured data.
+                    # Consumers that don't recognise this event ignore it cleanly.
+                    structured: Any = raw_output
+                    if isinstance(raw_output, str):
+                        try:
+                            structured = json.loads(raw_output)
+                        except (json.JSONDecodeError, ValueError):
+                            pass  # Leave as plain string — valid for text-only tools
+                    elif hasattr(raw_output, "model_dump"):
+                        structured = raw_output.model_dump()
+                    yield _sse_event(
+                        _EV_CUSTOM,
+                        {
+                            "name": "TOOL_OUTPUT",
+                            "value": {
+                                "tool_call_id": tool_call_id,
+                                "tool_name": node_name,
+                                "data": structured,
+                            },
                         },
                     )
 
