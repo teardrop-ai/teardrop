@@ -125,3 +125,66 @@ async def test_register_no_auth_required(anon_client, monkeypatch):
         json={"org_name": "Public Org", "email": "pub@example.com", "password": "strongpass1"},
     )
     assert resp.status_code != 401
+
+
+# ─── Input validation ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_register_invalid_email_format_422(anon_client):
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Org", "email": "notanemail", "password": "strongpass1"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_register_email_normalized_to_lowercase(anon_client, monkeypatch):
+    """Email submitted in mixed case must be stored lowercase."""
+    org, user = _mock_org(), _mock_user()
+    captured: dict = {}
+
+    async def fake_register(org_name: str, email: str, secret: str):
+        captured["email"] = email
+        return org, user
+
+    monkeypatch.setattr("app.register_org_and_user", fake_register)
+    monkeypatch.setattr("app.create_verification_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("app.send_verification_email", AsyncMock())
+    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="rt"))
+
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Alice Inc", "email": "ALICE@EXAMPLE.COM", "password": "strongpass1"},
+    )
+
+    assert resp.status_code == 201
+    assert captured["email"] == "alice@example.com"
+
+
+@pytest.mark.anyio
+async def test_register_password_missing_digit_422(anon_client):
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Org", "email": "alice@example.com", "password": "nodigitshere"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_register_per_email_rate_limit_429(anon_client, monkeypatch):
+    """Per-email bucket blocks repeated registrations for the same address even across IPs."""
+
+    async def _rate_limit(key: str, limit: int):
+        if key.startswith("register:email:"):
+            return (False, 0, 0)
+        return (True, 59, 0)
+
+    monkeypatch.setattr("app._check_rate_limit", _rate_limit)
+
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Org", "email": "alice@example.com", "password": "strongpass1"},
+    )
+    assert resp.status_code == 429

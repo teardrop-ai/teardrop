@@ -87,6 +87,10 @@ class Settings(BaseSettings):
         default=20,
         description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)",
     )
+    rate_limit_register_rpm: int = Field(
+        default=5,
+        description="Per-IP rate limit for POST /register (requests per minute). Intentionally lower than auth.",
+    )
     rate_limit_org_agent_rpm: int = Field(
         default=100,
         description=(
@@ -467,6 +471,17 @@ class Settings(BaseSettings):
     # ── Refresh Tokens ────────────────────────────────────────────────────────
     refresh_token_expire_days: int = Field(
         default=30, description="Refresh token validity window in days"
+    )
+    refresh_token_cleanup_interval_seconds: int = Field(
+        default=3600,
+        description="Background worker interval for deleting revoked+expired refresh tokens (seconds)",
+    )
+    refresh_token_idempotency_window_seconds: int = Field(
+        default=60,
+        description=(
+            "How long after rotation a client may replay the old refresh token and receive "
+            "the successor tokens. Handles network timeouts where the 200 was never delivered."
+        ),
     )
 
     # ── Validators ─────────────────────────────────────────────────────────────

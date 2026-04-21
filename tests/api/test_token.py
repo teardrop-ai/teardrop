@@ -221,3 +221,24 @@ async def test_token_unknown_client_id_wrong_config_secret(anon_client, test_set
         json={"client_id": test_settings.jwt_client_id, "client_secret": "wrong"},
     )
     assert resp.status_code == 401
+
+
+# ─── Per-email rate limiting ──────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_token_per_email_rate_limit_429(anon_client, monkeypatch):
+    """Per-email bucket blocks credential stuffing for a target address even within the IP limit."""
+
+    async def _rate_limit(key: str, limit: int):
+        if key.startswith("token:email:"):
+            return (False, 0, 0)
+        return (True, 59, 0)
+
+    monkeypatch.setattr("app._check_rate_limit", _rate_limit)
+
+    resp = await anon_client.post(
+        "/token",
+        json={"email": "victim@example.com", "secret": "anypassword"},
+    )
+    assert resp.status_code == 429

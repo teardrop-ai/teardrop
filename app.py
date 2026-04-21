@@ -39,6 +39,7 @@ if sys.platform == "win32":
 import hmac
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -53,7 +54,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, s
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
@@ -190,9 +191,9 @@ from usage import (
     record_usage_event,
 )
 from users import (
+    cleanup_expired_refresh_tokens,
     close_user_db,
     consume_org_invite,
-    consume_refresh_token,
     consume_verification_token,
     create_client_credential,
     create_org,
@@ -204,6 +205,7 @@ from users import (
     get_client_credential_by_id,
     get_org_by_id,
     get_org_by_name,
+    get_refresh_token_successor,
     list_org_client_credentials,
     get_org_invite,
     get_user_by_email,
@@ -212,6 +214,7 @@ from users import (
     mark_user_verified,
     register_org_and_user,
     revoke_refresh_token,
+    rotate_refresh_token,
     verify_secret,
 )
 from wallets import (
@@ -334,6 +337,21 @@ async def _memory_cleanup_loop() -> None:
             logger.exception("Memory cleanup loop error")
 
 
+async def _refresh_token_cleanup_loop() -> None:
+    """Periodically delete revoked+expired refresh tokens (runs as background task)."""
+    interval = settings.refresh_token_cleanup_interval_seconds
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            deleted = await cleanup_expired_refresh_tokens()
+            if deleted:
+                logger.info("Refresh token cleanup: deleted %d expired tokens", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Refresh token cleanup loop error")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
@@ -379,6 +397,7 @@ async def lifespan(app: FastAPI):
         from marketplace import _marketplace_sweep_loop
 
         bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
+    bg_tasks.append(asyncio.create_task(_refresh_token_cleanup_loop()))
 
     yield
 
@@ -744,6 +763,14 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
 
     # ── User-credentials flow ──────────────────────────────────────────────
     if body.email and body.secret:
+        email_key = body.email.strip().lower()
+        email_allowed, _, _ = await _check_rate_limit(f"token:email:{email_key}", 5)
+        if not email_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please slow down.",
+                headers={"Retry-After": "60"},
+            )
         user = await get_user_by_email(body.email)
         if user is None or not verify_secret(body.secret, user.hashed_secret, user.salt):
             raise HTTPException(
@@ -930,16 +957,23 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
 async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
     """Return identity claims for the currently authenticated user.
 
-    Decodes the Bearer JWT and echoes back the stable claims so the
-    frontend can identify the user without an extra database round-trip.
+    Decodes the Bearer JWT and echoes back the stable claims, augmented
+    with org_name fetched from the database so the frontend can display
+    the organisation name without a separate endpoint.
     """
+    org_id: str = payload.get("org_id", "")
     body: dict = {
         "user_id": payload["sub"],
-        "org_id": payload.get("org_id", ""),
+        "org_id": org_id,
         "role": payload.get("role", "user"),
         "auth_method": payload.get("auth_method", ""),
         "email": payload.get("email", ""),
     }
+    # Augment with org_name from the database when an org_id is present.
+    # Falls back to "" for config-based client_credentials (no org row).
+    if org_id:
+        _org = await get_org_by_id(org_id)
+        body["org_name"] = _org.name if _org else ""
     # Include wallet-specific fields only for SIWE sessions.
     if payload.get("auth_method") == "siwe":
         body["address"] = payload.get("address", "")
@@ -971,11 +1005,30 @@ async def siwe_nonce(request: Request) -> JSONResponse:
 
 # ─── Self-serve registration & email verification ──────────────────────────────
 
+# Compiled once at import time. Intentionally permissive — catches obvious non-emails
+# without rejecting valid edge cases. Full RFC 5322 validation is handled by the mail server.
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
 
 class RegisterRequest(BaseModel):
     org_name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("Invalid email address format")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        return v
 
 
 @app.post("/register", tags=["Auth"], status_code=status.HTTP_201_CREATED)
@@ -987,18 +1040,25 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     """
     client_ip = request.client.host if request.client else "unknown"
     allowed, remaining, reset_at = await _check_rate_limit(
-        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+        f"register:{client_ip}", settings.rate_limit_register_rpm
     )
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded.",
             headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
+                "X-RateLimit-Limit": str(settings.rate_limit_register_rpm),
                 "X-RateLimit-Remaining": str(remaining),
                 "X-RateLimit-Reset": str(reset_at),
                 "Retry-After": "60",
             },
+        )
+    email_allowed, _, _ = await _check_rate_limit(f"register:email:{body.email}", 3)
+    if not email_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded.",
+            headers={"Retry-After": "60"},
         )
     try:
         org, user = await register_org_and_user(
@@ -1095,7 +1155,12 @@ class RefreshRequest(BaseModel):
 
 @app.post("/auth/refresh", tags=["Auth"])
 async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSONResponse:
-    """Exchange a refresh token for a new access token and rotated refresh token."""
+    """Exchange a refresh token for a new access token and rotated refresh token.
+
+    Idempotent: if the client retried after a network timeout (the old token was
+    already rotated but the 200 was never delivered), the successor token is
+    replayed within refresh_token_idempotency_window_seconds.
+    """
     client_ip = request.client.host if request.client else "unknown"
     allowed, remaining, reset_at = await _check_rate_limit(
         f"auth:{client_ip}", settings.rate_limit_auth_rpm
@@ -1111,27 +1176,53 @@ async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSON
                 "Retry-After": "60",
             },
         )
-    record = await consume_refresh_token(body.refresh_token)
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid, expired, or revoked refresh token.",
-        )
-    access_token = create_access_token(subject=record.user_id, extra_claims=record.extra_claims)
-    new_refresh = await create_refresh_token(
-        user_id=record.user_id,
-        org_id=record.org_id,
-        auth_method=record.auth_method,
-        extra_claims=record.extra_claims,
+
+    # ── Happy path: atomic rotation ───────────────────────────────────────
+    result = await rotate_refresh_token(
+        body.refresh_token,
         expire_days=settings.refresh_token_expire_days,
     )
-    return JSONResponse(
-        content={
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.jwt_access_token_expire_minutes * 60,
-            "refresh_token": new_refresh,
-        }
+    if result is not None:
+        record, new_refresh = result
+        access_token = create_access_token(
+            subject=record.user_id, extra_claims=record.extra_claims
+        )
+        return JSONResponse(
+            content={
+                "access_token": access_token,
+                "token_type": "bearer",
+                "expires_in": settings.jwt_access_token_expire_minutes * 60,
+                "refresh_token": new_refresh,
+            }
+        )
+
+    # ── Idempotency replay: token was already rotated ─────────────────────
+    # The old token may have been consumed in a prior request whose response
+    # was lost (network timeout).  If a successor exists and was created within
+    # the idempotency window, replay the same tokens so the client is not
+    # locked out.
+    successor = await get_refresh_token_successor(body.refresh_token)
+    if successor is not None:
+        from datetime import timezone as _tz
+        from datetime import datetime as _dt
+        window = settings.refresh_token_idempotency_window_seconds
+        age = (_dt.now(_tz.utc) - successor.created_at).total_seconds()
+        if age <= window:
+            access_token = create_access_token(
+                subject=successor.user_id, extra_claims=successor.extra_claims
+            )
+            return JSONResponse(
+                content={
+                    "access_token": access_token,
+                    "token_type": "bearer",
+                    "expires_in": settings.jwt_access_token_expire_minutes * 60,
+                    "refresh_token": successor.token,
+                }
+            )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid, expired, or revoked refresh token.",
     )
 
 
