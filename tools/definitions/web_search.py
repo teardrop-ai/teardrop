@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="Search query", max_length=500)
     num_results: int = Field(default=5, ge=1, le=20)
+    search_depth: Literal["basic", "advanced"] = Field(
+        default="basic",
+        description="'basic' for fast results, 'advanced' for thorough research (higher cost)",
+    )
+    topic: Literal["general", "news", "finance"] = Field(
+        default="general",
+        description="Search topic: 'general' for web, 'news' for headlines, 'finance' for markets",
+    )
 
 
 class SearchResult(BaseModel):
@@ -39,7 +47,12 @@ class WebSearchOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def web_search(query: str, num_results: int = 5) -> dict[str, Any]:
+async def web_search(
+    query: str,
+    num_results: int = 5,
+    search_depth: Literal["basic", "advanced"] = "basic",
+    topic: Literal["general", "news", "finance"] = "general",
+) -> dict[str, Any]:
     """Search the web via Tavily.  Falls back to a stub when no API key is set."""
     from config import get_settings
 
@@ -47,29 +60,49 @@ async def web_search(query: str, num_results: int = 5) -> dict[str, Any]:
     api_key = settings.tavily_api_key
 
     if api_key:
-        return await _tavily_search(query, num_results, api_key)
+        return await _tavily_search(query, num_results, api_key, search_depth, topic)
 
     logger.warning("web_search: no TAVILY_API_KEY set – returning stub results")
     return _stub_results(query, num_results)
 
 
-async def _tavily_search(query: str, num_results: int, api_key: str) -> dict[str, Any]:
-    """Call the Tavily search API."""
+async def _tavily_search(
+    query: str,
+    num_results: int,
+    api_key: str,
+    search_depth: str = "basic",
+    topic: str = "general",
+) -> dict[str, Any]:
+    """Call the Tavily search API with error handling."""
     from tavily import AsyncTavilyClient
 
-    client = AsyncTavilyClient(api_key=api_key)
-    response = await client.search(query=query, max_results=num_results)
+    try:
+        client = AsyncTavilyClient(api_key=api_key)
+        response = await client.search(
+            query=query,
+            max_results=num_results,
+            search_depth=search_depth,
+            topic=topic,
+        )
 
-    results = [
-        {
-            "title": r.get("title", ""),
-            "url": r.get("url", ""),
-            "snippet": r.get("content", ""),
-            "score": r.get("score"),
+        results = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("content", ""),
+                "score": r.get("score"),
+            }
+            for r in response.get("results", [])
+        ]
+        return {"query": query, "num_results": num_results, "results": results}
+    except Exception as exc:
+        logger.warning("Tavily search failed: %s", exc)
+        return {
+            "query": query,
+            "num_results": 0,
+            "results": [],
+            "note": f"Search unavailable: {type(exc).__name__}",
         }
-        for r in response.get("results", [])
-    ]
-    return {"query": query, "num_results": num_results, "results": results}
 
 
 def _stub_results(query: str, num_results: int) -> dict[str, Any]:
@@ -97,7 +130,9 @@ TOOL = ToolDefinition(
     name="web_search",
     version="1.0.0",
     description=(
-        "Search the web for information. Returns titles, URLs, snippets, and relevance scores."
+        "Real-time web search via Tavily. Use for current events, fact-checking, and research. "
+        "Set search_depth='advanced' for complex research queries (higher quality, higher cost). "
+        "Set topic='news' for recent headlines or 'finance' for market information."
     ),
     tags=["search", "web", "realtime"],
     input_schema=WebSearchInput,

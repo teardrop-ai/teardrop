@@ -10,9 +10,11 @@ from tools.definitions.decode_transaction import TOOL as decode_transaction_tool
 from tools.definitions.delegate_to_agent import TOOL as delegate_to_agent_tool
 from tools.definitions.get_block import TOOL as get_block_tool
 from tools.definitions.get_datetime import TOOL as get_datetime_tool
+from tools.definitions.get_defi_positions import TOOL as get_defi_positions_tool
 from tools.definitions.get_erc20_balance import TOOL as get_erc20_balance_tool
 from tools.definitions.get_eth_balance import TOOL as get_eth_balance_tool
 from tools.definitions.get_gas_price import TOOL as get_gas_price_tool
+from tools.definitions.get_token_approvals import TOOL as get_token_approvals_tool
 from tools.definitions.get_token_price import TOOL as get_token_price_tool
 from tools.definitions.get_transaction import TOOL as get_transaction_tool
 from tools.definitions.get_wallet_portfolio import TOOL as get_wallet_portfolio_tool
@@ -30,7 +32,9 @@ _ALL_TOOLS = [
     delegate_to_agent_tool,
     get_datetime_tool,
     get_block_tool,
+    get_defi_positions_tool,
     get_gas_price_tool,
+    get_token_approvals_tool,
     get_token_price_tool,
     web_search_tool,
     count_text_stats_tool,

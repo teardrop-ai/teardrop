@@ -153,8 +153,8 @@ def _extract_content(html: str) -> tuple[str | None, str]:
 
 async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
     """Fetch a URL and return extracted text content."""
-    # SSRF validation
-    error = validate_url(url)
+    # SSRF validation (async DNS to avoid blocking event loop)
+    error = await async_validate_url(url)
     if error:
         return {
             "url": url,

@@ -164,3 +164,75 @@ class TestReadContract:
         )
 
         assert result["result"] == 42
+
+    async def test_struct_result_serialized_as_dict(self, test_settings, monkeypatch, view_abi):
+        """web3 AttributeDict / struct returns must be serialized as plain dicts."""
+        from tools.definitions.read_contract import read_contract
+        from web3.datastructures import AttributeDict
+
+        struct_return = AttributeDict({"amount": 1000, "recipient": "0xabc"})
+
+        mock_fn = MagicMock()
+        mock_fn.return_value.call = AsyncMock(return_value=struct_return)
+
+        mock_contract = MagicMock()
+        mock_contract.functions.__getitem__ = MagicMock(return_value=mock_fn)
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_contract
+
+        monkeypatch.setattr(
+            "tools.definitions.read_contract.get_web3", lambda chain_id=1: mock_w3
+        )
+
+        result = await read_contract(
+            contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            abi_fragment=view_abi,
+            function_name="totalSupply",
+        )
+
+        assert isinstance(result["result"], dict)
+        assert result["result"]["amount"] == 1000
+
+    async def test_block_identifier_passed_to_call(self, test_settings, monkeypatch, view_abi):
+        from tools.definitions.read_contract import read_contract
+
+        captured_kwargs: dict = {}
+
+        async def fake_call(**kwargs):
+            captured_kwargs.update(kwargs)
+            return 42
+
+        mock_fn = MagicMock()
+        mock_fn.return_value.call = fake_call
+
+        mock_contract = MagicMock()
+        mock_contract.functions.__getitem__ = MagicMock(return_value=mock_fn)
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_contract
+
+        monkeypatch.setattr(
+            "tools.definitions.read_contract.get_web3", lambda chain_id=1: mock_w3
+        )
+
+        await read_contract(
+            contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            abi_fragment=view_abi,
+            function_name="totalSupply",
+            block_identifier="19000000",
+        )
+
+        assert captured_kwargs.get("block_identifier") == 19_000_000
+
+    def test_oversized_abi_raises_validation_error(self):
+        from pydantic import ValidationError
+        from tools.definitions.read_contract import ReadContractInput
+
+        huge_abi = "x" * 65_537
+        with pytest.raises(ValidationError):
+            ReadContractInput(
+                contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                abi_fragment=huge_abi,
+                function_name="totalSupply",
+            )

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 
 class TestDecodeTransaction:
     async def test_eth_transfer_no_calldata(self, test_settings, monkeypatch):
@@ -116,3 +118,107 @@ class TestDecodeTransaction:
 
         assert result["function_name"] == "transfer(address,uint256)"
         assert result["decode_source"] == "4byte.directory"
+
+    def test_invalid_tx_hash_raises_validation_error(self):
+        from pydantic import ValidationError
+        from tools.definitions.decode_transaction import DecodeTransactionInput
+
+        with pytest.raises(ValidationError):
+            DecodeTransactionInput(tx_hash="0xdeadbeef")  # too short
+
+    def test_tx_hash_normalised_to_lowercase(self):
+        from tools.definitions.decode_transaction import DecodeTransactionInput
+
+        valid_hash = "0x" + "A" * 64
+        inp = DecodeTransactionInput(tx_hash=valid_hash)
+        assert inp.tx_hash == valid_hash.lower()
+
+    async def test_receipt_status_and_gas_used_populated(self, test_settings, monkeypatch):
+        from tools.definitions.decode_transaction import decode_transaction
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "value": 0,
+            "input": b"",
+            "blockNumber": 19_000_000,
+        }
+        mock_receipt = {
+            "status": 1,
+            "gasUsed": 21_000,
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
+
+        monkeypatch.setattr(
+            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
+        )
+
+        valid_hash = "0x" + "b" * 64
+        result = await decode_transaction(valid_hash, chain_id=1)
+
+        assert result["status"] == 1
+        assert result["gas_used"] == 21_000
+        assert result["block_number"] == 19_000_000
+
+    async def test_pending_transaction_has_none_status(self, test_settings, monkeypatch):
+        from tools.definitions.decode_transaction import decode_transaction
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "value": 0,
+            "input": b"",
+            "blockNumber": None,
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        # Pending txs have no receipt — raise to simulate node returning None / error.
+        mock_w3.eth.get_transaction_receipt = AsyncMock(side_effect=Exception("not found"))
+
+        monkeypatch.setattr(
+            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
+        )
+
+        valid_hash = "0x" + "c" * 64
+        result = await decode_transaction(valid_hash, chain_id=1)
+
+        assert result["status"] is None
+        assert result["gas_used"] is None
+
+    async def test_calldata_truncated_at_limit(self, test_settings, monkeypatch):
+        from tools.definitions.decode_transaction import _CALLDATA_MAX_CHARS, decode_transaction
+
+        # Generate calldata longer than the truncation limit.
+        big_input = b"\xab\xcd" * (_CALLDATA_MAX_CHARS + 100)
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "value": 0,
+            "input": big_input,
+            "blockNumber": 1,
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        mock_w3.eth.get_transaction_receipt = AsyncMock(
+            return_value={"status": 1, "gasUsed": 100_000}
+        )
+
+        monkeypatch.setattr(
+            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
+        )
+
+        valid_hash = "0x" + "d" * 64
+        result = await decode_transaction(valid_hash, chain_id=1)
+
+        assert len(result["raw_calldata"]) <= _CALLDATA_MAX_CHARS
+
+    def test_oversized_abi_raises_validation_error(self):
+        from pydantic import ValidationError
+        from tools.definitions.decode_transaction import DecodeTransactionInput
+
+        valid_hash = "0x" + "e" * 64
+        with pytest.raises(ValidationError):
+            DecodeTransactionInput(tx_hash=valid_hash, abi_json="x" * 65_537)

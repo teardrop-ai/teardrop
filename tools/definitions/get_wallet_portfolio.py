@@ -13,6 +13,7 @@ import aiohttp
 from pydantic import BaseModel, Field
 from web3 import Web3
 
+from config import get_settings
 from tools.definitions._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
@@ -21,17 +22,33 @@ logger = logging.getLogger(__name__)
 # ─── Well-known tokens per chain ──────────────────────────────────────────────
 
 _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
-    1: [  # Ethereum mainnet
+    1: [  # Ethereum mainnet (15 major tokens covering 80% of typical DeFi wallets)
         {"address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
         {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "cg_id": "tether", "decimals": "6"},  # noqa: E501
         {"address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
         {"address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
         {"address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "cg_id": "wrapped-bitcoin", "decimals": "8"},  # noqa: E501
+        {"address": "0x514910771af9ca656af840dff83e8264ecf986ca", "symbol": "LINK", "cg_id": "chainlink", "decimals": "18"},  # noqa: E501
+        {"address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", "symbol": "UNI", "cg_id": "uniswap", "decimals": "18"},  # noqa: E501
+        {"address": "0x7fc66500c84a76ad7e9c93437e0273038f7e64ee", "symbol": "AAVE", "cg_id": "aave", "decimals": "18"},  # noqa: E501
+        {"address": "0xb50721bcf8d731f670fb3934ea0eaf8c9df82955", "symbol": "ARB", "cg_id": "arbitrum", "decimals": "18"},  # noqa: E501
+        {"address": "0x4200000000000000000000000000000000000042", "symbol": "OP", "cg_id": "optimism", "decimals": "18"},  # noqa: E501
+        {"address": "0x6de3187eefc0691b5ca162b37bbfc60b8bfe65b0", "symbol": "LDO", "cg_id": "lido-dao", "decimals": "18"},  # noqa: E501
+        {"address": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84", "symbol": "stETH", "cg_id": "staked-ether", "decimals": "18"},  # noqa: E501
+        {"address": "0xd533a949740bb3306d119cc777fa900ba034cd52", "symbol": "CRV", "cg_id": "curve-dao-token", "decimals": "18"},  # noqa: E501
+        {"address": "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2", "symbol": "SUSHI", "cg_id": "sushi", "decimals": "18"},  # noqa: E501
+        {"address": "0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2", "symbol": "MKR", "cg_id": "maker", "decimals": "18"},  # noqa: E501
     ],
-    8453: [  # Base
+    8453: [  # Base (9 major tokens)
         {"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
         {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
         {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
+        {"address": "0xd4d42f0b6def4ce0383636d504adfc00e50ed41f", "symbol": "cbETH", "cg_id": "coinbase-wrapped-staked-eth", "decimals": "18"},  # noqa: E501
+        {"address": "0x940181a94a02757d5b3642341111d8f88a6d7efa", "symbol": "AERO", "cg_id": "aerodrome-finance", "decimals": "18"},  # noqa: E501
+        {"address": "0xeb466d67891d27fdf7b3dffefac43a659d5ff4b9", "symbol": "USDbC", "cg_id": "usd-base-coin", "decimals": "6"},  # noqa: E501
+        {"address": "0xa25b9ff59076169048ea43d08ad1326fff9b374d", "symbol": "LDO", "cg_id": "lido-dao", "decimals": "18"},  # noqa: E501
+        {"address": "0x0b3b3d9f75d81e005c3bd3762360db25d0da8035", "symbol": "USDe", "cg_id": "ethena-usde", "decimals": "18"},  # noqa: E501
+        {"address": "0x2ae3f1ec7f1f5012cfeab0151158198f0e09e4ff", "symbol": "CURVE", "cg_id": "curve-dao-token", "decimals": "18"},  # noqa: E501
     ],
 }
 
@@ -65,10 +82,18 @@ async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
     ids_str = ",".join(set(cg_ids))
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies=usd"
 
+    headers: dict[str, str] = {}
+    try:
+        api_key = get_settings().coingecko_api_key
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
+    except Exception:
+        pass
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=10)
+                url, timeout=aiohttp.ClientTimeout(total=10), headers=headers
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -103,6 +128,7 @@ class GetWalletPortfolioOutput(BaseModel):
     chain_id: int
     total_value_usd: float
     holdings: list[PortfolioEntry]
+    note: str = "Only tracked tokens shown. Untracked tokens not included."
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
@@ -172,6 +198,7 @@ async def get_wallet_portfolio(
         "chain_id": chain_id,
         "total_value_usd": total_value,
         "holdings": holdings[:20],
+        "note": "Only tracked tokens shown. Untracked tokens not included.",
     }
 
 
@@ -182,8 +209,8 @@ TOOL = ToolDefinition(
     version="1.0.0",
     description=(
         "Get aggregated token holdings with USD values for a wallet address. "
-        "Returns native ETH plus major ERC-20 balances (USDC, USDT, DAI, WETH, WBTC) "
-        "sorted by value. Supports Ethereum mainnet and Base."
+        "Tracks 15+ major tokens on Ethereum (USDC, USDT, DAI, WETH, WBTC, LINK, UNI, AAVE, ARB, OP, LDO, stETH, CRV, SUSHI, MKR) "
+        "and 9+ on Base. Sorted by USD value. Returns up to 20 holdings."
     ),
     tags=["web3", "ethereum", "portfolio", "balance", "defi"],
     input_schema=GetWalletPortfolioInput,

@@ -211,11 +211,12 @@ class TestGetTransaction:
 
 
 class TestResolveEns:
-    async def test_resolves_known_name(self, test_settings, monkeypatch):
+    async def test_forward_lookup_returns_checksummed_address(self, test_settings, monkeypatch):
         from tools.definitions.resolve_ens import resolve_ens
 
         mock_w3 = MagicMock()
         mock_w3.ens.address = AsyncMock(return_value="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+        mock_w3.ens.get_text = AsyncMock(return_value=None)
 
         monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
 
@@ -224,12 +225,26 @@ class TestResolveEns:
         assert result["resolved"] is True
         assert result["address"] == "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
         assert result["name"] == "vitalik.eth"
+        assert result["error"] is None
 
-    async def test_unresolvable_name_returns_none_address(self, test_settings, monkeypatch):
+    async def test_forward_lookup_populates_avatar(self, test_settings, monkeypatch):
         from tools.definitions.resolve_ens import resolve_ens
 
         mock_w3 = MagicMock()
-        mock_w3.ens.address = AsyncMock(side_effect=Exception("Name not found"))
+        mock_w3.ens.address = AsyncMock(return_value="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+        mock_w3.ens.get_text = AsyncMock(return_value="https://example.com/avatar.png")
+
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await resolve_ens("vitalik.eth")
+
+        assert result["avatar"] == "https://example.com/avatar.png"
+
+    async def test_rpc_error_populates_error_field(self, test_settings, monkeypatch):
+        from tools.definitions.resolve_ens import resolve_ens
+
+        mock_w3 = MagicMock()
+        mock_w3.ens.address = AsyncMock(side_effect=Exception("RPC timeout"))
 
         monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
 
@@ -237,3 +252,61 @@ class TestResolveEns:
 
         assert result["resolved"] is False
         assert result["address"] is None
+        # Error should be surfaced, not swallowed.
+        assert result["error"] is not None
+        assert "RPC timeout" in result["error"]
+
+    async def test_unresolvable_name_returns_resolved_false(self, test_settings, monkeypatch):
+        from tools.definitions.resolve_ens import resolve_ens
+
+        mock_w3 = MagicMock()
+        mock_w3.ens.address = AsyncMock(return_value=None)
+
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await resolve_ens("doesnotexist123456789.eth")
+
+        assert result["resolved"] is False
+        assert result["address"] is None
+        assert result["error"] is None
+
+    async def test_reverse_lookup_address_returns_ens_name(self, test_settings, monkeypatch):
+        from tools.definitions.resolve_ens import resolve_ens
+
+        mock_w3 = MagicMock()
+        mock_w3.ens.name = AsyncMock(return_value="vitalik.eth")
+
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await resolve_ens("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+
+        assert result["resolved"] is True
+        assert result["name"] == "vitalik.eth"
+        assert result["address"] == "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+
+    async def test_reverse_lookup_no_primary_name(self, test_settings, monkeypatch):
+        from tools.definitions.resolve_ens import resolve_ens
+
+        mock_w3 = MagicMock()
+        mock_w3.ens.name = AsyncMock(return_value=None)
+
+        monkeypatch.setattr("tools.definitions.resolve_ens.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await resolve_ens("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+
+        assert result["resolved"] is False
+        assert result["name"] is None
+
+    def test_invalid_input_raises_validation_error(self):
+        from pydantic import ValidationError
+        from tools.definitions.resolve_ens import ResolveEnsInput
+
+        with pytest.raises(ValidationError):
+            ResolveEnsInput(name="not_valid_ens_or_address")
+
+    def test_empty_input_raises_validation_error(self):
+        from pydantic import ValidationError
+        from tools.definitions.resolve_ens import ResolveEnsInput
+
+        with pytest.raises(ValidationError):
+            ResolveEnsInput(name="   ")

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -23,6 +24,22 @@ logger = logging.getLogger(__name__)
 
 _token_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _PRICE_CACHE_TTL = 120  # seconds
+
+# CoinGecko coins list index — full symbol/name → ID map, refreshed every 24 h.
+# Keyed by lowercase symbol and lowercase name; value is the canonical CoinGecko ID.
+_coins_list_index: dict[str, str] = {}
+_coins_list_expires: float = 0.0
+_COINS_LIST_TTL = 86400  # 24 hours — the coin list changes infrequently
+_coins_list_lock: asyncio.Lock | None = None
+
+
+def _get_coins_list_lock() -> asyncio.Lock:
+    """Return (or lazily create) the coins-list fetch lock for the running loop."""
+    global _coins_list_lock
+    if _coins_list_lock is None:
+        _coins_list_lock = asyncio.Lock()
+    return _coins_list_lock
+
 
 # Well-known symbol → CoinGecko ID mappings
 _SYMBOL_TO_ID: dict[str, str] = {
@@ -62,6 +79,69 @@ def _resolve_id(token: str) -> str:
     """Resolve a token symbol or name to a CoinGecko ID."""
     normalized = token.strip().lower()
     return _SYMBOL_TO_ID.get(normalized, normalized)
+
+
+async def _load_coins_list_index() -> dict[str, str]:
+    """Return a lowercase symbol/name → CoinGecko ID index.
+
+    Fetches GET /coins/list once per 24 hours and caches the result in process
+    memory (~50 KB, ~17 000 coins).  On cache hit the function returns
+    immediately with no I/O.  On failure it returns the existing (possibly
+    empty) index so callers degrade gracefully to passthrough behaviour.
+    """
+    global _coins_list_index, _coins_list_expires
+
+    # Fast path — read without the lock; worst case is a single harmless
+    # double-fetch across concurrent cold-start coroutines.
+    if time.monotonic() < _coins_list_expires and _coins_list_index:
+        return _coins_list_index
+
+    lock = _get_coins_list_lock()
+    async with lock:
+        # Double-check: another coroutine may have populated the cache while
+        # we were waiting for the lock.
+        if time.monotonic() < _coins_list_expires and _coins_list_index:
+            return _coins_list_index
+
+        headers: dict[str, str] = {}
+        try:
+            api_key = get_settings().coingecko_api_key
+            if api_key:
+                headers["x-cg-demo-api-key"] = api_key
+        except Exception:
+            pass
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.coingecko.com/api/v3/coins/list?include_platform=false",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        coins: list[dict[str, Any]] = await resp.json()
+                        index: dict[str, str] = {}
+                        for coin in coins:
+                            sym = coin.get("symbol", "").lower()
+                            name = coin.get("name", "").lower()
+                            cg_id: str = coin.get("id", "")
+                            if sym and sym not in index:
+                                index[sym] = cg_id
+                            if name and name not in index:
+                                index[name] = cg_id
+                        _coins_list_index = index
+                        _coins_list_expires = time.monotonic() + _COINS_LIST_TTL
+                        logger.debug(
+                            "CoinGecko coins list indexed: %d entries", len(index)
+                        )
+                    else:
+                        logger.warning(
+                            "CoinGecko coins/list returned status %d", resp.status
+                        )
+        except Exception as exc:
+            logger.warning("CoinGecko coins/list request failed: %s", exc)
+
+    return _coins_list_index
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -132,6 +212,20 @@ async def get_token_price(
     """Get current prices for one or more crypto tokens."""
     vs = vs_currency.strip().lower()
     ids = [_resolve_id(t) for t in tokens]
+
+    # Dynamically resolve any token not covered by the static map.
+    # Unresolved tokens are those whose symbol was not in _SYMBOL_TO_ID, meaning
+    # _resolve_id passed them through unchanged.  We consult the full CoinGecko
+    # coins list — ~50 KB cached in-process for 24 hours — to map them.
+    unresolved = [
+        i for i, t in enumerate(tokens) if t.strip().lower() not in _SYMBOL_TO_ID
+    ]
+    if unresolved:
+        coin_map = await _load_coins_list_index()
+        for i in unresolved:
+            key = tokens[i].strip().lower()
+            ids[i] = coin_map.get(key, ids[i])
+
     now = time.monotonic()
 
     # Split into cached vs uncached — only fetch what we don't already have
@@ -175,7 +269,9 @@ TOOL = ToolDefinition(
     version="1.0.0",
     description=(
         "Get current price, 24h change, market cap, and volume for one or more "
-        "crypto tokens. Accepts symbols (BTC, ETH, SOL) or CoinGecko IDs. "
+        "crypto tokens. Accepts ticker symbols (BTC, ETH, LQTY), full token names "
+        "(Bitcoin, Liquity, Chainlink), or CoinGecko IDs. Unknown symbols are "
+        "resolved automatically against the full CoinGecko coin list. "
         "Supports batch queries up to 50 tokens."
     ),
     tags=["finance", "crypto", "price", "market"],

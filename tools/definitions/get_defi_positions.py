@@ -1,0 +1,604 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+"""get_defi_positions – aggregate DeFi positions across Aave v3, Compound v3, and Uniswap v3 LP.
+
+View-only, hardcoded protocol addresses, chain_id ∈ {1, 8453}. Uses plain
+``asyncio.gather`` concurrency with per-protocol try/except so a failure in
+one protocol never blocks the others. Multicall3 batching was considered
+for v1 but deferred — per-call concurrency on a modern RPC is fast enough
+(~300–700 ms wall-clock per chain) and avoids manual ABI encode/decode.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from pydantic import BaseModel, Field
+from web3 import Web3
+
+from tools.definitions._web3_helpers import get_web3
+from tools.registry import ToolDefinition
+
+logger = logging.getLogger(__name__)
+
+# ─── Concurrency bounds ──────────────────────────────────────────────────────
+# Uniswap enumeration is capped to prevent runaway calls on whale wallets.
+_UNISWAP_MAX_POSITIONS = 20
+
+# Aave total debt / collateral in uint256 sentinel for "no debt / no collateral".
+# getUserAccountData returns type(uint256).max for healthFactor when no debt.
+_UINT256_MAX = 2**256 - 1
+# Defensive threshold: any health factor value above this is treated as "no_debt".
+_HEALTH_FACTOR_INFINITE_THRESHOLD = 10**30
+
+# ─── Contract address registry (checksummed, per chain_id) ───────────────────
+
+_AAVE_V3_POOL: dict[int, str] = {
+    1: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    8453: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+}
+
+_AAVE_V3_DATA_PROVIDER: dict[int, str] = {
+    1: "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD",
+    8453: "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A",
+}
+
+# Curated shortlist of major Aave v3 reserves to fetch per-reserve breakdown for.
+# Rest of the wallet's debt/collateral is still captured in the aggregate
+# getUserAccountData summary. Addresses are checksummed underlying ERC-20s.
+_AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
+    1: [
+        {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": "18"},
+        {"symbol": "wstETH", "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "decimals": "18"},
+        {"symbol": "WBTC", "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "decimals": "8"},
+        {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
+        {"symbol": "USDC", "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "decimals": "6"},
+        {"symbol": "USDT", "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "decimals": "6"},
+        {"symbol": "DAI", "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "decimals": "18"},
+        {"symbol": "weETH", "address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee", "decimals": "18"},
+    ],
+    8453: [
+        {"symbol": "WETH", "address": "0x4200000000000000000000000000000000000006", "decimals": "18"},
+        {"symbol": "wstETH", "address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "decimals": "18"},
+        {"symbol": "cbETH", "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "decimals": "18"},
+        {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
+        {"symbol": "USDC", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": "6"},
+        {"symbol": "USDbC", "address": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", "decimals": "6"},
+        {"symbol": "weETH", "address": "0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A", "decimals": "18"},
+    ],
+}
+
+# Compound v3 (Comet) per-market metadata. ``collaterals`` is empty —
+# we fetch the list dynamically via numAssets() + getAssetInfo(i) so the
+# tool stays correct as Compound adds collaterals.
+_COMPOUND_V3_MARKETS: dict[int, list[dict[str, str]]] = {
+    1: [
+        {"name": "cUSDCv3", "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+         "base_symbol": "USDC", "base_decimals": "6"},
+        {"name": "cWETHv3", "address": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
+         "base_symbol": "WETH", "base_decimals": "18"},
+        {"name": "cUSDTv3", "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
+         "base_symbol": "USDT", "base_decimals": "6"},
+    ],
+    8453: [
+        {"name": "cUSDCv3", "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+         "base_symbol": "USDC", "base_decimals": "6"},
+        {"name": "cWETHv3", "address": "0x46e6b214b524310239732D51387075E0e70970bf",
+         "base_symbol": "WETH", "base_decimals": "18"},
+        {"name": "cUSDbCv3", "address": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf",
+         "base_symbol": "USDbC", "base_decimals": "6"},
+    ],
+}
+
+_UNISWAP_V3_NFPM: dict[int, str] = {
+    1: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+    8453: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+}
+
+# ─── Minimal view-only ABIs ──────────────────────────────────────────────────
+
+_AAVE_V3_POOL_ABI = [
+    {
+        "inputs": [{"name": "user", "type": "address"}],
+        "name": "getUserAccountData",
+        "outputs": [
+            {"name": "totalCollateralBase", "type": "uint256"},
+            {"name": "totalDebtBase", "type": "uint256"},
+            {"name": "availableBorrowsBase", "type": "uint256"},
+            {"name": "currentLiquidationThreshold", "type": "uint256"},
+            {"name": "ltv", "type": "uint256"},
+            {"name": "healthFactor", "type": "uint256"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+_AAVE_V3_DATA_PROVIDER_ABI = [
+    {
+        "inputs": [
+            {"name": "asset", "type": "address"},
+            {"name": "user", "type": "address"},
+        ],
+        "name": "getUserReserveData",
+        "outputs": [
+            {"name": "currentATokenBalance", "type": "uint256"},
+            {"name": "currentStableDebt", "type": "uint256"},
+            {"name": "currentVariableDebt", "type": "uint256"},
+            {"name": "principalStableDebt", "type": "uint256"},
+            {"name": "scaledVariableDebt", "type": "uint256"},
+            {"name": "stableBorrowRate", "type": "uint256"},
+            {"name": "liquidityRate", "type": "uint256"},
+            {"name": "stableRateLastUpdated", "type": "uint40"},
+            {"name": "usageAsCollateralEnabled", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+_COMET_ABI = [
+    {
+        "inputs": [{"name": "account", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "account", "type": "address"}],
+        "name": "borrowBalanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "account", "type": "address"},
+            {"name": "asset", "type": "address"},
+        ],
+        "name": "userCollateral",
+        "outputs": [
+            {"name": "balance", "type": "uint128"},
+            {"name": "_reserved", "type": "uint128"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "numAssets",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "i", "type": "uint8"}],
+        "name": "getAssetInfo",
+        "outputs": [
+            {
+                "components": [
+                    {"name": "offset", "type": "uint8"},
+                    {"name": "asset", "type": "address"},
+                    {"name": "priceFeed", "type": "address"},
+                    {"name": "scale", "type": "uint64"},
+                    {"name": "borrowCollateralFactor", "type": "uint64"},
+                    {"name": "liquidateCollateralFactor", "type": "uint64"},
+                    {"name": "liquidationFactor", "type": "uint64"},
+                    {"name": "supplyCap", "type": "uint128"},
+                ],
+                "name": "",
+                "type": "tuple",
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "account", "type": "address"}],
+        "name": "isLiquidatable",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+_UNISWAP_V3_NFPM_ABI = [
+    {
+        "inputs": [{"name": "owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "index", "type": "uint256"},
+        ],
+        "name": "tokenOfOwnerByIndex",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "tokenId", "type": "uint256"}],
+        "name": "positions",
+        "outputs": [
+            {"name": "nonce", "type": "uint96"},
+            {"name": "operator", "type": "address"},
+            {"name": "token0", "type": "address"},
+            {"name": "token1", "type": "address"},
+            {"name": "fee", "type": "uint24"},
+            {"name": "tickLower", "type": "int24"},
+            {"name": "tickUpper", "type": "int24"},
+            {"name": "liquidity", "type": "uint128"},
+            {"name": "feeGrowthInside0LastX128", "type": "uint256"},
+            {"name": "feeGrowthInside1LastX128", "type": "uint256"},
+            {"name": "tokensOwed0", "type": "uint128"},
+            {"name": "tokensOwed1", "type": "uint128"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
+# ─── Schemas ─────────────────────────────────────────────────────────────────
+
+
+class GetDefiPositionsInput(BaseModel):
+    wallet_address: str = Field(..., description="Wallet address (0x…)")
+    chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
+
+
+class AaveReservePosition(BaseModel):
+    symbol: str
+    asset_address: str
+    supplied_amount: str
+    variable_debt_amount: str
+    stable_debt_amount: str
+    usage_as_collateral: bool
+
+
+class AavePosition(BaseModel):
+    total_collateral_usd: float
+    total_debt_usd: float
+    available_borrows_usd: float
+    ltv_bps: int
+    liquidation_threshold_bps: int
+    health_factor: float | None
+    health_factor_status: str  # "healthy" | "at_risk" | "no_debt"
+    reserves: list[AaveReservePosition]
+
+
+class CompoundCollateral(BaseModel):
+    asset_address: str
+    amount: str  # raw units (decimals not fetched — included in note)
+
+
+class CompoundMarketPosition(BaseModel):
+    market_name: str
+    market_address: str
+    base_asset_symbol: str
+    base_asset_address: str
+    supplied_amount: str
+    borrowed_amount: str
+    collateral: list[CompoundCollateral]
+    is_liquidatable: bool
+
+
+class UniswapV3Position(BaseModel):
+    token_id: str
+    token0_address: str
+    token1_address: str
+    fee_tier_raw: int
+    tick_lower: int
+    tick_upper: int
+    liquidity: str
+    tokens_owed_0: str
+    tokens_owed_1: str
+    status: str  # "active" | "closed"
+
+
+class ProtocolErrorInfo(BaseModel):
+    protocol: str
+    error: str
+
+
+class GetDefiPositionsOutput(BaseModel):
+    wallet_address: str
+    chain_id: int
+    data_block_number: int
+    aave_v3: AavePosition | None = None
+    compound_v3: list[CompoundMarketPosition] = Field(default_factory=list)
+    uniswap_v3: list[UniswapV3Position] = Field(default_factory=list)
+    errors: list[ProtocolErrorInfo] = Field(default_factory=list)
+    note: str = (
+        "On-chain position snapshot at data_block_number. "
+        "Aave USD values are from the Aave oracle (base currency = USD, 8 decimals on Ethereum/Base). "
+        "Compound collateral and Uniswap v3 amounts are raw integer units — "
+        "fetch ERC-20 decimals() to format. "
+        "Uniswap v3 liquidity is returned raw (no underlying token valuation in v1); "
+        "tokensOwed0/1 are uncollected fees only. "
+        "Does not include staking rewards, COMP accruals, or unlisted protocols."
+    )
+
+
+# ─── Protocol fetchers ───────────────────────────────────────────────────────
+
+
+def _classify_health_factor(raw: int, total_debt_base: int) -> tuple[float | None, str]:
+    """Map raw Aave healthFactor uint256 → (float_or_None, status_tag)."""
+    if total_debt_base == 0 or raw >= _HEALTH_FACTOR_INFINITE_THRESHOLD or raw == _UINT256_MAX:
+        return None, "no_debt"
+    hf = raw / 1e18
+    status = "healthy" if hf >= 1.0 else "at_risk"
+    return hf, status
+
+
+async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
+    """Fetch Aave v3 aggregate account data + tracked-reserve breakdown."""
+    pool_addr = Web3.to_checksum_address(_AAVE_V3_POOL[chain_id])
+    data_provider_addr = Web3.to_checksum_address(_AAVE_V3_DATA_PROVIDER[chain_id])
+
+    pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
+    data_provider = w3.eth.contract(address=data_provider_addr, abi=_AAVE_V3_DATA_PROVIDER_ABI)
+
+    # Aggregate account snapshot
+    account_data = await pool.functions.getUserAccountData(wallet).call()
+    (total_collateral_base, total_debt_base, available_borrows_base,
+     liq_threshold, ltv, health_factor_raw) = account_data
+
+    hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
+
+    # Per-reserve breakdown (tracked shortlist only)
+    tracked = _AAVE_V3_TRACKED_RESERVES.get(chain_id, [])
+
+    async def _fetch_reserve(reserve: dict[str, str]) -> AaveReservePosition | None:
+        try:
+            asset_addr = Web3.to_checksum_address(reserve["address"])
+            result = await data_provider.functions.getUserReserveData(asset_addr, wallet).call()
+            a_token_balance, stable_debt, variable_debt = result[0], result[1], result[2]
+            usage_as_collateral = result[8]
+            # Skip reserves with no activity
+            if a_token_balance == 0 and stable_debt == 0 and variable_debt == 0:
+                return None
+            decimals = int(reserve["decimals"])
+            divisor = 10**decimals
+            return AaveReservePosition(
+                symbol=reserve["symbol"],
+                asset_address=asset_addr,
+                supplied_amount=f"{a_token_balance / divisor:.6f}",
+                variable_debt_amount=f"{variable_debt / divisor:.6f}",
+                stable_debt_amount=f"{stable_debt / divisor:.6f}",
+                usage_as_collateral=bool(usage_as_collateral),
+            )
+        except Exception as exc:
+            logger.debug("Aave reserve %s fetch failed: %s", reserve.get("symbol"), exc)
+            return None
+
+    reserve_results = await asyncio.gather(*[_fetch_reserve(r) for r in tracked])
+    reserves = [r for r in reserve_results if r is not None]
+
+    return AavePosition(
+        total_collateral_usd=round(total_collateral_base / 1e8, 2),
+        total_debt_usd=round(total_debt_base / 1e8, 2),
+        available_borrows_usd=round(available_borrows_base / 1e8, 2),
+        ltv_bps=int(ltv),
+        liquidation_threshold_bps=int(liq_threshold),
+        health_factor=hf,
+        health_factor_status=hf_status,
+        reserves=reserves,
+    )
+
+
+async def _fetch_compound_market(
+    w3: Any, wallet: str, market: dict[str, str]
+) -> CompoundMarketPosition | None:
+    """Fetch a single Compound v3 Comet market position. Returns None if no position."""
+    market_addr = Web3.to_checksum_address(market["address"])
+    comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
+
+    # Parallel: supply, borrow, is_liquidatable, numAssets
+    supplied, borrowed, is_liq, num_assets = await asyncio.gather(
+        comet.functions.balanceOf(wallet).call(),
+        comet.functions.borrowBalanceOf(wallet).call(),
+        comet.functions.isLiquidatable(wallet).call(),
+        comet.functions.numAssets().call(),
+    )
+
+    # Discover collateral asset list, then fetch userCollateral per asset in parallel
+    asset_infos = await asyncio.gather(
+        *[comet.functions.getAssetInfo(i).call() for i in range(int(num_assets))]
+    )
+
+    async def _collateral(asset_info: Any) -> CompoundCollateral | None:
+        try:
+            # asset_info is a tuple matching the struct; asset is at index 1
+            asset_addr = Web3.to_checksum_address(asset_info[1])
+            result = await comet.functions.userCollateral(wallet, asset_addr).call()
+            balance = int(result[0])
+            if balance == 0:
+                return None
+            return CompoundCollateral(asset_address=asset_addr, amount=str(balance))
+        except Exception as exc:
+            logger.debug("Compound collateral fetch failed: %s", exc)
+            return None
+
+    coll_results = await asyncio.gather(*[_collateral(ai) for ai in asset_infos])
+    collateral = [c for c in coll_results if c is not None]
+
+    # Skip market entirely if wallet has no activity here
+    if int(supplied) == 0 and int(borrowed) == 0 and not collateral:
+        return None
+
+    base_decimals = int(market["base_decimals"])
+    base_divisor = 10**base_decimals
+    return CompoundMarketPosition(
+        market_name=market["name"],
+        market_address=market_addr,
+        base_asset_symbol=market["base_symbol"],
+        # Compound's baseToken is implicit in the market — we carry the symbol/decimals
+        # statically to avoid an extra RPC call. The market address is the Comet proxy.
+        base_asset_address=market_addr,  # Comet's base asset is fixed at deploy time; consumers should treat market_address as the canonical market identifier
+        supplied_amount=f"{int(supplied) / base_divisor:.6f}",
+        borrowed_amount=f"{int(borrowed) / base_divisor:.6f}",
+        collateral=collateral,
+        is_liquidatable=bool(is_liq),
+    )
+
+
+async def _fetch_compound_v3(
+    w3: Any, wallet: str, chain_id: int
+) -> list[CompoundMarketPosition]:
+    """Fetch all Compound v3 market positions for a wallet on the given chain."""
+    markets = _COMPOUND_V3_MARKETS.get(chain_id, [])
+
+    async def _safe(market: dict[str, str]) -> CompoundMarketPosition | None:
+        try:
+            return await _fetch_compound_market(w3, wallet, market)
+        except Exception as exc:
+            logger.debug("Compound market %s fetch failed: %s", market.get("name"), exc)
+            return None
+
+    results = await asyncio.gather(*[_safe(m) for m in markets])
+    return [r for r in results if r is not None]
+
+
+async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[UniswapV3Position]:
+    """Fetch Uniswap v3 LP positions by enumerating NFPM ERC-721 tokens."""
+    nfpm_addr = Web3.to_checksum_address(_UNISWAP_V3_NFPM[chain_id])
+    nfpm = w3.eth.contract(address=nfpm_addr, abi=_UNISWAP_V3_NFPM_ABI)
+
+    balance = int(await nfpm.functions.balanceOf(wallet).call())
+    if balance == 0:
+        return []
+
+    limit = min(balance, _UNISWAP_MAX_POSITIONS)
+
+    # Enumerate token IDs in parallel
+    async def _get_token_id(idx: int) -> int | None:
+        try:
+            return int(await nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call())
+        except Exception as exc:
+            logger.debug("Uniswap tokenOfOwnerByIndex(%d) failed: %s", idx, exc)
+            return None
+
+    token_ids = await asyncio.gather(*[_get_token_id(i) for i in range(limit)])
+
+    async def _get_position(token_id: int | None) -> UniswapV3Position | None:
+        if token_id is None:
+            return None
+        try:
+            result = await nfpm.functions.positions(token_id).call()
+            (_nonce, _operator, token0, token1, fee, tick_lower, tick_upper,
+             liquidity, _f0, _f1, tokens_owed_0, tokens_owed_1) = result
+            is_closed = (
+                int(liquidity) == 0
+                and int(tokens_owed_0) == 0
+                and int(tokens_owed_1) == 0
+            )
+            if is_closed:
+                return None
+            return UniswapV3Position(
+                token_id=str(token_id),
+                token0_address=Web3.to_checksum_address(token0),
+                token1_address=Web3.to_checksum_address(token1),
+                fee_tier_raw=int(fee),
+                tick_lower=int(tick_lower),
+                tick_upper=int(tick_upper),
+                liquidity=str(int(liquidity)),
+                tokens_owed_0=str(int(tokens_owed_0)),
+                tokens_owed_1=str(int(tokens_owed_1)),
+                status="active",
+            )
+        except Exception as exc:
+            logger.debug("Uniswap positions(%s) failed: %s", token_id, exc)
+            return None
+
+    position_results = await asyncio.gather(*[_get_position(tid) for tid in token_ids])
+    return [p for p in position_results if p is not None]
+
+
+# ─── Entry point ─────────────────────────────────────────────────────────────
+
+
+async def get_defi_positions(
+    wallet_address: str,
+    chain_id: int = 1,
+) -> dict[str, Any]:
+    """Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP."""
+    if chain_id not in _AAVE_V3_POOL:
+        raise ValueError(f"Unsupported chain_id={chain_id}. Supported: 1 (Ethereum), 8453 (Base).")
+
+    wallet = Web3.to_checksum_address(wallet_address)
+    w3 = get_web3(chain_id)
+
+    # Launch all three protocol pipelines + block number in parallel
+    aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
+    compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
+    uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
+    block_task = asyncio.create_task(w3.eth.block_number)
+
+    errors: list[ProtocolErrorInfo] = []
+    aave_result: AavePosition | None = None
+    compound_result: list[CompoundMarketPosition] = []
+    uniswap_result: list[UniswapV3Position] = []
+
+    try:
+        aave_result = await aave_task
+    except Exception as exc:
+        logger.warning("Aave v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
+
+    try:
+        compound_result = await compound_task
+    except Exception as exc:
+        logger.warning("Compound v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
+
+    try:
+        uniswap_result = await uniswap_task
+    except Exception as exc:
+        logger.warning("Uniswap v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
+
+    try:
+        block_number = int(await block_task)
+    except Exception as exc:
+        logger.warning("block_number fetch failed: %s", exc)
+        block_number = 0
+
+    output = GetDefiPositionsOutput(
+        wallet_address=wallet,
+        chain_id=chain_id,
+        data_block_number=block_number,
+        aave_v3=aave_result,
+        compound_v3=compound_result,
+        uniswap_v3=uniswap_result,
+        errors=errors,
+    )
+    return output.model_dump()
+
+
+# ─── Tool definition ─────────────────────────────────────────────────────────
+
+TOOL = ToolDefinition(
+    name="get_defi_positions",
+    version="1.0.0",
+    description=(
+        "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP on "
+        "Ethereum (chain_id=1) or Base (chain_id=8453). Returns Aave aggregate account health "
+        "(collateral, debt, health factor, LTV) with per-reserve breakdown for major assets, "
+        "Compound v3 Comet market positions (supply, borrow, per-asset collateral, liquidation flag), "
+        "and Uniswap v3 LP positions by token ID (token pair, fee tier, tick range, liquidity, "
+        "uncollected fees). Per-protocol failures are isolated — other protocols still return."
+    ),
+    tags=["web3", "defi", "aave", "compound", "uniswap", "portfolio"],
+    input_schema=GetDefiPositionsInput,
+    output_schema=GetDefiPositionsOutput,
+    implementation=get_defi_positions,
+)

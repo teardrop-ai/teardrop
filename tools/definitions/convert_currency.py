@@ -11,6 +11,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field
 
+from config import get_settings
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ async def _get_fiat_rates(base: str = "USD") -> dict[str, float]:
     if _fiat_cache is not None and time.monotonic() < _fiat_cache_expires:
         return _fiat_cache
 
-    url = f"https://api.exchangerate.host/latest?base={base.upper()}"
+    url = f"https://open.er-api.com/v6/latest/{base.upper()}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
@@ -116,18 +117,33 @@ async def _get_fiat_rates(base: str = "USD") -> dict[str, float]:
     }
 
 
-async def _get_crypto_price_usd(crypto_id: str) -> float | None:
-    """Fetch a single crypto asset price in USD from CoinGecko."""
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={crypto_id}&vs_currencies=usd"
+async def _get_crypto_prices_usd(crypto_ids: list[str]) -> dict[str, float | None]:
+    """Fetch crypto prices in USD from CoinGecko for multiple IDs (batched)."""
+    if not crypto_ids:
+        return {}
+
+    ids_str = ",".join(set(crypto_ids))
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies=usd"
+
+    headers: dict[str, str] = {}
+    try:
+        api_key = get_settings().coingecko_api_key
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
+    except Exception:
+        pass
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=5), headers=headers
+            ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get(crypto_id, {}).get("usd")
+                    return {cid: data.get(cid, {}).get("usd") for cid in crypto_ids}
     except Exception as exc:
-        logger.warning("CoinGecko price fetch failed for %s: %s", crypto_id, exc)
-    return None
+        logger.warning("CoinGecko price fetch failed: %s", exc)
+    return {cid: None for cid in crypto_ids}
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
@@ -145,10 +161,29 @@ async def convert_currency(
     from_is_fiat = _is_fiat(from_sym)
     to_is_fiat = _is_fiat(to_sym)
 
-    if not (from_is_crypto or from_is_fiat):
-        return {"error": f"Unknown currency: {from_currency}"}
-    if not (to_is_crypto or to_is_fiat):
-        return {"error": f"Unknown currency: {to_currency}"}
+    # If from/to look like unknown crypto, try to resolve via CoinGecko coins list
+    if not from_is_fiat and not from_is_crypto:
+        # Try dynamic resolution
+        from tools.definitions.get_token_price import _load_coins_list_index
+
+        coin_map = await _load_coins_list_index()
+        if from_sym in coin_map:
+            # Found it in coins list — add to _CRYPTO_IDS for this conversion
+            _CRYPTO_IDS[from_sym] = coin_map[from_sym]
+            from_is_crypto = True
+        else:
+            return {"error": f"Unknown currency: {from_currency}"}
+
+    if not to_is_fiat and not to_is_crypto:
+        # Try dynamic resolution
+        from tools.definitions.get_token_price import _load_coins_list_index
+
+        coin_map = await _load_coins_list_index()
+        if to_sym in coin_map:
+            _CRYPTO_IDS[to_sym] = coin_map[to_sym]
+            to_is_crypto = True
+        else:
+            return {"error": f"Unknown currency: {to_currency}"}
 
     rate: float
 
@@ -158,12 +193,13 @@ async def convert_currency(
         from_usd = rates.get(from_sym, 1.0)
         to_usd = rates.get(to_sym, 1.0)
         rate = to_usd / from_usd
-        source = "exchangerate.host"
+        source = "open.er-api.com"
 
     elif from_is_crypto and to_is_fiat:
         # Crypto-to-fiat: get crypto price in USD, then convert to target fiat
         crypto_id = _CRYPTO_IDS[from_sym]
-        price_usd = await _get_crypto_price_usd(crypto_id)
+        prices = await _get_crypto_prices_usd([crypto_id])
+        price_usd = prices.get(crypto_id)
         if price_usd is None:
             return {"error": f"Could not fetch price for {from_currency}"}
         if to_sym == "usd":
@@ -172,12 +208,13 @@ async def convert_currency(
             rates = await _get_fiat_rates("USD")
             fiat_rate = rates.get(to_sym, 1.0)
             rate = price_usd * fiat_rate
-        source = "coingecko+exchangerate.host"
+        source = "coingecko+open.er-api.com"
 
     elif from_is_fiat and to_is_crypto:
         # Fiat-to-crypto: invert crypto price
         crypto_id = _CRYPTO_IDS[to_sym]
-        price_usd = await _get_crypto_price_usd(crypto_id)
+        prices = await _get_crypto_prices_usd([crypto_id])
+        price_usd = prices.get(crypto_id)
         if price_usd is None:
             return {"error": f"Could not fetch price for {to_currency}"}
         if from_sym == "usd":
@@ -186,14 +223,15 @@ async def convert_currency(
             rates = await _get_fiat_rates("USD")
             from_usd_rate = rates.get(from_sym, 1.0)
             rate = 1.0 / (price_usd * from_usd_rate)
-        source = "coingecko+exchangerate.host"
+        source = "coingecko+open.er-api.com"
 
     else:
-        # Crypto-to-crypto: get both in USD, compute cross rate
+        # Crypto-to-crypto: get both in USD, compute cross rate (batched single call)
         from_id = _CRYPTO_IDS[from_sym]
         to_id = _CRYPTO_IDS[to_sym]
-        from_price = await _get_crypto_price_usd(from_id)
-        to_price = await _get_crypto_price_usd(to_id)
+        prices = await _get_crypto_prices_usd([from_id, to_id])
+        from_price = prices.get(from_id)
+        to_price = prices.get(to_id)
         if from_price is None or to_price is None:
             return {"error": f"Could not fetch prices for {from_currency}/{to_currency}"}
         rate = from_price / to_price
