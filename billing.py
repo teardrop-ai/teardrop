@@ -1238,6 +1238,9 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
 
     settings = get_settings()
 
+    if not sig_header:
+        raise ValueError("Missing Stripe-Signature header")
+
     event = stripe.Webhook.construct_event(payload, sig_header, settings.stripe_webhook_secret)
 
     if event.type != "checkout.session.completed":
@@ -1276,49 +1279,58 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
     # a crash between the two writes can never result in a consumed event with
     # no credit applied (which would be silently skipped on Stripe's retry).
     pool = _get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                INSERT INTO stripe_webhook_events (stripe_event_id, org_id, amount_usdc)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (stripe_event_id) DO NOTHING
-                RETURNING stripe_event_id
-                """,
-                event.id,
-                org_id,
-                amount_usdc,
-            )
-            if row is None:
-                # Duplicate delivery — silently ignore
-                logger.info("stripe webhook: duplicate event %s ignored", event.id)
-                return
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO stripe_webhook_events (stripe_event_id, org_id, amount_usdc)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (stripe_event_id) DO NOTHING
+                    RETURNING stripe_event_id
+                    """,
+                    event.id,
+                    org_id,
+                    amount_usdc,
+                )
+                if row is None:
+                    # Duplicate delivery — silently ignore
+                    logger.info("stripe webhook: duplicate event %s ignored", event.id)
+                    return
 
-            credit_row = await conn.fetchrow(
-                """
-                INSERT INTO org_credits (org_id, balance_usdc, updated_at)
-                VALUES ($1, $2, NOW())
-                ON CONFLICT (org_id) DO UPDATE
-                    SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
-                        updated_at = NOW()
-                RETURNING balance_usdc
-                """,
-                org_id,
-                amount_usdc,
-            )
-            new_balance = int(credit_row["balance_usdc"])
-            await conn.execute(
-                """
-                INSERT INTO org_credit_ledger
-                    (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-                VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
-                """,
-                str(uuid.uuid4()),
-                org_id,
-                amount_usdc,
-                new_balance,
-                f"stripe:{event.id}",
-            )
+                credit_row = await conn.fetchrow(
+                    """
+                    INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (org_id) DO UPDATE
+                        SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                            updated_at = NOW()
+                    RETURNING balance_usdc
+                    """,
+                    org_id,
+                    amount_usdc,
+                )
+                new_balance = int(credit_row["balance_usdc"])
+                await conn.execute(
+                    """
+                    INSERT INTO org_credit_ledger
+                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                    VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                    """,
+                    str(uuid.uuid4()),
+                    org_id,
+                    amount_usdc,
+                    new_balance,
+                    f"stripe:{event.id}",
+                )
+    except Exception:
+        logger.exception(
+            "stripe webhook: DB error processing event=%s org_id=%s amount_usdc=%s",
+            event.id,
+            org_id,
+            amount_usdc,
+        )
+        raise  # Re-raise → FastAPI returns 500 → Stripe retries
 
     logger.info(
         "stripe webhook: topped up org_id=%s amount_usdc=%s event=%s",

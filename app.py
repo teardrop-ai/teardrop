@@ -273,6 +273,19 @@ def _validate_production_config(s: "Settings") -> None:
             prefix,
         )
 
+    # Stripe — if STRIPE_SECRET_KEY is configured, STRIPE_WEBHOOK_SECRET must also be set.
+    # Without it, every inbound webhook fails signature verification and Stripe stops
+    # retrying after 3 days, silently dropping payment confirmations.
+    if s.stripe_secret_key and not s.stripe_webhook_secret:
+        msg = (
+            "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing. "
+            "Webhook signature verification will fail and Stripe stops retrying after 3 days. "
+            "Get the secret from Stripe Dashboard → Workbench → Webhooks → Click to reveal."
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        logger.warning("%s ⚠  %s", prefix, msg)
+
     # Marketplace requires billing to be enabled — without billing, tool calls are
     # free but earnings are still recorded, creating uncollectable phantom entries.
     if s.marketplace_enabled and not s.billing_enabled:
@@ -2517,12 +2530,19 @@ async def billing_topup_stripe(
     )
 
 
+_MAX_STRIPE_WEBHOOK_PAYLOAD = 1 * 1024 * 1024  # 1 MB — Stripe events are never this large
+
+
 @app.post("/billing/topup/webhook", include_in_schema=False)
 async def billing_topup_webhook(request: Request) -> JSONResponse:
     """Stripe webhook receiver for checkout.session.completed events."""
     import stripe as _stripe  # noqa: PLC0415
 
     payload = await request.body()
+    if len(payload) > _MAX_STRIPE_WEBHOOK_PAYLOAD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Payload too large"
+        )
     sig_header = request.headers.get("stripe-signature", "")
     try:
         await handle_stripe_webhook(payload, sig_header)
