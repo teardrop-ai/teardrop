@@ -433,6 +433,7 @@ def _resolve_shared_key(provider: str, settings: Any) -> str:
         "anthropic": settings.anthropic_api_key,
         "openai": settings.openai_api_key,
         "google": settings.google_api_key,
+        "openrouter": settings.openrouter_api_key,
     }
     return mapping.get(provider, "")
 
@@ -443,14 +444,13 @@ def _resolve_shared_key(provider: str, settings: Any) -> str:
 _provider_cooldowns: dict[str, float] = {}
 _COOLDOWN_SECONDS = 60.0
 
-# Static quality tiers for quality-based routing
+# Static quality tiers for quality-based routing.
+# Tier 1 = premium/quality, Tier 2 = standard/cost.  Models absent here fall
+# back to tier 99 (lowest priority) in _select_highest_quality().
 _QUALITY_TIERS: dict[str, int] = {
-    "claude-sonnet-4-20250514": 1,
-    "gpt-4o": 1,
-    "gemini-2.5-pro": 1,
-    "claude-haiku-4-5-20251001": 2,
-    "gpt-4o-mini": 2,
-    "gemini-2.0-flash": 2,
+    "deepseek/deepseek-v3.2": 1,
+    "gemini-3-flash-preview": 2,
+    "claude-sonnet-4-6": 1,
 }
 
 

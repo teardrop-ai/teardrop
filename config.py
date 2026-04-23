@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
     openai_api_key: str = Field(default="", description="OpenAI API key")
     google_api_key: str = Field(default="", description="Google AI API key")
+    openrouter_api_key: str = Field(default="", description="OpenRouter API key")
+
     agent_provider: str = Field(
         default="anthropic",
         description="LLM provider: anthropic, openai, or google",
@@ -381,9 +383,12 @@ class Settings(BaseSettings):
     )
     default_model_pool: list[dict[str, str]] = Field(
         default=[
-            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-            {"provider": "openai", "model": "gpt-4o-mini"},
-            {"provider": "google", "model": "gemini-2.0-flash"},
+            # Cost tier — DeepSeek V3.2 via OpenRouter, pinned to DeepInfra (US, SOC 2).
+            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"},
+            # Speed tier — Gemini 3 Flash (1M context, sub-400ms median).
+            {"provider": "google", "model": "gemini-3-flash-preview"},
+            # Quality tier — Claude Sonnet 4.6 (200k context, top-tier reasoning).
+            {"provider": "anthropic", "model": "claude-sonnet-4-6"},
         ],
         description="Models available for smart routing (Teardrop holds shared keys)",
     )

@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 # ── Allowed providers (validated at config and request boundaries) ────────────
 
-ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "google"})
+ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "google", "openrouter"})
 
 # ─── Global singleton (backward compat) ──────────────────────────────────────
 
@@ -135,7 +135,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     """Construct a ``BaseChatModel`` from an explicit config dict.
 
     Expected keys:
-        provider        — "anthropic" | "openai" | "google"
+        provider        — "anthropic" | "openai" | "google" | "openrouter"
         model           — model identifier string
         api_key         — provider API key (required)
         api_base         — optional custom base URL (OpenAI-compatible endpoints)
@@ -186,6 +186,23 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             )
         kwargs = {**common, "google_api_key": api_key or None}
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
+
+    if provider == "openrouter":
+        # OpenRouter exposes an OpenAI-compatible API at a fixed base URL.
+        # DeepSeek models are pinned to DeepInfra (US, SOC 2 + ISO 27001) via
+        # OpenRouter's provider-routing preference to avoid Chinese-hosted inference.
+        if ChatOpenAI is None:
+            raise RuntimeError(
+                "langchain-openai is not installed. Run: pip install langchain-openai"
+            )
+        kwargs = {
+            **common,
+            "api_key": api_key or None,
+            "base_url": api_base or "https://openrouter.ai/api/v1",
+        }
+        if model.startswith("deepseek/"):
+            kwargs["model_kwargs"] = {"extra_body": {"provider": {"only": ["DeepInfra"]}}}
+        return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
     # Should be unreachable due to ALLOWED_PROVIDERS check above.
     raise ValueError(f"Unknown provider '{provider}'.")

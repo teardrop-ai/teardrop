@@ -66,6 +66,7 @@ def mock_settings(fernet_key):
         anthropic_api_key="shared-anthropic-key",
         openai_api_key="shared-openai-key",
         google_api_key="shared-google-key",
+        openrouter_api_key="shared-openrouter-key",
         agent_max_tokens=4096,
         agent_temperature=0.0,
         agent_llm_timeout_seconds=120,
@@ -269,6 +270,7 @@ class TestResolveSharedKey:
         assert _resolve_shared_key("anthropic", mock_settings) == "shared-anthropic-key"
         assert _resolve_shared_key("openai", mock_settings) == "shared-openai-key"
         assert _resolve_shared_key("google", mock_settings) == "shared-google-key"
+        assert _resolve_shared_key("openrouter", mock_settings) == "shared-openrouter-key"
 
     def test_unknown_provider_returns_empty(self, mock_settings):
         assert _resolve_shared_key("cohere", mock_settings) == ""
@@ -300,25 +302,25 @@ class TestCooldowns:
 class TestSelectHighestQuality:
     def test_selects_tier_1(self):
         models = [
-            {"provider": "openai", "model": "gpt-4o-mini"},      # tier 2
-            {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},  # tier 1
-            {"provider": "google", "model": "gemini-2.0-flash"},  # tier 2
+            {"provider": "google", "model": "gemini-3-flash-preview"},   # tier 2
+            {"provider": "anthropic", "model": "claude-sonnet-4-6"},      # tier 1
+            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"}, # tier 1
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "claude-sonnet-4-20250514"
+        assert result["model"] == "claude-sonnet-4-6"
 
     def test_unknown_model_lowest_priority(self):
         models = [
-            {"provider": "openai", "model": "gpt-4o-mini"},       # tier 2
-            {"provider": "custom", "model": "custom-model-v1"},   # tier 99
+            {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
+            {"provider": "custom", "model": "custom-model-v1"},         # tier 99
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "gpt-4o-mini"
+        assert result["model"] == "gemini-3-flash-preview"
 
     def test_single_model(self):
-        models = [{"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}]
+        models = [{"provider": "anthropic", "model": "claude-sonnet-4-6"}]
         result = _select_highest_quality(models)
-        assert result["model"] == "claude-haiku-4-5-20251001"
+        assert result["model"] == "claude-sonnet-4-6"
 
 
 # ─── Fastest routing ─────────────────────────────────────────────────────────

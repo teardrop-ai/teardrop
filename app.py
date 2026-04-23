@@ -3051,7 +3051,7 @@ async def upsert_llm_config_endpoint(
         )
 
     # Provider-specific temperature limits
-    _provider_temp_limits: dict[str, float] = {"anthropic": 1.0, "openai": 2.0, "google": 2.0}
+    _provider_temp_limits: dict[str, float] = {"anthropic": 1.0, "openai": 2.0, "google": 2.0, "openrouter": 2.0}
     temp_limit = _provider_temp_limits.get(body.provider.lower(), 2.0)
     if body.temperature > temp_limit:
         raise HTTPException(
@@ -3075,10 +3075,10 @@ async def upsert_llm_config_endpoint(
 
     # SSRF validation for api_base
     if body.api_base:
-        if body.provider.lower() != "openai":
+        if body.provider.lower() not in {"openai", "openrouter"}:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="api_base is only supported for provider 'openai' (OpenAI-compatible endpoints).",
+                detail="api_base is only supported for OpenAI-compatible providers ('openai', 'openrouter').",
             )
         # Always validate URL structure and scheme
         ssrf_err = validate_url(body.api_base)

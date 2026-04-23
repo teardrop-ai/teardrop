@@ -30,6 +30,7 @@ def _make_settings(**overrides):
         anthropic_api_key="test-anthropic-key",
         openai_api_key="test-openai-key",
         google_api_key="test-google-key",
+        openrouter_api_key="test-openrouter-key",
     )
     defaults.update(overrides)
     return MagicMock(**defaults)
@@ -200,6 +201,7 @@ class TestAllowedProviders:
         assert "anthropic" in ALLOWED_PROVIDERS
         assert "openai" in ALLOWED_PROVIDERS
         assert "google" in ALLOWED_PROVIDERS
+        assert "openrouter" in ALLOWED_PROVIDERS
 
     def test_rejects_unknown(self):
         assert "mistral" not in ALLOWED_PROVIDERS
@@ -257,6 +259,51 @@ class TestCreateLlmFromConfig:
         create_llm_from_config(config)
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["base_url"] == "https://custom.anthropic.proxy.com/v1"
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openrouter(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openrouter",
+            model="mistralai/mistral-7b-instruct",
+            api_key="sk-or-test",
+            api_base=None,
+        )
+        create_llm_from_config(config)
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+        assert "model_kwargs" not in call_kwargs
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openrouter_with_deepinfra_pinning(self, mock_cls):
+        """DeepSeek models must include provider routing to pin to DeepInfra."""
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openrouter",
+            model="deepseek/deepseek-v3.2",
+            api_key="sk-or-test",
+            api_base=None,
+        )
+        create_llm_from_config(config)
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+        assert call_kwargs["model_kwargs"] == {
+            "extra_body": {"provider": {"only": ["DeepInfra"]}}
+        }
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openrouter_custom_base_url(self, mock_cls):
+        """An explicit api_base overrides the OpenRouter default."""
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openrouter",
+            model="openai/gpt-4o",
+            api_key="sk-or-test",
+            api_base="https://custom.proxy.example.com/v1",
+        )
+        create_llm_from_config(config)
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["base_url"] == "https://custom.proxy.example.com/v1"
 
 
 class TestCacheKey:

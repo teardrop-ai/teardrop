@@ -103,23 +103,6 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     llm_config = state.metadata.get("_llm_config")
     llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
 
-    # ── Inject retrieved memories into the system prompt ──────────────────
-    system_prompt = _PLANNER_SYSTEM
-    memories: list[str] = state.metadata.get("_memories", [])
-    if memories:
-        # Guard against prompt injection from stored memory content.
-        sanitized = [m.replace("```", "---") for m in memories]
-        memory_block = "\n".join(f"- {m}" for m in sanitized)
-        system_prompt += (
-            "\n\n## Relevant Context from Memory\n"
-            "The following facts were recalled from previous interactions with this organisation. "
-            "Use them as background context only — do not repeat them verbatim unless asked.\n"
-            f"{memory_block}"
-        )
-
-    # ── Inject runtime context (date/time, model, org, billing) ───────────
-    # Placed after static content to maximise prompt cache hit rate.
-    now = datetime.now(timezone.utc)
     _cfg = llm_config or {}
     _provider = _cfg.get("provider", settings.agent_provider)
     _model = _cfg.get("model", settings.agent_model)
@@ -127,6 +110,44 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
     model_specs = get_model_context_specs(_provider, _model)
 
+    # ── Cacheable prefix: base prompt + platform tools summary ────────────
+    # This block is identical across all requests for the same org+model and is
+    # eligible for Anthropic prompt caching (90% discount on cache reads).
+    # It must NOT contain any org-specific data (memories, org name, balance)
+    # to prevent cross-org cache pollution.
+    cached_prompt = _PLANNER_SYSTEM
+
+    # Only list platform (registry) tools in the cached block — org-specific
+    # tools are added to the uncached suffix below.
+    if tools:
+        platform_tool_lines = [
+            f"- **{t.name}**: {t.description.splitlines()[0]}"
+            for t in tools
+        ]
+        cached_prompt += (
+            "\n\n## Available Platform Tools\n"
+            + "\n".join(platform_tool_lines)
+        )
+
+    # ── Uncached suffix: org memory + runtime context + org-specific tools ─
+    # This block changes per org/request and must not be cached.
+    uncached_parts: list[str] = []
+
+    # Per-org memories (retrieved via RAG; never in the cache boundary).
+    memories: list[str] = state.metadata.get("_memories", [])
+    if memories:
+        # Guard against prompt injection from stored memory content.
+        sanitized = [m.replace("```", "---") for m in memories]
+        memory_block = "\n".join(f"- {m}" for m in sanitized)
+        uncached_parts.append(
+            "## Relevant Context from Memory\n"
+            "The following facts were recalled from previous interactions with this organisation. "
+            "Use them as background context only — do not repeat them verbatim unless asked.\n"
+            + memory_block
+        )
+
+    # Runtime context (date, model info, org, billing) — changes every request.
+    now = datetime.now(timezone.utc)
     context_lines = [
         f"- **Date & Time (UTC)**: {now.strftime('%A, %B %d, %Y at %H:%M:%S UTC')}",
         f"- **ISO 8601**: {now.isoformat()}",
@@ -150,8 +171,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         balance_usd = _credit_balance_usdc / 1_000_000
         context_lines.append(f"- **Remaining Credit Balance**: ${balance_usd:.4f} USD")
 
-    system_prompt += (
-        "\n\n## Current Runtime Context\n"
+    uncached_parts.append(
+        "## Current Runtime Context\n"
         "Use this information to ground your responses in current reality. "
         "When answering questions about 'today', 'this year', 'last year', recent events, "
         "or any time-relative analysis, always anchor to the date above — "
@@ -159,19 +180,38 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         + "\n".join(context_lines)
     )
 
-    # ── Available tools summary ────────────────────────────────────────────
-    # Listing tools explicitly helps smaller models plan without trial-and-error.
-    if all_tools:
-        tool_lines = [
+    # Per-org custom tools (webhook-backed; not in the cached block).
+    if org_tools:
+        org_tool_lines = [
             f"- **{t.name}**: {t.description.splitlines()[0]}"
-            for t in all_tools
+            for t in org_tools
         ]
-        system_prompt += (
-            "\n\n## Available Tools\n"
-            + "\n".join(tool_lines)
+        uncached_parts.append(
+            "## Additional Organisation Tools\n" + "\n".join(org_tool_lines)
         )
 
-    messages = [SystemMessage(content=system_prompt), *state.messages]
+    uncached_prompt = "\n\n".join(uncached_parts)
+
+    # ── Assemble messages with Anthropic cache_control when applicable ─────
+    # For Anthropic, set cache_control on the static prefix so Anthropic's
+    # prompt caching can skip re-processing it on subsequent turns.
+    # Other providers receive a single merged SystemMessage (no-op path).
+    if _provider == "anthropic":
+        system_messages: list[SystemMessage] = [
+            SystemMessage(
+                content=cached_prompt,
+                additional_kwargs={"cache_control": {"type": "ephemeral"}},
+            ),
+        ]
+        if uncached_prompt:
+            system_messages.append(SystemMessage(content=uncached_prompt))
+    else:
+        full_prompt = cached_prompt
+        if uncached_prompt:
+            full_prompt += "\n\n" + uncached_prompt
+        system_messages = [SystemMessage(content=full_prompt)]
+
+    messages = [*system_messages, *state.messages]
 
     try:
         response: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]

@@ -53,12 +53,12 @@ def _make_ai_response(content: str = "The current BTC price is...") -> MagicMock
 
 
 def _captured_system_prompt(mock_ainvoke: MagicMock) -> str:
-    """Extract the system prompt from the messages passed to ainvoke."""
+    """Extract the concatenated system prompt from the messages passed to ainvoke."""
     call_args = mock_ainvoke.call_args
     messages = call_args[0][0]  # positional arg: list of messages
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     assert system_msgs, "No SystemMessage found in LLM call"
-    return system_msgs[0].content
+    return "\n\n".join(m.content for m in system_msgs)
 
 
 def _default_settings():
@@ -326,7 +326,7 @@ async def test_available_tools_section_present_when_tools_exist():
                 await planner_node(state)
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
-    assert "## Available Tools" in system_prompt
+    assert "## Available Platform Tools" in system_prompt
     assert "web_search" in system_prompt
     # Only the first line of description should appear.
     assert "Search the web for information." in system_prompt
@@ -349,7 +349,8 @@ async def test_available_tools_section_absent_when_no_tools():
                 await planner_node(state)
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
-    assert "## Available Tools" not in system_prompt
+    assert "## Available Platform Tools" not in system_prompt
+    assert "## Additional Organisation Tools" not in system_prompt
 
 
 # ─── get_model_context_specs ─────────────────────────────────────────────────
