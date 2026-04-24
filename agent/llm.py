@@ -52,9 +52,10 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
     """Construct a ``BaseChatModel`` based on the configured provider.
 
     Supported providers:
-    - ``anthropic`` — ``langchain-anthropic`` (``ChatAnthropic``)
-    - ``openai``    — ``langchain-openai`` (``ChatOpenAI``)
-    - ``google``    — ``langchain-google-genai`` (``ChatGoogleGenerativeAI``)
+    - ``anthropic``   — ``langchain-anthropic`` (``ChatAnthropic``)
+    - ``openai``      — ``langchain-openai`` (``ChatOpenAI``)
+    - ``google``      — ``langchain-google-genai`` (``ChatGoogleGenerativeAI``)
+    - ``openrouter``  — ``langchain-openai`` via OpenRouter proxy (``ChatOpenAI``)
     """
     if settings is None:
         settings = get_settings()
@@ -96,9 +97,23 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
             google_api_key=settings.google_api_key or None,  # type: ignore[arg-type]
         )
 
+    if provider == "openrouter":
+        if ChatOpenAI is None:
+            raise RuntimeError(
+                "langchain-openai is not installed. Run: pip install langchain-openai"
+            )
+        kwargs: dict[str, Any] = {
+            **common,
+            "api_key": settings.openrouter_api_key or None,
+            "base_url": "https://openrouter.ai/api/v1",
+        }
+        if settings.agent_model.startswith("deepseek/"):
+            kwargs["model_kwargs"] = {"extra_body": {"provider": {"only": ["DeepInfra"]}}}
+        return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
+
     raise ValueError(
         f"Unknown agent_provider '{provider}'. "
-        "Supported: anthropic, openai, google."
+        "Supported: anthropic, openai, google, openrouter."
     )
 
 

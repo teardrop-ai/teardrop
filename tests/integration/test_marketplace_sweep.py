@@ -231,3 +231,129 @@ async def test_sweep_is_idempotent_on_restart(sweep_db_pool):
         org.id,
     )
     assert wd_count == 1
+
+
+@pytest.mark.anyio
+async def test_sweep_tx_reverted_marks_failed(sweep_db_pool):
+    """If verify_usdc_transfer returns False (reverted tx), withdrawal is marked failed."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-revert-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xreverted")),
+        patch(
+            "agent_wallets.verify_usdc_transfer",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+
+        count = await marketplace_sweep_once()
+
+    assert count == 0
+
+    wd_row = await pool.fetchrow(
+        "SELECT status, last_sweep_error FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    assert wd_row["status"] == "failed"
+    assert "reverted" in wd_row["last_sweep_error"]
+
+    # Earnings should be reverted back to pending so the next sweep can retry.
+    earnings_row = await pool.fetchrow(
+        "SELECT status FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert earnings_row["status"] == "pending"
+
+
+@pytest.mark.anyio
+async def test_sweep_tx_verification_skipped_when_no_rpc_url(sweep_db_pool):
+    """ValueError from verify_usdc_transfer (no RPC URL) → proceeds optimistically as settled."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-no-rpc-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash_norpc")),
+        patch(
+            "agent_wallets.verify_usdc_transfer",
+            new=AsyncMock(side_effect=ValueError("No RPC URL available")),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+
+        count = await marketplace_sweep_once()
+
+    assert count == 1
+
+    wd_row = await pool.fetchrow(
+        "SELECT status, tx_hash FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    assert wd_row["status"] == "settled"
+    assert wd_row["tx_hash"] == "0xtxhash_norpc"
+
+
+@pytest.mark.anyio
+async def test_sweep_balance_warning_logged_on_low_balance(sweep_db_pool, caplog):
+    """Settlement wallet below threshold → logger.error emitted after sweep cycle."""
+    import logging
+
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-balance-warn-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash3")),
+        patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+        patch(
+            "agent_wallets.get_settlement_wallet_balance_usdc",
+            new=AsyncMock(return_value=500_000),  # $0.50 — below $5.00 threshold
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        settings.marketplace_settlement_warn_threshold_usdc = 5_000_000  # $5.00
+        mock_settings.return_value = settings
+
+        with caplog.at_level(logging.ERROR, logger="marketplace"):
+            count = await marketplace_sweep_once()
+
+    assert count == 1
+    assert any(
+        "settlement wallet below threshold" in r.message and r.levelno == logging.ERROR
+        for r in caplog.records
+    )

@@ -140,7 +140,7 @@ curl "https://api.teardrop.ai/marketplace/earnings?cursor=<next_cursor>&limit=20
       "id": "earn-abc123",
       "tool_name": "weather_lookup",
       "caller_org_id": "subscriber-org",
-      "total_cost_usdc": 10000,
+      "amount_usdc": 10000,
       "author_share_usdc": 7000,
       "platform_share_usdc": 3000,
       "status": "settled",
@@ -178,8 +178,9 @@ curl https://api.teardrop.ai/marketplace/balance \
 ## Step 7 — Request a Withdrawal
 
 Withdrawals transfer your available earnings to the settlement wallet in one
-atomic on-chain USDC transfer.  The minimum withdrawal amount is 1,000 units
-($0.001).
+atomic on-chain USDC transfer.  The minimum withdrawal amount is **100,000 units
+($0.10)**.  You may only request one withdrawal per hour per org — if you hit the
+cooldown, wait and retry.
 
 ```bash
 curl -X POST https://api.teardrop.ai/marketplace/withdraw \
@@ -245,5 +246,5 @@ Pagination works the same way as earnings: pass `next_cursor` as `cursor`.
 |---|---|
 | `422 settlement wallet` on publish | Complete Step 2 first |
 | `422 invalid checksum` | Use EIP-55 format (mixed-case hex) |
-| Withdrawal stays `pending` for >30 min | The auto-sweep runs every 5 minutes; if still stuck, contact support who can trigger an admin reset |
+| Withdrawal stays `pending` for >30 min | The auto-sweep runs every 24 hours by default (configurable via `MARKETPLACE_SWEEP_INTERVAL_SECONDS`); if still stuck after a full sweep cycle, contact support who can trigger an admin reset |
 | `429 Too Many Requests` on catalog | Back off for 60 seconds (`Retry-After` header) |

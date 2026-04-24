@@ -98,3 +98,24 @@ async def test_db_error_returns_500(test_settings, monkeypatch):
             headers={"stripe-signature": "t=1,v1=abc"},
         )
     assert resp.status_code == 500
+
+
+@pytest.mark.anyio
+async def test_rate_limited_returns_429(anon_client, monkeypatch):
+    """Exceeding the per-IP rate limit returns 429 before the handler is called."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    mock_handler = _AsyncMock(return_value=None)
+    monkeypatch.setattr("app.handle_stripe_webhook", mock_handler)
+    # Simulate rate limit exhausted: allowed=False
+    monkeypatch.setattr(
+        "app._check_rate_limit",
+        _AsyncMock(return_value=(False, 0, None)),
+    )
+    resp = await anon_client.post(
+        "/billing/topup/webhook",
+        content=b'{"type":"checkout.session.completed"}',
+        headers={"stripe-signature": "t=1,v1=abc"},
+    )
+    assert resp.status_code == 429
+    mock_handler.assert_not_called()

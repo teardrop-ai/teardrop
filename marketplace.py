@@ -324,6 +324,11 @@ async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
     pool = _get_pool()
     settings = get_settings()
 
+    if not settings.agent_wallet_enabled:
+        raise ValueError(
+            "Withdrawals are unavailable: agent wallets are not enabled on this platform"
+        )
+
     # Author config required
     config = await get_author_config(org_id)
     if config is None:
@@ -399,6 +404,11 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
     pool = _get_pool()
     settings = get_settings()
 
+    if not settings.agent_wallet_enabled:
+        raise RuntimeError(
+            "Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first"
+        )
+
     row = await pool.fetchrow(
         "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
         withdrawal_id,
@@ -452,7 +462,7 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
             transfer_error = ""
             if settled_total > 0 and settings.agent_wallet_enabled:
                 try:
-                    from agent_wallets import transfer_usdc
+                    from agent_wallets import transfer_usdc, verify_usdc_transfer
 
                     tx_hash = await transfer_usdc(
                         from_cdp_account=settings.marketplace_settlement_cdp_account,
@@ -466,6 +476,29 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                         tx_hash,
                         settled_total,
                     )
+
+                    # Confirm the transaction was mined and not reverted.
+                    try:
+                        confirmed = await verify_usdc_transfer(
+                            tx_hash=tx_hash,
+                            chain_id=settings.marketplace_settlement_chain_id,
+                            timeout_seconds=settings.marketplace_tx_confirm_timeout_seconds,
+                        )
+                    except ValueError:
+                        # No RPC URL configured — skip verification, proceed optimistically.
+                        logger.warning(
+                            "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) "
+                            "tx=%s id=%s",
+                            tx_hash,
+                            withdrawal_id,
+                        )
+                        confirmed = True
+
+                    if not confirmed:
+                        raise RuntimeError(
+                            f"Transaction {tx_hash} was reverted on-chain"
+                        )
+
                 except Exception as exc:
                     logger.error(
                         "process_withdrawal: CDP transfer failed id=%s: %s",
@@ -1152,8 +1185,11 @@ async def marketplace_sweep_once() -> int:
                         error_detail,
                     )
                     logger.error(
-                        "marketplace_sweep: exhausted org=%s attempts=%d error=%s",
+                        "marketplace_sweep: exhausted withdrawal_id=%s org=%s "
+                        "amount_usdc=%d attempts=%d error=%s — manual intervention required",
+                        withdrawal_id,
                         org_id,
+                        total,
                         attempt,
                         error_detail,
                     )
@@ -1187,6 +1223,26 @@ async def marketplace_sweep_once() -> int:
                 exc,
                 exc_info=True,
             )
+
+    # Warn operators if the settlement wallet is running low on USDC.
+    if settings.agent_wallet_enabled:
+        try:
+            from agent_wallets import get_settlement_wallet_balance_usdc
+
+            balance = await get_settlement_wallet_balance_usdc(
+                chain_id=settings.marketplace_settlement_chain_id
+            )
+            warn_threshold = settings.marketplace_settlement_warn_threshold_usdc
+            if balance < warn_threshold:
+                logger.error(
+                    "marketplace_sweep: settlement wallet below threshold — "
+                    "balance_usdc=%d threshold_usdc=%d account=%s — top up required",
+                    balance,
+                    warn_threshold,
+                    settings.marketplace_settlement_cdp_account,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("marketplace_sweep: could not check settlement balance: %s", exc)
 
     return processed
 

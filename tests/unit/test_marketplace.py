@@ -30,6 +30,22 @@ _NOW = datetime.now(timezone.utc)
 # Use a well-known address that passes EIP-55 when all-lowercase (all digits = no check).
 _VALID_ADDR = "0x1234567890123456789012345678901234567890"
 
+
+def _mock_wallet_settings(monkeypatch, **overrides) -> MagicMock:
+    """Patch marketplace.get_settings so agent_wallet_enabled=True for withdrawal tests."""
+    defaults: dict = {
+        "agent_wallet_enabled": True,
+        "marketplace_minimum_withdrawal_usdc": 100_000,
+        "marketplace_withdrawal_cooldown_seconds": 86400,
+        "marketplace_settlement_cdp_account": "td-test",
+        "marketplace_settlement_chain_id": 84532,
+        "marketplace_tx_confirm_timeout_seconds": 5,
+        "marketplace_settlement_warn_threshold_usdc": 5_000_000,
+    }
+    mock_s = MagicMock(**{**defaults, **overrides})
+    monkeypatch.setattr("marketplace.get_settings", lambda: mock_s)
+    return mock_s
+
 # ─── validate_eip55_address ───────────────────────────────────────────────────
 
 
@@ -179,6 +195,7 @@ class TestRequestWithdrawal:
     @pytest.mark.anyio
     async def test_no_author_config_raises(self, monkeypatch):
         # get_author_config returns None
+        _mock_wallet_settings(monkeypatch)
         mock_pool = MagicMock()
         mock_pool.fetchrow = AsyncMock(return_value=None)
         monkeypatch.setattr("marketplace._pool", mock_pool)
@@ -188,6 +205,7 @@ class TestRequestWithdrawal:
 
     @pytest.mark.anyio
     async def test_below_minimum_raises(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         config_row = {
             "org_id": "org-1",
             "settlement_wallet": _VALID_ADDR,
@@ -204,6 +222,7 @@ class TestRequestWithdrawal:
 
     @pytest.mark.anyio
     async def test_insufficient_balance_raises(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         config_row = {
             "org_id": "org-1",
             "settlement_wallet": _VALID_ADDR,
@@ -222,6 +241,7 @@ class TestRequestWithdrawal:
 
     @pytest.mark.anyio
     async def test_cooldown_raises(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         config_row = {
             "org_id": "org-1",
             "settlement_wallet": _VALID_ADDR,
@@ -272,6 +292,7 @@ def _make_conn_mock(withdrawal_row, earnings_rows):
 class TestProcessWithdrawal:
     @pytest.mark.anyio
     async def test_not_found_raises(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         mock_pool, _ = _make_conn_mock(withdrawal_row=None, earnings_rows=[])
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
@@ -285,6 +306,7 @@ class TestProcessWithdrawal:
         Verifies the P1 best-effort fix: loop continues past oversized rows
         instead of breaking, so smaller later rows are still settled.
         """
+        _mock_wallet_settings(monkeypatch)
         withdrawal_row = {
             "id": "w-1",
             "org_id": "org-1",
@@ -301,6 +323,8 @@ class TestProcessWithdrawal:
         ]
         mock_pool, mock_conn = _make_conn_mock(withdrawal_row, earnings_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
+        monkeypatch.setattr("agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
+        monkeypatch.setattr("agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
 
         await process_withdrawal("w-1")
 
@@ -312,6 +336,7 @@ class TestProcessWithdrawal:
 
     @pytest.mark.anyio
     async def test_marks_withdrawal_settled(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         withdrawal_row = {
             "id": "w-2",
             "org_id": "org-1",
@@ -324,6 +349,8 @@ class TestProcessWithdrawal:
         earnings_rows = [{"id": "e1", "author_share_usdc": 300}]
         mock_pool, mock_conn = _make_conn_mock(withdrawal_row, earnings_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
+        monkeypatch.setattr("agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
+        monkeypatch.setattr("agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
 
         result = await process_withdrawal("w-2")
 

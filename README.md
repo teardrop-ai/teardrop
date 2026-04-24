@@ -1,5 +1,5 @@
 # teardrop
-Teardrop is a streaming AI agent API. You send it a message; it reasons using your configured LLM (Anthropic, OpenAI, or Google), optionally calls tools, builds a structured UI component tree, and streams everything back as Server-Sent Events. It implements four open protocols simultaneously: **AG-UI** (streaming events), **A2A** (agent discoverability), **MCP** (tool serving), and **x402** (per-request payments in USDC on Base, no subscription required).
+Teardrop is a streaming AI agent API. You send it a message; it reasons using your configured LLM (Anthropic, OpenAI, Google, or OpenRouter), optionally calls tools, builds a structured UI component tree, and streams everything back as Server-Sent Events. It implements four open protocols simultaneously: **AG-UI** (streaming events), **A2A** (agent discoverability), **MCP** (tool serving), and **x402** (per-request payments in USDC on Base, no subscription required).
 
 ---
 
@@ -156,7 +156,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_PROVIDER` | `anthropic`, `openai`, or `google` (default: `anthropic`) |
+| `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `anthropic`) |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
@@ -411,7 +411,7 @@ X402_NETWORK=eip155:8453          # Base mainnet (eip155:84532 = Base Sepolia)
 X402_FACILITATOR_URL=https://x402.org/facilitator
 X402_SCHEME=upto                  # "exact" (default) or "upto" (usage-based settlement)
 X402_UPTO_MAX_AMOUNT=$0.50        # Max ceiling per-run for upto (ignored for exact)
-BILLABLE_AUTH_METHODS=["siwe"]    # Add "client_credentials","email" to bill those too
+BILLABLE_AUTH_METHODS=["siwe", "client_credentials", "email"]    # All three auth methods billed by default
 ```
 
 ### Pricing
@@ -844,7 +844,7 @@ Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-ba
 
 ### Tools (`tools/definitions/`)
 
-Seventeen tools are available to the agent and served via MCP:
+Twenty-one tools are available to the agent and served via MCP:
 
 | Tool | Description |
 |------|-------------|
@@ -865,6 +865,10 @@ Seventeen tools are available to the agent and served via MCP:
 | `resolve_ens` | Resolves ENS name → address or address → ENS primary name. |
 | `summarize_text` | Returns character, word, sentence, and paragraph counts for a given text. |
 | `web_search` | Web search via Tavily. Set `TAVILY_API_KEY` to activate. |
+| `get_defi_positions` | Aggregate DeFi positions (Aave v3, Compound v3, Uniswap v3 LP) for a wallet on Ethereum or Base. |
+| `get_dex_quote` | Best Uniswap v3 swap quote across all fee tiers on Ethereum or Base via on-chain QuoterV2. |
+| `get_liquidation_risk` | Assess DeFi liquidation risk for up to 50 wallets across Aave v3 and Compound v3. |
+| `get_token_approvals` | Audit ERC-20 token allowances and flag risky unlimited approvals across major DeFi spenders. |
 
 ### A2UI components (`agent/state.py`)
 
@@ -908,8 +912,37 @@ python -m migrations.runner
 | `010_org_tools.sql` | Per-org custom webhook tools (`org_tools`) and audit events |
 | `011_org_memories.sql` | Enables `pgvector`; creates `org_memories` table with HNSW index |
 | `012_org_mcp_servers.sql` | Per-org MCP server connections (`org_mcp_servers`) and audit events |
+| `013_mcp_marketplace.sql` | Marketplace visibility flags (`publish_as_mcp`, `marketplace_description`, `base_price_usdc`) on org tools |
+| `013_settlement_retry.sql` | Settlement retry tracking columns for auto-sweep background worker |
+| `014_org_spending_limits.sql` | Per-org spending caps and pause/resume controls (`org_spending_limits`) |
+| `015_memory_ttl_dedup.sql` | Memory TTL expiry and near-duplicate deduplication support |
+| `016_email_verification.sql` | Email verification tokens and `email_verified` flag on users |
+| `017_org_invites.sql` | Org invite tokens and acceptance flow (`org_invites`) |
+| `018_refresh_tokens.sql` | Persistent refresh tokens for 30-day sessions (`refresh_tokens`) |
+| `019_org_llm_config.sql` | Per-org LLM provider/model/BYOK config (`org_llm_config`) |
+| `020_usage_provider_model.sql` | Adds `provider` and `model` columns to `usage_events` for per-model billing |
+| `021_model_pricing.sql` | Dynamic per-model pricing table (`model_pricing`) |
+| `022_model_pricing_seed.sql` | Seeds default pricing for all models in the catalogue |
+| `023_siwe_login_sessions.sql` | SIWE session persistence for nonce replay protection |
 | `024_a2a_delegation_billing.sql` | A2A delegation billing: extends `a2a_allowed_agents` with cost caps; creates `a2a_delegation_events` audit table |
 | `025_org_agent_wallets.sql` | CDP-backed agent wallets (`org_agent_wallets`) and audit events (`agent_wallet_events`) |
+| `026_a2a_jwt_forward.sql` | JWT forwarding flag on A2A delegation rules |
+| `026_normalize_revenue_share.sql` | Backfills and normalises revenue share in basis points |
+| `027_marketplace_tool_pricing.sql` | Per-tool pricing overrides for marketplace authors |
+| `028_marketplace_subscriptions.sql` | Org marketplace tool subscriptions (`marketplace_subscriptions`) |
+| `029_marketplace_platform_tools.sql` | Platform built-in metered tool enablement in marketplace |
+| `029_sweep_retry_columns.sql` | Auto-sweep retry tracking and backoff columns on withdrawal records |
+| `030_siwe_nonce_address_binding.sql` | Binds SIWE nonces to the signing address to prevent cross-wallet replay |
+| `031_activate_bench_tools.sql` | Activates benchmark tooling entries |
+| `031_byok_platform_fee.sql` | BYOK flat platform fee column on `org_llm_config` |
+| `032_refresh_token_successor.sql` | Refresh token successor chaining for atomic rotation |
+| `033_get_token_approvals.sql` | Schema support for `get_token_approvals` tool |
+| `034_get_defi_positions.sql` | Schema support for `get_defi_positions` tool |
+| `035_get_liquidation_risk.sql` | Schema support for `get_liquidation_risk` tool |
+| `036_get_dex_quote.sql` | Schema support for `get_dex_quote` tool |
+| `037_fix_haiku_pricing.sql` | Corrects Claude Haiku 4.5 token pricing to $0.80/$4.00 per 1k |
+| `038_org_llm_config_allow_openrouter.sql` | Expands provider CHECK constraint to allow `openrouter` in `org_llm_config` |
+| `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2, Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
 
 ### Neon (production)
 
@@ -934,7 +967,7 @@ wallets.py          # User wallet management, SIWE nonce lifecycle
 agent_wallets.py    # CDP-backed agent wallet provisioning, balance queries, audit
 agent/
   graph.py          # LangGraph StateGraph definition and routing
-  llm.py            # Multi-provider LLM factory (Anthropic, OpenAI, Google)
+  llm.py            # Multi-provider LLM factory (Anthropic, OpenAI, Google, OpenRouter)
   nodes.py          # planner, tool_executor, ui_generator implementations
   state.py          # AgentState, A2UIComponent, TaskStatus schemas
 tools/
@@ -944,7 +977,7 @@ tools/
   __init__.py       # Global registry singleton, get_langchain_tools()
 migrations/
   runner.py         # Applies SQL migrations in order
-  versions/         # 001_baseline through 012_org_mcp_servers
+  versions/         # 001_baseline through 039_new_model_pricing_seed
 scripts/
   generate_keys.py  # Generate RSA keypair → keys/private.pem + keys/public.pem
   init_neon.py      # Initialize Neon Postgres schema

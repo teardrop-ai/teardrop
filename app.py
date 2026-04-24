@@ -383,7 +383,11 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # pgvector unavailable; memory features will be disabled
 
-    pool = await asyncpg.create_pool(settings.pg_dsn, init=_init_conn)
+    pool = await asyncpg.create_pool(
+        settings.pg_dsn,
+        init=_init_conn,
+        command_timeout=settings.pg_command_timeout,
+    )
     app.state.pool = pool
     await apply_pending(pool)
     await init_redis(settings.redis_url)
@@ -2538,6 +2542,16 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
     """Stripe webhook receiver for checkout.session.completed events."""
     import stripe as _stripe  # noqa: PLC0415
 
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, _, _ = await _check_rate_limit(
+        f"webhook:{client_ip}", settings.rate_limit_webhook_rpm
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": "Too Many Requests"},
+        )
+
     payload = await request.body()
     if len(payload) > _MAX_STRIPE_WEBHOOK_PAYLOAD:
         raise HTTPException(
@@ -4282,6 +4296,8 @@ async def admin_process_withdrawal(
         withdrawal = await process_withdrawal(withdrawal_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
     return JSONResponse(content={
         "id": withdrawal.id,

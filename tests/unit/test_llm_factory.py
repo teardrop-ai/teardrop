@@ -76,6 +76,33 @@ class TestCreateLlm:
             )
             assert llm is MockCls.return_value
 
+    def test_openrouter_provider(self):
+        settings = _make_settings(
+            agent_provider="openrouter",
+            agent_model="mistral/mistral-7b-instruct",
+            openrouter_api_key="test-openrouter-key",
+        )
+        with patch("agent.llm.ChatOpenAI") as MockCls:
+            llm = create_llm(settings)
+            call_kwargs = MockCls.call_args[1]
+            assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+            assert call_kwargs["api_key"] == "test-openrouter-key"
+            assert "model_kwargs" not in call_kwargs
+            assert llm is MockCls.return_value
+
+    def test_openrouter_deepseek_model_gets_provider_routing(self):
+        settings = _make_settings(
+            agent_provider="openrouter",
+            agent_model="deepseek/deepseek-v3.2",
+            openrouter_api_key="test-openrouter-key",
+        )
+        with patch("agent.llm.ChatOpenAI") as MockCls:
+            create_llm(settings)
+            call_kwargs = MockCls.call_args[1]
+            assert call_kwargs["model_kwargs"] == {
+                "extra_body": {"provider": {"only": ["DeepInfra"]}}
+            }
+
     def test_unknown_provider_raises_value_error(self):
         settings = _make_settings(agent_provider="cohere")
         with pytest.raises(ValueError, match="Unknown agent_provider 'cohere'"):

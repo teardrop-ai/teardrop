@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     agent_provider: str = Field(
         default="anthropic",
-        description="LLM provider: anthropic, openai, or google",
+        description="LLM provider: anthropic, openai, google, or openrouter",
     )
     agent_model: str = "claude-haiku-4-5-20251001"
     agent_max_tokens: int = 4096
@@ -105,6 +105,10 @@ class Settings(BaseSettings):
         description=(
             "Per-org aggregate rate limit for MCP requests via the gateway (requests per minute)."
         ),
+    )
+    rate_limit_webhook_rpm: int = Field(
+        default=120,
+        description="Per-IP rate limit for POST /billing/topup/webhook (requests per minute).",
     )
 
     # ── JWT Authentication ─────────────────────────────────────────────────────
@@ -220,6 +224,12 @@ class Settings(BaseSettings):
     )
     stripe_webhook_secret: str = Field(
         default="", description="Stripe webhook signing secret (whsec_...)"
+    )
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    pg_command_timeout: float = Field(
+        default=30.0,
+        description="Default asyncpg command timeout in seconds for all DB queries.",
     )
 
     # Which auth methods are subject to billing.  SIWE callers pay via x402
@@ -430,6 +440,20 @@ class Settings(BaseSettings):
         description=(
             "Max sweep attempts per withdrawal before marking it 'exhausted'. "
             "Backoff: min(2^attempt * 60s, 86400s). Matches settlement_max_retries default."
+        ),
+    )
+    marketplace_tx_confirm_timeout_seconds: int = Field(
+        default=30,
+        description=(
+            "Seconds to wait for an on-chain transaction receipt after CDP transfer. "
+            "Base L2 blocks in ~2s so 30s gives ~15 polling attempts before timeout."
+        ),
+    )
+    marketplace_settlement_warn_threshold_usdc: int = Field(
+        default=5_000_000,
+        description=(
+            "Log an ERROR after each sweep cycle when the settlement wallet USDC "
+            "balance falls below this threshold (atomic units; 5_000_000 = $5.00)."
         ),
     )
     rate_limit_mcp_rpm: int = Field(

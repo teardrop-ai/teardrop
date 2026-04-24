@@ -10,12 +10,16 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import asyncpg
+import httpx
 from pydantic import BaseModel
 
 from config import get_settings
@@ -359,8 +363,6 @@ async def transfer_usdc(
 
     network = _chain_id_to_network(chain_id)
     # CDP SDK uses human-readable USDC amounts (e.g. "1.50" for $1.50).
-    from decimal import Decimal
-
     human_amount = str(Decimal(amount_usdc) / Decimal("1_000_000"))
 
     logger.info(
@@ -387,3 +389,116 @@ async def transfer_usdc(
 
     logger.info("transfer_usdc: success tx_hash=%s", tx_hash)
     return tx_hash
+
+
+# ─── On-chain transaction verification ───────────────────────────────────────
+
+# Public RPC endpoints for supported chains (used when no custom RPC URL is set).
+_FALLBACK_RPC: dict[int, str] = {
+    8453: "https://mainnet.base.org",
+    84532: "https://sepolia.base.org",
+}
+
+_TX_POLL_INTERVAL = 2.0  # seconds between eth_getTransactionReceipt polls
+
+
+async def verify_usdc_transfer(
+    tx_hash: str,
+    chain_id: int | None = None,
+    timeout_seconds: int | None = None,
+) -> bool:
+    """Verify a transaction was mined and succeeded on-chain.
+
+    Polls ``eth_getTransactionReceipt`` until the tx is included in a block.
+
+    Args:
+        tx_hash: Hex transaction hash (``0x...``).
+        chain_id: EIP-155 chain ID. Defaults to the configured CDP network.
+        timeout_seconds: Max seconds to wait for a receipt. Defaults to
+            ``marketplace_tx_confirm_timeout_seconds`` from settings.
+
+    Returns:
+        ``True`` if the transaction was mined with status ``0x1`` (success).
+        ``False`` if the transaction was mined with status ``0x0`` (reverted).
+
+    Raises:
+        TimeoutError: No receipt found within *timeout_seconds*.
+        ValueError: Could not determine an RPC endpoint for *chain_id*.
+    """
+    settings = get_settings()
+
+    if chain_id is None:
+        chain_id = 84532 if settings.cdp_network == "base-sepolia" else 8453
+
+    if timeout_seconds is None:
+        timeout_seconds = settings.marketplace_tx_confirm_timeout_seconds
+
+    # Prefer operator-supplied URL; fall back to public endpoint.
+    base_rpc = settings.base_rpc_url
+    rpc_url = base_rpc if base_rpc else _FALLBACK_RPC.get(chain_id, "")
+    if not rpc_url:
+        raise ValueError(
+            f"No RPC URL available for chain_id={chain_id}. "
+            "Set BASE_RPC_URL for reliable transaction verification."
+        )
+
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+        "id": 1,
+    }
+    deadline = time.monotonic() + timeout_seconds
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while True:
+            try:
+                resp = await client.post(rpc_url, json=payload)
+                resp.raise_for_status()
+                receipt = resp.json().get("result")
+                if receipt is not None:
+                    confirmed = receipt.get("status") == "0x1"
+                    logger.info(
+                        "verify_usdc_transfer: tx=%s chain=%d confirmed=%s",
+                        tx_hash,
+                        chain_id,
+                        confirmed,
+                    )
+                    return confirmed
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                logger.debug("verify_usdc_transfer: poll error tx=%s: %s", tx_hash, exc)
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Transaction {tx_hash} not mined within {timeout_seconds}s on chain {chain_id}"
+                )
+            await asyncio.sleep(_TX_POLL_INTERVAL)
+
+
+async def get_settlement_wallet_balance_usdc(chain_id: int | None = None) -> int:
+    """Return the settlement CDP account's USDC balance in atomic units.
+
+    Used by the sweep loop to check whether the platform pool needs topping up.
+    Raises ``RuntimeError`` if CDP is not enabled/configured.
+    """
+    _require_cdp_enabled()
+    settings = get_settings()
+
+    if chain_id is None:
+        chain_id = 84532 if settings.cdp_network == "base-sepolia" else 8453
+
+    network = _chain_id_to_network(chain_id)
+    account_name = settings.marketplace_settlement_cdp_account
+
+    async with _get_cdp_client() as cdp:
+        account = await cdp.evm.get_or_create_account(name=account_name)
+        balances = await cdp.evm.list_token_balances(
+            address=account.address, network=network
+        )
+        for tb in balances:
+            symbol = getattr(tb, "symbol", "") or ""
+            if symbol.upper() == "USDC":
+                amt = getattr(tb, "amount", None)
+                if amt is not None:
+                    return int(Decimal(str(amt)) * Decimal("1_000_000"))
+    return 0
