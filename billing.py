@@ -503,10 +503,14 @@ async def get_current_pricing() -> PricingRule | None:
     return PricingRule(**dict(row))
 
 
-async def get_current_pricing_for_model(provider: str, model: str) -> PricingRule | None:
+async def get_current_pricing_for_model(
+    provider: str, model: str, *, is_byok: bool = False
+) -> PricingRule | None:
     """Return the most specific pricing rule for a provider/model (direct DB query).
 
     Resolution order: exact model match → provider-level → global default.
+    When *is_byok* is True, only BYOK-tier rows (``is_byok = TRUE``) are
+    considered, falling back through the same hierarchy.
     """
     pool = _get_pool()
     row = await pool.fetchrow(
@@ -515,6 +519,7 @@ async def get_current_pricing_for_model(provider: str, model: str) -> PricingRul
                tokens_out_cost_per_1k, tool_call_cost, effective_from, created_at
         FROM pricing_rules
         WHERE effective_from <= NOW()
+          AND is_byok = $3
           AND (
             (provider = $1 AND model = $2)
             OR (provider = $1 AND model = '')
@@ -531,6 +536,7 @@ async def get_current_pricing_for_model(provider: str, model: str) -> PricingRul
         """,
         provider,
         model,
+        is_byok,
     )
     if row is None:
         return None
@@ -539,16 +545,20 @@ async def get_current_pricing_for_model(provider: str, model: str) -> PricingRul
 
 # ─── Per-model pricing TTL cache ─────────────────────────────────────────────
 
+# Cache key format: "{provider}:{model}:{is_byok}" to keep BYOK and standard
+# pricing separate in the same dict.
 _model_pricing_cache: dict[str, tuple[PricingRule | None, float]] = {}
 _model_pricing_lock: asyncio.Lock | None = None
 
 
 async def get_live_pricing_for_model(
-    provider: str, model: str
+    provider: str, model: str, *, is_byok: bool = False
 ) -> PricingRule | None:
     """Return model-specific pricing using a TTL cache.
 
     Falls back through: model-specific → provider-level → global default.
+    When *is_byok* is True, resolves from the BYOK orchestration rate table
+    (seeded by migration 041) rather than the standard cost table.
     """
     global _model_pricing_lock
 
@@ -556,13 +566,13 @@ async def get_live_pricing_for_model(
         return await get_live_pricing()
 
     settings = get_settings()
-    cache_key = f"{provider}:{model}"
+    cache_key = f"{provider}:{model}:{is_byok}"
     redis = get_redis()
 
     # Redis path
     if redis is not None:
         try:
-            rkey = f"teardrop:pricing:{provider}:{model}"
+            rkey = f"teardrop:pricing:{provider}:{model}:{'byok' if is_byok else 'std'}"
             cached_json = await redis.get(rkey)
             if cached_json is not None:
                 data = json.loads(cached_json)
@@ -589,13 +599,13 @@ async def get_live_pricing_for_model(
             return entry[0]
 
         try:
-            rule = await get_current_pricing_for_model(provider, model)
+            rule = await get_current_pricing_for_model(provider, model, is_byok=is_byok)
             expires = time.monotonic() + settings.pricing_cache_ttl_seconds
             _model_pricing_cache[cache_key] = (rule, expires)
 
             if (redis := get_redis()) is not None:
                 try:
-                    rkey = f"teardrop:pricing:{provider}:{model}"
+                    rkey = f"teardrop:pricing:{provider}:{model}:{'byok' if is_byok else 'std'}"
                     payload = json.dumps(rule.model_dump(mode="json") if rule else None, default=str)
                     await redis.setex(rkey, settings.pricing_cache_ttl_seconds, payload)
                 except Exception as exc:
@@ -1836,10 +1846,53 @@ def apply_platform_fee(cost_usdc: int) -> int:
 
 
 def get_byok_platform_fee(is_byok: bool) -> int:
-    """Return the flat per-run platform fee for BYOK orgs, or 0 for non-BYOK."""
+    """Return the flat per-run platform fee for BYOK orgs, or 0 for non-BYOK.
+
+    .. deprecated::
+        Kept for backward compatibility.  New code should call
+        ``calculate_byok_orchestration_cost()`` which uses token-based pricing
+        seeded in migration 041.  This function now serves only as a minimum
+        floor via ``byok_platform_fee_usdc`` config.
+    """
     if not is_byok:
         return 0
     return get_settings().byok_platform_fee_usdc
+
+
+async def calculate_byok_orchestration_cost(
+    tokens_in: int,
+    tokens_out: int,
+    provider: str = "",
+    model: str = "",
+) -> int:
+    """Calculate the BYOK orchestration fee for a completed run.
+
+    Resolves a BYOK-tier pricing rule (``is_byok=TRUE`` in ``pricing_rules``)
+    and bills per-token orchestration overhead.  BYOK users pay the LLM
+    provider directly; this fee covers Teardrop's routing, streaming, billing,
+    and storage infrastructure.
+
+    Falls back to ``byok_platform_fee_usdc`` (flat floor) when:
+    - No BYOK pricing rule exists in the DB yet (pre-migration 041).
+    - Computed token cost is less than the configured floor.
+
+    Returns 0 only when both the rule is missing AND the floor is 0.
+    """
+    settings = get_settings()
+    floor = settings.byok_platform_fee_usdc
+
+    rule = await get_live_pricing_for_model(provider, model, is_byok=True)
+    if rule is None:
+        return floor
+
+    computed = (
+        (tokens_in // 1000) * rule.tokens_in_cost_per_1k
+        + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
+    )
+
+    # Apply floor so zero-token runs (e.g. tool-only or very short prompts) still
+    # register as a paid transaction in the ledger.
+    return max(computed, floor)
 
 
 async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:

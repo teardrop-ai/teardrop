@@ -17,7 +17,7 @@ Agents can securely delegate tasks to other agents via `POST /delegate` or the `
 ```
 A2A_DELEGATION_ENABLED=true                      # Enable agent-to-agent delegation
 A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: false)
-A2A_DELEGATION_MAX_PER_RUN=10                    # Max delegations per run
+A2A_DELEGATION_MAX_PER_RUN=3                     # Max delegations per run (default: 3)
 A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
 A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
 A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
@@ -46,7 +46,8 @@ Organizations can monetize their agents via a Marketplace. Earned fees are settl
 **Auto-sweep settings** (configure in `.env`):
 ```
 MARKETPLACE_SETTLEMENT_CDP_ACCOUNT=td-marketplace   # CDP account for settlement transfers
-MARKETPLACE_SETTLEMENT_CHAIN_ID=84532               # Chain ID (Base Sepolia=84532, Base=8453)
+MARKETPLACE_SETTLEMENT_CHAIN_ID=8453                # Chain ID: 8453=Base mainnet, 84532=Base Sepolia (testnet)
+MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS=90          # Timeout for on-chain tx receipt (90s for mainnet congestion tolerance)
 MARKETPLACE_AUTO_SWEEP_ENABLED=true                # Enable automatic earnings sweep
 MARKETPLACE_SWEEP_INTERVAL_SECONDS=86400           # Sweep cadence (86400 = 1 day)
 ```
@@ -176,9 +177,24 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `AGENT_WALLET_MAX_BALANCE_USDC` | Max USDC per agent wallet (default: 100000000 = $100) |
 | `MARKETPLACE_ENABLED` | `true` to activate the tool marketplace catalog and platform tool billing in the MCP gateway |
 | `MARKETPLACE_SETTLEMENT_CDP_ACCOUNT` | CDP account name for settlement transfers (default: `td-marketplace`) |
-| `MARKETPLACE_SETTLEMENT_CHAIN_ID` | Chain for USDC sweeps (`84532` = Base Sepolia, `8453` = Base mainnet) |
+| `MARKETPLACE_SETTLEMENT_CHAIN_ID` | Chain for USDC sweeps: `8453` = Base mainnet (production), `84532` = Base Sepolia (testnet). Must match `CDP_NETWORK`. |
+| `MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS` | Seconds to wait for on-chain tx receipt after CDP transfer (default: `90`). Base mainnet can experience 60–90s delays under congestion. |
 | `MARKETPLACE_AUTO_SWEEP_ENABLED` | `true` to auto-sweep org earnings on a schedule |
 | `MARKETPLACE_SWEEP_INTERVAL_SECONDS` | Sweep cadence in seconds (default: `86400` = 1 day) |
+| `BYOK_TIER_PRICING_ENABLED` | `true` to use per-token orchestration pricing for BYOK orgs (seeded by migration 041). When `false`, uses legacy flat `byok_platform_fee_usdc`. Default: `false` for backward compatibility. |
+| `OPENROUTER_API_KEY` | Required if `AGENT_PROVIDER=openrouter` |
+| `COINGECKO_API_KEY` | CoinGecko API key for live price data (optional; rate-limited without key) |
+| `ORG_TOOL_ENCRYPTION_KEY` | Fernet key for encrypting webhook `auth_header_value` at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `LLM_CONFIG_ENCRYPTION_KEY` | Fernet key for encrypting BYOK API keys at rest (same format as above) |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` to require email verification before login (default: `false`) |
+| `RESEND_API_KEY` | Resend API key for sending verification / invite emails |
+| `RESEND_FROM_EMAIL` | Sender address for transactional emails (e.g. `noreply@yourdomain.com`) |
+| `APP_BASE_URL` | Public URL of this deployment (used in email links, e.g. `https://api.teardrop.dev`) |
+| `MARKETPLACE_DEFAULT_REVENUE_SHARE_BPS` | Author revenue share in basis points (default: `7000` = 70% to author, 30% to platform). Hard-coded split; per-author overrides are not supported. |
+| `MCP_AUTH_ENABLED` | `true` to require authentication on the `/tools/mcp` MCP gateway |
+| `MCP_AUTH_AUDIENCE` | JWT audience for MCP gateway tokens (default: `teardrop-mcp`) |
+| `MCP_BILLING_ENABLED` | `true` to enable credit billing for MCP tool calls |
+| `MCP_X402_ENABLED` | `true` to accept x402 payments on the MCP gateway |
 
 ---
 
@@ -228,7 +244,7 @@ SIWE tokens are the only auth method that can use x402 on-chain payments. New wa
 Organizations can configure their preferred LLM provider, model, routing strategy, and optionally bring their own API keys (BYOK). This unlocks:
 
 - **Multi-provider choice**: Use Anthropic, OpenAI, Google, or point at self-hosted endpoints (vLLM, Ollama, OpenRouter)
-- **Bring Your Own Key (BYOK)**: Encrypt and store your own API credentials — Teardrop never sees your keys
+- **Bring Your Own Key (BYOK)**: Encrypt and store your own API credentials — Teardrop never sees your keys. BYOK orgs pay platform fees for orchestration (per-token when `BYOK_TIER_PRICING_ENABLED=true`, or flat fee otherwise) in addition to their LLM provider costs.
 - **Smart routing**: Automatically select models based on cost, speed, or quality
 - **Self-hosted support**: Use any OpenAI-compatible endpoint via `api_base` parameter
 

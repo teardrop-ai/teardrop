@@ -36,6 +36,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 600,
         "knowledge_cutoff": "2025-10",
         "training_cutoff_note": "Training data through October 2025",
+        "deprecated": True,
     },
     "anthropic:claude-sonnet-4-20250514": {
         "provider": "anthropic",
@@ -48,6 +49,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 1800,
         "knowledge_cutoff": "2025-05",
         "training_cutoff_note": "Training data through May 2025",
+        "deprecated": True,
     },
     "openai:gpt-4o-mini": {
         "provider": "openai",
@@ -73,6 +75,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 1500,
         "knowledge_cutoff": "2024-04",
         "training_cutoff_note": "Training data through April 2024",
+        "deprecated": True,
     },
     "google:gemini-2.0-flash": {
         "provider": "google",
@@ -98,6 +101,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 2000,
         "knowledge_cutoff": "2025-01",
         "training_cutoff_note": "Training data through January 2025",
+        "deprecated": True,
     },
     # ── New pool (April 2026 refresh) ─────────────────────────────────────
     "openrouter:deepseek/deepseek-v3.2": {

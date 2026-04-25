@@ -213,9 +213,20 @@ class Settings(BaseSettings):
     byok_platform_fee_usdc: int = Field(
         default=1000,
         description=(
-            "Flat platform fee in atomic USDC charged per /agent/run when the org "
-            "uses a BYOK (Bring Your Own Key) LLM config. 1000 = $0.001. "
-            "Set to 0 to disable the fee."
+            "Minimum flat fee in atomic USDC charged per /agent/run for BYOK orgs. "
+            "1000 = $0.001. Acts as a floor when byok_tier_pricing_enabled=True "
+            "(computed token-based fee is max(computed, floor)). "
+            "Also used as the legacy flat fee when byok_tier_pricing_enabled=False. "
+            "Set to 0 to disable any minimum floor."
+        ),
+    )
+    byok_tier_pricing_enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, BYOK orgs are billed a per-token orchestration fee resolved "
+            "from pricing_rules (is_byok=True rows, seeded by migration 041) rather "
+            "than the flat byok_platform_fee_usdc. The flat fee becomes a floor. "
+            "Enable after verifying migration 041 has been applied."
         ),
     )
     # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
@@ -443,10 +454,13 @@ class Settings(BaseSettings):
         ),
     )
     marketplace_tx_confirm_timeout_seconds: int = Field(
-        default=30,
+        default=90,
         description=(
             "Seconds to wait for an on-chain transaction receipt after CDP transfer. "
-            "Base L2 blocks in ~2s so 30s gives ~15 polling attempts before timeout."
+            "Base L2 blocks normally in ~2s, but under network congestion mainnet txs "
+            "can sit in the mempool for 60–90s. 90s provides a comfortable margin for "
+            "production (45 polling attempts at 2s intervals) while keeping withdrawal "
+            "latency reasonable."
         ),
     )
     marketplace_settlement_warn_threshold_usdc: int = Field(

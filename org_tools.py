@@ -52,6 +52,8 @@ class OrgTool(BaseModel):
     publish_as_mcp: bool = False
     marketplace_description: str = ""
     base_price_usdc: int = 0
+    schema_hash: str = ""
+    last_schema_changed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -201,8 +203,8 @@ async def create_org_tool(
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
             "  publish_as_mcp, marketplace_description, base_price_usdc,"
-            "  created_at, updated_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $14, $14)",
+            "  created_at, updated_at, last_schema_changed_at)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $14, $14, $14)",
             tool_id,
             org_id,
             name,
@@ -240,6 +242,7 @@ async def create_org_tool(
         publish_as_mcp=publish_as_mcp,
         marketplace_description=marketplace_description,
         base_price_usdc=base_price_usdc,
+        last_schema_changed_at=now,
         created_at=now,
         updated_at=now,
     )
@@ -264,6 +267,8 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         publish_as_mcp=row.get("publish_as_mcp", False),
         marketplace_description=row.get("marketplace_description", ""),
         base_price_usdc=row.get("base_price_usdc", 0),
+        schema_hash=row.get("schema_hash") or "",
+        last_schema_changed_at=row.get("last_schema_changed_at"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

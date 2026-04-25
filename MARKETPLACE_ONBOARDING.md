@@ -60,6 +60,17 @@ earnings are always settled to the wallet recorded **at withdrawal time**.
 
 ---
 
+## Publishing: Author Tools vs Platform Tools
+
+Teardrop maintains two categories of tools in the marketplace catalog:
+
+- **Author tools**: Custom tools you publish via this guide. Each has an `author_org_slug` and appears with `qualified_name = "<your-org-slug>/<tool-name>"`.
+- **Platform tools**: Built-in Teardrop tools (e.g., `web_search`, `http_fetch`) maintained by Teardrop itself. These appear with `qualified_name = "platform/<tool-name>"` and are always available.
+
+When a caller retrieves the catalog via `GET /marketplace/catalog`, they can optionally filter by author using the `org_slug` query parameter to see only your tools or only platform tools.
+
+---
+
 ## Step 3 — Create the Tool
 
 Create your webhook-backed tool via `POST /tools`.  The `input_schema` field
@@ -86,8 +97,12 @@ curl -X POST https://api.teardrop.ai/tools \
   }'
 ```
 
-> **`base_price_usdc`** — the amount callers pay per invocation. The platform
-> applies a **70 / 30 revenue split**: 70 % goes to you, 30 % to Teardrop.
+```
+
+> **`base_price_usdc`** — the amount standard callers pay per invocation. The platform
+> applies a **70 / 30 revenue split**: 70% to you, 30% to Teardrop.
+> 
+> **BYOK orgs** (Bring Your Own Key) may pay a different orchestration fee if `BYOK_TIER_PRICING_ENABLED=true` on the platform (seeded by migration 041). BYOK orgs always pay your `base_price_usdc` plus any applicable BYOK orchestration fees to Teardrop.
 > This split is fixed; per-author overrides are not supported.
 
 ---
@@ -113,6 +128,31 @@ Your tool now appears in the public catalog at `GET /marketplace/catalog`.
 > Soft-deleting (`DELETE /tools/<id>`) a published tool automatically
 > deactivates all subscriber subscriptions so callers are not left with
 > a broken reference.
+
+### Catalog Discovery & Filtering
+
+Callers can discover your tools via `GET /marketplace/catalog` with optional filtering:
+
+```bash
+# Get all marketplace tools (author + platform)
+curl https://api.teardrop.ai/marketplace/catalog
+
+# Filter to only your org's tools
+curl "https://api.teardrop.ai/marketplace/catalog?org_slug=<your-org-slug>"
+
+# Sort by price (ascending or descending)
+curl "https://api.teardrop.ai/marketplace/catalog?sort=price_asc"
+curl "https://api.teardrop.ai/marketplace/catalog?sort=price_desc"
+
+# Paginate results (default limit 100, max 200)
+curl "https://api.teardrop.ai/marketplace/catalog?limit=50&cursor=<next_cursor>"
+```
+
+Query parameters:
+- `org_slug`: Filter to a specific author org, or `"platform"` for Teardrop tools only
+- `sort`: `name` (default), `price_asc`, `price_desc`
+- `limit`: Results per page (1–200, default 100)
+- `cursor`: Opaque pagination token from previous response's `next_cursor`
 
 ---
 
@@ -140,7 +180,7 @@ curl "https://api.teardrop.ai/marketplace/earnings?cursor=<next_cursor>&limit=20
       "id": "earn-abc123",
       "tool_name": "weather_lookup",
       "caller_org_id": "subscriber-org",
-      "amount_usdc": 10000,
+      "total_cost_usdc": 10000,
       "author_share_usdc": 7000,
       "platform_share_usdc": 3000,
       "status": "settled",
@@ -166,12 +206,12 @@ curl https://api.teardrop.ai/marketplace/balance \
 **Response:**
 ```json
 {
-  "available_usdc": 350000,
-  "pending_usdc": 0
+  "org_id": "your-org-id",
+  "balance_usdc": 350000
 }
 ```
 
-`available_usdc` is the amount you can withdraw right now.
+`balance_usdc` is your total pending (unwithdrawn) earnings.
 
 ---
 

@@ -668,84 +668,177 @@ class MarketplaceTool(BaseModel):
     author_org_slug: str
 
 
+_CATALOG_SORT_COLUMNS = {
+    "name": "t.name ASC",
+    "price_asc": "t.base_price_usdc ASC, t.name ASC",
+    "price_desc": "t.base_price_usdc DESC, t.name ASC",
+}
+
+# Sentinel used to distinguish "filter to platform only" from "no filter".
+_PLATFORM_SLUG = "platform"
+
+
 async def get_marketplace_catalog(
     tool_overrides: dict[str, int] | None = None,
     default_tool_cost: int = 0,
+    *,
+    org_slug: str | None = None,
+    sort: str = "name",
+    limit: int = 100,
+    cursor: str | None = None,
 ) -> list[MarketplaceTool]:
-    """Return all published marketplace tools with pricing and author info.
+    """Return published marketplace tools with optional filtering and sorting.
 
-    Combines org-published tools (org_tools) and platform-owned tools
-    (marketplace_platform_tools) into a single catalog.
+    Args:
+        tool_overrides: Admin price overrides keyed by tool name or qualified name.
+        default_tool_cost: Fallback cost when no other price is available.
+        org_slug: When set, return only tools from that org. Use ``"platform"``
+            to return only Teardrop-owned platform tools.
+        sort: One of ``"name"`` (default), ``"price_asc"``, ``"price_desc"``.
+        limit: Maximum number of results to return (capped at 200).
+        cursor: Opaque pagination token (base64 of last seen sort key).
     """
-    pool = _get_pool()
+    if sort not in _CATALOG_SORT_COLUMNS:
+        raise ValueError(f"Invalid sort '{sort}'. Allowed: {', '.join(_CATALOG_SORT_COLUMNS)}")
 
-    rows = await pool.fetch(
-        """
-        SELECT t.name, t.description, t.marketplace_description, t.input_schema,
-               t.base_price_usdc,
-               o.name AS org_name, o.slug AS org_slug
-        FROM org_tools t
-        JOIN orgs o ON o.id = t.org_id
-        WHERE t.publish_as_mcp = TRUE AND t.is_active = TRUE
-        ORDER BY t.name
-        """
-    )
+    limit = min(max(1, limit), 200)
 
     if tool_overrides is None:
         tool_overrides = {}
 
+    import base64 as _b64
     import json as _json
 
+    pool = _get_pool()
     catalog: list[MarketplaceTool] = []
-    for r in rows:
-        raw_schema = r["input_schema"]
-        if isinstance(raw_schema, str):
-            raw_schema = _json.loads(raw_schema)
 
-        qualified = f"{r['org_slug']}/{r['name']}"
-        # Price resolution: admin override (qualified) > admin override (bare) > author price > default
-        author_price = r.get("base_price_usdc", 0)
-        cost = tool_overrides.get(qualified, tool_overrides.get(r["name"], author_price or default_tool_cost))
+    # ── Decode cursor (opaque base64 JSON of last seen values) ────────────
+    # Cursor encodes {"sort_key": <value>, "name": <str>} for keyset pagination.
+    cursor_sort_key: Any = None
+    cursor_name: str | None = None
+    if cursor:
+        try:
+            cursor_data = _json.loads(_b64.b64decode(cursor).decode())
+            cursor_sort_key = cursor_data.get("sort_key")
+            cursor_name = cursor_data.get("name")
+        except Exception:
+            pass  # Malformed cursor → ignore, return from start
 
-        catalog.append(
-            MarketplaceTool(
-                name=r["name"],
-                qualified_name=qualified,
-                description=r["description"],
-                marketplace_description=r["marketplace_description"] or r["description"],
-                input_schema=raw_schema,
-                cost_usdc=cost,
-                author_org_name=r["org_name"],
-                author_org_slug=r["org_slug"],
-            )
+    # ── Org-tool section (skip when requesting platform-only) ────────────
+    if org_slug != _PLATFORM_SLUG:
+        order_col = _CATALOG_SORT_COLUMNS[sort]
+
+        # Build WHERE clause; org_slug filter and cursor are optional additions.
+        where_clauses = ["t.publish_as_mcp = TRUE", "t.is_active = TRUE"]
+        params: list[Any] = []
+
+        if org_slug:
+            params.append(org_slug)
+            where_clauses.append(f"o.slug = ${len(params)}")
+
+        # Keyset pagination: skip rows already seen based on sort order.
+        if cursor_sort_key is not None and cursor_name is not None:
+            if sort == "name":
+                params.append(cursor_name)
+                where_clauses.append(f"t.name > ${len(params)}")
+            elif sort == "price_asc":
+                params.append(cursor_sort_key)
+                params.append(cursor_name)
+                where_clauses.append(
+                    f"(t.base_price_usdc > ${len(params) - 1} OR "
+                    f"(t.base_price_usdc = ${len(params) - 1} AND t.name > ${len(params)}))"
+                )
+            elif sort == "price_desc":
+                params.append(cursor_sort_key)
+                params.append(cursor_name)
+                where_clauses.append(
+                    f"(t.base_price_usdc < ${len(params) - 1} OR "
+                    f"(t.base_price_usdc = ${len(params) - 1} AND t.name > ${len(params)}))"
+                )
+
+        params.append(limit)
+        where_sql = " AND ".join(where_clauses)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT t.name, t.description, t.marketplace_description, t.input_schema,
+                   t.base_price_usdc,
+                   o.name AS org_name, o.slug AS org_slug
+            FROM org_tools t
+            JOIN orgs o ON o.id = t.org_id
+            WHERE {where_sql}
+            ORDER BY {order_col}
+            LIMIT ${len(params)}
+            """,
+            *params,
         )
 
-    # ── Platform tools (no org owner, execute in-process) ─────────────────
-    platform_rows = await pool.fetch(
-        """
-        SELECT tool_name, display_name, description, base_price_usdc
-        FROM marketplace_platform_tools
-        WHERE is_active = TRUE
-        ORDER BY tool_name
-        """
-    )
-    for pr in platform_rows:
-        name = pr["tool_name"]
-        cost = tool_overrides.get(name, pr["base_price_usdc"] or default_tool_cost)
-        catalog.append(
-            MarketplaceTool(
-                name=name,
-                qualified_name=f"platform/{name}",
-                description=pr["description"],
-                marketplace_description=pr["description"],
-                input_schema={},
-                cost_usdc=cost,
-                author_org_name="Teardrop",
-                author_org_slug="platform",
+        for r in rows:
+            raw_schema = r["input_schema"]
+            if isinstance(raw_schema, str):
+                raw_schema = _json.loads(raw_schema)
+
+            qualified = f"{r['org_slug']}/{r['name']}"
+            # Price resolution: admin override (qualified) > admin override (bare) > author price > default
+            author_price = r.get("base_price_usdc", 0)
+            cost = tool_overrides.get(qualified, tool_overrides.get(r["name"], author_price or default_tool_cost))
+
+            catalog.append(
+                MarketplaceTool(
+                    name=r["name"],
+                    qualified_name=qualified,
+                    description=r["description"],
+                    marketplace_description=r["marketplace_description"] or r["description"],
+                    input_schema=raw_schema,
+                    cost_usdc=cost,
+                    author_org_name=r["org_name"],
+                    author_org_slug=r["org_slug"],
+                )
             )
+
+    # ── Platform tools (skip when requesting a specific org) ──────────────
+    if org_slug is None or org_slug == _PLATFORM_SLUG:
+        # Platform tools are always sorted by tool_name; apply limit only when
+        # fetching platform-only (org_slug="platform") to respect the limit param.
+        platform_limit_clause = f"LIMIT {limit}" if org_slug == _PLATFORM_SLUG else ""
+        platform_rows = await pool.fetch(
+            f"""
+            SELECT tool_name, display_name, description, base_price_usdc
+            FROM marketplace_platform_tools
+            WHERE is_active = TRUE
+            ORDER BY tool_name
+            {platform_limit_clause}
+            """
         )
+        for pr in platform_rows:
+            name = pr["tool_name"]
+            cost = tool_overrides.get(name, pr["base_price_usdc"] or default_tool_cost)
+            catalog.append(
+                MarketplaceTool(
+                    name=name,
+                    qualified_name=f"platform/{name}",
+                    description=pr["description"],
+                    marketplace_description=pr["description"],
+                    input_schema={},
+                    cost_usdc=cost,
+                    author_org_name="Teardrop",
+                    author_org_slug="platform",
+                )
+            )
 
     return catalog
+
+
+def _build_catalog_cursor(tool: MarketplaceTool, sort: str) -> str:
+    """Build an opaque pagination cursor for the given tool and sort order."""
+    import base64 as _b64
+    import json as _json
+
+    if sort == "price_asc" or sort == "price_desc":
+        data = {"sort_key": tool.cost_usdc, "name": tool.name}
+    else:
+        data = {"sort_key": tool.name, "name": tool.name}
+    return _b64.b64encode(_json.dumps(data).encode()).decode()
 
 
 async def get_marketplace_tool_by_name(
@@ -819,6 +912,7 @@ class MarketplaceSubscription(BaseModel):
     qualified_tool_name: str
     is_active: bool
     subscribed_at: datetime
+    subscribed_schema_hash: str | None = None
 
 
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
@@ -836,6 +930,7 @@ async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> Marketplac
     if tool_row is None:
         raise ValueError(f"Marketplace tool not found: {qualified_tool_name}")
 
+    current_hash = tool_row.get("schema_hash") or ""
     sub_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
@@ -843,16 +938,18 @@ async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> Marketplac
         await pool.execute(
             """
             INSERT INTO org_marketplace_subscriptions
-                (id, org_id, qualified_tool_name, is_active, subscribed_at)
-            VALUES ($1, $2, $3, TRUE, $4)
+                (id, org_id, qualified_tool_name, is_active, subscribed_at, subscribed_schema_hash)
+            VALUES ($1, $2, $3, TRUE, $4, $5)
             ON CONFLICT (org_id, qualified_tool_name) DO UPDATE
-                SET is_active = TRUE, subscribed_at = EXCLUDED.subscribed_at
+                SET is_active = TRUE, subscribed_at = EXCLUDED.subscribed_at,
+                    subscribed_schema_hash = EXCLUDED.subscribed_schema_hash
             RETURNING id
             """,
             sub_id,
             org_id,
             qualified_tool_name,
             now,
+            current_hash or None,
         )
     except Exception:
         raise ValueError(f"Failed to subscribe to {qualified_tool_name}")
@@ -864,6 +961,7 @@ async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> Marketplac
         qualified_tool_name=qualified_tool_name,
         is_active=True,
         subscribed_at=now,
+        subscribed_schema_hash=current_hash or None,
     )
 
 
@@ -884,7 +982,7 @@ async def get_org_subscriptions(org_id: str) -> list[MarketplaceSubscription]:
     """Return all active marketplace subscriptions for an org."""
     pool = _get_pool()
     rows = await pool.fetch(
-        "SELECT id, org_id, qualified_tool_name, is_active, subscribed_at"
+        "SELECT id, org_id, qualified_tool_name, is_active, subscribed_at, subscribed_schema_hash"
         " FROM org_marketplace_subscriptions"
         " WHERE org_id = $1 AND is_active = TRUE"
         " ORDER BY subscribed_at",
@@ -949,6 +1047,18 @@ async def build_subscribed_marketplace_tools(
         if tool_row is None:
             logger.debug("Subscribed tool %s no longer published; skipping", qualified)
             continue
+
+        current_hash = tool_row.get("schema_hash") or ""
+        sub_hash = sub.subscribed_schema_hash or ""
+        if sub_hash and current_hash and sub_hash != current_hash:
+            logger.warning(
+                "Schema drift detected for marketplace tool %s "
+                "(subscribed=%s… current=%s…) — org_id=%s may be calling with a stale input schema",
+                qualified,
+                sub_hash[:8],
+                current_hash[:8],
+                org_id,
+            )
 
         try:
             lc_tool = _build_marketplace_langchain_tool(tool_row, qualified)

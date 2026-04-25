@@ -79,6 +79,7 @@ from billing import (
     build_402_headers,
     build_402_response_body,
     build_usdc_topup_requirements,
+    calculate_byok_orchestration_cost,
     calculate_run_cost_usdc,
     close_billing,
     create_stripe_embedded_session,
@@ -308,6 +309,109 @@ def _validate_production_config(s: "Settings") -> None:
         if is_prod:
             raise RuntimeError(msg)
         logger.warning("%s ⚠  %s", prefix, msg)
+
+    # LLM pool key coverage — warn per missing provider, hard-fail if all are absent
+    # in production.  The pool router tolerates single-tier gaps but cannot function
+    # with zero configured providers.
+    _provider_key_map = {
+        "openrouter": s.openrouter_api_key,
+        "anthropic": s.anthropic_api_key,
+        "google": s.google_api_key,
+        "openai": s.openai_api_key,
+    }
+    pool_providers = {entry["provider"] for entry in s.default_model_pool}
+    missing_providers = [p for p in pool_providers if not _provider_key_map.get(p, "")]
+    configured_count = len(pool_providers) - len(missing_providers)
+    for mp in missing_providers:
+        logger.warning(
+            "%s ⚠  %s_API_KEY is unset but default_model_pool includes '%s' — "
+            "that routing tier will fail at runtime",
+            prefix,
+            mp.upper().replace("-", "_"),
+            mp,
+        )
+    if missing_providers and configured_count == 0 and is_prod:
+        raise RuntimeError(
+            "All LLM providers in default_model_pool are missing API keys in production. "
+            f"Missing: {', '.join(sorted(missing_providers))}. "
+            "Set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, "
+            "or OPENROUTER_API_KEY."
+        )
+    logger.info(
+        "%s   LLM pool: %d/%d providers configured%s",
+        prefix,
+        configured_count,
+        len(pool_providers),
+        f" (missing: {', '.join(sorted(missing_providers))})" if missing_providers else "",
+    )
+
+    # CDP / Marketplace production guards ────────────────────────────────────
+    # Guard 1: CDP credentials must be present when marketplace + agent wallets are both on.
+    if s.marketplace_enabled and s.agent_wallet_enabled and not s.cdp_configured:
+        msg = (
+            "MARKETPLACE_ENABLED=true + AGENT_WALLET_ENABLED=true requires all three "
+            "CDP credentials: CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET. "
+            "Withdrawals will fail for every request until these are set."
+        )
+        if is_prod:
+            raise RuntimeError(msg)
+        logger.warning("%s ⚠  %s", prefix, msg)
+
+    # Guard 2: Testnet network must not be used in production.
+    if is_prod and s.marketplace_enabled and s.cdp_network == "base-sepolia":
+        raise RuntimeError(
+            "CDP_NETWORK is 'base-sepolia' (testnet) in a production deployment. "
+            "Set CDP_NETWORK=base to use Base mainnet."
+        )
+
+    # Guard 3: Settlement chain ID must be Base mainnet in production.
+    if is_prod and s.marketplace_enabled and s.marketplace_settlement_chain_id == 84532:
+        raise RuntimeError(
+            "MARKETPLACE_SETTLEMENT_CHAIN_ID is 84532 (Base Sepolia testnet) in production. "
+            "Set MARKETPLACE_SETTLEMENT_CHAIN_ID=8453 for Base mainnet."
+        )
+
+    # Guard 4: Mismatched network name vs chain ID (silent config error).
+    _network_chain_pairs = {"base-sepolia": 84532, "base": 8453}
+    _expected_chain = _network_chain_pairs.get(s.cdp_network)
+    if (
+        s.marketplace_enabled
+        and _expected_chain is not None
+        and s.marketplace_settlement_chain_id != _expected_chain
+    ):
+        logger.warning(
+            "%s ⚠  CDP_NETWORK='%s' expects chain_id=%d but "
+            "MARKETPLACE_SETTLEMENT_CHAIN_ID=%d — network/chain mismatch may cause "
+            "withdrawals to be sent to the wrong chain",
+            prefix,
+            s.cdp_network,
+            _expected_chain,
+            s.marketplace_settlement_chain_id,
+        )
+
+    # Guard 5: Sweep enabled without a private RPC URL — public fallback RPCs are
+    # rate-limited and unreliable under load.  Warn but don't block startup.
+    if s.marketplace_auto_sweep_enabled and not s.base_rpc_url:
+        logger.warning(
+            "%s ⚠  MARKETPLACE_AUTO_SWEEP_ENABLED=true but BASE_RPC_URL is unset. "
+            "Transaction verification will use public RPC endpoints which may be "
+            "rate-limited under load. Set BASE_RPC_URL to a dedicated RPC provider.",
+            prefix,
+        )
+
+    # Log CDP state so operators can confirm configuration at startup.
+    if s.agent_wallet_enabled or s.marketplace_enabled:
+        logger.info(
+            "%s   CDP: wallet_enabled=%s configured=%s network=%s settlement_account=%s "
+            "settlement_chain=%d tx_timeout=%ds",
+            prefix,
+            s.agent_wallet_enabled,
+            s.cdp_configured,
+            s.cdp_network,
+            s.marketplace_settlement_cdp_account,
+            s.marketplace_settlement_chain_id,
+            s.marketplace_tx_confirm_timeout_seconds,
+        )
 
     # Log a concise summary so operators can see the active config at a glance.
     logger.info(
@@ -1448,13 +1552,16 @@ async def agent_run(
     # top up via /billing/topup/usdc are billed calculate_run_cost_usdc() actual
     # cost post-run rather than the fixed x402 exact price.
     #
-    # BYOK orgs are charged a flat platform fee instead of LLM cost.
+    # BYOK orgs are charged a per-token orchestration fee (or a flat floor) instead
+    # of the full LLM passthrough cost.
     billing = BillingResult()
     auth_method = payload.get("auth_method", "")
 
     # Resolve BYOK status early so the billing gate uses the right minimum.
     _org_llm_cfg = await get_org_llm_config_cached(org_id)
     is_byok = _org_llm_cfg.is_byok if _org_llm_cfg else False
+    # For the pre-run billing gate we always use the floor (actual usage is unknown).
+    # Token-based cost is computed post-run at the debit step.
     platform_fee = get_byok_platform_fee(is_byok)
 
     if settings.billing_enabled and auth_method in settings.billable_auth_methods:
@@ -1739,10 +1846,23 @@ async def agent_run(
         delegation_spend = usage_data.get("delegation_spend_usdc", 0)
 
         if billing.verified:
-            # For BYOK orgs, debit only the platform fee (they pay the LLM
-            # provider directly).  For non-BYOK, debit the full LLM cost
-            # (platform_fee is 0 in that case, so debit_amount == cost_usdc).
-            debit_amount = platform_fee if is_byok else cost_usdc
+            # Determine what to charge BYOK orgs.
+            # - byok_tier_pricing_enabled=True (migration 041 applied): per-token
+            #   orchestration cost floored at byok_platform_fee_usdc.
+            # - byok_tier_pricing_enabled=False (legacy / pre-migration): flat fee.
+            # Non-BYOK orgs always pay the full LLM cost.
+            if is_byok and settings.byok_tier_pricing_enabled:
+                _run_provider = (_org_llm_cfg.provider if _org_llm_cfg else "") or ""
+                _run_model = (_org_llm_cfg.model if _org_llm_cfg else "") or ""
+                debit_amount = await calculate_byok_orchestration_cost(
+                    usage_data.get("tokens_in", 0),
+                    usage_data.get("tokens_out", 0),
+                    provider=_run_provider,
+                    model=_run_model,
+                )
+            else:
+                # Legacy: flat fee for BYOK, full model cost for non-BYOK.
+                debit_amount = platform_fee if is_byok else cost_usdc
 
             if billing.billing_method == "credit":
                 # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
@@ -4174,12 +4294,36 @@ async def get_marketplace_withdrawals(
     })
 
 
+_CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc"})
+
+
 @app.get("/marketplace/catalog", tags=["Marketplace"])
-async def get_marketplace_catalog_endpoint(request: Request) -> JSONResponse:
-    """Public: browse available marketplace tools with pricing."""
+async def get_marketplace_catalog_endpoint(
+    request: Request,
+    org_slug: str | None = None,
+    sort: str = "name",
+    limit: int = 100,
+    cursor: str | None = None,
+) -> JSONResponse:
+    """Public: browse available marketplace tools with pricing.
+
+    Query parameters:
+    - **org_slug**: Filter to a single author org (use ``"platform"`` for
+      Teardrop-owned tools). Omit for all tools.
+    - **sort**: ``name`` (default), ``price_asc``, or ``price_desc``.
+    - **limit**: Maximum results to return (1–200, default 100).
+    - **cursor**: Pagination token from a previous response's ``next_cursor``
+      field. Omit for the first page.
+    """
     s = get_settings()
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    if sort not in _CATALOG_VALID_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid sort '{sort}'. Allowed: {', '.join(sorted(_CATALOG_VALID_SORTS))}",
+        )
 
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
     allowed, remaining, reset_at = await _check_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
@@ -4195,11 +4339,26 @@ async def get_marketplace_catalog_endpoint(request: Request) -> JSONResponse:
             },
         )
 
+    from marketplace import _build_catalog_cursor
+
     overrides = await get_tool_pricing_overrides()
     pricing = await get_current_pricing()
     default_cost = pricing.tool_call_cost if pricing else 0
 
-    catalog = await get_marketplace_catalog(overrides, default_cost)
+    catalog = await get_marketplace_catalog(
+        overrides,
+        default_cost,
+        org_slug=org_slug,
+        sort=sort,
+        limit=limit,
+        cursor=cursor,
+    )
+
+    # Build next_cursor from the last item so callers can paginate.
+    next_cursor: str | None = None
+    if len(catalog) == limit:
+        next_cursor = _build_catalog_cursor(catalog[-1], sort)
+
     return JSONResponse(content={
         "tools": [
             {
@@ -4207,10 +4366,14 @@ async def get_marketplace_catalog_endpoint(request: Request) -> JSONResponse:
                 "description": t.marketplace_description,
                 "input_schema": t.input_schema,
                 "cost_usdc": t.cost_usdc,
+                # author_slug is the canonical filter key; author is kept for
+                # backward compatibility and human display.
                 "author": t.author_org_name,
+                "author_slug": t.author_org_slug,
             }
             for t in catalog
-        ]
+        ],
+        "next_cursor": next_cursor,
     })
 
 
