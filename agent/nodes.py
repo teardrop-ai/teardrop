@@ -93,22 +93,26 @@ No markdown, no prose — pure JSON.
 # ─── Nodes ────────────────────────────────────────────────────────────────────
 
 
-async def planner_node(state: AgentState) -> dict[str, Any]:
-    """Reasoning / planning node.  Calls the LLM with bound tools."""
-    logger.debug("planner_node: entry, %d messages", len(state.messages))
-    settings = get_settings()
-    tools = _get_cached_tools()
-    org_tools = state.metadata.get("_org_tools", [])
-    all_tools = tools + org_tools
-    llm_config = state.metadata.get("_llm_config")
-    llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
+def _build_planner_system_messages(
+    state: AgentState,
+    *,
+    provider: str,
+    model: str,
+    max_tokens: int,
+    timeout_seconds: int,
+    platform_tools: list,
+    org_tools: list,
+) -> list[SystemMessage]:
+    """Assemble the planner system prompt(s).
 
-    _cfg = llm_config or {}
-    _provider = _cfg.get("provider", settings.agent_provider)
-    _model = _cfg.get("model", settings.agent_model)
-    _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
-    _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
-    model_specs = get_model_context_specs(_provider, _model)
+    Splits into a cacheable static prefix (base prompt + platform tools) and
+    a per-request uncached suffix (memories, runtime context, org tools).
+    For Anthropic, the prefix is emitted as a separate SystemMessage with
+    ``cache_control`` so prompt caching applies. Other providers receive a
+    single merged SystemMessage.
+    """
+    settings = get_settings()
+    model_specs = get_model_context_specs(provider, model)
 
     # ── Cacheable prefix: base prompt + platform tools summary ────────────
     # This block is identical across all requests for the same org+model and is
@@ -116,13 +120,10 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     # It must NOT contain any org-specific data (memories, org name, balance)
     # to prevent cross-org cache pollution.
     cached_prompt = _PLANNER_SYSTEM
-
-    # Only list platform (registry) tools in the cached block — org-specific
-    # tools are added to the uncached suffix below.
-    if tools:
+    if platform_tools:
         platform_tool_lines = [
             f"- **{t.name}**: {t.description.splitlines()[0]}"
-            for t in tools
+            for t in platform_tools
         ]
         cached_prompt += (
             "\n\n## Available Platform Tools\n"
@@ -130,10 +131,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         )
 
     # ── Uncached suffix: org memory + runtime context + org-specific tools ─
-    # This block changes per org/request and must not be cached.
     uncached_parts: list[str] = []
 
-    # Per-org memories (retrieved via RAG; never in the cache boundary).
     memories: list[str] = state.metadata.get("_memories", [])
     if memories:
         # Guard against prompt injection from stored memory content.
@@ -146,23 +145,21 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             + memory_block
         )
 
-    # Runtime context (date, model info, org, billing) — changes every request.
     now = datetime.now(timezone.utc)
     context_lines = [
         f"- **Date & Time (UTC)**: {now.strftime('%A, %B %d, %Y at %H:%M:%S UTC')}",
         f"- **ISO 8601**: {now.isoformat()}",
-        f"- **Model**: {_provider}/{_model}",
+        f"- **Model**: {provider}/{model}",
         f"- **Model Knowledge Cutoff**: {model_specs['knowledge_cutoff']} "
         f"({model_specs['training_cutoff_note']})",
         f"- **Context Window**: {model_specs['context_window']:,} tokens",
-        f"- **Max Response Tokens**: {_max_tokens:,}",
-        f"- **Request Timeout**: {_timeout}s",
+        f"- **Max Response Tokens**: {max_tokens:,}",
+        f"- **Request Timeout**: {timeout_seconds}s",
     ]
 
     _org_name: str = state.metadata.get("_org_name", "")
     _user_role: str = state.metadata.get("_user_role", "user")
     if _org_name:
-        # Sanitise to guard against prompt injection via org name.
         context_lines.append(f"- **Organisation**: {_org_name.replace('```', '---')}")
     context_lines.append(f"- **User Role**: {_user_role.replace('```', '---')}")
 
@@ -180,7 +177,6 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         + "\n".join(context_lines)
     )
 
-    # Per-org custom tools (webhook-backed; not in the cached block).
     if org_tools:
         org_tool_lines = [
             f"- **{t.name}**: {t.description.splitlines()[0]}"
@@ -192,11 +188,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     uncached_prompt = "\n\n".join(uncached_parts)
 
-    # ── Assemble messages with Anthropic cache_control when applicable ─────
-    # For Anthropic, set cache_control on the static prefix so Anthropic's
-    # prompt caching can skip re-processing it on subsequent turns.
-    # Other providers receive a single merged SystemMessage (no-op path).
-    if _provider == "anthropic":
+    if provider == "anthropic":
         system_messages: list[SystemMessage] = [
             SystemMessage(
                 content=cached_prompt,
@@ -211,18 +203,25 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             full_prompt += "\n\n" + uncached_prompt
         system_messages = [SystemMessage(content=full_prompt)]
 
-    messages = [*system_messages, *state.messages]
+    # Reference settings to maintain a stable lookup point for tests that patch
+    # ``get_settings`` (no functional effect — kept for parity with original).
+    _ = settings
+    return system_messages
 
+
+async def _invoke_planner_llm(llm, messages: list, timeout_seconds: int) -> AIMessage | dict[str, Any]:
+    """Call the bound LLM with timeout + exception handling.
+
+    Returns the raw ``AIMessage`` on success, or a node-result ``dict`` on
+    failure (so callers can return it directly).
+    """
     try:
-        response: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
+        return await asyncio.wait_for(  # type: ignore[return-value]
             llm.ainvoke(messages),
-            timeout=settings.agent_llm_timeout_seconds,
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
-        logger.error(
-            "planner_node: LLM call timed out after %ss",
-            settings.agent_llm_timeout_seconds,
-        )
+        logger.error("planner_node: LLM call timed out after %ss", timeout_seconds)
         return {
             "messages": [AIMessage(content="The AI model timed out. Please try again.")],
             "task_status": TaskStatus.FAILED,
@@ -236,11 +235,49 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             "error": str(exc),
         }
 
-    # ── Accumulate token usage ────────────────────────────────────────────
+
+def _accumulate_usage(state: AgentState, response: AIMessage) -> dict[str, int]:
+    """Add this turn's token counts to the running usage in metadata."""
     usage = dict(state.metadata.get("_usage", {}))
     extracted = extract_usage(response)
     usage["tokens_in"] = usage.get("tokens_in", 0) + extracted["tokens_in"]
     usage["tokens_out"] = usage.get("tokens_out", 0) + extracted["tokens_out"]
+    return usage
+
+
+async def planner_node(state: AgentState) -> dict[str, Any]:
+    """Reasoning / planning node.  Calls the LLM with bound tools."""
+    logger.debug("planner_node: entry, %d messages", len(state.messages))
+    settings = get_settings()
+    tools = _get_cached_tools()
+    org_tools = state.metadata.get("_org_tools", [])
+    all_tools = tools + org_tools
+    llm_config = state.metadata.get("_llm_config")
+    llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
+
+    _cfg = llm_config or {}
+    _provider = _cfg.get("provider", settings.agent_provider)
+    _model = _cfg.get("model", settings.agent_model)
+    _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
+    _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
+
+    system_messages = _build_planner_system_messages(
+        state,
+        provider=_provider,
+        model=_model,
+        max_tokens=_max_tokens,
+        timeout_seconds=_timeout,
+        platform_tools=tools,
+        org_tools=org_tools,
+    )
+    messages = [*system_messages, *state.messages]
+
+    result = await _invoke_planner_llm(llm, messages, settings.agent_llm_timeout_seconds)
+    if isinstance(result, dict):
+        return result
+    response: AIMessage = result
+
+    usage = _accumulate_usage(state, response)
 
     return {
         "messages": [response],

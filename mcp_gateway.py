@@ -41,9 +41,39 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         settings = get_settings()
 
-        # ── Phase 1: JWT auth gate ────────────────────────────────────────
+        # ── Phase 1: JWT auth (or x402 fallback) ──────────────────────────
+        auth_response = await self._authenticate(request, settings)
+        if auth_response is not None:
+            return auth_response
+
+        # ── Phase 1.5: per-org aggregate rate limit ───────────────────────
+        rate_limit_response = await self._enforce_org_rate_limit(request, settings)
+        if rate_limit_response is not None:
+            return rate_limit_response
+
+        # ── Phase 2: credit billing gate ──────────────────────────────────
+        pending_debit = await self._billing_gate(request)
+        if isinstance(pending_debit, Response):
+            return pending_debit
+
+        # ── Forward to FastMCP ────────────────────────────────────────────
+        response = await call_next(request)
+
+        # ── Post-response: settle billing ─────────────────────────────────
+        if response.status_code == 200 and pending_debit is not None:
+            await self._settle_billing(request, pending_debit)
+
+        return response
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    async def _authenticate(self, request: Request, settings) -> Response | None:
+        """Phase 1: JWT auth gate with optional x402 payment fallback.
+
+        Sets ``request.state.mcp_org_id`` and ``request.state.mcp_auth_method``
+        on success. Returns a Response on failure, or None to proceed.
+        """
         token = self._extract_bearer(request)
-        payload: dict | None = None
 
         if token:
             try:
@@ -77,67 +107,53 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
             request.state.mcp_org_id = payload.get("org_id", "")
             request.state.mcp_auth_method = payload.get("auth_method", "")
+            return None
 
-        elif settings.mcp_auth_enabled:
+        if settings.mcp_auth_enabled:
             # No Bearer token and auth is required.
-
             # Phase 3: check for x402 payment header as fallback.
             if settings.mcp_x402_enabled:
-                x402_result = await self._handle_x402_auth(request)
-                if x402_result is not None:
-                    return x402_result
-                # If _handle_x402_auth returns None, x402 auth succeeded
-                # and request.state.x402_billing is set.
-            else:
-                return Response(
-                    status_code=401,
-                    headers={"WWW-Authenticate": 'Bearer realm="teardrop-mcp"'},
-                )
-        else:
-            # Auth disabled — pass through with empty state.
-            request.state.mcp_org_id = None
-            request.state.mcp_auth_method = ""
-
-        # ── Per-org aggregate rate limit ──────────────────────────────────
-        # Applied to authenticated orgs only; x402/anonymous callers are skipped.
-        mcp_org_id = getattr(request.state, "mcp_org_id", None)
-        if mcp_org_id:
-            from app import _check_rate_limit  # lazy import — avoids circular dep at module level
-
-            org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
-                f"mcp:org:{mcp_org_id}", settings.rate_limit_org_mcp_rpm
+                return await self._handle_x402_auth(request)
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="teardrop-mcp"'},
             )
-            if not org_allowed:
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "error": "Organization MCP rate limit exceeded. Please slow down.",
-                        "code": -32029,
-                    },
-                    headers={
-                        "X-RateLimit-Limit": str(settings.rate_limit_org_mcp_rpm),
-                        "X-RateLimit-Remaining": str(org_remaining),
-                        "X-RateLimit-Reset": str(org_reset_at),
-                        "Retry-After": "60",
-                        "X-RateLimit-Scope": "org",
-                    },
-                )
 
-        # ── Phase 2: credit billing gate ──────────────────────────────────
-        pending_debit = await self._billing_gate(request)
-        if isinstance(pending_debit, Response):
-            return pending_debit
+        # Auth disabled — pass through with empty state.
+        request.state.mcp_org_id = None
+        request.state.mcp_auth_method = ""
+        return None
 
-        # ── Forward to FastMCP ────────────────────────────────────────────
-        response = await call_next(request)
+    async def _enforce_org_rate_limit(
+        self, request: Request, settings
+    ) -> Response | None:
+        """Phase 1.5: per-org aggregate rate limit (skipped for x402/anonymous)."""
+        mcp_org_id = getattr(request.state, "mcp_org_id", None)
+        if not mcp_org_id:
+            return None
 
-        # ── Post-response: settle billing ─────────────────────────────────
-        if response.status_code == 200 and pending_debit is not None:
-            await self._settle_billing(request, pending_debit)
+        from app import _check_rate_limit  # lazy import — avoids circular dep at module level
 
-        return response
+        org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
+            f"mcp:org:{mcp_org_id}", settings.rate_limit_org_mcp_rpm
+        )
+        if org_allowed:
+            return None
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Organization MCP rate limit exceeded. Please slow down.",
+                "code": -32029,
+            },
+            headers={
+                "X-RateLimit-Limit": str(settings.rate_limit_org_mcp_rpm),
+                "X-RateLimit-Remaining": str(org_remaining),
+                "X-RateLimit-Reset": str(org_reset_at),
+                "Retry-After": "60",
+                "X-RateLimit-Scope": "org",
+            },
+        )
 
     @staticmethod
     def _extract_bearer(request: Request) -> str | None:

@@ -26,7 +26,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, Generic, TypeVar
 
 import asyncpg
 from pydantic import BaseModel, Field
@@ -36,6 +36,124 @@ from config import get_settings
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
+
+
+class TTLCache(Generic[T]):
+    """Single-value TTL cache: Redis-first with in-process fallback.
+
+    Preserves the existing graceful-degradation contract:
+    - Redis is consulted first; on read failure we fall through to in-process.
+    - In-process tier holds the last successfully-loaded value with a TTL.
+    - Loader failures serve the stale in-process value if present, else the
+      configured ``stale_default``.
+
+    Designed for single-tenant caches (one logical value per cache instance).
+    Keyed caches (e.g. per-(provider, model) pricing) use a different shape
+    and remain inline.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        redis_key: str,
+        ttl_seconds_fn: Callable[[], int],
+        loader: Callable[[], Awaitable[T | None]],
+        serialize: Callable[[T], str],
+        deserialize: Callable[[str], T | None],
+        cache_when: Callable[[T | None], bool] = lambda v: v is not None,
+        stale_default: T | None = None,
+    ) -> None:
+        self._name = name
+        self._redis_key = redis_key
+        self._ttl_fn = ttl_seconds_fn
+        self._loader = loader
+        self._serialize = serialize
+        self._deserialize = deserialize
+        self._cache_when = cache_when
+        self._stale_default = stale_default
+        self._value: T | None = None
+        self._expires: float = 0.0
+        self._lock: asyncio.Lock | None = None
+
+    async def get(self) -> T | None:
+        # ── Redis path (multi-container) ──────────────────────────────────
+        redis = get_redis()
+        if redis is not None:
+            try:
+                raw = await redis.get(self._redis_key)
+                if raw is not None:
+                    return self._deserialize(raw)
+            except Exception as exc:
+                logger.warning(
+                    "Redis %s cache read failed; falling back to in-process: %s",
+                    self._name,
+                    exc,
+                )
+
+        # ── In-process fast path ──────────────────────────────────────────
+        if self._value is not None and time.monotonic() < self._expires:
+            return self._value
+
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
+        async with self._lock:
+            # Double-check after acquiring; another coroutine may have refreshed.
+            if self._value is not None and time.monotonic() < self._expires:
+                return self._value
+
+            try:
+                value = await self._loader()
+            except Exception:
+                logger.warning(
+                    "Failed to refresh %s cache; serving stale value",
+                    self._name,
+                    exc_info=True,
+                )
+                if self._value is not None:
+                    return self._value
+                return self._stale_default
+
+            ttl = self._ttl_fn()
+            if self._cache_when(value):
+                self._value = value
+                self._expires = time.monotonic() + ttl
+
+                redis = get_redis()
+                if redis is not None and value is not None:
+                    try:
+                        await redis.setex(self._redis_key, ttl, self._serialize(value))
+                    except Exception as exc:
+                        logger.warning(
+                            "Redis %s cache write failed (non-fatal): %s",
+                            self._name,
+                            exc,
+                        )
+
+            return value
+
+    async def invalidate(self) -> None:
+        """Drop the in-process value and delete the Redis key."""
+        self._value = None
+        self._expires = 0.0
+        redis = get_redis()
+        if redis is not None:
+            try:
+                await redis.delete(self._redis_key)
+            except Exception as exc:
+                logger.warning(
+                    "Redis %s cache invalidation failed (non-fatal): %s",
+                    self._name,
+                    exc,
+                )
+
+    def reset(self) -> None:
+        """Synchronous reset of in-process tier only (for shutdown paths)."""
+        self._value = None
+        self._expires = 0.0
+
 # ─── Lazy x402 imports (only when billing is enabled) ─────────────────────────
 
 _server = None  # x402ResourceServer instance
@@ -44,17 +162,12 @@ _exact_requirements_cache: list | None = None  # exact-scheme requirements (alwa
 _upto_requirements_cache: list | None = None   # upto-scheme requirements (when opted in)
 
 # ─── Pricing TTL cache ────────────────────────────────────────────────────────
+# Note: ``_live_pricing_cache`` and ``_tool_overrides_cache_obj`` (declared
+# later, after ``get_current_pricing`` and ``get_current_tool_overrides``
+# are defined) hold the singleton-style pricing caches. The keyed per-model
+# cache below remains inline because of its different shape.
 
-_pricing_cache: PricingRule | None = None  # type: ignore[name-defined]  # resolved at runtime
-_pricing_cache_expires: float = 0.0  # monotonic clock deadline
-_pricing_lock: asyncio.Lock | None = None  # lazily initialised
 _last_requirements_price_usdc: int = -1  # run_price_usdc when requirements were last built
-
-# ─── Tool pricing overrides TTL cache ─────────────────────────────────────────
-
-_tool_overrides_cache: dict[str, int] | None = None  # {tool_name: cost_usdc}
-_tool_overrides_cache_expires: float = 0.0
-_tool_overrides_lock: asyncio.Lock | None = None
 
 
 def _get_server():
@@ -163,20 +276,16 @@ async def init_billing(pool: asyncpg.Pool) -> None:
 
 async def close_billing() -> None:
     """Release billing resources."""
-    global _server, _requirements_cache, _pool
+    global _server, _requirements_cache, _pool, _last_requirements_price_usdc
     global _exact_requirements_cache, _upto_requirements_cache
-    global _pricing_cache, _pricing_cache_expires, _last_requirements_price_usdc
-    global _tool_overrides_cache, _tool_overrides_cache_expires
     _server = None
     _requirements_cache = None
     _exact_requirements_cache = None
     _upto_requirements_cache = None
     _pool = None
-    _pricing_cache = None
-    _pricing_cache_expires = 0.0
     _last_requirements_price_usdc = -1
-    _tool_overrides_cache = None
-    _tool_overrides_cache_expires = 0.0
+    _live_pricing_cache.reset()
+    _tool_overrides_cache_obj.reset()
     logger.info("Billing resources released")
 
 
@@ -619,6 +728,43 @@ async def get_live_pricing_for_model(
             return None
 
 
+async def _load_live_pricing() -> "PricingRule | None":
+    """Loader for the live-pricing TTL cache. Returns None when DB is unset."""
+    if _pool is None:
+        return None
+    return await get_current_pricing()
+
+
+async def _load_tool_overrides() -> dict[str, int]:
+    """Loader for the tool-pricing-overrides TTL cache. Returns {} when DB is unset."""
+    if _pool is None:
+        return {}
+    return await get_current_tool_overrides()
+
+
+_live_pricing_cache: TTLCache[PricingRule] = TTLCache(
+    name="pricing",
+    redis_key="teardrop:pricing:active",
+    ttl_seconds_fn=lambda: get_settings().pricing_cache_ttl_seconds,
+    loader=_load_live_pricing,
+    serialize=lambda v: json.dumps(v.model_dump(), default=str),
+    deserialize=lambda raw: PricingRule(**json.loads(raw)),
+    cache_when=lambda v: v is not None,
+    stale_default=None,
+)
+
+_tool_overrides_cache_obj: TTLCache[dict[str, int]] = TTLCache(
+    name="tool overrides",
+    redis_key="teardrop:pricing:tool_overrides",
+    ttl_seconds_fn=lambda: get_settings().pricing_cache_ttl_seconds,
+    loader=_load_tool_overrides,
+    serialize=lambda v: json.dumps(v),
+    deserialize=lambda raw: json.loads(raw),
+    cache_when=lambda v: v is not None,
+    stale_default={},
+)
+
+
 async def get_live_pricing() -> PricingRule | None:
     """Return the current pricing rule using a TTL cache.
 
@@ -627,59 +773,8 @@ async def get_live_pricing() -> PricingRule | None:
     pricing_cache_ttl_seconds. Returns None if no pricing_rules row exists or
     DB is unavailable.
     """
-    global _pricing_cache, _pricing_cache_expires, _pricing_lock
-    settings = get_settings()
-    redis = get_redis()
+    return await _live_pricing_cache.get()
 
-    # ── Redis path (multi-container) ──────────────────────────────────────
-    if redis is not None:
-        try:
-            key = "teardrop:pricing:active"
-            cached_json = await redis.get(key)
-            if cached_json is not None:
-                data = json.loads(cached_json)
-                return PricingRule(**data)
-        except Exception as exc:
-            logger.warning("Redis pricing cache read failed; falling back to in-process: %s", exc)
-            # Fall through to in-process cache
-
-    # ── In-process TTL cache path (single-container fallback) ───────────────
-    # Fast path: valid in-process cache.
-    if _pricing_cache is not None and time.monotonic() < _pricing_cache_expires:
-        return _pricing_cache
-
-    # Pool not yet set (e.g. called before init_billing).
-    if _pool is None:
-        return None
-
-    # Lazily create the lock (cannot be created at module level on all platforms).
-    if _pricing_lock is None:
-        _pricing_lock = asyncio.Lock()
-
-    async with _pricing_lock:
-        # Double-check after acquiring — another coroutine may have refreshed.
-        if _pricing_cache is not None and time.monotonic() < _pricing_cache_expires:
-            return _pricing_cache
-
-        try:
-            rule = await get_current_pricing()
-            if rule is not None:
-                _pricing_cache = rule
-                _pricing_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
-
-                # Write to Redis if available
-                if (redis := get_redis()) is not None:
-                    try:
-                        key = "teardrop:pricing:active"
-                        cached_json = json.dumps(rule.model_dump(), default=str)
-                        await redis.setex(key, settings.pricing_cache_ttl_seconds, cached_json)
-                    except Exception as exc:
-                        logger.warning("Redis pricing cache write failed (non-fatal): %s", exc)
-
-            return rule
-        except Exception:
-            logger.warning("Failed to refresh pricing cache; serving stale value", exc_info=True)
-            return _pricing_cache  # Return stale on DB error rather than crashing.
 
 
 # ─── Tool pricing override queries ───────────────────────────────────────────
@@ -699,61 +794,14 @@ async def get_tool_pricing_overrides() -> dict[str, int]:
     back to an in-process TTL cache.  Returns an empty dict (never None) when
     no overrides exist — callers should treat it as "use global default."
     """
-    global _tool_overrides_cache, _tool_overrides_cache_expires, _tool_overrides_lock
-    settings = get_settings()
-    redis = get_redis()
-
-    # ── Redis path ────────────────────────────────────────────────────────────
-    if redis is not None:
-        try:
-            key = "teardrop:pricing:tool_overrides"
-            cached_json = await redis.get(key)
-            if cached_json is not None:
-                return json.loads(cached_json)
-        except Exception as exc:
-            logger.warning("Redis tool overrides cache read failed; falling back: %s", exc)
-
-    # ── In-process TTL cache ──────────────────────────────────────────────────
-    if _tool_overrides_cache is not None and time.monotonic() < _tool_overrides_cache_expires:
-        return _tool_overrides_cache
-
-    if _pool is None:
-        return {}
-
-    if _tool_overrides_lock is None:
-        _tool_overrides_lock = asyncio.Lock()
-
-    async with _tool_overrides_lock:
-        if _tool_overrides_cache is not None and time.monotonic() < _tool_overrides_cache_expires:
-            return _tool_overrides_cache
-
-        try:
-            overrides = await get_current_tool_overrides()
-            _tool_overrides_cache = overrides
-            _tool_overrides_cache_expires = time.monotonic() + settings.pricing_cache_ttl_seconds
-
-            if (redis := get_redis()) is not None:
-                try:
-                    key = "teardrop:pricing:tool_overrides"
-                    await redis.setex(
-                        key, settings.pricing_cache_ttl_seconds, json.dumps(overrides)
-                    )
-                except Exception as exc:
-                    logger.warning("Redis tool overrides cache write failed (non-fatal): %s", exc)
-
-            return overrides
-        except Exception:
-            logger.warning(
-                "Failed to refresh tool overrides cache; serving stale value", exc_info=True
-            )
-            return _tool_overrides_cache if _tool_overrides_cache is not None else {}
+    result = await _tool_overrides_cache_obj.get()
+    return result if result is not None else {}
 
 
 async def upsert_tool_pricing_override(
     tool_name: str, cost_usdc: int, description: str
 ) -> None:
     """Insert or update a tool pricing override and invalidate the cache."""
-    global _tool_overrides_cache, _tool_overrides_cache_expires
     pool = _get_pool()
     await pool.execute(
         """
@@ -768,32 +816,17 @@ async def upsert_tool_pricing_override(
         cost_usdc,
         description,
     )
-    _tool_overrides_cache = None
-    _tool_overrides_cache_expires = 0.0
-    redis = get_redis()
-    if redis is not None:
-        try:
-            await redis.delete("teardrop:pricing:tool_overrides")
-        except Exception as exc:
-            logger.warning("Redis tool overrides cache invalidation failed (non-fatal): %s", exc)
+    await _tool_overrides_cache_obj.invalidate()
 
 
 async def delete_tool_pricing_override(tool_name: str) -> bool:
     """Delete a tool pricing override. Returns True if a row was deleted."""
-    global _tool_overrides_cache, _tool_overrides_cache_expires
     pool = _get_pool()
     result = await pool.execute(
         "DELETE FROM tool_pricing_overrides WHERE tool_name = $1", tool_name
     )
     deleted = result.split()[-1] != "0"
-    _tool_overrides_cache = None
-    _tool_overrides_cache_expires = 0.0
-    redis = get_redis()
-    if redis is not None:
-        try:
-            await redis.delete("teardrop:pricing:tool_overrides")
-        except Exception as exc:
-            logger.warning("Redis tool overrides cache invalidation failed (non-fatal): %s", exc)
+    await _tool_overrides_cache_obj.invalidate()
     return deleted
 
 

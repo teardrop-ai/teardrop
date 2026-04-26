@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from users import Org
 
 
 @pytest.fixture(autouse=True)
@@ -199,26 +202,45 @@ async def test_siwe_login_nonce_address_mismatch(anon_client, monkeypatch, test_
 
 
 @pytest.mark.anyio
-async def test_auth_me_email_user(api_client):
+async def test_auth_me_email_user(api_client, monkeypatch):
     """Authenticated email user gets their identity claims."""
+    # Mock get_org_by_id to avoid DB init error
+    mock_org = Org(
+        id="test-org-id",
+        name="Test Org",
+        slug="test-org",
+        created_at=datetime.now(),
+    )
+    monkeypatch.setattr("app.get_org_by_id", AsyncMock(return_value=mock_org))
+    
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
     body = resp.json()
     assert body["user_id"] == "test-user-id"
     assert body["org_id"] == "test-org-id"
     assert body["role"] == "user"
+    assert body["org_name"] == "Test Org"
     # No wallet fields for non-SIWE sessions
     assert "address" not in body
     assert "chain_id" not in body
 
 
 @pytest.mark.anyio
-async def test_auth_me_siwe_user(test_settings):
+async def test_auth_me_siwe_user(test_settings, monkeypatch):
     """SIWE-authenticated user gets wallet fields in the response."""
     from httpx import ASGITransport, AsyncClient
 
     from app import app
     from auth import require_auth
+
+    # Mock get_org_by_id to avoid DB init error
+    mock_org = Org(
+        id="siwe-org-id",
+        name="SIWE Test Org",
+        slug="siwe-org",
+        created_at=datetime.now(),
+    )
+    monkeypatch.setattr("app.get_org_by_id", AsyncMock(return_value=mock_org))
 
     async def _mock_siwe_auth():
         return {
@@ -243,6 +265,7 @@ async def test_auth_me_siwe_user(test_settings):
     assert body["user_id"] == "siwe-user-id"
     assert body["auth_method"] == "siwe"
     assert body["address"] == "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920"
+    assert body["org_name"] == "SIWE Test Org"
     assert body["chain_id"] == 1
     assert body["email"] == "0xa03772fbd16dbf3760b59f1c5921bceb8a6b2920@wallet"
 

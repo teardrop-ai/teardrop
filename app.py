@@ -47,7 +47,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -216,6 +216,7 @@ from users import (
     register_org_and_user,
     revoke_refresh_token,
     rotate_refresh_token,
+    User,
     verify_secret,
 )
 from wallets import (
@@ -424,49 +425,69 @@ def _validate_production_config(s: "Settings") -> None:
     )
 
 
-async def _settlement_retry_loop() -> None:
-    """Periodically retry failed settlements (runs as background task)."""
-    interval = settings.settlement_retry_interval_seconds
+async def _run_periodic(
+    name: str,
+    coro_fn: Callable[[], Awaitable[Any]],
+    interval: float,
+) -> None:
+    """Run *coro_fn* every *interval* seconds with cancel + error handling.
+
+    Cancellation is propagated; all other exceptions are logged and the loop
+    continues. Per-iteration logging is the responsibility of *coro_fn*.
+    """
     while True:
         try:
             await asyncio.sleep(interval)
-            processed = await process_pending_settlements()
-            if processed:
-                logger.info("Settlement retry: processed %d pending settlements", processed)
+            await coro_fn()
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Settlement retry loop error")
+            logger.exception("%s loop error", name)
+
+
+async def _settlement_retry_iter() -> None:
+    processed = await process_pending_settlements()
+    if processed:
+        logger.info("Settlement retry: processed %d pending settlements", processed)
+
+
+async def _memory_cleanup_iter() -> None:
+    deleted = await cleanup_expired_memories()
+    if deleted:
+        logger.info("Memory cleanup: deleted %d expired memories", deleted)
+
+
+async def _refresh_token_cleanup_iter() -> None:
+    deleted = await cleanup_expired_refresh_tokens()
+    if deleted:
+        logger.info("Refresh token cleanup: deleted %d expired tokens", deleted)
+
+
+async def _settlement_retry_loop() -> None:
+    """Periodically retry failed settlements (runs as background task)."""
+    await _run_periodic(
+        "Settlement retry",
+        _settlement_retry_iter,
+        settings.settlement_retry_interval_seconds,
+    )
 
 
 async def _memory_cleanup_loop() -> None:
     """Periodically delete expired memories (runs as background task)."""
-    interval = settings.memory_cleanup_interval_seconds
-    while True:
-        try:
-            await asyncio.sleep(interval)
-            deleted = await cleanup_expired_memories()
-            if deleted:
-                logger.info("Memory cleanup: deleted %d expired memories", deleted)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Memory cleanup loop error")
+    await _run_periodic(
+        "Memory cleanup",
+        _memory_cleanup_iter,
+        settings.memory_cleanup_interval_seconds,
+    )
 
 
 async def _refresh_token_cleanup_loop() -> None:
     """Periodically delete revoked+expired refresh tokens (runs as background task)."""
-    interval = settings.refresh_token_cleanup_interval_seconds
-    while True:
-        try:
-            await asyncio.sleep(interval)
-            deleted = await cleanup_expired_refresh_tokens()
-            if deleted:
-                logger.info("Refresh token cleanup: deleted %d expired tokens", deleted)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Refresh token cleanup loop error")
+    await _run_periodic(
+        "Refresh token cleanup",
+        _refresh_token_cleanup_iter,
+        settings.refresh_token_cleanup_interval_seconds,
+    )
 
 
 @asynccontextmanager
@@ -629,6 +650,38 @@ async def _check_rate_limit(key: str, limit: int) -> RateLimitResult:
         oldest_key = next(iter(_rate_counters))
         del _rate_counters[oldest_key]
     return True, remaining, reset_epoch
+
+
+async def _enforce_rate_limit(
+    key: str,
+    limit: int,
+    *,
+    detail: str = "Rate limit exceeded.",
+    extra_headers: dict[str, str] | None = None,
+) -> None:
+    """Check sliding-window limit and raise HTTPException(429) on breach.
+
+    Emits the standard ``X-RateLimit-*`` and ``Retry-After`` headers. Callers
+    that need a non-standard response shape (e.g. webhooks returning
+    ``JSONResponse`` 429) should continue to call ``_check_rate_limit``
+    directly.
+    """
+    allowed, remaining, reset_at = await _check_rate_limit(key, limit)
+    if allowed:
+        return
+    headers = {
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(remaining),
+        "X-RateLimit-Reset": str(reset_at),
+        "Retry-After": "60",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=detail,
+        headers=headers,
+    )
 
 
 # ─── AG-UI event helpers ──────────────────────────────────────────────────────
@@ -856,6 +909,36 @@ class TokenRequest(BaseModel):
     siwe_signature: str | None = None
 
 
+async def _issue_email_token_pair(user: User) -> dict:
+    """Canonical access + refresh token issuance for email-authenticated users.
+
+    Single source of truth for ``refresh_tokens.extra_claims`` shape on the
+    email path. Used by ``/token`` (email flow), ``/register``, and
+    ``/register/invite``. SIWE and client-credentials flows are intentionally
+    not routed through this helper because their claim shapes differ.
+    """
+    extra_claims = {
+        "org_id": user.org_id,
+        "email": user.email,
+        "role": user.role,
+        "auth_method": "email",
+    }
+    access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
+    refresh_token = await create_refresh_token(
+        user_id=user.id,
+        org_id=user.org_id,
+        auth_method="email",
+        extra_claims=extra_claims,
+        expire_days=settings.refresh_token_expire_days,
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": settings.jwt_access_token_expire_minutes * 60,
+        "refresh_token": refresh_token,
+    }
+
+
 @app.post("/token", tags=["Auth"])
 async def token(body: TokenRequest, request: Request) -> JSONResponse:
     """Tri-mode token endpoint.
@@ -867,20 +950,11 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     Returns a signed RS256 JWT.
     """
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"auth:{client_ip}", settings.rate_limit_auth_rpm
+    await _enforce_rate_limit(
+        f"auth:{client_ip}",
+        settings.rate_limit_auth_rpm,
+        detail="Rate limit exceeded. Please slow down.",
     )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please slow down.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
 
     # ── User-credentials flow ──────────────────────────────────────────────
     if body.email and body.secret:
@@ -903,28 +977,7 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Please verify your email before signing in.",
             )
-        extra_claims = {
-            "org_id": user.org_id,
-            "email": user.email,
-            "role": user.role,
-            "auth_method": "email",
-        }
-        access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
-        refresh_token = await create_refresh_token(
-            user_id=user.id,
-            org_id=user.org_id,
-            auth_method="email",
-            extra_claims=extra_claims,
-            expire_days=settings.refresh_token_expire_days,
-        )
-        return JSONResponse(
-            content={
-                "access_token": access_token,
-                "token_type": "bearer",
-                "expires_in": settings.jwt_access_token_expire_minutes * 60,
-                "refresh_token": refresh_token,
-            }
-        )
+        return JSONResponse(content=await _issue_email_token_pair(user))
 
     # ── Client-credentials flow ────────────────────────────────────────────────
     if body.client_id and body.client_secret:
@@ -972,6 +1025,84 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Provide email+secret, client_id+client_secret, or siwe_message+siwe_signature.",
     )
+
+
+async def _run_billing_gate(
+    request: Request,
+    payload: dict,
+    org_id: str,
+    *,
+    is_byok: bool,
+    platform_fee: int,
+) -> tuple[BillingResult, JSONResponse | None]:
+    """Pre-run billing gate for ``/agent/run``.
+
+    Dispatches based on ``auth_method``:
+      * ``siwe`` with prepaid balance → org credit (verify_credit, actual cost)
+      * ``siwe`` no balance           → x402 on-chain payment header (exact)
+      * ``client_credentials`` / ``email`` → org prepaid credit balance
+
+    Returns ``(billing, gate_response)``. ``gate_response`` is non-None when
+    the request must short-circuit (402 from the x402 path) — caller returns
+    it directly. Credit-failure paths raise ``HTTPException(402)`` so callers
+    don't need to handle them. ``billing.verified`` may be ``False`` only when
+    billing is disabled or auth_method is non-billable; in that case the
+    caller proceeds with the default unverified ``BillingResult``.
+
+    BYOK orgs are charged a per-token orchestration fee (or a flat floor) instead
+    of the full LLM passthrough cost.
+    """
+    auth_method = payload.get("auth_method", "")
+
+    if not (settings.billing_enabled and auth_method in settings.billable_auth_methods):
+        return BillingResult(), None
+
+    if auth_method == "siwe":
+        # Prefer credit billing when the org has a prepaid balance.
+        siwe_credit_balance = await get_credit_balance(org_id)
+        if siwe_credit_balance > 0:
+            pricing = await get_current_pricing()
+            default_min = pricing.run_price_usdc if pricing is not None else 0
+            min_required = platform_fee if is_byok else default_min
+            billing = await verify_credit(org_id, min_required)
+            if not billing.verified:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail=billing.error,
+                )
+            return billing, None
+
+        # No credit balance: require per-request x402 exact payment.
+        payment_header = request.headers.get("payment-signature") or request.headers.get(
+            "x-payment"
+        )
+        if not payment_header:
+            return BillingResult(), JSONResponse(
+                status_code=402,
+                content=build_402_response_body(),
+                headers=build_402_headers(),
+            )
+        billing = await verify_payment(payment_header)
+        if not billing.verified:
+            return BillingResult(), JSONResponse(
+                status_code=402,
+                content={"error": billing.error},
+                headers=build_402_headers(),
+            )
+        return billing, None
+
+    # Credit-based billing: ensure org has enough balance to cover at
+    # least one run at the current flat-rate floor.
+    pricing = await get_current_pricing()
+    default_min = pricing.run_price_usdc if pricing is not None else 0
+    min_required = platform_fee if is_byok else default_min
+    billing = await verify_credit(org_id, min_required)
+    if not billing.verified:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=billing.error,
+        )
+    return billing, None
 
 
 async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
@@ -1106,20 +1237,7 @@ async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
 async def siwe_nonce(request: Request) -> JSONResponse:
     """Generate a single-use nonce for SIWE authentication."""
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"auth:{client_ip}", settings.rate_limit_auth_rpm
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"auth:{client_ip}", settings.rate_limit_auth_rpm)
     nonce = await create_nonce()
     return JSONResponse(content={"nonce": nonce})
 
@@ -1160,20 +1278,7 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     Set REQUIRE_EMAIL_VERIFICATION=true to gate /token login until verified.
     """
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"register:{client_ip}", settings.rate_limit_register_rpm
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_register_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"register:{client_ip}", settings.rate_limit_register_rpm)
     email_allowed, _, _ = await _check_rate_limit(f"register:email:{body.email}", 3)
     if not email_allowed:
         raise HTTPException(
@@ -1196,29 +1301,10 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     asyncio.create_task(
         send_verification_email(user.email, verification_token, settings.app_base_url)
     )
-    extra_claims = {
-        "org_id": user.org_id,
-        "email": user.email,
-        "role": user.role,
-        "auth_method": "email",
-    }
-    access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
-    refresh_token = await create_refresh_token(
-        user_id=user.id,
-        org_id=user.org_id,
-        auth_method="email",
-        extra_claims=extra_claims,
-        expire_days=settings.refresh_token_expire_days,
-    )
     logger.info("register org=%s user=%s", org.id, user.id)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
-        content={
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.jwt_access_token_expire_minutes * 60,
-            "refresh_token": refresh_token,
-        },
+        content=await _issue_email_token_pair(user),
     )
 
 
@@ -1244,18 +1330,7 @@ async def resend_verification(body: ResendVerificationRequest, request: Request)
     """Re-send a verification email. Always returns 200 to prevent email oracle attacks."""
     client_ip = request.client.host if request.client else "unknown"
     resend_limit = max(1, settings.rate_limit_auth_rpm // 4)
-    allowed, remaining, reset_at = await _check_rate_limit(f"resend:{client_ip}", resend_limit)
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(resend_limit),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"resend:{client_ip}", resend_limit)
     user = await get_user_by_email(body.email)
     if user is not None and not user.is_verified:
         verification_token = await create_verification_token(user.id)
@@ -1283,20 +1358,7 @@ async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSON
     replayed within refresh_token_idempotency_window_seconds.
     """
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"auth:{client_ip}", settings.rate_limit_auth_rpm
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"auth:{client_ip}", settings.rate_limit_auth_rpm)
 
     # ── Happy path: atomic rotation ───────────────────────────────────────
     result = await rotate_refresh_token(
@@ -1412,20 +1474,7 @@ class AcceptInviteRequest(BaseModel):
 async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JSONResponse:
     """Accept an org invite token and create a new user account."""
     client_ip = request.client.host if request.client else "unknown"
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"auth:{client_ip}", settings.rate_limit_auth_rpm
-    )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_auth_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"auth:{client_ip}", settings.rate_limit_auth_rpm)
     invite = await get_org_invite(body.token)
     if invite is None:
         raise HTTPException(
@@ -1457,29 +1506,10 @@ async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JS
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with that email already exists.",
         )
-    extra_claims = {
-        "org_id": user.org_id,
-        "email": user.email,
-        "role": user.role,
-        "auth_method": "email",
-    }
-    access_token = create_access_token(subject=user.id, extra_claims=extra_claims)
-    refresh_token = await create_refresh_token(
-        user_id=user.id,
-        org_id=user.org_id,
-        auth_method="email",
-        extra_claims=extra_claims,
-        expire_days=settings.refresh_token_expire_days,
-    )
     logger.info("register_via_invite org=%s user=%s", user.org_id, user.id)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
-        content={
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.jwt_access_token_expire_minutes * 60,
-            "refresh_token": refresh_token,
-        },
+        content=await _issue_email_token_pair(user),
     )
 
 
@@ -1496,20 +1526,11 @@ async def agent_run(
     Thread state is scoped to the authenticated user.
     """
     user_id: str = payload["sub"]
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"run:{user_id}", settings.rate_limit_agent_rpm
+    await _enforce_rate_limit(
+        f"run:{user_id}",
+        settings.rate_limit_agent_rpm,
+        detail="Rate limit exceeded. Please slow down.",
     )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please slow down.",
-            headers={
-                "X-RateLimit-Limit": str(settings.rate_limit_agent_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
 
     org_id: str = payload.get("org_id", "")
 
@@ -1517,21 +1538,12 @@ async def agent_run(
     # Guards against a single org saturating the LLM pool across many users.
     org_rpm: int = settings.rate_limit_org_agent_rpm
     if org_id and isinstance(org_rpm, int):
-        org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
-            f"run:org:{org_id}", org_rpm
+        await _enforce_rate_limit(
+            f"run:org:{org_id}",
+            org_rpm,
+            detail="Organization rate limit exceeded. Please slow down.",
+            extra_headers={"X-RateLimit-Scope": "org"},
         )
-        if not org_allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Organization rate limit exceeded. Please slow down.",
-                headers={
-                    "X-RateLimit-Limit": str(org_rpm),
-                    "X-RateLimit-Remaining": str(org_remaining),
-                    "X-RateLimit-Reset": str(org_reset_at),
-                    "Retry-After": "60",
-                    "X-RateLimit-Scope": "org",
-                },
-            )
 
     run_id = str(uuid.uuid4())
     scoped_thread_id = f"{user_id}:{body.thread_id}"
@@ -1543,71 +1555,19 @@ async def agent_run(
     )
 
     # ── Billing gate ────────────────────────────────────────────────────────
-    # Dispatches based on auth_method:
-    #   siwe with balance → org prepaid credit (verify_credit, bills actual cost)
-    #   siwe no balance   → x402 on-chain payment header (verify_payment, exact)
-    #   client_credentials / email → org prepaid credit balance (verify_credit)
-    #
-    # Note: the siwe-with-balance path is the upto workaround — SIWE users who
-    # top up via /billing/topup/usdc are billed calculate_run_cost_usdc() actual
-    # cost post-run rather than the fixed x402 exact price.
-    #
-    # BYOK orgs are charged a per-token orchestration fee (or a flat floor) instead
-    # of the full LLM passthrough cost.
-    billing = BillingResult()
-    auth_method = payload.get("auth_method", "")
-
-    # Resolve BYOK status early so the billing gate uses the right minimum.
+    # Resolve BYOK status early — used by both the gate and the downstream
+    # debit step in _stream().
     _org_llm_cfg = await get_org_llm_config_cached(org_id)
     is_byok = _org_llm_cfg.is_byok if _org_llm_cfg else False
     # For the pre-run billing gate we always use the floor (actual usage is unknown).
     # Token-based cost is computed post-run at the debit step.
     platform_fee = get_byok_platform_fee(is_byok)
 
-    if settings.billing_enabled and auth_method in settings.billable_auth_methods:
-        if auth_method == "siwe":
-            # Prefer credit billing when the org has a prepaid balance.
-            siwe_credit_balance = await get_credit_balance(org_id)
-            if siwe_credit_balance > 0:
-                pricing = await get_current_pricing()
-                default_min = pricing.run_price_usdc if pricing is not None else 0
-                min_required = platform_fee if is_byok else default_min
-                billing = await verify_credit(org_id, min_required)
-                if not billing.verified:
-                    raise HTTPException(
-                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                        detail=billing.error,
-                    )
-            else:
-                # No credit balance: require per-request x402 exact payment.
-                payment_header = request.headers.get("payment-signature") or request.headers.get(
-                    "x-payment"
-                )
-                if not payment_header:
-                    return JSONResponse(
-                        status_code=402,
-                        content=build_402_response_body(),
-                        headers=build_402_headers(),
-                    )
-                billing = await verify_payment(payment_header)
-                if not billing.verified:
-                    return JSONResponse(
-                        status_code=402,
-                        content={"error": billing.error},
-                        headers=build_402_headers(),
-                    )
-        else:
-            # Credit-based billing: ensure org has enough balance to cover at
-            # least one run at the current flat-rate floor.
-            pricing = await get_current_pricing()
-            default_min = pricing.run_price_usdc if pricing is not None else 0
-            min_required = platform_fee if is_byok else default_min
-            billing = await verify_credit(org_id, min_required)
-            if not billing.verified:
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail=billing.error,
-                )
+    billing, gate_response = await _run_billing_gate(
+        request, payload, org_id, is_byok=is_byok, platform_fee=platform_fee
+    )
+    if gate_response is not None:
+        return gate_response
 
     async def _stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
@@ -3921,20 +3881,11 @@ async def mcp_jsonrpc_handler(
     org_id: str = payload.get("org_id", "")
 
     # Rate limit (separate MCP bucket)
-    allowed, remaining, reset_at = await _check_rate_limit(
-        f"mcp:{user_id}", s.rate_limit_mcp_rpm,
+    await _enforce_rate_limit(
+        f"mcp:{user_id}",
+        s.rate_limit_mcp_rpm,
+        detail="MCP rate limit exceeded.",
     )
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="MCP rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(s.rate_limit_mcp_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
 
     try:
         body = await request.json()
@@ -4326,18 +4277,7 @@ async def get_marketplace_catalog_endpoint(
         )
 
     client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-    allowed, remaining, reset_at = await _check_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
-    if not allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers={
-                "X-RateLimit-Limit": str(s.rate_limit_auth_rpm),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(reset_at),
-                "Retry-After": "60",
-            },
-        )
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
 
     from marketplace import _build_catalog_cursor
 
