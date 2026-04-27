@@ -11,6 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+# ASGITransport is built on asyncio primitives; trio is incompatible.
+# Restrict all async tests in this package to the asyncio backend only.
+pytestmark = pytest.mark.anyio(backends=["asyncio"])
+
 
 @pytest.fixture
 async def api_client(test_settings):
