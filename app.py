@@ -1098,8 +1098,12 @@ async def _run_billing_gate(
     return billing, None
 
 
-async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
-    """Verify a SIWE message, auto-register if needed, and return a JWT."""
+async def _verify_siwe(siwe_message: str, siwe_signature: str) -> tuple[str, int]:
+    """Parse and verify a SIWE message, consume its nonce, and return (address, chain_id).
+
+    Raises HTTPException on any failure.  Signature is verified BEFORE the
+    nonce is consumed to prevent nonce-exhaustion DoS attacks.
+    """
     import siwe as siwe_errors
     from siwe import SiweMessage
 
@@ -1108,7 +1112,6 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
     except Exception:
         raise HTTPException(status_code=400, detail="Malformed SIWE message")
 
-    # Validate domain
     expected_domain = settings.effective_siwe_domain
     if msg.domain != expected_domain:
         raise HTTPException(status_code=400, detail=f"Domain mismatch: expected {expected_domain}")
@@ -1130,7 +1133,6 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
     except Exception:
         raise HTTPException(status_code=401, detail="SIWE verification error")
 
-    # Checksummed address from the verified message
     from web3 import Web3
 
     address = Web3.to_checksum_address(msg.address)
@@ -1140,6 +1142,13 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
     if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds, expected_address=address):
         raise HTTPException(status_code=401, detail="Invalid or expired nonce")
     logger.info("SIWE nonce consumed for address=%s chain=%d", address, chain_id)
+
+    return address, chain_id
+
+
+async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
+    """Verify a SIWE message, auto-register if needed, and return a JWT."""
+    address, chain_id = await _verify_siwe(siwe_message, siwe_signature)
 
     # Look up existing wallet
     wallet = await get_wallet_by_address(address, chain_id)
@@ -1621,6 +1630,7 @@ async def agent_run(
                 "_llm_config": llm_config,
                 "_org_name": _org_name,
                 "_user_role": payload.get("role", "user"),
+                "_user_wallet_address": payload.get("address") or None,
                 "_credit_balance_usdc": _credit_balance_usdc,
                 "_jwt_token": (request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None),
             },
@@ -1923,6 +1933,40 @@ async def require_admin(
     return payload
 
 
+
+def _validate_webhook_url(url: str) -> None:
+    """Validate a webhook URL against SSRF rules and HTTPS enforcement.
+
+    Raises HTTP 422 if the URL is unsafe or not HTTPS in production.
+    """
+    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
+
+    ssrf_err = validate_url(url)
+    if ssrf_err:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsafe webhook URL: {ssrf_err}",
+        )
+    s = get_settings()
+    if s.app_env == "production" and not url.startswith("https://"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Webhook URL must use HTTPS in production.",
+        )
+
+
+def _require_org_id(payload: dict, detail: str = "No org_id in token.") -> str:
+    """Extract org_id from a JWT payload or raise HTTP 400.
+
+    Used by all org-scoped endpoints.  Preserves the exact status code and
+    detail string that was previously inlined at every call site.
+    """
+    org_id: str = payload.get("org_id", "")
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    return org_id
+
+
 # ─── Admin endpoints ─────────────────────────────────────────────────────────
 
 
@@ -1980,12 +2024,7 @@ async def get_org_credentials(
     Returns client_id and created_at only — secrets are never stored in plain
     text and cannot be retrieved after creation.
     """
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — credentials require an org-scoped session.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     credentials = await list_org_client_credentials(org_id)
     return JSONResponse(content=[{"client_id": c.client_id, "created_at": c.created_at.isoformat()} for c in credentials])
 
@@ -1998,12 +2037,7 @@ async def regenerate_org_credentials(
 
     The new client_secret is returned exactly once — store it immediately.
     """
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — credentials require an org-scoped session.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     await delete_org_client_credentials(org_id)
     cred, plaintext_secret = await create_client_credential(org_id)
     return JSONResponse(
@@ -2055,41 +2089,7 @@ async def link_wallet(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Link an additional wallet to the authenticated user via SIWE."""
-    import siwe as siwe_errors
-    from siwe import SiweMessage
-
-    try:
-        msg = SiweMessage.from_message(body.siwe_message)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Malformed SIWE message")
-
-    expected_domain = settings.effective_siwe_domain
-    if msg.domain != expected_domain:
-        raise HTTPException(status_code=400, detail=f"Domain mismatch: expected {expected_domain}")
-
-    # Verify signature BEFORE consuming nonce (prevent nonce-exhaustion DoS)
-    try:
-        msg.verify(signature=body.siwe_signature)
-    except (
-        siwe_errors.ExpiredMessage,
-        siwe_errors.InvalidSignature,
-        siwe_errors.DomainMismatch,
-        siwe_errors.NonceMismatch,
-        siwe_errors.MalformedSession,
-    ):
-        raise HTTPException(status_code=401, detail="SIWE signature verification failed")
-    except Exception:
-        raise HTTPException(status_code=401, detail="SIWE verification error")
-
-    from web3 import Web3
-
-    address = Web3.to_checksum_address(msg.address)
-    chain_id = int(msg.chain_id) if msg.chain_id else 1
-
-    # Consume nonce AFTER signature verification (single-use + TTL + address binding)
-    if not await consume_nonce(msg.nonce, settings.siwe_nonce_ttl_seconds, expected_address=address):
-        raise HTTPException(status_code=401, detail="Invalid or expired nonce")
-    logger.info("SIWE nonce consumed for address=%s chain=%d", address, chain_id)
+    address, chain_id = await _verify_siwe(body.siwe_message, body.siwe_signature)
 
     existing = await get_wallet_by_address(address, chain_id)
     if existing is not None:
@@ -2390,12 +2390,7 @@ async def billing_balance(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Return the authenticated org's current credit balance."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — credit balance requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — credit balance requires an org-scoped credential.")
     balance = await get_credit_balance(org_id)
     spending = await get_org_spending_config(org_id)
     return JSONResponse(
@@ -2533,12 +2528,7 @@ async def billing_credit_history(
     """Return credit ledger entries for the authenticated org (cursor paginated)."""
     from datetime import datetime
 
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — credit history requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — credit history requires an org-scoped credential.")
     if operation is not None and operation not in ("debit", "topup"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2573,12 +2563,7 @@ async def billing_topup_stripe(
 
     Returns client_secret and session_id for embedding a Stripe form in the frontend.
     """
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — top-up requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — top-up requires an org-scoped credential.")
     user_id: str = payload.get("sub", "")
     session_data = await create_stripe_embedded_session(org_id, user_id, body.amount_cents, body.return_url)
     return JSONResponse(
@@ -2630,12 +2615,7 @@ async def billing_topup_stripe_status(
     """
     import stripe as _stripe  # noqa: PLC0415
 
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — status check requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — status check requires an org-scoped credential.")
 
     try:
         status_data = await get_stripe_session_status(session_id, org_id)
@@ -2722,12 +2702,7 @@ async def billing_topup_usdc(
     Returns 402 if signature verification fails, 409 if the tx_hash was already
     processed (duplicate submission), 503 if billing is disabled.
     """
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — top-up requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — top-up requires an org-scoped credential.")
 
     try:
         result = await verify_and_settle_usdc_topup(body.payment_header, body.amount_usdc)
@@ -2838,11 +2813,7 @@ async def create_tool(
     """Register a custom webhook-backed tool for the authenticated org."""
     from jsonschema import Draft7Validator, SchemaError  # noqa: PLC0415
 
-    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
-
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
     # Validate JSON Schema
@@ -2854,21 +2825,7 @@ async def create_tool(
             detail=f"Invalid input_schema: {exc.message}",
         )
 
-    # SSRF check
-    ssrf_err = validate_url(body.webhook_url)
-    if ssrf_err:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unsafe webhook URL: {ssrf_err}",
-        )
-
-    # HTTPS enforcement in production
-    s = get_settings()
-    if s.app_env == "production" and not body.webhook_url.startswith("https://"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Webhook URL must use HTTPS in production.",
-        )
+    _validate_webhook_url(body.webhook_url)
 
     # Global name collision check
     if registry.get(body.name) is not None:
@@ -2917,9 +2874,7 @@ async def list_tools(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """List custom tools for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     tools = await list_org_tools(org_id)
     return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
 
@@ -2930,9 +2885,7 @@ async def get_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Get a specific custom tool by ID."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     tool = await get_org_tool(tool_id, org_id)
     if tool is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
@@ -2946,27 +2899,12 @@ async def patch_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Update a custom tool (partial update)."""
-    from tools.definitions.http_fetch import validate_url  # noqa: PLC0415
-
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
     # SSRF check if webhook_url is being changed
     if body.webhook_url is not None:
-        ssrf_err = validate_url(body.webhook_url)
-        if ssrf_err:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Unsafe webhook URL: {ssrf_err}",
-            )
-        s = get_settings()
-        if s.app_env == "production" and not body.webhook_url.startswith("https://"):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Webhook URL must use HTTPS in production.",
-            )
+        _validate_webhook_url(body.webhook_url)
 
     kwargs: dict[str, Any] = {}
     _updatable = (
@@ -3006,9 +2944,7 @@ async def remove_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Soft-delete a custom tool."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
     deleted = await delete_org_tool(tool_id, org_id, actor_id=user_id)
     if not deleted:
@@ -3069,9 +3005,7 @@ async def get_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Get the authenticated org's LLM configuration."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     cfg = await get_org_llm_config(org_id)
     if cfg is None:
         return JSONResponse(
@@ -3093,9 +3027,7 @@ async def upsert_llm_config_endpoint(
     from agent.llm import ALLOWED_PROVIDERS
     from tools.definitions.http_fetch import validate_url
 
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     if body.provider.lower() not in ALLOWED_PROVIDERS:
         raise HTTPException(
@@ -3178,9 +3110,7 @@ async def delete_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Delete the authenticated org's LLM config (revert to global default)."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     deleted = await delete_org_llm_config(org_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No LLM config found.")
@@ -3206,9 +3136,7 @@ async def get_org_models_benchmarks(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Authenticated: model benchmarks scoped to the caller's org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     try:
         data = await build_benchmarks_response(org_id=org_id)
     except Exception:
@@ -3231,12 +3159,7 @@ async def list_memories_endpoint(
     cursor: str | None = Query(default=None, description="ISO datetime cursor for pagination"),
 ) -> JSONResponse:
     """List memories for the authenticated org (newest first, cursor-paginated)."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — memory requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — memory requires an org-scoped credential.")
 
     from datetime import datetime as _dt
 
@@ -3262,12 +3185,7 @@ async def store_memory_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Manually store a memory for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — memory requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — memory requires an org-scoped credential.")
     user_id: str = payload.get("sub", "")
 
     entry = await store_memory(org_id, user_id, body.content)
@@ -3292,12 +3210,7 @@ async def delete_memory_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Delete a specific memory (org-scoped)."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No org_id in token — memory requires an org-scoped credential.",
-        )
+    org_id = _require_org_id(payload, "No org_id in token — memory requires an org-scoped credential.")
     deleted = await delete_memory(memory_id, org_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found.")
@@ -3381,9 +3294,7 @@ async def create_mcp_server(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Register an external MCP server for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
     # Auth consistency
@@ -3420,9 +3331,7 @@ async def list_mcp_servers(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """List MCP servers for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     servers = await list_org_mcp_servers(org_id)
     return JSONResponse(content=[_mcp_server_to_response(s) for s in servers])
 
@@ -3433,9 +3342,7 @@ async def get_mcp_server(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Get a specific MCP server by ID."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     srv = await get_org_mcp_server(server_id, org_id)
     if srv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found.")
@@ -3449,9 +3356,7 @@ async def patch_mcp_server(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Update an MCP server (partial update)."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
     kwargs: dict[str, Any] = {}
@@ -3491,9 +3396,7 @@ async def remove_mcp_server(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Soft-delete an MCP server."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
     deleted = await delete_org_mcp_server(server_id, org_id, actor_id=user_id)
     if not deleted:
@@ -3507,9 +3410,7 @@ async def discover_mcp_server_tools(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Connect to an MCP server and return its available tools."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
     srv = await get_org_mcp_server(server_id, org_id)
     if srv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found.")
@@ -4062,9 +3963,7 @@ async def set_marketplace_author_config(
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
 
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     try:
         config = await set_author_config(
@@ -4089,9 +3988,7 @@ async def get_marketplace_author_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Get the marketplace author configuration for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     config = await get_author_config(org_id)
     if config is None:
@@ -4119,9 +4016,7 @@ async def get_marketplace_balance(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Get the pending (unwithdrawn) earnings balance for the authenticated org."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     balance = await get_author_balance(org_id)
     return JSONResponse(content={"org_id": org_id, "balance_usdc": balance})
@@ -4138,9 +4033,7 @@ async def get_marketplace_earnings(
 
     Optionally filter by ``tool_name`` to see earnings for a specific tool.
     """
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     cursor_dt: datetime | None = None
     if cursor is not None:
@@ -4183,9 +4076,7 @@ async def request_marketplace_withdrawal(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Request a withdrawal of earnings to the settlement wallet."""
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     try:
         withdrawal = await request_withdrawal(org_id, body.amount_usdc)
@@ -4214,9 +4105,7 @@ async def get_marketplace_withdrawals(
     """Get paginated withdrawal history (all statuses) for the authenticated org."""
     from marketplace import list_org_withdrawals
 
-    org_id: str = payload.get("org_id", "")
-    if not org_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No org_id in token.")
+    org_id = _require_org_id(payload)
 
     cursor_dt: datetime | None = None
     if cursor is not None:

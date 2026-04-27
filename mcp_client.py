@@ -25,7 +25,7 @@ import asyncpg
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from cache import get_redis
+from cache import TTLCache, get_redis
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -347,69 +347,44 @@ async def delete_org_mcp_server(server_id: str, org_id: str, *, actor_id: str) -
 
 # ─── Per-org TTL cache (server list) ──────────────────────────────────────────
 
-_servers_cache: dict[str, tuple[list[OrgMcpServer], float]] = {}
-_servers_lock: asyncio.Lock | None = None
+_server_caches: dict[str, TTLCache[list[OrgMcpServer]]] = {}
 
 
-def _get_cache_lock() -> asyncio.Lock:
-    global _servers_lock
-    if _servers_lock is None:
-        _servers_lock = asyncio.Lock()
-    return _servers_lock
+def _get_server_cache(org_id: str) -> TTLCache[list[OrgMcpServer]]:
+    if org_id not in _server_caches:
+        _server_caches[org_id] = TTLCache(
+            name=f"org_mcp_servers:{org_id}",
+            redis_key=f"teardrop:org_mcp_servers:{org_id}",
+            ttl_seconds_fn=lambda: get_settings().mcp_client_tool_cache_ttl_seconds,
+            loader=lambda: list_org_mcp_servers(org_id, active_only=True),
+            serialize=lambda servers: json.dumps([s.model_dump(mode="json") for s in servers]),
+            deserialize=lambda raw: [OrgMcpServer(**item) for item in json.loads(raw)],
+        )
+    return _server_caches[org_id]
 
 
 async def _get_servers_cached(org_id: str) -> list[OrgMcpServer]:
     """Return active MCP servers for an org with TTL cache (Redis → in-process)."""
-    settings = get_settings()
-    redis = get_redis()
-
-    if redis is not None:
-        cache_key = f"teardrop:org_mcp_servers:{org_id}"
-        try:
-            cached_json = await redis.get(cache_key)
-            if cached_json is not None:
-                items = json.loads(cached_json)
-                return [OrgMcpServer(**item) for item in items]
-        except Exception:
-            logger.warning("Redis MCP server cache read failed; falling back", exc_info=True)
-
-    now = time.monotonic()
-    cached = _servers_cache.get(org_id)
-    if cached is not None:
-        tools, expiry = cached
-        if now < expiry:
-            return tools
-
-    async with _get_cache_lock():
-        cached = _servers_cache.get(org_id)
-        if cached is not None and time.monotonic() < cached[1]:
-            return cached[0]
-
-        servers = await list_org_mcp_servers(org_id, active_only=True)
-        ttl = settings.mcp_client_tool_cache_ttl_seconds
-        _servers_cache[org_id] = (servers, time.monotonic() + ttl)
-
-        if (r := get_redis()) is not None:
-            try:
-                data = json.dumps([s.model_dump(mode="json") for s in servers])
-                await r.setex(f"teardrop:org_mcp_servers:{org_id}", ttl, data)
-            except Exception:
-                logger.warning("Redis MCP server cache write failed (non-fatal)", exc_info=True)
-
-        return servers
+    return await _get_server_cache(org_id).get() or []
 
 
 async def invalidate_mcp_cache(org_id: str) -> None:
     """Clear the server list cache and tool cache for an org."""
-    _servers_cache.pop(org_id, None)
+    await _get_server_cache(org_id).invalidate()
     _tools_cache.pop(org_id, None)
-    redis = get_redis()
-    if redis is not None:
+    r = get_redis()
+    if r is not None:
         try:
-            await redis.delete(f"teardrop:org_mcp_servers:{org_id}")
-            await redis.delete(f"teardrop:org_mcp_tools:{org_id}")
+            await r.delete(f"teardrop:org_mcp_tools:{org_id}")
         except Exception:
-            logger.warning("Redis MCP cache invalidation failed (non-fatal)", exc_info=True)
+            logger.warning("Redis MCP tools cache invalidation failed (non-fatal)", exc_info=True)
+    _tools_cache.pop(org_id, None)
+    r = get_redis()
+    if r is not None:
+        try:
+            await r.delete(f"teardrop:org_mcp_tools:{org_id}")
+        except Exception:
+            logger.warning("Redis MCP tools cache invalidation failed (non-fatal)", exc_info=True)
 
 
 # ─── MCP Session Pool ────────────────────────────────────────────────────────

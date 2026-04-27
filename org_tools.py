@@ -23,7 +23,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
-from cache import get_redis
+from cache import TTLCache, get_redis
 from config import get_settings
 from tools.definitions.http_fetch import async_validate_url
 
@@ -419,71 +419,30 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
 
 # ─── Per-org TTL cache ────────────────────────────────────────────────────────
 
-_org_tools_cache: dict[str, tuple[list[OrgTool], float]] = {}  # {org_id: (tools, expiry)}
-_org_tools_lock: asyncio.Lock | None = None
+_org_tool_caches: dict[str, TTLCache[list[OrgTool]]] = {}
 
 
-def _get_cache_lock() -> asyncio.Lock:
-    global _org_tools_lock
-    if _org_tools_lock is None:
-        _org_tools_lock = asyncio.Lock()
-    return _org_tools_lock
+def _get_org_tool_cache(org_id: str) -> TTLCache[list[OrgTool]]:
+    if org_id not in _org_tool_caches:
+        _org_tool_caches[org_id] = TTLCache(
+            name=f"org_tools:{org_id}",
+            redis_key=f"teardrop:org_tools:{org_id}",
+            ttl_seconds_fn=lambda: get_settings().org_tools_cache_ttl_seconds,
+            loader=lambda: list_org_tools(org_id, active_only=True),
+            serialize=lambda tools: json.dumps([t.model_dump(mode="json") for t in tools]),
+            deserialize=lambda raw: [OrgTool(**item) for item in json.loads(raw)],
+        )
+    return _org_tool_caches[org_id]
 
 
 async def get_org_tools_cached(org_id: str) -> list[OrgTool]:
     """Return active org tools with a TTL cache (Redis → in-process fallback)."""
-    settings = get_settings()
-    redis = get_redis()
-
-    # ── Redis path ────────────────────────────────────────────────────────────
-    if redis is not None:
-        cache_key = f"teardrop:org_tools:{org_id}"
-        try:
-            cached_json = await redis.get(cache_key)
-            if cached_json is not None:
-                items = json.loads(cached_json)
-                return [OrgTool(**item) for item in items]
-        except Exception:
-            logger.warning("Redis org_tools cache read failed; falling back", exc_info=True)
-
-    # ── In-process TTL cache ──────────────────────────────────────────────────
-    now = time.monotonic()
-    cached = _org_tools_cache.get(org_id)
-    if cached is not None:
-        tools, expiry = cached
-        if now < expiry:
-            return tools
-
-    async with _get_cache_lock():
-        # Double-check after acquiring lock
-        cached = _org_tools_cache.get(org_id)
-        if cached is not None and time.monotonic() < cached[1]:
-            return cached[0]
-
-        tools = await list_org_tools(org_id, active_only=True)
-        ttl = settings.org_tools_cache_ttl_seconds
-        _org_tools_cache[org_id] = (tools, time.monotonic() + ttl)
-
-        # Write-through to Redis
-        if (r := get_redis()) is not None:
-            try:
-                data = json.dumps([t.model_dump(mode="json") for t in tools])
-                await r.setex(f"teardrop:org_tools:{org_id}", ttl, data)
-            except Exception:
-                logger.warning("Redis org_tools cache write failed (non-fatal)", exc_info=True)
-
-        return tools
+    return await _get_org_tool_cache(org_id).get() or []
 
 
 async def invalidate_org_tools_cache(org_id: str) -> None:
     """Clear the cache for a specific org.  Called after any mutation."""
-    _org_tools_cache.pop(org_id, None)
-    redis = get_redis()
-    if redis is not None:
-        try:
-            await redis.delete(f"teardrop:org_tools:{org_id}")
-        except Exception:
-            logger.warning("Redis org_tools cache invalidation failed (non-fatal)", exc_info=True)
+    await _get_org_tool_cache(org_id).invalidate()
 
 
 # ─── Marketplace tools cache ─────────────────────────────────────────────────
@@ -562,12 +521,19 @@ _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
 }
 
 
-def _build_pydantic_model(name: str, schema: dict[str, Any]) -> type[BaseModel]:
+def _build_pydantic_model(
+    name: str,
+    schema: dict[str, Any],
+    model_name: str | None = None,
+) -> type[BaseModel]:
     """Create a Pydantic model from a JSON Schema 'properties' dict.
 
     Supports basic types (string, integer, number, boolean).  Unknown types
     default to ``str``.  Required fields come from the schema's ``required``
     list; everything else is ``Optional`` with a default of ``None``.
+
+    ``model_name`` overrides the auto-generated class name; defaults to
+    ``OrgTool_{name}_Input``.
     """
     properties = schema.get("properties", {})
     required_set = set(schema.get("required", []))
@@ -583,8 +549,8 @@ def _build_pydantic_model(name: str, schema: dict[str, Any]) -> type[BaseModel]:
         else:
             fields[field_name] = (py_type | None, Field(default=None, description=description))
 
-    model_name = f"OrgTool_{name}_Input"
-    return create_model(model_name, **fields)
+    cls_name = model_name if model_name is not None else f"OrgTool_{name}_Input"
+    return create_model(cls_name, **fields)
 
 
 # ─── Webhook execution & LangChain tool building ─────────────────────────────

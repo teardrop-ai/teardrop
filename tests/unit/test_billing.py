@@ -1129,7 +1129,7 @@ class TestUptoScheme:
 @pytest.mark.anyio
 class TestTTLCache:
     def _make_cache(self, loader, stale_default=None):
-        from billing import TTLCache
+        from cache import TTLCache
 
         return TTLCache(
             name="test",
@@ -1143,7 +1143,7 @@ class TestTTLCache:
 
     async def test_get_returns_value_from_loader(self):
         cache = self._make_cache(AsyncMock(return_value="hello"))
-        with patch("billing.get_redis", return_value=None):
+        with patch("cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "hello"
 
@@ -1154,7 +1154,7 @@ class TestTTLCache:
         cache = self._make_cache(loader)
         cache._value = "cached"
         cache._expires = time.monotonic() + 9999
-        with patch("billing.get_redis", return_value=None):
+        with patch("cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "cached"
         loader.assert_not_called()
@@ -1162,7 +1162,7 @@ class TestTTLCache:
     async def test_loader_failure_returns_stale_default(self):
         loader = AsyncMock(side_effect=RuntimeError("DB down"))
         cache = self._make_cache(loader, stale_default="fallback")
-        with patch("billing.get_redis", return_value=None):
+        with patch("cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "fallback"
 
@@ -1171,7 +1171,7 @@ class TestTTLCache:
         cache = self._make_cache(loader)
         cache._value = "stale"
         cache._expires = 0.0  # expired in-process, but stale present
-        with patch("billing.get_redis", return_value=None):
+        with patch("cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "stale"
 
@@ -1180,14 +1180,14 @@ class TestTTLCache:
         redis.get = AsyncMock(return_value='"from_redis"')
         cache = self._make_cache(AsyncMock(return_value="from_loader"))
         cache._deserialize = lambda s: s.strip('"')
-        with patch("billing.get_redis", return_value=redis):
+        with patch("cache.get_redis", return_value=redis):
             result = await cache.get()
         assert result == "from_redis"
 
     async def test_invalidate_clears_value(self):
         cache = self._make_cache(AsyncMock(return_value="v"))
         cache._value = "old"
-        with patch("billing.get_redis", return_value=None):
+        with patch("cache.get_redis", return_value=None):
             await cache.invalidate()
         assert cache._value is None
         assert cache._expires == 0.0

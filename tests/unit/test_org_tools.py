@@ -537,10 +537,13 @@ class TestWebhookExecution:
 @pytest.mark.anyio
 class TestCacheInvalidation:
     async def test_invalidate_clears_in_process(self):
-        org_tools_module._org_tools_cache["org-1"] = ([_sample_org_tool()], 9999999999)
+        import time
+        cache = org_tools_module._get_org_tool_cache("org-1")
+        cache._value = [_sample_org_tool()]
+        cache._expires = time.monotonic() + 9999
         with patch("org_tools.get_redis", return_value=None):
             await invalidate_org_tools_cache("org-1")
-        assert "org-1" not in org_tools_module._org_tools_cache
+        assert cache._value is None
 
 
 # ─── build_org_langchain_tools ────────────────────────────────────────────────
@@ -700,14 +703,16 @@ class TestGetOrgToolsCached:
             created_at=now,
             updated_at=now,
         )
-        monkeypatch.setitem(org_tools_module._org_tools_cache, "org-cached", ([tool], time.monotonic() + 9999))
+        cache = org_tools_module._get_org_tool_cache("org-cached")
+        cache._value = [tool]
+        cache._expires = time.monotonic() + 9999
         monkeypatch.setattr(org_tools_module, "_pool", MagicMock())
         monkeypatch.setattr("org_tools.get_redis", lambda: None)
 
         result = await org_tools_module.get_org_tools_cached("org-cached")
         assert len(result) == 1
         assert result[0].name == "my_tool"
-        org_tools_module._org_tools_cache.pop("org-cached", None)
+        org_tools_module._org_tool_caches.pop("org-cached", None)
 
     async def test_cache_miss_fetches_from_db(self, monkeypatch):
         from datetime import datetime, timezone
@@ -739,15 +744,16 @@ class TestGetOrgToolsCached:
                 }
             ]
         )
-        org_tools_module._org_tools_cache.pop("org-miss", None)
+        org_tools_module._org_tool_caches.pop("org-miss", None)
         monkeypatch.setattr(org_tools_module, "_pool", pool)
         monkeypatch.setattr("org_tools.get_redis", lambda: None)
         monkeypatch.setattr("org_tools.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
+        monkeypatch.setattr("cache.get_redis", lambda: None)
 
         result = await org_tools_module.get_org_tools_cached("org-miss")
         assert len(result) == 1
         assert result[0].name == "fresh_tool"
-        org_tools_module._org_tools_cache.pop("org-miss", None)
+        org_tools_module._org_tool_caches.pop("org-miss", None)
 
 
 # ─── list_marketplace_tools ──────────────────────────────────────────────────

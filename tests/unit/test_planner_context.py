@@ -34,6 +34,7 @@ def _make_state(**metadata_overrides) -> AgentState:
         "_llm_config": None,
         "_org_name": "",
         "_user_role": "user",
+        "_user_wallet_address": None,
         "_credit_balance_usdc": None,
     }
     metadata.update(metadata_overrides)
@@ -271,6 +272,50 @@ async def test_credit_balance_omitted_when_none():
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
     assert "Remaining Credit Balance" not in system_prompt
+
+
+# ─── User wallet address (SIWE) ─────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_wallet_address_injected_when_siwe_auth():
+    """Full EIP-55 address from SIWE JWT must appear in the system prompt."""
+    state = _make_state(_user_wallet_address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045")
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "User Wallet Address" in system_prompt
+    assert "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_wallet_address_omitted_when_none():
+    """When _user_wallet_address is None (email/client-creds) the line must not appear."""
+    state = _make_state(_user_wallet_address=None)
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "User Wallet Address" not in system_prompt
 
 
 # ─── Prompt injection sanitisation ───────────────────────────────────────────

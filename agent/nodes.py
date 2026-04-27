@@ -155,6 +155,10 @@ def _build_planner_system_messages(
         context_lines.append(f"- **Organisation**: {_org_name.replace('```', '---')}")
     context_lines.append(f"- **User Role**: {_user_role.replace('```', '---')}")
 
+    _user_wallet_address: str | None = state.metadata.get("_user_wallet_address")
+    if _user_wallet_address:
+        context_lines.append(f"- **User Wallet Address**: {_user_wallet_address.replace('`', '')}")
+
     _credit_balance_usdc: int | None = state.metadata.get("_credit_balance_usdc")
     if _credit_balance_usdc is not None:
         balance_usd = _credit_balance_usdc / 1_000_000

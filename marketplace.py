@@ -272,33 +272,23 @@ async def get_author_earnings_history(
         base_where += " AND tool_name = $3"
         params.append(tool_name)
 
-    if cursor is None:
-        rows = await pool.fetch(
-            f"""
-            SELECT id, org_id, tool_name, caller_org_id, amount_usdc,
-                   author_share_usdc, platform_share_usdc, status, created_at
-            FROM tool_author_earnings
-            {base_where}
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            *params,
-        )
+    if cursor is not None:
+        cursor_clause = f"AND created_at < ${len(params) + 1}"
+        params.append(cursor)
     else:
-        # Insert cursor condition at the right position
-        cursor_placeholder = f"${len(params) + 1}"
-        rows = await pool.fetch(
-            f"""
-            SELECT id, org_id, tool_name, caller_org_id, amount_usdc,
-                   author_share_usdc, platform_share_usdc, status, created_at
-            FROM tool_author_earnings
-            {base_where} AND created_at < {cursor_placeholder}
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            *params,
-            cursor,
-        )
+        cursor_clause = ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT id, org_id, tool_name, caller_org_id, amount_usdc,
+               author_share_usdc, platform_share_usdc, status, created_at
+        FROM tool_author_earnings
+        {base_where} {cursor_clause}
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        *params,
+    )
     earnings = [AuthorEarning(**dict(r)) for r in rows]
     next_cursor = earnings[-1].created_at.isoformat() if len(earnings) == limit else None
     return earnings, next_cursor
@@ -585,19 +575,12 @@ async def list_org_withdrawals(
 ) -> tuple[list[AuthorWithdrawal], str | None]:
     """Return all withdrawals (any status) for an org, cursor-paginated by created_at DESC."""
     pool = _get_pool()
-    if cursor is None:
-        rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2",
-            org_id,
-            limit,
-        )
-    else:
-        rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND created_at < $3 ORDER BY created_at DESC LIMIT $2",
-            org_id,
-            limit,
-            cursor,
-        )
+    cursor_clause = "" if cursor is None else "AND created_at < $3"
+    args: list = [org_id, limit, *([cursor] if cursor is not None else [])]
+    rows = await pool.fetch(
+        f"SELECT * FROM tool_author_withdrawals WHERE org_id = $1 {cursor_clause} ORDER BY created_at DESC LIMIT $2",
+        *args,
+    )
     withdrawals = [AuthorWithdrawal(**dict(r)) for r in rows]
     next_cursor = withdrawals[-1].created_at.isoformat() if len(withdrawals) == limit else None
     return withdrawals, next_cursor
@@ -1057,31 +1040,16 @@ def _build_marketplace_langchain_tool(
     import json as _json
 
     import aiohttp
-    from pydantic import Field as _Field
-    from pydantic import create_model
 
-    from org_tools import _decrypt_header
+    from org_tools import _build_pydantic_model, _decrypt_header
     from tools.definitions.http_fetch import async_validate_url
 
     raw_schema = tool_row.get("input_schema", {})
     if isinstance(raw_schema, str):
         raw_schema = _json.loads(raw_schema)
 
-    # Build a simple Pydantic model from JSON Schema properties.
-    _type_map = {"string": str, "integer": int, "number": float, "boolean": bool}
-    properties = raw_schema.get("properties", {})
-    required_set = set(raw_schema.get("required", []))
-    fields: dict[str, Any] = {}
-    for fname, fdef in properties.items():
-        py_type = _type_map.get(fdef.get("type", "string"), str)
-        desc = fdef.get("description", "")
-        if fname in required_set:
-            fields[fname] = (py_type, _Field(..., description=desc))
-        else:
-            fields[fname] = (py_type | None, _Field(default=None, description=desc))
-
     model_name = f"MPTool_{qualified_name.replace('/', '_')}_Input"
-    args_model = create_model(model_name, **fields)
+    args_model = _build_pydantic_model(qualified_name, raw_schema, model_name=model_name)
 
     _url = tool_row["webhook_url"]
     _method = tool_row.get("webhook_method", "POST")

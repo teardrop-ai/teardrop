@@ -26,133 +26,15 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Generic, TypeVar
+from typing import Any
 
 import asyncpg
 from pydantic import BaseModel, Field
 
-from cache import get_redis
+from cache import TTLCache, get_redis
 from config import get_settings
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
-
-
-class TTLCache(Generic[T]):
-    """Single-value TTL cache: Redis-first with in-process fallback.
-
-    Preserves the existing graceful-degradation contract:
-    - Redis is consulted first; on read failure we fall through to in-process.
-    - In-process tier holds the last successfully-loaded value with a TTL.
-    - Loader failures serve the stale in-process value if present, else the
-      configured ``stale_default``.
-
-    Designed for single-tenant caches (one logical value per cache instance).
-    Keyed caches (e.g. per-(provider, model) pricing) use a different shape
-    and remain inline.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        redis_key: str,
-        ttl_seconds_fn: Callable[[], int],
-        loader: Callable[[], Awaitable[T | None]],
-        serialize: Callable[[T], str],
-        deserialize: Callable[[str], T | None],
-        cache_when: Callable[[T | None], bool] = lambda v: v is not None,
-        stale_default: T | None = None,
-    ) -> None:
-        self._name = name
-        self._redis_key = redis_key
-        self._ttl_fn = ttl_seconds_fn
-        self._loader = loader
-        self._serialize = serialize
-        self._deserialize = deserialize
-        self._cache_when = cache_when
-        self._stale_default = stale_default
-        self._value: T | None = None
-        self._expires: float = 0.0
-        self._lock: asyncio.Lock | None = None
-
-    async def get(self) -> T | None:
-        # ── Redis path (multi-container) ──────────────────────────────────
-        redis = get_redis()
-        if redis is not None:
-            try:
-                raw = await redis.get(self._redis_key)
-                if raw is not None:
-                    return self._deserialize(raw)
-            except Exception as exc:
-                logger.warning(
-                    "Redis %s cache read failed; falling back to in-process: %s",
-                    self._name,
-                    exc,
-                )
-
-        # ── In-process fast path ──────────────────────────────────────────
-        if self._value is not None and time.monotonic() < self._expires:
-            return self._value
-
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-
-        async with self._lock:
-            # Double-check after acquiring; another coroutine may have refreshed.
-            if self._value is not None and time.monotonic() < self._expires:
-                return self._value
-
-            try:
-                value = await self._loader()
-            except Exception:
-                logger.warning(
-                    "Failed to refresh %s cache; serving stale value",
-                    self._name,
-                    exc_info=True,
-                )
-                if self._value is not None:
-                    return self._value
-                return self._stale_default
-
-            ttl = self._ttl_fn()
-            if self._cache_when(value):
-                self._value = value
-                self._expires = time.monotonic() + ttl
-
-                redis = get_redis()
-                if redis is not None and value is not None:
-                    try:
-                        await redis.setex(self._redis_key, ttl, self._serialize(value))
-                    except Exception as exc:
-                        logger.warning(
-                            "Redis %s cache write failed (non-fatal): %s",
-                            self._name,
-                            exc,
-                        )
-
-            return value
-
-    async def invalidate(self) -> None:
-        """Drop the in-process value and delete the Redis key."""
-        self._value = None
-        self._expires = 0.0
-        redis = get_redis()
-        if redis is not None:
-            try:
-                await redis.delete(self._redis_key)
-            except Exception as exc:
-                logger.warning(
-                    "Redis %s cache invalidation failed (non-fatal): %s",
-                    self._name,
-                    exc,
-                )
-
-    def reset(self) -> None:
-        """Synchronous reset of in-process tier only (for shutdown paths)."""
-        self._value = None
-        self._expires = 0.0
 
 
 # ─── Lazy x402 imports (only when billing is enabled) ─────────────────────────
@@ -884,34 +766,20 @@ async def get_billing_history(
     last item returned as ``cursor`` to retrieve the next page.
     """
     pool = _get_pool()
-    if cursor is None:
-        rows = await pool.fetch(
-            """
-            SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
-                   cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
-            FROM usage_events
-            WHERE user_id = $1 AND settlement_status != 'none'
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            user_id,
-            limit,
-        )
-    else:
-        rows = await pool.fetch(
-            """
-            SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
-                   cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
-            FROM usage_events
-            WHERE user_id = $1 AND settlement_status != 'none'
-              AND created_at < $3
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            user_id,
-            limit,
-            cursor,
-        )
+    cursor_clause = "" if cursor is None else "AND created_at < $3"
+    args: list = [user_id, limit, *([cursor] if cursor is not None else [])]
+    rows = await pool.fetch(
+        f"""
+        SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
+               cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
+        FROM usage_events
+        WHERE user_id = $1 AND settlement_status != 'none'
+          {cursor_clause}
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        *args,
+    )
     return [dict(r) for r in rows]
 
 
@@ -958,35 +826,21 @@ async def get_invoices(
     returned item as ``cursor`` to fetch the next page.
     """
     pool = _get_pool()
-    if cursor is None:
-        rows = await pool.fetch(
-            """
-            SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
-                   tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
-                   settlement_status, created_at
-            FROM usage_events
-            WHERE user_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            user_id,
-            limit,
-        )
-    else:
-        rows = await pool.fetch(
-            """
-            SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
-                   tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
-                   settlement_status, created_at
-            FROM usage_events
-            WHERE user_id = $1 AND created_at < $3
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            user_id,
-            limit,
-            cursor,
-        )
+    cursor_clause = "" if cursor is None else "AND created_at < $3"
+    args: list = [user_id, limit, *([cursor] if cursor is not None else [])]
+    rows = await pool.fetch(
+        f"""
+        SELECT id, run_id, thread_id, tokens_in, tokens_out, tool_calls,
+               tool_names, duration_ms, cost_usdc, platform_fee_usdc, settlement_tx,
+               settlement_status, created_at
+        FROM usage_events
+        WHERE user_id = $1
+          {cursor_clause}
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        *args,
+    )
     return [dict(r) for r in rows]
 
 
@@ -1932,33 +1786,20 @@ async def get_delegation_events(
 ) -> list[dict]:
     """Return delegation events for an org (cursor-paginated, newest first)."""
     pool = _get_pool()
-    if cursor is None:
-        rows = await pool.fetch(
-            """
-            SELECT id, org_id, run_id, agent_url, agent_name,
-                   task_status, cost_usdc, billing_method, settlement_tx, error, created_at
-            FROM a2a_delegation_events
-            WHERE org_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            org_id,
-            limit,
-        )
-    else:
-        rows = await pool.fetch(
-            """
-            SELECT id, org_id, run_id, agent_url, agent_name,
-                   task_status, cost_usdc, billing_method, settlement_tx, error, created_at
-            FROM a2a_delegation_events
-            WHERE org_id = $1 AND created_at < $3
-            ORDER BY created_at DESC
-            LIMIT $2
-            """,
-            org_id,
-            limit,
-            cursor,
-        )
+    cursor_clause = "" if cursor is None else "AND created_at < $3"
+    args: list = [org_id, limit, *([cursor] if cursor is not None else [])]
+    rows = await pool.fetch(
+        f"""
+        SELECT id, org_id, run_id, agent_url, agent_name,
+               task_status, cost_usdc, billing_method, settlement_tx, error, created_at
+        FROM a2a_delegation_events
+        WHERE org_id = $1
+          {cursor_clause}
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        *args,
+    )
     return [dict(r) for r in rows]
 
 

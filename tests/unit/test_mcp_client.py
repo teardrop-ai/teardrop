@@ -101,7 +101,7 @@ def setup_mcp_client(mock_pool, test_settings, monkeypatch):
     import mcp_client
 
     monkeypatch.setattr(mcp_client, "_pool", mock_pool)
-    monkeypatch.setattr(mcp_client, "_servers_cache", {})
+    monkeypatch.setattr(mcp_client, "_server_caches", {})
     monkeypatch.setattr(mcp_client, "_tools_cache", {})
     monkeypatch.setattr(mcp_client, "_sessions", {})
     # Stub out cache invalidation
