@@ -77,6 +77,11 @@ A2UI component types (use only these primitives):
   - progress: {"type":"progress","props":{"value":0-100,"label":"..."}}
 
 Keep payloads clean and data-bound. Never invent data you don't have.
+
+Formatting rules:
+  - Separate distinct narrative paragraphs or sections with a blank line (\n\n).
+  - Never emit raw ```json fenced blocks in your response. All structured data
+    must be expressed in a ```a2ui block so the client can render it properly.
 """
 
 _UI_GENERATOR_SYSTEM = """\

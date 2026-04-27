@@ -1652,10 +1652,25 @@ async def agent_run(
                     chunk = event_data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         msg_id = event.get("run_id", run_id)
-                        yield _sse_event(
-                            _EV_TEXT_MSG_CONTENT,
-                            {"message_id": msg_id, "delta": chunk.content},
-                        )
+                        # Anthropic returns chunk.content as a list of content
+                        # blocks ([{"type": "text", "text": "...", "index": 0}]).
+                        # Normalise to a plain string so the SDK delta contract
+                        # (string) is always satisfied regardless of provider.
+                        raw_content = chunk.content
+                        if isinstance(raw_content, list):
+                            delta = "".join(
+                                block.get("text", "") if isinstance(block, dict)
+                                else getattr(block, "text", "")
+                                for block in raw_content
+                                if (block.get("type") if isinstance(block, dict) else getattr(block, "type", "")) == "text"
+                            )
+                        else:
+                            delta = raw_content
+                        if delta:
+                            yield _sse_event(
+                                _EV_TEXT_MSG_CONTENT,
+                                {"message_id": msg_id, "delta": delta},
+                            )
 
                 # --- Tool call start ---
                 elif event_name == "on_tool_start":
