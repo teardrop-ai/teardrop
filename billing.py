@@ -23,6 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+
+import sentry_sdk
 import time
 import uuid
 from datetime import datetime, timezone
@@ -422,6 +424,9 @@ async def settle_payment(
             )
     except Exception as exc:
         logger.error("Payment settlement error: %s", exc, exc_info=True)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("rail", "x402")
+            sentry_sdk.capture_exception(exc)
         billing_result.error = f"Settlement failed: {exc}"
         return billing_result
 
@@ -465,8 +470,12 @@ async def record_settlement(
             settlement_tx,
             settlement_status,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to record settlement for event=%s", usage_event_id)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("usage_event_id", str(usage_event_id))
+            scope.set_tag("settlement_status", str(settlement_status))
+            sentry_sdk.capture_exception(exc)
 
 
 # ─── Pricing queries ─────────────────────────────────────────────────────────
@@ -970,8 +979,13 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
                     reason,
                 )
         return True
-    except Exception:
+    except Exception as exc:
         logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("org_id", str(org_id))
+            scope.set_tag("amount_usdc_atomic", str(amount_usdc))
+            scope.set_tag("rail", "credit")
+            sentry_sdk.capture_exception(exc)
         return False
 
 
@@ -1119,6 +1133,14 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
     org_id: str | None = session.client_reference_id or (session.metadata.get("org_id") if session.metadata else None)
     if not org_id:
         logger.error("stripe webhook: no org_id in event %s", event.id)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("webhook_event_id", str(event.id))
+            scope.set_tag("rail", "stripe")
+            scope.set_tag("reason", "missing_org_id")
+            sentry_sdk.capture_message(
+                "stripe webhook: no org_id in event",
+                level="error",
+            )
         return
 
     # Prefer metadata amount (set by us); fall back to Stripe amount_total.
@@ -1137,15 +1159,39 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
 
     if amount_usdc <= 0:
         logger.error("stripe webhook: non-positive amount_usdc=%s event %s", amount_usdc, event.id)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("webhook_event_id", str(event.id))
+            scope.set_tag("rail", "stripe")
+            scope.set_tag("reason", "non_positive_amount")
+            scope.set_tag("amount_usdc_atomic", str(amount_usdc))
+            sentry_sdk.capture_message(
+                "stripe webhook: non-positive amount",
+                level="error",
+            )
         return
+
+    # Reject unknown orgs before entering the transaction.  org_id is set
+    # server-side in create_stripe_embedded_session so this should never fire,
+    # but defends against metadata tampering or events referencing deleted orgs.
+    # Raises ValueError → caller returns HTTP 400 → Stripe does not retry
+    # (retrying cannot fix a non-existent org).
+    pool = _get_pool()
+    org_exists = await pool.fetchval("SELECT EXISTS(SELECT 1 FROM orgs WHERE id = $1)", org_id)
+    if not org_exists:
+        logger.error("stripe webhook: unknown org_id=%s event=%s — rejecting", org_id, event.id)
+        raise ValueError(f"unknown org_id {org_id!r}")
 
     # Perform idempotency guard + credit update in a single transaction so that
     # a crash between the two writes can never result in a consumed event with
     # no credit applied (which would be silently skipped on Stripe's retry).
-    pool = _get_pool()
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # Bound total transaction time so a hung Postgres connection
+                # cannot block the webhook indefinitely.  8 s is well within
+                # Stripe's 30 s request timeout and normal asyncpg acquire
+                # timeout (10 s default).  SET LOCAL is transaction-scoped.
+                await conn.execute("SET LOCAL statement_timeout = '8000'")
                 row = await conn.fetchrow(
                     """
                     INSERT INTO stripe_webhook_events (stripe_event_id, org_id, amount_usdc)
@@ -1187,13 +1233,20 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
                     new_balance,
                     f"stripe:{event.id}",
                 )
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "stripe webhook: DB error processing event=%s org_id=%s amount_usdc=%s",
             event.id,
             org_id,
             amount_usdc,
         )
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("webhook_event_id", str(event.id))
+            scope.set_tag("webhook_type", str(event.type))
+            scope.set_tag("org_id", str(org_id))
+            scope.set_tag("amount_usdc_atomic", str(amount_usdc))
+            scope.set_tag("rail", "stripe")
+            sentry_sdk.capture_exception(exc)
         raise  # Re-raise → FastAPI returns 500 → Stripe retries
 
     logger.info(

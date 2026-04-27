@@ -958,7 +958,8 @@ python -m migrations.runner
 | `036_get_dex_quote.sql` | Schema support for `get_dex_quote` tool |
 | `037_fix_haiku_pricing.sql` | Corrects Claude Haiku 4.5 token pricing to $0.80/$4.00 per 1k |
 | `038_org_llm_config_allow_openrouter.sql` | Expands provider CHECK constraint to allow `openrouter` in `org_llm_config` |
-| `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2, Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
+| `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2 (superseded), Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
+| `040_v4_flash_pricing.sql` | Replaces DeepSeek V3.2 pricing with V4 Flash (same Teardrop rates, lower provider cost) |
 
 ### Neon (production)
 

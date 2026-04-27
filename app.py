@@ -237,6 +237,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── Sentry ──────────────────────────────────────────────────────────────────
+# Initialize before FastAPI() so the FastAPI/Starlette/asyncpg integrations
+# can hook in. No-op when SENTRY_DSN is empty.
+from observability import init_sentry  # noqa: E402
+
+init_sentry(settings)
+
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
 
 
@@ -417,20 +424,71 @@ async def _run_periodic(
     name: str,
     coro_fn: Callable[[], Awaitable[Any]],
     interval: float,
+    monitor_slug: str | None = None,
 ) -> None:
     """Run *coro_fn* every *interval* seconds with cancel + error handling.
 
     Cancellation is propagated; all other exceptions are logged and the loop
     continues. Per-iteration logging is the responsibility of *coro_fn*.
+
+    When *monitor_slug* is provided and Sentry is enabled, each iteration is
+    wrapped in a Sentry cron check-in so a dead loop surfaces as a missed
+    monitor in Sentry. ``monitor_config`` upserts the monitor on first run.
     """
+    monitor_cm = _build_cron_monitor(monitor_slug, interval)
     while True:
         try:
             await asyncio.sleep(interval)
-            await coro_fn()
+        except asyncio.CancelledError:
+            raise
+        # Cancellation during coro_fn() must not be reported as a cron
+        # `error` check-in. Catch it inside the monitor block so __exit__
+        # records `ok`, then re-raise after.
+        cancel_exc: BaseException | None = None
+        try:
+            if monitor_cm is not None:
+                with monitor_cm():
+                    try:
+                        await coro_fn()
+                    except asyncio.CancelledError as exc:
+                        cancel_exc = exc
+            else:
+                await coro_fn()
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("%s loop error", name)
+        if cancel_exc is not None:
+            raise cancel_exc
+
+
+def _build_cron_monitor(slug: str | None, interval_seconds: float):
+    """Return a zero-arg callable producing a Sentry cron context manager, or None.
+
+    Returns ``None`` when no slug is given or Sentry is disabled, so callers
+    can branch with a single ``is None`` check. The schedule is expressed in
+    whole minutes (Sentry's smallest interval unit).
+    """
+    if not slug or not settings.sentry_dsn:
+        return None
+    try:
+        from sentry_sdk.crons import monitor as sentry_monitor
+    except ImportError:  # pragma: no cover - sentry_sdk pinned in requirements
+        return None
+
+    minutes = max(1, int(interval_seconds // 60) or 1)
+    monitor_config = {
+        "schedule": {"type": "interval", "value": minutes, "unit": "minute"},
+        "checkin_margin": max(2, minutes // 4 or 2),
+        "max_runtime": max(2, minutes * 2),
+        "failure_issue_threshold": 2,
+        "recovery_threshold": 2,
+    }
+
+    def _factory():
+        return sentry_monitor(monitor_slug=slug, monitor_config=monitor_config)
+
+    return _factory
 
 
 async def _settlement_retry_iter() -> None:
@@ -457,6 +515,7 @@ async def _settlement_retry_loop() -> None:
         "Settlement retry",
         _settlement_retry_iter,
         settings.settlement_retry_interval_seconds,
+        monitor_slug="settlement-retry",
     )
 
 
@@ -466,6 +525,7 @@ async def _memory_cleanup_loop() -> None:
         "Memory cleanup",
         _memory_cleanup_iter,
         settings.memory_cleanup_interval_seconds,
+        monitor_slug="memory-cleanup",
     )
 
 
@@ -475,6 +535,7 @@ async def _refresh_token_cleanup_loop() -> None:
         "Refresh token cleanup",
         _refresh_token_cleanup_iter,
         settings.refresh_token_cleanup_interval_seconds,
+        monitor_slug="token-cleanup",
     )
 
 
@@ -1742,6 +1803,16 @@ async def agent_run(
 
         except Exception as exc:
             logger.error("agent_run error run_id=%s: %s", run_id, exc, exc_info=True)
+            try:
+                import sentry_sdk
+
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("org_id", str(org_id))
+                    scope.set_tag("run_id", str(run_id))
+                    scope.set_tag("auth_method", str(payload.get("auth_method", "")))
+                    sentry_sdk.capture_exception(exc)
+            except Exception:  # pragma: no cover - sentry is best-effort
+                pass
             # Do not leak internal exception details to clients in production.
             error_msg = (
                 f"Agent error: {exc}"
@@ -3907,6 +3978,15 @@ async def mcp_jsonrpc_handler(
                 result = await tool_def.implementation(**arguments)
             except Exception as exc:
                 logger.error("MCP tool execution error: %s", exc, exc_info=True)
+                try:
+                    import sentry_sdk
+
+                    with sentry_sdk.new_scope() as scope:
+                        scope.set_tag("tool_name", str(tool_name))
+                        scope.set_tag("org_id", str(org_id))
+                        sentry_sdk.capture_exception(exc)
+                except Exception:  # pragma: no cover
+                    pass
                 result = {"error": str(exc)}
 
         # ── Debit credits ─────────────────────────────────────────────

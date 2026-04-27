@@ -54,6 +54,7 @@ def _pool_mock_for_webhook(*, event_row=_SENTINEL, credit_row=None):
 
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=_async_ctx(conn))
+    pool.fetchval = AsyncMock(return_value=True)  # default: org exists
     pool._conn = conn  # convenience for assertions
     return pool
 
@@ -248,9 +249,11 @@ class TestHandleStripeWebhookDbOperations:
         # Credit upsert
         second_sql = pool._conn.fetchrow.call_args_list[1].args[0]
         assert "org_credits" in second_sql
-        # Ledger insert
-        pool._conn.execute.assert_called_once()
-        ledger_sql = pool._conn.execute.call_args.args[0]
+        # conn.execute is called twice: SET LOCAL statement_timeout + ledger insert
+        assert pool._conn.execute.call_count == 2
+        timeout_sql = pool._conn.execute.call_args_list[0].args[0]
+        assert "statement_timeout" in timeout_sql
+        ledger_sql = pool._conn.execute.call_args_list[1].args[0]
         assert "org_credit_ledger" in ledger_sql
 
     async def test_duplicate_event_id_is_silently_ignored(self):
@@ -265,12 +268,17 @@ class TestHandleStripeWebhookDbOperations:
 
         # Only the idempotency INSERT is attempted; credit upsert and ledger are skipped
         assert pool._conn.fetchrow.call_count == 1
-        pool._conn.execute.assert_not_called()
+        # SET LOCAL statement_timeout fires before the idempotency INSERT; the
+        # ledger execute does not run on the duplicate path.
+        pool._conn.execute.assert_called_once()
+        timeout_sql = pool._conn.execute.call_args.args[0]
+        assert "statement_timeout" in timeout_sql
 
     async def test_db_error_propagates_for_stripe_retry(self):
         """DB failure during transaction is logged and re-raised so Stripe retries (500)."""
         event = _make_stripe_event()
         pool = MagicMock()
+        pool.fetchval = AsyncMock(return_value=True)  # org exists
         pool.acquire = MagicMock(side_effect=RuntimeError("DB connection lost"))
         with (
             patch("stripe.Webhook.construct_event", return_value=event),
@@ -278,3 +286,46 @@ class TestHandleStripeWebhookDbOperations:
         ):
             with pytest.raises(RuntimeError, match="DB connection lost"):
                 await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+
+
+# ─── Org Existence Validation ─────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestHandleStripeWebhookOrgValidation:
+    async def test_unknown_org_raises_ValueError(self):
+        """org_id not found in orgs table raises ValueError → caller returns HTTP 400."""
+        event = _make_stripe_event()
+        pool = _pool_mock_for_webhook()
+        pool.fetchval = AsyncMock(return_value=False)  # org does not exist
+        with (
+            patch("stripe.Webhook.construct_event", return_value=event),
+            patch.object(billing_module, "_pool", pool),
+        ):
+            with pytest.raises(ValueError, match="unknown org_id"):
+                await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+        # Transaction should not be entered
+        pool._conn.fetchrow.assert_not_called()
+
+    async def test_known_org_proceeds_to_transaction(self):
+        """org_id found in orgs table (fetchval=True) proceeds normally."""
+        event = _make_stripe_event()
+        pool = _pool_mock_for_webhook()  # fetchval=True by default
+        with (
+            patch("stripe.Webhook.construct_event", return_value=event),
+            patch.object(billing_module, "_pool", pool),
+        ):
+            await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+        pool._conn.fetchrow.assert_called()
+
+    async def test_statement_timeout_is_first_execute_in_transaction(self):
+        """SET LOCAL statement_timeout is the first conn.execute call inside the transaction."""
+        event = _make_stripe_event()
+        pool = _pool_mock_for_webhook()
+        with (
+            patch("stripe.Webhook.construct_event", return_value=event),
+            patch.object(billing_module, "_pool", pool),
+        ):
+            await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+        first_execute_sql = pool._conn.execute.call_args_list[0].args[0]
+        assert "SET LOCAL statement_timeout" in first_execute_sql

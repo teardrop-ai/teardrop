@@ -93,13 +93,13 @@ class TestCreateLlm:
     def test_openrouter_deepseek_model_gets_provider_routing(self):
         settings = _make_settings(
             agent_provider="openrouter",
-            agent_model="deepseek/deepseek-v3.2",
+            agent_model="deepseek/deepseek-v4-flash",
             openrouter_api_key="test-openrouter-key",
         )
         with patch("agent.llm.ChatOpenAI") as MockCls:
             create_llm(settings)
             call_kwargs = MockCls.call_args[1]
-            assert call_kwargs["model_kwargs"] == {"extra_body": {"provider": {"only": ["DeepInfra"]}}}
+            assert call_kwargs["model_kwargs"] == {"extra_body": {"provider": {"only": ["NovitaAI", "DeepInfra"]}}}
 
     def test_unknown_provider_raises_value_error(self):
         settings = _make_settings(agent_provider="cohere")
@@ -300,19 +300,19 @@ class TestCreateLlmFromConfig:
         assert "model_kwargs" not in call_kwargs
 
     @patch("agent.llm.ChatOpenAI")
-    def test_openrouter_with_deepinfra_pinning(self, mock_cls):
-        """DeepSeek models must include provider routing to pin to DeepInfra."""
+    def test_openrouter_deepseek_model_pins_to_us_providers(self, mock_cls):
+        """DeepSeek models must pin to US-hosted providers (NovitaAI primary, DeepInfra fallback)."""
         mock_cls.return_value = MagicMock()
         config = _make_config(
             provider="openrouter",
-            model="deepseek/deepseek-v3.2",
+            model="deepseek/deepseek-v4-flash",
             api_key="sk-or-test",
             api_base=None,
         )
         create_llm_from_config(config)
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
-        assert call_kwargs["model_kwargs"] == {"extra_body": {"provider": {"only": ["DeepInfra"]}}}
+        assert call_kwargs["model_kwargs"] == {"extra_body": {"provider": {"only": ["NovitaAI", "DeepInfra"]}}}
 
     @patch("agent.llm.ChatOpenAI")
     def test_openrouter_custom_base_url(self, mock_cls):

@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+
+import sentry_sdk
 import re
 import time
 import uuid
@@ -236,8 +238,13 @@ async def record_tool_call_earnings(
             author_share,
             platform_share,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Failed to record tool earnings", exc_info=True)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("author_org_id", str(author_org_id))
+            scope.set_tag("caller_org_id", str(caller_org_id))
+            scope.set_tag("tool_name", str(tool_name))
+            sentry_sdk.capture_exception(exc)
 
 
 async def get_author_balance(org_id: str) -> int:
@@ -483,6 +490,10 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                         withdrawal_id,
                         exc,
                     )
+                    with sentry_sdk.new_scope() as scope:
+                        scope.set_tag("withdrawal_id", str(withdrawal_id))
+                        scope.set_tag("rail", "cdp")
+                        sentry_sdk.capture_exception(exc)
                     transfer_failed = True
                     transfer_error = str(exc)
                     # Revert earnings back to pending
@@ -1309,17 +1320,52 @@ async def _marketplace_sweep_loop() -> None:
     settings = get_settings()
     interval = settings.marketplace_sweep_interval_seconds
     logger.info("marketplace_sweep_loop: started (interval=%ds)", interval)
+
+    # Optional Sentry cron monitor wiring (no-op when DSN unset).
+    cron_monitor = None
+    if getattr(settings, "sentry_dsn", ""):
+        try:
+            from sentry_sdk.crons import monitor as sentry_monitor
+
+            minutes = max(1, interval // 60 or 1)
+            monitor_config = {
+                "schedule": {"type": "interval", "value": minutes, "unit": "minute"},
+                "checkin_margin": max(2, minutes // 4 or 2),
+                "max_runtime": max(2, minutes * 2),
+                "failure_issue_threshold": 2,
+                "recovery_threshold": 2,
+            }
+
+            def cron_monitor() -> Any:  # type: ignore[no-redef]
+                return sentry_monitor(
+                    monitor_slug="marketplace-sweep",
+                    monitor_config=monitor_config,
+                )
+        except ImportError:  # pragma: no cover
+            cron_monitor = None
+
     while True:
         try:
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             logger.info("marketplace_sweep_loop: cancelled, shutting down")
             raise
+        cancel_exc: BaseException | None = None
         try:
-            count = await marketplace_sweep_once()
+            if cron_monitor is not None:
+                with cron_monitor():
+                    try:
+                        count = await marketplace_sweep_once()
+                    except asyncio.CancelledError as exc:
+                        cancel_exc = exc
+                        count = 0
+            else:
+                count = await marketplace_sweep_once()
             if count:
                 logger.info("marketplace_sweep_loop: settled %d orgs", count)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("marketplace_sweep_loop: cycle error", exc_info=True)
+        if cancel_exc is not None:
+            raise cancel_exc

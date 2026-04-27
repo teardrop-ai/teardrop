@@ -41,6 +41,11 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
+      # ── Observability (Sentry) ────────────────────────────────────────────
+      # Write-only ingest key (not a secret); leave unset to disable Sentry.
+      - key: SENTRY_DSN
+        sync: false
+
       # ── Optional: Web search (Tavily) ─────────────────────────────────────
       - key: TAVILY_API_KEY
         sync: false

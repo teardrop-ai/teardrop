@@ -36,6 +36,12 @@ python-dotenv>=1.0.1
 # ─── Authentication ────────────────────────────────────────────────────────────
 PyJWT>=2.12.0
 cryptography>=44.0.0
+
+# ─── Observability (Sentry) ────────────────────────────────────────────────────
+# Errors + cron monitoring. fastapi/asyncpg integrations auto-enabled.
+# Pinned to 2.x where the crons.monitor context-manager API is stable.
+sentry-sdk[fastapi,asyncpg]>=2.18,<3
+
 # ─── Redis (optional) ─────────────────────────────────────────────────────────────
 redis[asyncio]>=5.0.0
 # ─── Postgres (Neon) ───────────────────────────────────────────────────────────

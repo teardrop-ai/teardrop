@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
 
+    # ── Observability (Sentry) ────────────────────────────────────────────────
+    # Empty DSN disables Sentry entirely (no SDK init, no network). The DSN is
+    # a write-only ingest key (not a secret) but is kept in env for cleanliness.
+    sentry_dsn: str = Field(default="", description="Sentry DSN; empty = disabled")
+    sentry_environment: str = Field(
+        default="",
+        description="Override Sentry environment label; defaults to app_env when empty",
+    )
+
     # ── CORS ───────────────────────────────────────────────────────────────────
     # Empty string or "*" both mean "allow all origins" — acceptable for fully
     # public APIs using bearer-token auth, but should be restricted to your
@@ -342,8 +351,8 @@ class Settings(BaseSettings):
     )
     default_model_pool: list[dict[str, str]] = Field(
         default=[
-            # Cost tier — DeepSeek V3.2 via OpenRouter, pinned to DeepInfra (US, SOC 2).
-            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"},
+            # Cost tier — DeepSeek V4 Flash via OpenRouter (US providers: NovitaAI primary, DeepInfra fallback).
+            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},
             # Speed tier — Gemini 3 Flash (1M context, sub-400ms median).
             {"provider": "google", "model": "gemini-3-flash-preview"},
             # Quality tier — Claude Sonnet 4.6 (200k context, top-tier reasoning).

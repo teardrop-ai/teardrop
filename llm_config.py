@@ -457,7 +457,7 @@ _COOLDOWN_SECONDS = 60.0
 # Tier 1 = premium/quality, Tier 2 = standard/cost.  Models absent here fall
 # back to tier 99 (lowest priority) in _select_highest_quality().
 _QUALITY_TIERS: dict[str, int] = {
-    "deepseek/deepseek-v3.2": 1,
+    "deepseek/deepseek-v4-flash": 2,
     "gemini-3-flash-preview": 2,
     "claude-sonnet-4-6": 1,
 }

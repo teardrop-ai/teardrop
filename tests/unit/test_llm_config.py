@@ -300,7 +300,7 @@ class TestSelectHighestQuality:
         models = [
             {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
             {"provider": "anthropic", "model": "claude-sonnet-4-6"},  # tier 1
-            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"},  # tier 1
+            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},  # tier 2
         ]
         result = _select_highest_quality(models)
         assert result["model"] == "claude-sonnet-4-6"
