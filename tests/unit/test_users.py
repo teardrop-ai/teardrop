@@ -427,8 +427,6 @@ class TestVerificationTokens:
         from users import consume_verification_token
 
         pool, conn = _make_transactional_pool()
-        from datetime import timedelta
-
         conn.fetchrow = AsyncMock(
             return_value={
                 "user_id": "u-1",

@@ -683,7 +683,6 @@ class TestUpdateOrgTool:
 class TestGetOrgToolsCached:
     async def test_in_process_cache_hit(self, monkeypatch):
         import time
-
         from datetime import datetime, timezone
 
         now = datetime.now(timezone.utc)
@@ -757,8 +756,6 @@ class TestGetOrgToolsCached:
 @pytest.mark.anyio
 class TestListMarketplaceTools:
     async def test_returns_empty_list(self, monkeypatch):
-        from datetime import datetime, timezone
-
         pool = MagicMock()
         pool.fetch = AsyncMock(return_value=[])
         org_tools_module._marketplace_cache = None

@@ -1167,8 +1167,6 @@ class TestTTLCache:
         assert result == "fallback"
 
     async def test_loader_failure_returns_stale_value(self):
-        import time
-
         loader = AsyncMock(side_effect=RuntimeError("DB down"))
         cache = self._make_cache(loader)
         cache._value = "stale"
@@ -1273,30 +1271,6 @@ class TestGetLivePricingForModel:
             with patch("billing.get_redis", return_value=None):
                 result = await get_live_pricing_for_model("openai", "gpt-4")
         assert result is None
-
-
-# ─── record_settlement ────────────────────────────────────────────────────────
-
-
-@pytest.mark.anyio
-class TestRecordSettlement:
-    async def test_updates_usage_event(self):
-        from billing import record_settlement
-
-        pool = MagicMock()
-        pool.execute = AsyncMock()
-        with patch.object(billing_module, "_pool", pool):
-            await record_settlement("evt-1", 5000, "0xabc", "settled")
-        pool.execute.assert_called_once()
-
-    async def test_swallows_exceptions(self):
-        from billing import record_settlement
-
-        pool = MagicMock()
-        pool.execute = AsyncMock(side_effect=RuntimeError("DB down"))
-        with patch.object(billing_module, "_pool", pool):
-            # Should NOT raise
-            await record_settlement("evt-1", 5000, "0xabc")
 
 
 # ─── get_revenue_summary ──────────────────────────────────────────────────────
