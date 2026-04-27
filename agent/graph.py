@@ -32,9 +32,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     global _checkpointer, _exit_stack
     settings = get_settings()
     _exit_stack = AsyncExitStack()
-    _checkpointer = await _exit_stack.enter_async_context(
-        AsyncPostgresSaver.from_conn_string(settings.pg_dsn)
-    )
+    _checkpointer = await _exit_stack.enter_async_context(AsyncPostgresSaver.from_conn_string(settings.pg_dsn))
     await _checkpointer.setup()
     logger.info("Postgres checkpointer ready")
     return _checkpointer

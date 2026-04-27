@@ -181,8 +181,7 @@ async def get_author_config(org_id: str) -> AuthorConfig | None:
     """Return the author config for an org, or None if not configured."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT org_id, settlement_wallet, created_at, updated_at"
-        " FROM tool_author_config WHERE org_id = $1",
+        "SELECT org_id, settlement_wallet, created_at, updated_at FROM tool_author_config WHERE org_id = $1",
         org_id,
     )
     if row is None:
@@ -245,8 +244,7 @@ async def get_author_balance(org_id: str) -> int:
     """Return the total pending (unsettled) author earnings in atomic USDC."""
     pool = _get_pool()
     result = await pool.fetchval(
-        "SELECT COALESCE(SUM(author_share_usdc), 0)"
-        " FROM tool_author_earnings WHERE org_id = $1 AND status = 'pending'",
+        "SELECT COALESCE(SUM(author_share_usdc), 0) FROM tool_author_earnings WHERE org_id = $1 AND status = 'pending'",
         org_id,
     )
     return int(result)
@@ -325,9 +323,7 @@ async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
     settings = get_settings()
 
     if not settings.agent_wallet_enabled:
-        raise ValueError(
-            "Withdrawals are unavailable: agent wallets are not enabled on this platform"
-        )
+        raise ValueError("Withdrawals are unavailable: agent wallets are not enabled on this platform")
 
     # Author config required
     config = await get_author_config(org_id)
@@ -342,10 +338,7 @@ async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
     # Sufficient pending balance
     balance = await get_author_balance(org_id)
     if amount_usdc > balance:
-        raise ValueError(
-            f"Insufficient balance: requested {amount_usdc} atomic USDC "
-            f"but only {balance} pending"
-        )
+        raise ValueError(f"Insufficient balance: requested {amount_usdc} atomic USDC but only {balance} pending")
 
     # Cooldown check
     last_withdrawal = await pool.fetchrow(
@@ -405,9 +398,7 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
     settings = get_settings()
 
     if not settings.agent_wallet_enabled:
-        raise RuntimeError(
-            "Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first"
-        )
+        raise RuntimeError("Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first")
 
     row = await pool.fetchrow(
         "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
@@ -487,17 +478,14 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                     except ValueError:
                         # No RPC URL configured — skip verification, proceed optimistically.
                         logger.warning(
-                            "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) "
-                            "tx=%s id=%s",
+                            "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
                             tx_hash,
                             withdrawal_id,
                         )
                         confirmed = True
 
                     if not confirmed:
-                        raise RuntimeError(
-                            f"Transaction {tx_hash} was reverted on-chain"
-                        )
+                        raise RuntimeError(f"Transaction {tx_hash} was reverted on-chain")
 
                 except Exception as exc:
                     logger.error(
@@ -580,14 +568,12 @@ async def list_pending_withdrawals(org_id: str | None = None) -> list[AuthorWith
     pool = _get_pool()
     if org_id is not None:
         rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND status = 'pending'"
-            " ORDER BY created_at DESC",
+            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND status = 'pending' ORDER BY created_at DESC",
             org_id,
         )
     else:
         rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE status = 'pending'"
-            " ORDER BY created_at DESC",
+            "SELECT * FROM tool_author_withdrawals WHERE status = 'pending' ORDER BY created_at DESC",
         )
     return [AuthorWithdrawal(**dict(r)) for r in rows]
 
@@ -601,15 +587,13 @@ async def list_org_withdrawals(
     pool = _get_pool()
     if cursor is None:
         rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1"
-            " ORDER BY created_at DESC LIMIT $2",
+            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2",
             org_id,
             limit,
         )
     else:
         rows = await pool.fetch(
-            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND created_at < $3"
-            " ORDER BY created_at DESC LIMIT $2",
+            "SELECT * FROM tool_author_withdrawals WHERE org_id = $1 AND created_at < $3 ORDER BY created_at DESC LIMIT $2",
             org_id,
             limit,
             cursor,
@@ -645,8 +629,7 @@ async def list_exhausted_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:
     """Return exhausted withdrawals for admin inspection (newest first)."""
     pool = _get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM tool_author_withdrawals WHERE status = 'exhausted'"
-        " ORDER BY created_at DESC LIMIT $1",
+        "SELECT * FROM tool_author_withdrawals WHERE status = 'exhausted' ORDER BY created_at DESC LIMIT $1",
         limit,
     )
     return [AuthorWithdrawal(**dict(r)) for r in rows]
@@ -890,8 +873,7 @@ async def get_platform_tool_price(tool_name: str) -> int | None:
 
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT base_price_usdc FROM marketplace_platform_tools"
-        " WHERE tool_name = $1 AND is_active = TRUE",
+        "SELECT base_price_usdc FROM marketplace_platform_tools WHERE tool_name = $1 AND is_active = TRUE",
         tool_name,
     )
     if row is None:
@@ -969,8 +951,7 @@ async def unsubscribe_from_tool(subscription_id: str, org_id: str) -> bool:
     """Soft-delete a subscription.  Returns True if found and deactivated."""
     pool = _get_pool()
     result = await pool.execute(
-        "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
-        " WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
+        "UPDATE org_marketplace_subscriptions SET is_active = FALSE WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
         subscription_id,
         org_id,
     )
@@ -1032,8 +1013,6 @@ async def build_subscribed_marketplace_tools(
     if not subs:
         return [], {}
 
-    from langchain_core.tools import StructuredTool
-
     tools_list: list[StructuredTool] = []
     tools_by_name: dict[str, Any] = {}
 
@@ -1078,7 +1057,6 @@ def _build_marketplace_langchain_tool(
     import json as _json
 
     import aiohttp
-    from pydantic import BaseModel as _BM
     from pydantic import Field as _Field
     from pydantic import create_model
 
@@ -1339,9 +1317,7 @@ async def marketplace_sweep_once() -> int:
         try:
             from agent_wallets import get_settlement_wallet_balance_usdc
 
-            balance = await get_settlement_wallet_balance_usdc(
-                chain_id=settings.marketplace_settlement_chain_id
-            )
+            balance = await get_settlement_wallet_balance_usdc(chain_id=settings.marketplace_settlement_chain_id)
             warn_threshold = settings.marketplace_settlement_warn_threshold_usdc
             if balance < warn_threshold:
                 logger.error(

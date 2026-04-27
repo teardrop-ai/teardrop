@@ -82,16 +82,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 return Response(
                     status_code=401,
                     headers={
-                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp"'
-                        ', error="token_expired"',
+                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="token_expired"',
                     },
                 )
             except jwt.InvalidTokenError:
                 return Response(
                     status_code=401,
                     headers={
-                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp"'
-                        ', error="invalid_token"',
+                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_token"',
                     },
                 )
 
@@ -100,8 +98,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 return Response(
                     status_code=401,
                     headers={
-                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp"'
-                        ', error="invalid_audience"',
+                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_audience"',
                     },
                 )
 
@@ -124,9 +121,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         request.state.mcp_auth_method = ""
         return None
 
-    async def _enforce_org_rate_limit(
-        self, request: Request, settings
-    ) -> Response | None:
+    async def _enforce_org_rate_limit(self, request: Request, settings) -> Response | None:
         """Phase 1.5: per-org aggregate rate limit (skipped for x402/anonymous)."""
         mcp_org_id = getattr(request.state, "mcp_org_id", None)
         if not mcp_org_id:
@@ -173,9 +168,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             verify_payment,
         )
 
-        payment_header = request.headers.get("payment-signature") or request.headers.get(
-            "x-payment"
-        )
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
         if not payment_header:
             return JSONResponse(
                 status_code=402,
@@ -251,28 +244,25 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # ── Platform tool pricing ─────────────────────────────────────────
         # Platform tools (tools/definitions/) are not qualified with "/".
         # Look up their marketplace price from marketplace_platform_tools.
-        is_platform_tool = False
         if "/" not in tool_name and settings.marketplace_enabled:
             from marketplace import get_platform_tool_price
 
             platform_price = await get_platform_tool_price(tool_name)
             if platform_price is not None:
                 tool_cost = overrides.get(tool_name, platform_price)
-                is_platform_tool = True
 
         # Subscription gate: marketplace tools require an active subscription.
         if "/" in tool_name and settings.marketplace_enabled:
             from marketplace import check_org_subscription
+
             if not await check_org_subscription(org_id, tool_name):
-                logger.info(
-                    "mcp subscription check failed org_id=%s tool=%s", org_id, tool_name
-                )
+                logger.info("mcp subscription check failed org_id=%s tool=%s", org_id, tool_name)
                 return JSONResponse(
                     status_code=403,
                     content=_jsonrpc_error(
-                        req_id, -32001,
-                        f"Not subscribed to marketplace tool '{tool_name}'. "
-                        "Subscribe via POST /marketplace/subscriptions.",
+                        req_id,
+                        -32001,
+                        f"Not subscribed to marketplace tool '{tool_name}'. Subscribe via POST /marketplace/subscriptions.",
                     ),
                 )
 

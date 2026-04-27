@@ -21,9 +21,7 @@ class TestDecodeTransaction:
         mock_w3 = MagicMock()
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         result = await decode_transaction("0xdeadbeef", chain_id=1)
 
@@ -60,20 +58,22 @@ class TestDecodeTransaction:
         )
         mock_w3.eth.contract.return_value = mock_contract
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
-        abi = json.dumps([{
-            "type": "function",
-            "name": "transfer",
-            "inputs": [
-                {"name": "_to", "type": "address"},
-                {"name": "_value", "type": "uint256"},
-            ],
-            "outputs": [{"name": "", "type": "bool"}],
-            "stateMutability": "nonpayable",
-        }])
+        abi = json.dumps(
+            [
+                {
+                    "type": "function",
+                    "name": "transfer",
+                    "inputs": [
+                        {"name": "_to", "type": "address"},
+                        {"name": "_value", "type": "uint256"},
+                    ],
+                    "outputs": [{"name": "", "type": "bool"}],
+                    "stateMutability": "nonpayable",
+                }
+            ]
+        )
 
         result = await decode_transaction("0xdeadbeef", chain_id=1, abi_json=abi)
 
@@ -96,17 +96,13 @@ class TestDecodeTransaction:
         mock_w3 = MagicMock()
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         # Mock 4byte.directory response
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "results": [{"text_signature": "transfer(address,uint256)"}]
-        })
+        mock_resp.json = AsyncMock(return_value={"results": [{"text_signature": "transfer(address,uint256)"}]})
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)
@@ -121,6 +117,7 @@ class TestDecodeTransaction:
 
     def test_invalid_tx_hash_raises_validation_error(self):
         from pydantic import ValidationError
+
         from tools.definitions.decode_transaction import DecodeTransactionInput
 
         with pytest.raises(ValidationError):
@@ -151,9 +148,7 @@ class TestDecodeTransaction:
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
         mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         valid_hash = "0x" + "b" * 64
         result = await decode_transaction(valid_hash, chain_id=1)
@@ -177,9 +172,7 @@ class TestDecodeTransaction:
         # Pending txs have no receipt — raise to simulate node returning None / error.
         mock_w3.eth.get_transaction_receipt = AsyncMock(side_effect=Exception("not found"))
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         valid_hash = "0x" + "c" * 64
         result = await decode_transaction(valid_hash, chain_id=1)
@@ -202,13 +195,9 @@ class TestDecodeTransaction:
         }
         mock_w3 = MagicMock()
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
-        mock_w3.eth.get_transaction_receipt = AsyncMock(
-            return_value={"status": 1, "gasUsed": 100_000}
-        )
+        mock_w3.eth.get_transaction_receipt = AsyncMock(return_value={"status": 1, "gasUsed": 100_000})
 
-        monkeypatch.setattr(
-            "tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.decode_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         valid_hash = "0x" + "d" * 64
         result = await decode_transaction(valid_hash, chain_id=1)
@@ -217,6 +206,7 @@ class TestDecodeTransaction:
 
     def test_oversized_abi_raises_validation_error(self):
         from pydantic import ValidationError
+
         from tools.definitions.decode_transaction import DecodeTransactionInput
 
         valid_hash = "0x" + "e" * 64

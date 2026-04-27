@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from pydantic import ValidationError
-from unittest.mock import AsyncMock, MagicMock
 
 # Well-known addresses used across tests (checksummed).
 _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -92,9 +93,7 @@ class TestGetTokenApprovals:
         """Build a mock Web3 instance returning a fixed allowance() value."""
         mock_w3 = MagicMock()
         mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(
-            return_value=allowance_value
-        )
+        mock_contract.functions.allowance.return_value.call = AsyncMock(return_value=allowance_value)
         mock_w3.eth.contract.return_value = mock_contract
         return mock_w3
 
@@ -203,9 +202,7 @@ class TestGetTokenApprovals:
 
         mock_w3 = MagicMock()
         mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(
-            side_effect=Exception("revert")
-        )
+        mock_contract.functions.allowance.return_value.call = AsyncMock(side_effect=Exception("revert"))
         mock_w3.eth.contract.return_value = mock_contract
 
         monkeypatch.setattr(
@@ -231,9 +228,7 @@ class TestGetTokenApprovals:
 
         mock_w3 = MagicMock()
         mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(
-            return_value=_UINT256_MAX
-        )
+        mock_contract.functions.allowance.return_value.call = AsyncMock(return_value=_UINT256_MAX)
         mock_w3.eth.contract.return_value = mock_contract
 
         monkeypatch.setattr(
@@ -267,9 +262,7 @@ class TestGetTokenApprovals:
 
         mock_w3 = MagicMock()
         mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(
-            side_effect=_side_effect
-        )
+        mock_contract.functions.allowance.return_value.call = AsyncMock(side_effect=_side_effect)
         mock_w3.eth.contract.return_value = mock_contract
 
         monkeypatch.setattr(

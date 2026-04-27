@@ -18,7 +18,6 @@ from typing import Any
 import asyncpg
 
 from cache import get_redis
-from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +169,7 @@ def get_model_context_specs(provider: str, model: str) -> dict[str, Any]:
         "supports_tools": entry.get("supports_tools", True),
         "quality_tier": entry.get("quality_tier", 1),
     }
+
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 

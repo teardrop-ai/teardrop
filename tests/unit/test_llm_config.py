@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,8 +11,8 @@ from cryptography.fernet import Fernet
 
 import llm_config
 from llm_config import (
-    OrgLlmConfig,
     _COOLDOWN_SECONDS,
+    OrgLlmConfig,
     _decrypt_llm_key,
     _encrypt_llm_key,
     _resolve_shared_key,
@@ -22,8 +21,6 @@ from llm_config import (
     _select_fastest,
     _select_highest_quality,
     build_llm_config_dict,
-    get_org_llm_config,
-    get_org_llm_config_cached,
     invalidate_llm_config_cache,
     is_provider_cooled_down,
     record_provider_failure,
@@ -31,7 +28,6 @@ from llm_config import (
     resolve_llm_config,
     upsert_org_llm_config,
 )
-
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -302,9 +298,9 @@ class TestCooldowns:
 class TestSelectHighestQuality:
     def test_selects_tier_1(self):
         models = [
-            {"provider": "google", "model": "gemini-3-flash-preview"},   # tier 2
-            {"provider": "anthropic", "model": "claude-sonnet-4-6"},      # tier 1
-            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"}, # tier 1
+            {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
+            {"provider": "anthropic", "model": "claude-sonnet-4-6"},  # tier 1
+            {"provider": "openrouter", "model": "deepseek/deepseek-v3.2"},  # tier 1
         ]
         result = _select_highest_quality(models)
         assert result["model"] == "claude-sonnet-4-6"
@@ -312,7 +308,7 @@ class TestSelectHighestQuality:
     def test_unknown_model_lowest_priority(self):
         models = [
             {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
-            {"provider": "custom", "model": "custom-model-v1"},         # tier 99
+            {"provider": "custom", "model": "custom-model-v1"},  # tier 99
         ]
         result = _select_highest_quality(models)
         assert result["model"] == "gemini-3-flash-preview"
@@ -364,8 +360,8 @@ class TestSelectFastest:
         """Empty live benchmarks → static default_latency_ms from catalogue."""
         models = [
             {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},  # 600ms
-            {"provider": "openai", "model": "gpt-4o-mini"},                    # 500ms
-            {"provider": "google", "model": "gemini-2.0-flash"},               # 400ms
+            {"provider": "openai", "model": "gpt-4o-mini"},  # 500ms
+            {"provider": "google", "model": "gemini-2.0-flash"},  # 400ms
         ]
         with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
             result = await _select_fastest(models)
@@ -383,13 +379,16 @@ class TestSelectFastest:
         """Exception from get_model_benchmarks → falls back to static, logs warning."""
         models = [
             {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},  # 600ms static
-            {"provider": "openai", "model": "gpt-4o-mini"},                    # 500ms static
+            {"provider": "openai", "model": "gpt-4o-mini"},  # 500ms static
         ]
-        with patch(
-            "benchmarks.get_model_benchmarks",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("db down"),
-        ), patch("llm_config.logger") as mock_log:
+        with (
+            patch(
+                "benchmarks.get_model_benchmarks",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("db down"),
+            ),
+            patch("llm_config.logger") as mock_log,
+        ):
             result = await _select_fastest(models)
         # Static fallback: gpt-4o-mini (500ms) is faster than claude-haiku (600ms)
         assert result["model"] == "gpt-4o-mini"
@@ -478,8 +477,7 @@ class TestResolveLlmConfig:
         pool.fetchrow = AsyncMock(return_value=None)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             result = await resolve_llm_config("org-1")
         assert result is None
 
@@ -490,11 +488,13 @@ class TestResolveLlmConfig:
         pool.fetchrow = AsyncMock(return_value=None)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None), \
-             patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route:
+        with (
+            patch("llm_config.get_settings", return_value=mock_settings),
+            patch("llm_config.get_redis", return_value=None),
+            patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
+        ):
             mock_route.return_value = {"provider": "openai", "model": "gpt-4o-mini"}
-            result = await resolve_llm_config("org-1", routing_preference="cost")
+            await resolve_llm_config("org-1", routing_preference="cost")
         mock_route.assert_called_once_with("cost")
 
     @pytest.mark.asyncio
@@ -509,13 +509,18 @@ class TestResolveLlmConfig:
         llm_config._pool = pool
 
         byok_cfg = OrgLlmConfig(
-            org_id="org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
-            has_api_key=True, is_byok=True,
+            org_id="org-1",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            has_api_key=True,
+            is_byok=True,
         )
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None), \
-             patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=byok_cfg):
+        with (
+            patch("llm_config.get_settings", return_value=mock_settings),
+            patch("llm_config.get_redis", return_value=None),
+            patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=byok_cfg),
+        ):
             result = await resolve_llm_config("org-1", routing_preference="cost")
 
         # Should use build_llm_config_dict, not _route_from_pool
@@ -526,16 +531,21 @@ class TestResolveLlmConfig:
     async def test_non_byok_with_quality_routing(self, mock_settings):
         """Non-BYOK org with quality routing → routes from pool."""
         cfg = OrgLlmConfig(
-            org_id="org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
-            is_byok=False, routing_preference="quality",
+            org_id="org-1",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            is_byok=False,
+            routing_preference="quality",
         )
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None), \
-             patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=cfg), \
-             patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route:
+        with (
+            patch("llm_config.get_settings", return_value=mock_settings),
+            patch("llm_config.get_redis", return_value=None),
+            patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=cfg),
+            patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
+        ):
             mock_route.return_value = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
-            result = await resolve_llm_config("org-1")
+            await resolve_llm_config("org-1")
         mock_route.assert_called_once_with("quality")
 
 
@@ -615,10 +625,11 @@ class TestUpsertOrgLlmConfig:
         pool = AsyncMock()
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             cfg = await upsert_org_llm_config(
-                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+                "org-1",
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
                 api_key="sk-byok-key",
             )
 
@@ -632,10 +643,11 @@ class TestUpsertOrgLlmConfig:
         pool.fetchrow = AsyncMock(return_value={"is_byok": False, "has_api_key": False})
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             cfg = await upsert_org_llm_config(
-                "org-1", provider="openai", model="gpt-4o-mini",
+                "org-1",
+                provider="openai",
+                model="gpt-4o-mini",
             )
 
         assert cfg.is_byok is False
@@ -649,10 +661,11 @@ class TestUpsertOrgLlmConfig:
         pool.fetchrow = AsyncMock(return_value={"is_byok": True, "has_api_key": True})
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             cfg = await upsert_org_llm_config(
-                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+                "org-1",
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
             )
 
         assert cfg.is_byok is True
@@ -665,10 +678,11 @@ class TestUpsertOrgLlmConfig:
         pool = AsyncMock()
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             cfg = await upsert_org_llm_config(
-                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+                "org-1",
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
                 clear_api_key=True,
             )
 
@@ -685,10 +699,11 @@ class TestUpsertOrgLlmConfig:
         llm_config._pool = pool
         llm_config._config_cache["org-1"] = (None, time.monotonic() + 999)
 
-        with patch("llm_config.get_settings", return_value=mock_settings), \
-             patch("llm_config.get_redis", return_value=None):
+        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
             await upsert_org_llm_config(
-                "org-1", provider="anthropic", model="claude-haiku-4-5-20251001",
+                "org-1",
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
             )
 
         assert "org-1" not in llm_config._config_cache

@@ -69,9 +69,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
 
     if provider == "anthropic":
         if ChatAnthropic is None:
-            raise RuntimeError(
-                "langchain-anthropic is not installed. Run: pip install langchain-anthropic"
-            )
+            raise RuntimeError("langchain-anthropic is not installed. Run: pip install langchain-anthropic")
         return ChatAnthropic(
             **common,
             api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
@@ -79,9 +77,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
 
     if provider == "openai":
         if ChatOpenAI is None:
-            raise RuntimeError(
-                "langchain-openai is not installed. Run: pip install langchain-openai"
-            )
+            raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
         return ChatOpenAI(
             **common,
             api_key=settings.openai_api_key or None,  # type: ignore[arg-type]
@@ -89,9 +85,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
 
     if provider == "google":
         if ChatGoogleGenerativeAI is None:
-            raise RuntimeError(
-                "langchain-google-genai is not installed. Run: pip install langchain-google-genai"
-            )
+            raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         return ChatGoogleGenerativeAI(
             **common,
             google_api_key=settings.google_api_key or None,  # type: ignore[arg-type]
@@ -99,9 +93,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
 
     if provider == "openrouter":
         if ChatOpenAI is None:
-            raise RuntimeError(
-                "langchain-openai is not installed. Run: pip install langchain-openai"
-            )
+            raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
         kwargs: dict[str, Any] = {
             **common,
             "api_key": settings.openrouter_api_key or None,
@@ -111,10 +103,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
             kwargs["model_kwargs"] = {"extra_body": {"provider": {"only": ["DeepInfra"]}}}
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
-    raise ValueError(
-        f"Unknown agent_provider '{provider}'. "
-        "Supported: anthropic, openai, google, openrouter."
-    )
+    raise ValueError(f"Unknown agent_provider '{provider}'. Supported: anthropic, openai, google, openrouter.")
 
 
 def get_llm() -> BaseChatModel:
@@ -160,9 +149,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     """
     provider = config["provider"].lower()
     if provider not in ALLOWED_PROVIDERS:
-        raise ValueError(
-            f"Unknown provider '{provider}'. Supported: {', '.join(sorted(ALLOWED_PROVIDERS))}."
-        )
+        raise ValueError(f"Unknown provider '{provider}'. Supported: {', '.join(sorted(ALLOWED_PROVIDERS))}.")
 
     api_key = config.get("api_key") or ""
     model = config["model"]
@@ -176,9 +163,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
 
     if provider == "anthropic":
         if ChatAnthropic is None:
-            raise RuntimeError(
-                "langchain-anthropic is not installed. Run: pip install langchain-anthropic"
-            )
+            raise RuntimeError("langchain-anthropic is not installed. Run: pip install langchain-anthropic")
         kwargs: dict[str, Any] = {**common, "api_key": api_key or None}
         if api_base:
             kwargs["base_url"] = api_base
@@ -186,9 +171,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
 
     if provider == "openai":
         if ChatOpenAI is None:
-            raise RuntimeError(
-                "langchain-openai is not installed. Run: pip install langchain-openai"
-            )
+            raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
         kwargs = {**common, "api_key": api_key or None}
         if api_base:
             kwargs["base_url"] = api_base
@@ -196,9 +179,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
 
     if provider == "google":
         if ChatGoogleGenerativeAI is None:
-            raise RuntimeError(
-                "langchain-google-genai is not installed. Run: pip install langchain-google-genai"
-            )
+            raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         kwargs = {**common, "google_api_key": api_key or None}
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
 
@@ -207,9 +188,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         # DeepSeek models are pinned to DeepInfra (US, SOC 2 + ISO 27001) via
         # OpenRouter's provider-routing preference to avoid Chinese-hosted inference.
         if ChatOpenAI is None:
-            raise RuntimeError(
-                "langchain-openai is not installed. Run: pip install langchain-openai"
-            )
+            raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
         kwargs = {
             **common,
             "api_key": api_key or None,

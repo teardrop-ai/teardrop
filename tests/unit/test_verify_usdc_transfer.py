@@ -3,7 +3,6 @@ get_settlement_wallet_balance_usdc — all network calls are mocked."""
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -92,10 +91,7 @@ class TestVerifyUsdcTransfer:
         """No receipt within timeout → TimeoutError."""
         monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings(timeout=1))
         # Freeze time so the deadline is immediately exceeded after the first poll.
-        import time as time_mod
-
         call_count = 0
-        original_monotonic = time_mod.monotonic
 
         def _fast_time():
             nonlocal call_count

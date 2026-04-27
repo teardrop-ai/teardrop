@@ -317,11 +317,7 @@ async def update_org_mcp_server(
     params.append(server_id)
     params.append(org_id)
 
-    query = (
-        f"UPDATE org_mcp_servers SET {', '.join(sets)}"
-        f" WHERE id = ${idx} AND org_id = ${idx + 1}"
-        " RETURNING *"
-    )
+    query = f"UPDATE org_mcp_servers SET {', '.join(sets)} WHERE id = ${idx} AND org_id = ${idx + 1} RETURNING *"
     updated = await pool.fetchrow(query, *params)
 
     await _record_event(org_id, server_id, row["name"], "updated", actor_id)
@@ -335,8 +331,7 @@ async def delete_org_mcp_server(server_id: str, org_id: str, *, actor_id: str) -
     """Soft-delete a server (set is_active=False).  Returns True if found."""
     pool = _get_pool()
     result = await pool.execute(
-        "UPDATE org_mcp_servers SET is_active = FALSE, updated_at = NOW()"
-        " WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
+        "UPDATE org_mcp_servers SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
         server_id,
         org_id,
     )
@@ -448,8 +443,7 @@ async def _get_or_create_session(server: OrgMcpServer) -> Any:
     if server.has_auth:
         pool = _get_pool()
         row = await pool.fetchrow(
-            "SELECT auth_type, auth_token_enc, auth_header_name"
-            " FROM org_mcp_servers WHERE id = $1",
+            "SELECT auth_type, auth_token_enc, auth_header_name FROM org_mcp_servers WHERE id = $1",
             server.id,
         )
         if row and row["auth_token_enc"]:
@@ -470,9 +464,7 @@ async def _get_or_create_session(server: OrgMcpServer) -> Any:
             )
         )
         read_stream, write_stream, _ = transport
-        session = await exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
-        )
+        session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
         await asyncio.wait_for(
             session.initialize(),
             timeout=float(settings.mcp_client_connect_timeout_seconds),
@@ -543,11 +535,13 @@ async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
 
     tools: list[dict[str, Any]] = []
     for mcp_tool in response.tools[: settings.max_mcp_tools_per_server]:
-        tools.append({
-            "name": mcp_tool.name,
-            "description": mcp_tool.description or "",
-            "input_schema": mcp_tool.inputSchema or {},
-        })
+        tools.append(
+            {
+                "name": mcp_tool.name,
+                "description": mcp_tool.description or "",
+                "input_schema": mcp_tool.inputSchema or {},
+            }
+        )
     return tools
 
 

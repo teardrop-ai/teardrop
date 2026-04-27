@@ -11,7 +11,6 @@ from tools.definitions.get_token_price import (
     GetTokenPriceInput,
     _load_coins_list_index,
     _resolve_id,
-    _token_cache,
     get_token_price,
 )
 
@@ -60,7 +59,7 @@ class TestLoadCoinsListIndex:
         with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
             result = await _load_coins_list_index()
 
-        assert result["lqty"] == "liquity"   # symbol lookup
+        assert result["lqty"] == "liquity"  # symbol lookup
         assert result["liquity"] == "liquity"  # name lookup
 
     async def test_caches_result_for_24h(self, test_settings, monkeypatch):
@@ -138,14 +137,16 @@ class TestGetTokenPrice:
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "bitcoin": {
-                "usd": 65000.0,
-                "usd_market_cap": 1_200_000_000_000,
-                "usd_24h_vol": 30_000_000_000,
-                "usd_24h_change": 2.5,
-            },
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "bitcoin": {
+                    "usd": 65000.0,
+                    "usd_market_cap": 1_200_000_000_000,
+                    "usd_24h_vol": 30_000_000_000,
+                    "usd_24h_change": 2.5,
+                },
+            }
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)
@@ -184,14 +185,16 @@ class TestGetTokenPrice:
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "liquity": {
-                "usd": 2.45,
-                "usd_market_cap": 230_000_000,
-                "usd_24h_vol": 5_000_000,
-                "usd_24h_change": -1.2,
-            },
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "liquity": {
+                    "usd": 2.45,
+                    "usd_market_cap": 230_000_000,
+                    "usd_24h_vol": 5_000_000,
+                    "usd_24h_change": -1.2,
+                },
+            }
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)
@@ -213,14 +216,16 @@ class TestGetTokenPrice:
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "liquity": {
-                "usd": 2.45,
-                "usd_market_cap": 230_000_000,
-                "usd_24h_vol": 5_000_000,
-                "usd_24h_change": -1.2,
-            },
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "liquity": {
+                    "usd": 2.45,
+                    "usd_market_cap": 230_000_000,
+                    "usd_24h_vol": 5_000_000,
+                    "usd_24h_change": -1.2,
+                },
+            }
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)
@@ -242,14 +247,16 @@ class TestGetTokenPrice:
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "bitcoin": {
-                "usd": 65000.0,
-                "usd_market_cap": 1_200_000_000_000,
-                "usd_24h_vol": 30_000_000_000,
-                "usd_24h_change": 2.5,
-            },
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "bitcoin": {
+                    "usd": 65000.0,
+                    "usd_market_cap": 1_200_000_000_000,
+                    "usd_24h_vol": 30_000_000_000,
+                    "usd_24h_change": 2.5,
+                },
+            }
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)
@@ -272,20 +279,22 @@ class TestGetTokenPrice:
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "bitcoin": {
-                "usd": 65000.0,
-                "usd_market_cap": 1_200_000_000_000,
-                "usd_24h_vol": 30_000_000_000,
-                "usd_24h_change": 2.5,
-            },
-            "liquity": {
-                "usd": 2.45,
-                "usd_market_cap": 230_000_000,
-                "usd_24h_vol": 5_000_000,
-                "usd_24h_change": -1.2,
-            },
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "bitcoin": {
+                    "usd": 65000.0,
+                    "usd_market_cap": 1_200_000_000_000,
+                    "usd_24h_vol": 30_000_000_000,
+                    "usd_24h_change": 2.5,
+                },
+                "liquity": {
+                    "usd": 2.45,
+                    "usd_market_cap": 230_000_000,
+                    "usd_24h_vol": 5_000_000,
+                    "usd_24h_change": -1.2,
+                },
+            }
+        )
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = MagicMock(return_value=mock_resp)

@@ -131,13 +131,9 @@ async def _load_coins_list_index() -> dict[str, str]:
                                 index[name] = cg_id
                         _coins_list_index = index
                         _coins_list_expires = time.monotonic() + _COINS_LIST_TTL
-                        logger.debug(
-                            "CoinGecko coins list indexed: %d entries", len(index)
-                        )
+                        logger.debug("CoinGecko coins list indexed: %d entries", len(index))
                     else:
-                        logger.warning(
-                            "CoinGecko coins/list returned status %d", resp.status
-                        )
+                        logger.warning("CoinGecko coins/list returned status %d", resp.status)
         except Exception as exc:
             logger.warning("CoinGecko coins/list request failed: %s", exc)
 
@@ -154,9 +150,7 @@ class GetTokenPriceInput(BaseModel):
         max_length=50,
         description="Token symbols or CoinGecko IDs (e.g. ['BTC', 'ETH', 'SOL'])",
     )
-    vs_currency: str = Field(
-        default="usd", description="Quote currency (usd, eur, gbp, btc, eth)"
-    )
+    vs_currency: str = Field(default="usd", description="Quote currency (usd, eur, gbp, btc, eth)")
 
 
 class TokenPriceEntry(BaseModel):
@@ -176,9 +170,7 @@ class GetTokenPriceOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def _fetch_from_coingecko(
-    ids: list[str], vs: str
-) -> dict[str, dict[str, Any]]:
+async def _fetch_from_coingecko(ids: list[str], vs: str) -> dict[str, dict[str, Any]]:
     """Call CoinGecko for the given IDs. Returns raw per-ID data dict."""
     url = (
         f"https://api.coingecko.com/api/v3/simple/price"
@@ -195,9 +187,7 @@ async def _fetch_from_coingecko(
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 logger.warning("CoinGecko returned status %d", resp.status)
@@ -206,9 +196,7 @@ async def _fetch_from_coingecko(
     return {}
 
 
-async def get_token_price(
-    tokens: list[str], vs_currency: str = "usd"
-) -> dict[str, Any]:
+async def get_token_price(tokens: list[str], vs_currency: str = "usd") -> dict[str, Any]:
     """Get current prices for one or more crypto tokens."""
     vs = vs_currency.strip().lower()
     ids = [_resolve_id(t) for t in tokens]
@@ -217,9 +205,7 @@ async def get_token_price(
     # Unresolved tokens are those whose symbol was not in _SYMBOL_TO_ID, meaning
     # _resolve_id passed them through unchanged.  We consult the full CoinGecko
     # coins list — ~50 KB cached in-process for 24 hours — to map them.
-    unresolved = [
-        i for i, t in enumerate(tokens) if t.strip().lower() not in _SYMBOL_TO_ID
-    ]
+    unresolved = [i for i, t in enumerate(tokens) if t.strip().lower() not in _SYMBOL_TO_ID]
     if unresolved:
         coin_map = await _load_coins_list_index()
         for i in unresolved:

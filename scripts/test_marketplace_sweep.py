@@ -39,7 +39,6 @@ import asyncpg
 # Ensure the project root is importable when running from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import agent_wallets
 import marketplace
 from config import get_settings
 from marketplace import marketplace_sweep_once
@@ -47,9 +46,9 @@ from marketplace import marketplace_sweep_once
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _VALID_WALLET = "0x742d35Cc6634C0532925a3b8D4C9F1d2b4C3e2F1"  # dummy EIP-55 address
-_MIN_AMOUNT = 100_000        # $0.10 — matches MARKETPLACE_MINIMUM_WITHDRAWAL_USDC default
-_EARNINGS = 500_000          # $0.50 per org — comfortably above minimum
-_BELOW_MIN = 50_000          # $0.05 — below minimum, should be skipped
+_MIN_AMOUNT = 100_000  # $0.10 — matches MARKETPLACE_MINIMUM_WITHDRAWAL_USDC default
+_EARNINGS = 500_000  # $0.50 per org — comfortably above minimum
+_BELOW_MIN = 50_000  # $0.05 — below minimum, should be skipped
 _MOCK_TX = "0xabcdef" + "0" * 58  # deterministic fake tx hash
 
 # ─── Output helpers ───────────────────────────────────────────────────────────
@@ -148,18 +147,10 @@ async def _seed_earnings(pool: asyncpg.Pool, org_id: str, amount: int) -> None:
 async def _cleanup(pool: asyncpg.Pool, org_ids: list[str]) -> None:
     if not org_ids:
         return
-    await pool.execute(
-        "DELETE FROM tool_author_earnings WHERE org_id = ANY($1::text[])", org_ids
-    )
-    await pool.execute(
-        "DELETE FROM tool_author_withdrawals WHERE org_id = ANY($1::text[])", org_ids
-    )
-    await pool.execute(
-        "DELETE FROM tool_author_config WHERE org_id = ANY($1::text[])", org_ids
-    )
-    await pool.execute(
-        "DELETE FROM orgs WHERE id = ANY($1::text[])", org_ids
-    )
+    await pool.execute("DELETE FROM tool_author_earnings WHERE org_id = ANY($1::text[])", org_ids)
+    await pool.execute("DELETE FROM tool_author_withdrawals WHERE org_id = ANY($1::text[])", org_ids)
+    await pool.execute("DELETE FROM tool_author_config WHERE org_id = ANY($1::text[])", org_ids)
+    await pool.execute("DELETE FROM orgs WHERE id = ANY($1::text[])", org_ids)
 
 
 # ─── Scenario 1: happy path ───────────────────────────────────────────────────
@@ -179,8 +170,7 @@ async def test_happy_path(pool: asyncpg.Pool, run_id: str, verbose: bool) -> lis
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
     _settings = get_settings()
-    with patch.object(_settings, "agent_wallet_enabled", True), \
-         patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch.object(_settings, "agent_wallet_enabled", True), patch("agent_wallets.transfer_usdc", mock_transfer):
         count = await marketplace_sweep_once()
 
     if count < 3:
@@ -225,9 +215,7 @@ async def test_idempotency(pool: asyncpg.Pool, org_ids: list[str]) -> None:
         await marketplace_sweep_once()
 
     for oid in org_ids:
-        n = await pool.fetchval(
-            "SELECT COUNT(*) FROM tool_author_withdrawals WHERE org_id = $1", oid
-        )
+        n = await pool.fetchval("SELECT COUNT(*) FROM tool_author_withdrawals WHERE org_id = $1", oid)
         _assert_eq(n, 1, f"exactly 1 withdrawal record for {oid} (no duplicates)")
 
     _ok("transfer_usdc not re-invoked for already-settled orgs")
@@ -241,9 +229,7 @@ async def test_deterministic_ids(pool: asyncpg.Pool, org_ids: list[str]) -> None
 
     for oid in org_ids:
         expected = _expected_withdrawal_id(oid)
-        actual = await pool.fetchval(
-            "SELECT id FROM tool_author_withdrawals WHERE org_id = $1", oid
-        )
+        actual = await pool.fetchval("SELECT id FROM tool_author_withdrawals WHERE org_id = $1", oid)
         _assert_eq(actual, expected, f"deterministic ID for {oid}")
 
 
@@ -261,8 +247,7 @@ async def test_cdp_failure(pool: asyncpg.Pool, run_id: str) -> list[str]:
 
     mock_transfer = AsyncMock(side_effect=RuntimeError("CDP network unreachable"))
     _settings = get_settings()
-    with patch.object(_settings, "agent_wallet_enabled", True), \
-         patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch.object(_settings, "agent_wallet_enabled", True), patch("agent_wallets.transfer_usdc", mock_transfer):
         await marketplace_sweep_once()
 
     w = await pool.fetchrow(
@@ -294,15 +279,13 @@ async def test_below_minimum(pool: asyncpg.Pool, run_id: str) -> list[str]:
     await _seed_org(pool, oid, f"Smoke Sweep Low {run_id[:8]}")
     await _seed_author_config(pool, oid)
     await _seed_earnings(pool, oid, _BELOW_MIN)
-    _step(f"Seeded below-minimum org: {oid} ({_BELOW_MIN} atomic = ${_BELOW_MIN/1_000_000:.5f})")
+    _step(f"Seeded below-minimum org: {oid} ({_BELOW_MIN} atomic = ${_BELOW_MIN / 1_000_000:.5f})")
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
     with patch("agent_wallets.transfer_usdc", mock_transfer):
         await marketplace_sweep_once()
 
-    n = await pool.fetchval(
-        "SELECT COUNT(*) FROM tool_author_withdrawals WHERE org_id = $1", oid
-    )
+    n = await pool.fetchval("SELECT COUNT(*) FROM tool_author_withdrawals WHERE org_id = $1", oid)
     _assert_eq(n, 0, f"no withdrawal created for below-minimum org {oid}")
     _assert_eq(mock_transfer.call_count, 0, "transfer_usdc not called for below-minimum org")
 
@@ -313,9 +296,7 @@ async def test_below_minimum(pool: asyncpg.Pool, run_id: str) -> list[str]:
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Smoke-test marketplace_sweep_once() against a live Postgres DB."
-    )
+    parser = argparse.ArgumentParser(description="Smoke-test marketplace_sweep_once() against a live Postgres DB.")
     parser.add_argument(
         "--pg-dsn",
         default=os.environ.get("PG_DSN", ""),

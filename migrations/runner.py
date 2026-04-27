@@ -119,9 +119,7 @@ async def _main(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Teardrop migration runner")
-    parser.add_argument(
-        "--status", action="store_true", help="Show migration status without applying"
-    )
+    parser.add_argument("--status", action="store_true", help="Show migration status without applying")
     args = parser.parse_args()
     asyncio.run(_main(args))
 

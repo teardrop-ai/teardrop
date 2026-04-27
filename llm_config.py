@@ -20,7 +20,6 @@ import asyncpg
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
 
-from agent.llm import ALLOWED_PROVIDERS
 from cache import get_redis
 from config import get_settings
 
@@ -45,8 +44,7 @@ def _get_llm_fernet() -> Fernet:
     key = settings.llm_config_encryption_key or settings.org_tool_encryption_key
     if not key:
         raise RuntimeError(
-            "Neither LLM_CONFIG_ENCRYPTION_KEY nor ORG_TOOL_ENCRYPTION_KEY is set. "
-            "Cannot encrypt/decrypt BYOK API keys."
+            "Neither LLM_CONFIG_ENCRYPTION_KEY nor ORG_TOOL_ENCRYPTION_KEY is set. Cannot encrypt/decrypt BYOK API keys."
         )
     _llm_fernet = Fernet(key.encode())
     return _llm_fernet
@@ -164,9 +162,7 @@ def _row_to_config(row: asyncpg.Record) -> OrgLlmConfig:
 async def get_org_llm_config(org_id: str) -> OrgLlmConfig | None:
     """Fetch the LLM config for an org.  Returns ``None`` if not configured."""
     pool = _get_pool()
-    row = await pool.fetchrow(
-        "SELECT * FROM org_llm_config WHERE org_id = $1", org_id
-    )
+    row = await pool.fetchrow("SELECT * FROM org_llm_config WHERE org_id = $1", org_id)
     if row is None:
         return None
     return _row_to_config(row)
@@ -280,9 +276,17 @@ async def upsert_org_llm_config(
                 is_byok = EXCLUDED.is_byok,
                 updated_at = EXCLUDED.updated_at
             """,
-            org_id, provider, model, api_key_enc, api_base,
-            max_tokens, temperature, timeout_seconds,
-            routing_preference, is_byok, now,
+            org_id,
+            provider,
+            model,
+            api_key_enc,
+            api_base,
+            max_tokens,
+            temperature,
+            timeout_seconds,
+            routing_preference,
+            is_byok,
+            now,
         )
     elif clear_api_key:
         # Explicitly clear BYOK key while preserving other config
@@ -305,9 +309,15 @@ async def upsert_org_llm_config(
                 is_byok = FALSE,
                 updated_at = EXCLUDED.updated_at
             """,
-            org_id, provider, model, api_base,
-            max_tokens, temperature, timeout_seconds,
-            routing_preference, now,
+            org_id,
+            provider,
+            model,
+            api_base,
+            max_tokens,
+            temperature,
+            timeout_seconds,
+            routing_preference,
+            now,
         )
         is_byok = False
         has_key = False
@@ -332,9 +342,15 @@ async def upsert_org_llm_config(
                 updated_at = EXCLUDED.updated_at
             RETURNING is_byok, (api_key_enc IS NOT NULL) AS has_api_key
             """,
-            org_id, provider, model, api_base,
-            max_tokens, temperature, timeout_seconds,
-            routing_preference, now,
+            org_id,
+            provider,
+            model,
+            api_base,
+            max_tokens,
+            temperature,
+            timeout_seconds,
+            routing_preference,
+            now,
         )
         is_byok = row["is_byok"] if row else False
         has_key = row["has_api_key"] if row else False
@@ -364,9 +380,7 @@ async def upsert_org_llm_config(
 async def delete_org_llm_config(org_id: str) -> bool:
     """Delete an org's LLM configuration.  Returns ``True`` if a row was deleted."""
     pool = _get_pool()
-    result = await pool.execute(
-        "DELETE FROM org_llm_config WHERE org_id = $1", org_id
-    )
+    result = await pool.execute("DELETE FROM org_llm_config WHERE org_id = $1", org_id)
     deleted = result.split()[-1] != "0"
     await invalidate_llm_config_cache(org_id)
     return deleted
@@ -384,9 +398,7 @@ async def build_llm_config_dict(org_id: str) -> dict[str, Any] | None:
     Returns ``None`` if the org has no LLM config (use global defaults).
     """
     pool = _get_pool()
-    row = await pool.fetchrow(
-        "SELECT * FROM org_llm_config WHERE org_id = $1", org_id
-    )
+    row = await pool.fetchrow("SELECT * FROM org_llm_config WHERE org_id = $1", org_id)
     if row is None:
         return None
 
@@ -406,12 +418,9 @@ async def build_llm_config_dict(org_id: str) -> dict[str, Any] | None:
                     org_id,
                 )
                 raise RuntimeError(
-                    f"BYOK API key could not be decrypted for org {org_id}. "
-                    "Please re-upload your API key via PUT /llm-config."
+                    f"BYOK API key could not be decrypted for org {org_id}. Please re-upload your API key via PUT /llm-config."
                 )
-            logger.warning(
-                "API key decryption failed for org %s — falling back to shared key", org_id
-            )
+            logger.warning("API key decryption failed for org %s — falling back to shared key", org_id)
             api_key = _resolve_shared_key(row["provider"], settings)
     else:
         api_key = _resolve_shared_key(row["provider"], settings)
@@ -504,10 +513,7 @@ async def _route_from_pool(routing_preference: str) -> dict[str, Any] | None:
         return None
 
     # Filter out cooled-down providers
-    available = [
-        m for m in pool_models
-        if not is_provider_cooled_down(m["provider"], m["model"])
-    ]
+    available = [m for m in pool_models if not is_provider_cooled_down(m["provider"], m["model"])]
     if not available:
         # All cooled down — use first anyway (best effort)
         available = pool_models
@@ -592,7 +598,11 @@ async def _select_fastest(models: list[dict[str, str]]) -> dict[str, str]:
         source = "static"
     logger.debug(
         "_select_fastest: selected %s/%s latency=%.1f source=%s candidates=%d",
-        best["provider"], best["model"], best_latency, source, len(models),
+        best["provider"],
+        best["model"],
+        best_latency,
+        source,
+        len(models),
     )
     return best
 

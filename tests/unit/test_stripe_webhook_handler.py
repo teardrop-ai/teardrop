@@ -15,7 +15,6 @@ import stripe
 import billing as billing_module
 from billing import handle_stripe_webhook
 
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -103,9 +102,7 @@ class TestHandleStripeWebhookSignature:
     async def test_invalid_signature_raises_SignatureVerificationError(self):
         """Bad signature propagates stripe.SignatureVerificationError to caller."""
         with patch("stripe.Webhook.construct_event") as mock_construct:
-            mock_construct.side_effect = stripe.SignatureVerificationError(
-                "No signatures found", VALID_SIG
-            )
+            mock_construct.side_effect = stripe.SignatureVerificationError("No signatures found", VALID_SIG)
             with pytest.raises(stripe.SignatureVerificationError):
                 await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
 

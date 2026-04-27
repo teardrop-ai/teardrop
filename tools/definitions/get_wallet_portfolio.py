@@ -43,12 +43,27 @@ _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
         {"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
         {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
         {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
-        {"address": "0xd4d42f0b6def4ce0383636d504adfc00e50ed41f", "symbol": "cbETH", "cg_id": "coinbase-wrapped-staked-eth", "decimals": "18"},  # noqa: E501
-        {"address": "0x940181a94a02757d5b3642341111d8f88a6d7efa", "symbol": "AERO", "cg_id": "aerodrome-finance", "decimals": "18"},  # noqa: E501
+        {
+            "address": "0xd4d42f0b6def4ce0383636d504adfc00e50ed41f",
+            "symbol": "cbETH",
+            "cg_id": "coinbase-wrapped-staked-eth",
+            "decimals": "18",
+        },  # noqa: E501
+        {
+            "address": "0x940181a94a02757d5b3642341111d8f88a6d7efa",
+            "symbol": "AERO",
+            "cg_id": "aerodrome-finance",
+            "decimals": "18",
+        },  # noqa: E501
         {"address": "0xeb466d67891d27fdf7b3dffefac43a659d5ff4b9", "symbol": "USDbC", "cg_id": "usd-base-coin", "decimals": "6"},  # noqa: E501
         {"address": "0xa25b9ff59076169048ea43d08ad1326fff9b374d", "symbol": "LDO", "cg_id": "lido-dao", "decimals": "18"},  # noqa: E501
         {"address": "0x0b3b3d9f75d81e005c3bd3762360db25d0da8035", "symbol": "USDe", "cg_id": "ethena-usde", "decimals": "18"},  # noqa: E501
-        {"address": "0x2ae3f1ec7f1f5012cfeab0151158198f0e09e4ff", "symbol": "CURVE", "cg_id": "curve-dao-token", "decimals": "18"},  # noqa: E501
+        {
+            "address": "0x2ae3f1ec7f1f5012cfeab0151158198f0e09e4ff",
+            "symbol": "CURVE",
+            "cg_id": "curve-dao-token",
+            "decimals": "18",
+        },  # noqa: E501
     ],
 }
 
@@ -74,9 +89,7 @@ async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
     global _portfolio_price_cache, _portfolio_price_ts
 
     now = time.monotonic()
-    if now < _portfolio_price_ts + _PORTFOLIO_PRICE_TTL and all(
-        cid in _portfolio_price_cache for cid in cg_ids
-    ):
+    if now < _portfolio_price_ts + _PORTFOLIO_PRICE_TTL and all(cid in _portfolio_price_cache for cid in cg_ids):
         return {cid: _portfolio_price_cache[cid] for cid in cg_ids}
 
     ids_str = ",".join(set(cg_ids))
@@ -92,9 +105,7 @@ async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=10), headers=headers
-            ) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for cid in cg_ids:
@@ -209,7 +220,8 @@ TOOL = ToolDefinition(
     version="1.0.0",
     description=(
         "Get aggregated token holdings with USD values for a wallet address. "
-        "Tracks 15+ major tokens on Ethereum (USDC, USDT, DAI, WETH, WBTC, LINK, UNI, AAVE, ARB, OP, LDO, stETH, CRV, SUSHI, MKR) "
+        "Tracks 15+ major tokens on Ethereum "
+        "(USDC, USDT, DAI, WETH, WBTC, LINK, UNI, AAVE, ARB, OP, LDO, stETH, CRV, SUSHI, MKR) "
         "and 9+ on Base. Sorted by USD value. Returns up to 20 holdings."
     ),
     tags=["web3", "ethereum", "portfolio", "balance", "defi"],

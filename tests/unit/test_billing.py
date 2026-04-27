@@ -83,9 +83,7 @@ class TestCalculateRunCostUsdc:
     async def test_flat_rate_when_no_per_unit_rates(self):
         rule = _make_rule(run_price_usdc=10_000)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 5_000, "tokens_out": 2_000, "tool_calls": 3}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 5_000, "tokens_out": 2_000, "tool_calls": 3})
         assert cost == 10_000
 
     async def test_usage_based_pricing_full_formula(self):
@@ -97,18 +95,14 @@ class TestCalculateRunCostUsdc:
         )
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
             # (2000//1000)*100 + (1000//1000)*200 + 2*50 = 200+200+100 = 500
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 2_000, "tokens_out": 1_000, "tool_calls": 2}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 2_000, "tokens_out": 1_000, "tool_calls": 2})
         assert cost == 500
 
     async def test_floor_truncation_below_1k_tokens(self):
         """999 tokens = 0 completed 1k blocks — cost is 0 for that leg."""
         rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 999, "tokens_out": 0, "tool_calls": 0}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 999, "tokens_out": 0, "tool_calls": 0})
         assert cost == 0
 
     async def test_zero_usage_returns_flat_rate(self):
@@ -119,9 +113,7 @@ class TestCalculateRunCostUsdc:
 
     async def test_no_pricing_rule_returns_zero(self):
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=None)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 1_000, "tokens_out": 500, "tool_calls": 1}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 1_000, "tokens_out": 500, "tool_calls": 1})
         assert cost == 0
 
     async def test_tool_calls_only_with_per_unit_rate(self):
@@ -140,9 +132,7 @@ class TestCalculateRunCostUsdc:
     async def test_usage_based_exactly_1k_tokens(self):
         rule = _make_rule(run_price_usdc=0, tokens_out_cost_per_1k=300)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 1_000, "tool_calls": 0}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 1_000, "tool_calls": 0})
         assert cost == 300
 
 
@@ -202,7 +192,9 @@ class TestVerifyCredit:
 
     async def test_daily_spending_limit_exceeded(self):
         mock_pool = _mock_pool_for_verify(
-            balance=100_000, spending_limit=50_000, daily_spend=45_000,
+            balance=100_000,
+            spending_limit=50_000,
+            daily_spend=45_000,
         )
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
@@ -211,7 +203,9 @@ class TestVerifyCredit:
 
     async def test_daily_spending_limit_within_budget(self):
         mock_pool = _mock_pool_for_verify(
-            balance=100_000, spending_limit=50_000, daily_spend=30_000,
+            balance=100_000,
+            spending_limit=50_000,
+            daily_spend=30_000,
         )
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
@@ -260,9 +254,7 @@ def _payment_fixture(mock_parse_return=None, mock_parse_side_effect=None):
 class TestVerifyPayment:
     async def test_malformed_header_returns_error(self):
         """Exception from parse_payment_payload returns BillingResult with error."""
-        mock_server, mock_req, mock_x402 = _payment_fixture(
-            mock_parse_side_effect=Exception("bad parse")
-        )
+        mock_server, mock_req, mock_x402 = _payment_fixture(mock_parse_side_effect=Exception("bad parse"))
         with (
             patch.object(billing_module, "_server", mock_server),
             patch.object(billing_module, "_requirements_cache", [mock_req]),
@@ -290,9 +282,7 @@ class TestVerifyPayment:
 
     async def test_invalid_signature_surfaces_reason(self):
         """Server returning is_valid=False includes the reason in the error."""
-        mock_verify = MagicMock(
-            is_valid=False, invalid_reason="wrong amount", payer="0xabc", invalid_message=None
-        )
+        mock_verify = MagicMock(is_valid=False, invalid_reason="wrong amount", payer="0xabc", invalid_message=None)
         mock_server, mock_req, mock_x402 = _payment_fixture()
         mock_server.verify_payment = AsyncMock(return_value=mock_verify)
         with (
@@ -726,11 +716,15 @@ class TestBuild402ResponseBody:
 
         upto_req = MagicMock()
         upto_req.model_dump.return_value = {
-            "scheme": "upto", "network": "base", "amount": "500000",
+            "scheme": "upto",
+            "network": "base",
+            "amount": "500000",
         }
         exact_req = MagicMock()
         exact_req.model_dump.return_value = {
-            "scheme": "exact", "network": "base", "amount": "10000",
+            "scheme": "exact",
+            "network": "base",
+            "amount": "10000",
         }
 
         with patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]):
@@ -829,9 +823,7 @@ class TestCalculateRunCostWithOverrides:
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
             patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
         assert cost == 15_000
 
     async def test_with_overrides_mixed_tools(self):
@@ -927,11 +919,8 @@ class TestCalculateRunCostWithOverrides:
         with (
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 2, "tool_names": []}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 2, "tool_names": []})
         assert cost == 2 * 1_000
-
 
     def test_price_string_for_ten_dollars(self):
         mock_server = MagicMock()
@@ -982,9 +971,7 @@ class TestVerifyAndSettleUsdcTopup:
             patch.object(billing_module, "_server", mock_server),
             patch(
                 "billing.get_settings",
-                return_value=MagicMock(
-                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
-                ),
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
             ),
             patch.dict("sys.modules", {"x402": mock_x402}),
         ):
@@ -999,15 +986,11 @@ class TestVerifyAndSettleUsdcTopup:
             patch.object(billing_module, "_server", mock_server),
             patch(
                 "billing.get_settings",
-                return_value=MagicMock(
-                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
-                ),
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
             ),
             patch.dict("sys.modules", {"x402": mock_x402}),
         ):
-            result = await verify_and_settle_usdc_topup(
-                base64.b64encode(b"dummy").decode(), 1_000_000
-            )
+            result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
         assert not result.settled
         assert "verification failed" in result.error.lower()
         mock_server.settle_payment.assert_not_called()
@@ -1019,15 +1002,11 @@ class TestVerifyAndSettleUsdcTopup:
             patch.object(billing_module, "_server", mock_server),
             patch(
                 "billing.get_settings",
-                return_value=MagicMock(
-                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
-                ),
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
             ),
             patch.dict("sys.modules", {"x402": mock_x402}),
         ):
-            result = await verify_and_settle_usdc_topup(
-                base64.b64encode(b"dummy").decode(), 1_000_000
-            )
+            result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
         assert not result.settled
         assert "rejected" in result.error.lower()
 
@@ -1038,15 +1017,11 @@ class TestVerifyAndSettleUsdcTopup:
             patch.object(billing_module, "_server", mock_server),
             patch(
                 "billing.get_settings",
-                return_value=MagicMock(
-                    x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"
-                ),
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
             ),
             patch.dict("sys.modules", {"x402": mock_x402}),
         ):
-            result = await verify_and_settle_usdc_topup(
-                base64.b64encode(b"dummy").decode(), 1_000_000
-            )
+            result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
         assert result.settled
         assert result.tx_hash == "0xdeadbeef"
         assert result.amount_usdc == 1_000_000
@@ -1071,9 +1046,7 @@ class TestCreditUsdcTopup:
 
         guard_row = MagicMock() if guard_returns_row else None
         credit_row = MagicMock()
-        credit_row.__getitem__ = MagicMock(
-            side_effect=lambda k: initial_balance + 1_000_000 if k == "balance_usdc" else None
-        )
+        credit_row.__getitem__ = MagicMock(side_effect=lambda k: initial_balance + 1_000_000 if k == "balance_usdc" else None)
         conn.fetchrow = AsyncMock(side_effect=[guard_row, credit_row])
         conn.execute = AsyncMock()
 
@@ -1148,6 +1121,224 @@ class TestUptoScheme:
             result = await verify_payment(base64.b64encode(b"valid").decode())
         assert result.verified is True
         assert result.scheme == "exact"
+
+
+# ─── TTLCache ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestTTLCache:
+    def _make_cache(self, loader, stale_default=None):
+        from billing import TTLCache
+
+        return TTLCache(
+            name="test",
+            redis_key="teardrop:test",
+            ttl_seconds_fn=lambda: 60,
+            loader=loader,
+            serialize=str,
+            deserialize=lambda s: s,
+            stale_default=stale_default,
+        )
+
+    async def test_get_returns_value_from_loader(self):
+        cache = self._make_cache(AsyncMock(return_value="hello"))
+        with patch("billing.get_redis", return_value=None):
+            result = await cache.get()
+        assert result == "hello"
+
+    async def test_in_process_cache_hit_skips_loader(self):
+        import time
+
+        loader = AsyncMock(return_value="first")
+        cache = self._make_cache(loader)
+        cache._value = "cached"
+        cache._expires = time.monotonic() + 9999
+        with patch("billing.get_redis", return_value=None):
+            result = await cache.get()
+        assert result == "cached"
+        loader.assert_not_called()
+
+    async def test_loader_failure_returns_stale_default(self):
+        loader = AsyncMock(side_effect=RuntimeError("DB down"))
+        cache = self._make_cache(loader, stale_default="fallback")
+        with patch("billing.get_redis", return_value=None):
+            result = await cache.get()
+        assert result == "fallback"
+
+    async def test_loader_failure_returns_stale_value(self):
+        import time
+
+        loader = AsyncMock(side_effect=RuntimeError("DB down"))
+        cache = self._make_cache(loader)
+        cache._value = "stale"
+        cache._expires = 0.0  # expired in-process, but stale present
+        with patch("billing.get_redis", return_value=None):
+            result = await cache.get()
+        assert result == "stale"
+
+    async def test_get_redis_path(self):
+        redis = MagicMock()
+        redis.get = AsyncMock(return_value='"from_redis"')
+        cache = self._make_cache(AsyncMock(return_value="from_loader"))
+        cache._deserialize = lambda s: s.strip('"')
+        with patch("billing.get_redis", return_value=redis):
+            result = await cache.get()
+        assert result == "from_redis"
+
+    async def test_invalidate_clears_value(self):
+        cache = self._make_cache(AsyncMock(return_value="v"))
+        cache._value = "old"
+        with patch("billing.get_redis", return_value=None):
+            await cache.invalidate()
+        assert cache._value is None
+        assert cache._expires == 0.0
+
+    def test_reset_clears_in_process_tier(self):
+        cache = self._make_cache(AsyncMock())
+        cache._value = "v"
+        cache._expires = 999.0
+        cache.reset()
+        assert cache._value is None
+        assert cache._expires == 0.0
+
+
+# ─── upsert / delete tool pricing overrides ──────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestToolPricingOverrides:
+    async def test_upsert_executes_upsert(self):
+        from billing import upsert_tool_pricing_override
+
+        pool = MagicMock()
+        pool.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            with patch.object(billing_module._tool_overrides_cache_obj, "invalidate", AsyncMock()):
+                await upsert_tool_pricing_override("my_tool", 5000, "desc")
+        pool.execute.assert_called_once()
+
+    async def test_delete_returns_true_when_deleted(self):
+        from billing import delete_tool_pricing_override
+
+        pool = MagicMock()
+        pool.execute = AsyncMock(return_value="DELETE 1")
+        with patch.object(billing_module, "_pool", pool):
+            with patch.object(billing_module._tool_overrides_cache_obj, "invalidate", AsyncMock()):
+                result = await delete_tool_pricing_override("my_tool")
+        assert result is True
+
+    async def test_delete_returns_false_when_not_found(self):
+        from billing import delete_tool_pricing_override
+
+        pool = MagicMock()
+        pool.execute = AsyncMock(return_value="DELETE 0")
+        with patch.object(billing_module, "_pool", pool):
+            with patch.object(billing_module._tool_overrides_cache_obj, "invalidate", AsyncMock()):
+                result = await delete_tool_pricing_override("missing_tool")
+        assert result is False
+
+
+# ─── get_live_pricing_for_model ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetLivePricingForModel:
+    async def test_no_provider_falls_back_to_global(self):
+        from billing import get_live_pricing_for_model
+
+        mock_rule = _make_rule()
+        with patch("billing.get_live_pricing", AsyncMock(return_value=mock_rule)):
+            with patch("billing.get_redis", return_value=None):
+                result = await get_live_pricing_for_model("", "")
+        assert result is mock_rule
+
+    async def test_fetches_from_db_and_caches(self):
+        from billing import get_live_pricing_for_model
+
+        mock_rule = _make_rule()
+        billing_module._model_pricing_cache.pop("openai:gpt-4:False", None)
+        with patch.object(billing_module, "_pool", MagicMock()):
+            with patch("billing.get_redis", return_value=None):
+                with patch("billing.get_current_pricing_for_model", AsyncMock(return_value=mock_rule)):
+                    result = await get_live_pricing_for_model("openai", "gpt-4")
+        assert result is mock_rule
+        billing_module._model_pricing_cache.pop("openai:gpt-4:False", None)
+
+    async def test_returns_none_when_pool_is_none(self):
+        from billing import get_live_pricing_for_model
+
+        billing_module._model_pricing_cache.pop("openai:gpt-4:False", None)
+        with patch.object(billing_module, "_pool", None):
+            with patch("billing.get_redis", return_value=None):
+                result = await get_live_pricing_for_model("openai", "gpt-4")
+        assert result is None
+
+
+# ─── record_settlement ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestRecordSettlement:
+    async def test_updates_usage_event(self):
+        from billing import record_settlement
+
+        pool = MagicMock()
+        pool.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            await record_settlement("evt-1", 5000, "0xabc", "settled")
+        pool.execute.assert_called_once()
+
+    async def test_swallows_exceptions(self):
+        from billing import record_settlement
+
+        pool = MagicMock()
+        pool.execute = AsyncMock(side_effect=RuntimeError("DB down"))
+        with patch.object(billing_module, "_pool", pool):
+            # Should NOT raise
+            await record_settlement("evt-1", 5000, "0xabc")
+
+
+# ─── get_revenue_summary ──────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetRevenueSummary:
+    async def test_returns_row_as_dict(self):
+        from billing import get_revenue_summary
+
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={"total_settlements": 5, "total_revenue_usdc": 50000})
+        with patch.object(billing_module, "_pool", pool):
+            result = await get_revenue_summary()
+        assert result["total_settlements"] == 5
+        assert result["total_revenue_usdc"] == 50000
+
+    async def test_returns_zeros_when_no_row(self):
+        from billing import get_revenue_summary
+
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value=None)
+        with patch.object(billing_module, "_pool", pool):
+            result = await get_revenue_summary()
+        assert result == {"total_settlements": 0, "total_revenue_usdc": 0}
+
+    async def test_applies_date_range_filters(self):
+        from datetime import datetime, timezone
+
+        from billing import get_revenue_summary
+
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={"total_settlements": 1, "total_revenue_usdc": 1000})
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        with patch.object(billing_module, "_pool", pool):
+            result = await get_revenue_summary(start=start, end=end)
+        assert result["total_settlements"] == 1
+        # Verify params were passed
+        call_args = pool.fetchrow.call_args
+        assert start in call_args[0]
+        assert end in call_args[0]
 
     async def test_settle_upto_passes_actual_amount(self):
         """Upto settlement clones requirements with actual cost in atomic units.
@@ -1260,8 +1451,10 @@ class TestUptoScheme:
 
         # upto verify fails, exact verify succeeds
         upto_fail = MagicMock(
-            is_valid=False, invalid_reason="wrong scheme",
-            payer="0xabc", invalid_message=None,
+            is_valid=False,
+            invalid_reason="wrong scheme",
+            payer="0xabc",
+            invalid_message=None,
         )
         exact_pass = MagicMock(is_valid=True)
 
@@ -1321,12 +1514,16 @@ class TestUptoScheme:
         exact_req.scheme = "exact"
 
         upto_fail = MagicMock(
-            is_valid=False, invalid_reason="bad permit2 sig",
-            payer="0xabc", invalid_message=None,
+            is_valid=False,
+            invalid_reason="bad permit2 sig",
+            payer="0xabc",
+            invalid_message=None,
         )
         exact_fail = MagicMock(
-            is_valid=False, invalid_reason="wrong amount",
-            payer="0xabc", invalid_message=None,
+            is_valid=False,
+            invalid_reason="wrong amount",
+            payer="0xabc",
+            invalid_message=None,
         )
 
         mock_server = MagicMock()
@@ -1356,9 +1553,7 @@ class TestUptoScheme:
 
         exact_pass = MagicMock(is_valid=True)
         mock_server = MagicMock()
-        mock_server.verify_payment = AsyncMock(
-            side_effect=[Exception("permit2 decode error"), exact_pass]
-        )
+        mock_server.verify_payment = AsyncMock(side_effect=[Exception("permit2 decode error"), exact_pass])
 
         with (
             patch.object(billing_module, "_server", mock_server),

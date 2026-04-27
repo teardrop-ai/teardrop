@@ -142,9 +142,7 @@ async def test_exhausted_org_does_not_block_other_org(test_settings, monkeypatch
     finally:
         app.dependency_overrides.pop(require_auth, None)
 
-    assert not got_org_rate_limit, (
-        "org-B should not be rate-limited because of org-A's exhausted bucket"
-    )
+    assert not got_org_rate_limit, "org-B should not be rate-limited because of org-A's exhausted bucket"
 
 
 # ─── User limit fires before org limit ───────────────────────────────────────

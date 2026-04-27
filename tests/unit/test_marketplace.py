@@ -13,7 +13,6 @@ import pytest
 
 from marketplace import (
     AuthorConfig,
-    AuthorWithdrawal,
     MarketplaceTool,
     complete_withdrawal,
     get_author_balance,
@@ -45,6 +44,7 @@ def _mock_wallet_settings(monkeypatch, **overrides) -> MagicMock:
     mock_s = MagicMock(**{**defaults, **overrides})
     monkeypatch.setattr("marketplace.get_settings", lambda: mock_s)
     return mock_s
+
 
 # ─── validate_eip55_address ───────────────────────────────────────────────────
 
@@ -249,9 +249,7 @@ class TestRequestWithdrawal:
             "created_at": _NOW,
             "updated_at": _NOW,
         }
-        recent_withdrawal = {
-            "created_at": datetime.now(timezone.utc) - timedelta(seconds=30)
-        }
+        recent_withdrawal = {"created_at": datetime.now(timezone.utc) - timedelta(seconds=30)}
         mock_pool = MagicMock()
         # First fetchrow → config; fetchval → sufficient balance;
         # second fetchrow → recent withdrawal (triggers cooldown)
@@ -375,7 +373,7 @@ class TestCompleteWithdrawal:
 
         mock_pool.execute.assert_called_once()
         call_args = mock_pool.execute.call_args.args
-        assert call_args[1] == "w-1"       # withdrawal_id
+        assert call_args[1] == "w-1"  # withdrawal_id
         assert call_args[2] == "0xdeadbeefdeadbeef"  # tx_hash
 
 
@@ -443,3 +441,320 @@ class TestMarketplaceToolModel:
         )
         assert t.qualified_name == "acme/my_tool"
         assert t.cost_usdc == 100
+
+
+# ─── init / close / _get_pool ────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestMarketplaceDbHelpers:
+    async def test_init_sets_pool(self, monkeypatch):
+        import marketplace as mp
+
+        pool = MagicMock()
+        monkeypatch.setattr(mp, "_pool", None)
+        await mp.init_marketplace_db(pool)
+        assert mp._pool is pool
+
+    async def test_close_clears_pool(self, monkeypatch):
+        import marketplace as mp
+
+        monkeypatch.setattr(mp, "_pool", MagicMock())
+        await mp.close_marketplace_db()
+        assert mp._pool is None
+
+    def test_get_pool_raises_when_none(self, monkeypatch):
+        import marketplace as mp
+
+        monkeypatch.setattr(mp, "_pool", None)
+        with pytest.raises(RuntimeError, match="not initialised"):
+            mp._get_pool()
+
+
+# ─── get_author_config ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetAuthorConfig:
+    async def test_returns_config_when_found(self, monkeypatch):
+        from marketplace import get_author_config
+
+        now = datetime.now(timezone.utc)
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"org_id": "org-1", "settlement_wallet": "0xAbCd" + "0" * 36, "created_at": now, "updated_at": now}
+        )
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await get_author_config("org-1")
+        assert result is not None
+        assert result.org_id == "org-1"
+
+    async def test_returns_none_when_not_found(self, monkeypatch):
+        from marketplace import get_author_config
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await get_author_config("no-org")
+        assert result is None
+
+
+# ─── get_author_earnings_history ─────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetAuthorEarningsHistory:
+    async def test_no_cursor_returns_results(self, monkeypatch):
+        from marketplace import get_author_earnings_history
+
+        now = datetime.now(timezone.utc)
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "earn-1",
+                    "org_id": "org-1",
+                    "tool_name": "my_tool",
+                    "caller_org_id": "caller-1",
+                    "amount_usdc": 1000,
+                    "author_share_usdc": 700,
+                    "platform_share_usdc": 300,
+                    "status": "pending",
+                    "created_at": now,
+                }
+            ]
+        )
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        results, next_cursor = await get_author_earnings_history("org-1", limit=10)
+        assert len(results) == 1
+        assert results[0].tool_name == "my_tool"
+
+    async def test_empty_results(self, monkeypatch):
+        from marketplace import get_author_earnings_history
+
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        results, next_cursor = await get_author_earnings_history("org-1")
+        assert results == []
+        assert next_cursor is None
+
+
+# ─── list_org_withdrawals ─────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestListOrgWithdrawals:
+    async def test_no_cursor(self, monkeypatch):
+        from marketplace import list_org_withdrawals
+
+        now = datetime.now(timezone.utc)
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "w-1",
+                    "org_id": "org-1",
+                    "amount_usdc": 5000,
+                    "tx_hash": "",
+                    "wallet": "0xDe" + "0" * 38,
+                    "status": "pending",
+                    "created_at": now,
+                    "settled_at": None,
+                    "sweep_attempt_count": 0,
+                    "last_sweep_error": "",
+                    "next_sweep_at": None,
+                }
+            ]
+        )
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        results, next_cursor = await list_org_withdrawals("org-1")
+        assert len(results) == 1
+        assert results[0].status == "pending"
+
+
+# ─── reset_withdrawal ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestResetWithdrawal:
+    async def test_returns_true_when_reset(self, monkeypatch):
+        from marketplace import reset_withdrawal
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(return_value="UPDATE 1")
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await reset_withdrawal("w-1")
+        assert result is True
+
+    async def test_returns_false_when_not_found(self, monkeypatch):
+        from marketplace import reset_withdrawal
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(return_value="UPDATE 0")
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await reset_withdrawal("bad-id")
+        assert result is False
+
+
+# ─── list_exhausted_withdrawals ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestListExhaustedWithdrawals:
+    async def test_returns_empty_list(self, monkeypatch):
+        from marketplace import list_exhausted_withdrawals
+
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await list_exhausted_withdrawals()
+        assert result == []
+
+
+# ─── get_marketplace_tool_by_name ─────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetMarketplaceToolByName:
+    async def test_returns_dict_when_found(self, monkeypatch):
+        from marketplace import get_marketplace_tool_by_name
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"id": "t-1", "name": "weather", "org_id": "org-1", "org_slug": "acme", "org_name": "Acme"}
+        )
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await get_marketplace_tool_by_name("weather", "acme")
+        assert result is not None
+        assert result["name"] == "weather"
+
+    async def test_returns_none_when_not_found(self, monkeypatch):
+        from marketplace import get_marketplace_tool_by_name
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await get_marketplace_tool_by_name("missing", "nobody")
+        assert result is None
+
+
+# ─── subscribe_to_tool / unsubscribe_from_tool ────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestSubscriptions:
+    async def test_subscribe_tool_not_found_raises(self, monkeypatch):
+        from marketplace import subscribe_to_tool
+
+        monkeypatch.setattr("marketplace.get_marketplace_tool_by_name", AsyncMock(return_value=None))
+        mock_pool = MagicMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        with pytest.raises(ValueError, match="not found"):
+            await subscribe_to_tool("org-1", "acme/weather")
+
+    async def test_subscribe_no_slash_raises(self, monkeypatch):
+        from marketplace import subscribe_to_tool
+
+        mock_pool = MagicMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        with pytest.raises(ValueError):
+            await subscribe_to_tool("org-1", "no-slash-tool")
+
+    async def test_subscribe_success(self, monkeypatch):
+        from marketplace import subscribe_to_tool
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        monkeypatch.setattr(
+            "marketplace.get_marketplace_tool_by_name",
+            AsyncMock(return_value={"schema_hash": "abc123"}),
+        )
+        result = await subscribe_to_tool("org-1", "acme/weather")
+        assert result.org_id == "org-1"
+        assert result.qualified_tool_name == "acme/weather"
+        assert result.is_active is True
+
+    async def test_unsubscribe_found(self, monkeypatch):
+        from marketplace import unsubscribe_from_tool
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(return_value="UPDATE 1")
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await unsubscribe_from_tool("sub-1", "org-1")
+        assert result is True
+
+    async def test_unsubscribe_not_found(self, monkeypatch):
+        from marketplace import unsubscribe_from_tool
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(return_value="UPDATE 0")
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await unsubscribe_from_tool("bad-id", "org-1")
+        assert result is False
+
+
+# ─── get_org_subscriptions / check_org_subscription ──────────────────────────
+
+
+@pytest.mark.anyio
+class TestOrgSubscriptions:
+    async def test_get_org_subscriptions_empty(self, monkeypatch):
+        from marketplace import get_org_subscriptions
+
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        result = await get_org_subscriptions("org-1")
+        assert result == []
+
+    async def test_check_subscription_cache_hit(self, monkeypatch):
+        import time
+
+        import marketplace as mp
+        from marketplace import check_org_subscription
+
+        names = frozenset(["acme/weather"])
+        monkeypatch.setitem(mp._SUBSCRIPTION_CACHE, "org-1", (names, time.monotonic() + 9999))
+        result = await check_org_subscription("org-1", "acme/weather")
+        assert result is True
+
+    async def test_check_subscription_cache_miss(self, monkeypatch):
+        import marketplace as mp
+        from marketplace import check_org_subscription
+
+        mp._SUBSCRIPTION_CACHE.pop("org-99", None)
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr(mp, "_pool", mock_pool)
+        result = await check_org_subscription("org-99", "acme/weather")
+        assert result is False
+
+
+# ─── get_platform_tool_price ──────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestGetPlatformToolPrice:
+    async def test_returns_price_from_db(self, monkeypatch):
+        import marketplace as mp
+        from marketplace import get_platform_tool_price
+
+        mp._PLATFORM_TOOL_CACHE.clear()
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 5000})
+        monkeypatch.setattr(mp, "_pool", mock_pool)
+        price = await get_platform_tool_price("web_search")
+        assert price == 5000
+
+    async def test_returns_none_when_not_found(self, monkeypatch):
+        import marketplace as mp
+        from marketplace import get_platform_tool_price
+
+        mp._PLATFORM_TOOL_CACHE.clear()
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr(mp, "_pool", mock_pool)
+        price = await get_platform_tool_price("nonexistent_tool")
+        assert price is None

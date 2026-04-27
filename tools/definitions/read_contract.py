@@ -49,10 +49,7 @@ class ReadContractInput(BaseModel):
     contract_address: str = Field(..., description="Contract address (0x…)")
     abi_fragment: str = Field(
         ...,
-        description=(
-            "JSON array containing the ABI for the function to call. "
-            "Only view/pure functions are allowed."
-        ),
+        description=("JSON array containing the ABI for the function to call. Only view/pure functions are allowed."),
         max_length=_ABI_MAX_LEN,
     )
     function_name: str = Field(
@@ -107,23 +104,17 @@ async def read_contract(
     # Validate that the target function exists and is view/pure
     fn_abi = None
     for entry in abi:
-        if (
-            entry.get("type", "function") == "function"
-            and entry.get("name") == function_name
-        ):
+        if entry.get("type", "function") == "function" and entry.get("name") == function_name:
             fn_abi = entry
             break
 
     if fn_abi is None:
-        raise ValueError(
-            f"Function '{function_name}' not found in provided ABI fragment"
-        )
+        raise ValueError(f"Function '{function_name}' not found in provided ABI fragment")
 
     mutability = fn_abi.get("stateMutability", "nonpayable")
     if mutability not in _ALLOWED_MUTABILITY:
         raise ValueError(
-            f"Function '{function_name}' has stateMutability='{mutability}'. "
-            f"Only view/pure functions are allowed for safety."
+            f"Function '{function_name}' has stateMutability='{mutability}'. Only view/pure functions are allowed for safety."
         )
 
     w3 = get_web3(chain_id)
@@ -139,8 +130,7 @@ async def read_contract(
         fn = contract.functions[function_name]
     except KeyError:
         raise ValueError(
-            f"Function '{function_name}' not found in contract ABI — "
-            "check that function_name matches the ABI exactly."
+            f"Function '{function_name}' not found in contract ABI — check that function_name matches the ABI exactly."
         )
 
     raw = await fn(*args).call(block_identifier=block_id)

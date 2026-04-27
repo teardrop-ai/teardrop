@@ -50,8 +50,26 @@ _CRYPTO_IDS: dict[str, str] = {
 
 # Common fiat currency codes
 _FIAT_CODES = {
-    "usd", "eur", "gbp", "jpy", "cny", "krw", "cad", "aud", "chf", "hkd",
-    "sgd", "sek", "nok", "dkk", "nzd", "zar", "brl", "inr", "mxn", "try",
+    "usd",
+    "eur",
+    "gbp",
+    "jpy",
+    "cny",
+    "krw",
+    "cad",
+    "aud",
+    "chf",
+    "hkd",
+    "sgd",
+    "sek",
+    "nok",
+    "dkk",
+    "nzd",
+    "zar",
+    "brl",
+    "inr",
+    "mxn",
+    "try",
 }
 
 
@@ -68,12 +86,8 @@ def _is_fiat(symbol: str) -> bool:
 
 class ConvertCurrencyInput(BaseModel):
     amount: float = Field(..., gt=0, description="Amount to convert")
-    from_currency: str = Field(
-        ..., min_length=1, max_length=20, description="Source currency (e.g. 'ETH', 'USD', 'BTC')"
-    )
-    to_currency: str = Field(
-        ..., min_length=1, max_length=20, description="Target currency (e.g. 'USD', 'EUR', 'BTC')"
-    )
+    from_currency: str = Field(..., min_length=1, max_length=20, description="Source currency (e.g. 'ETH', 'USD', 'BTC')")
+    to_currency: str = Field(..., min_length=1, max_length=20, description="Target currency (e.g. 'USD', 'EUR', 'BTC')")
 
 
 class ConvertCurrencyOutput(BaseModel):
@@ -112,8 +126,16 @@ async def _get_fiat_rates(base: str = "USD") -> dict[str, float]:
 
     # Hardcoded USD fallback for core pairs (stale but functional)
     return {
-        "usd": 1.0, "eur": 0.92, "gbp": 0.79, "jpy": 149.5, "cny": 7.24,
-        "cad": 1.36, "aud": 1.53, "chf": 0.88, "krw": 1320.0, "inr": 83.1,
+        "usd": 1.0,
+        "eur": 0.92,
+        "gbp": 0.79,
+        "jpy": 149.5,
+        "cny": 7.24,
+        "cad": 1.36,
+        "aud": 1.53,
+        "chf": 0.88,
+        "krw": 1320.0,
+        "inr": 83.1,
     }
 
 
@@ -135,9 +157,7 @@ async def _get_crypto_prices_usd(crypto_ids: list[str]) -> dict[str, float | Non
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url, timeout=aiohttp.ClientTimeout(total=5), headers=headers
-            ) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5), headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return {cid: data.get(cid, {}).get("usd") for cid in crypto_ids}
@@ -149,9 +169,7 @@ async def _get_crypto_prices_usd(crypto_ids: list[str]) -> dict[str, float | Non
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def convert_currency(
-    amount: float, from_currency: str, to_currency: str
-) -> dict[str, Any]:
+async def convert_currency(amount: float, from_currency: str, to_currency: str) -> dict[str, Any]:
     """Convert between fiat and crypto currencies."""
     from_sym = from_currency.strip().lower()
     to_sym = to_currency.strip().lower()

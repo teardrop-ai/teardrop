@@ -128,9 +128,7 @@ async def init_user_db(pool: asyncpg.Pool) -> None:
         )
         """
     )
-    await pool.execute(
-        "CREATE INDEX IF NOT EXISTS idx_org_invites_org ON org_invites (org_id)"
-    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_org_invites_org ON org_invites (org_id)")
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -145,9 +143,7 @@ async def init_user_db(pool: asyncpg.Pool) -> None:
         )
         """
     )
-    await pool.execute(
-        "CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (user_id)"
-    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens (user_id)")
     logger.info("User tables ready (Postgres)")
 
 
@@ -228,8 +224,7 @@ async def get_user_by_email(email: str) -> User | None:
     email = email.strip().lower()
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at"
-        " FROM users WHERE email = $1",
+        "SELECT id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at FROM users WHERE email = $1",
         email,
     )
     if row is None:
@@ -328,9 +323,7 @@ async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", 
     hashed, salt_hex = _hash_secret(plaintext_secret)
     now = datetime.now(timezone.utc)
     await pool.execute(
-        "INSERT INTO org_client_credentials"
-        " (client_id, org_id, hashed_secret, salt, created_at)"
-        " VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at) VALUES ($1, $2, $3, $4, $5)",
         client_id,
         org_id,
         hashed,
@@ -351,8 +344,7 @@ async def get_client_credential_by_id(client_id: str) -> "OrgClientCredential | 
     """Look up an org client credential by client_id. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT client_id, org_id, hashed_secret, salt, created_at"
-        " FROM org_client_credentials WHERE client_id = $1",
+        "SELECT client_id, org_id, hashed_secret, salt, created_at FROM org_client_credentials WHERE client_id = $1",
         client_id,
     )
     if row is None:
@@ -413,19 +405,30 @@ async def register_org_and_user(
     now = datetime.now(timezone.utc)
     org_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
-    slug = re.sub(r'[^a-z0-9]+', '-', org_name.lower()).strip('-')[:40]
+    slug = re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-")[:40]
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
                 "INSERT INTO orgs (id, name, slug, created_at) VALUES ($1, $2, $3, $4)",
-                org_id, org_name, slug, now,
+                org_id,
+                org_name,
+                slug,
+                now,
             )
             await conn.execute(
                 "INSERT INTO users"
                 " (id, email, org_id, hashed_secret, salt, role,"
                 " is_active, is_verified, created_at)"
                 " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                user_id, email, org_id, hashed, salt_hex, "user", True, False, now,
+                user_id,
+                email,
+                org_id,
+                hashed,
+                salt_hex,
+                "user",
+                True,
+                False,
+                now,
             )
     org = Org(id=org_id, name=org_name, slug=slug, created_at=now)
     user = User(
@@ -454,9 +457,11 @@ async def create_verification_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=_VERIFICATION_TOKEN_TTL_SECONDS)
     await pool.execute(
-        "INSERT INTO email_verification_tokens (token, user_id, created_at, expires_at)"
-        " VALUES ($1, $2, $3, $4)",
-        token, user_id, now, expires_at,
+        "INSERT INTO email_verification_tokens (token, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)",
+        token,
+        user_id,
+        now,
+        expires_at,
     )
     return token
 
@@ -471,8 +476,7 @@ async def consume_verification_token(token: str) -> str | None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "SELECT user_id, expires_at, used"
-                " FROM email_verification_tokens WHERE token = $1 FOR UPDATE",
+                "SELECT user_id, expires_at, used FROM email_verification_tokens WHERE token = $1 FOR UPDATE",
                 token,
             )
             if row is None or row["used"] or row["expires_at"] < now:
@@ -524,7 +528,13 @@ async def create_org_invite(
     await pool.execute(
         "INSERT INTO org_invites (token, org_id, email, role, invited_by, created_at, expires_at)"
         " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        token, org_id, email, role, invited_by, now, expires_at,
+        token,
+        org_id,
+        email,
+        role,
+        invited_by,
+        now,
+        expires_at,
     )
     return OrgInvite(
         token=token,
@@ -543,8 +553,7 @@ async def get_org_invite(token: str) -> OrgInvite | None:
     pool = _get_pool()
     now = datetime.now(timezone.utc)
     row = await pool.fetchrow(
-        "SELECT token, org_id, email, role, invited_by, created_at, expires_at, used"
-        " FROM org_invites WHERE token = $1",
+        "SELECT token, org_id, email, role, invited_by, created_at, expires_at, used FROM org_invites WHERE token = $1",
         token,
     )
     if row is None or row["used"] or row["expires_at"] < now:
@@ -613,7 +622,13 @@ async def create_refresh_token(
         "INSERT INTO refresh_tokens"
         " (token, user_id, org_id, auth_method, extra_claims, created_at, expires_at)"
         " VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)",
-        token, user_id, org_id, auth_method, _json.dumps(extra_claims), now, expires_at,
+        token,
+        user_id,
+        org_id,
+        auth_method,
+        _json.dumps(extra_claims),
+        now,
+        expires_at,
     )
     return token
 
@@ -672,9 +687,7 @@ async def rotate_refresh_token(
 
             # Now safe to mark old token as consumed with a pointer to successor.
             await conn.execute(
-                "UPDATE refresh_tokens"
-                " SET revoked = TRUE, successor_token = $1"
-                " WHERE token = $2",
+                "UPDATE refresh_tokens SET revoked = TRUE, successor_token = $1 WHERE token = $2",
                 new_token,
                 old_token,
             )
@@ -737,9 +750,7 @@ async def cleanup_expired_refresh_tokens() -> int:
     are never deleted.  Returns the count of deleted rows.
     """
     pool = _get_pool()
-    result = await pool.execute(
-        "DELETE FROM refresh_tokens WHERE revoked = TRUE AND expires_at < NOW()"
-    )
+    result = await pool.execute("DELETE FROM refresh_tokens WHERE revoked = TRUE AND expires_at < NOW()")
     try:
         return int(result.split()[-1])
     except (ValueError, IndexError):

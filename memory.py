@@ -335,9 +335,7 @@ async def delete_all_org_memories(org_id: str) -> int:
 async def cleanup_expired_memories() -> int:
     """Delete memories past their TTL. Returns count of deleted rows."""
     pool = _get_pool()
-    result = await pool.execute(
-        "DELETE FROM org_memories WHERE expires_at IS NOT NULL AND expires_at < NOW()"
-    )
+    result = await pool.execute("DELETE FROM org_memories WHERE expires_at IS NOT NULL AND expires_at < NOW()")
     try:
         return int(result.split()[-1])
     except (ValueError, IndexError):

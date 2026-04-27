@@ -93,9 +93,7 @@ async def test_refresh_siwe_token_happy_path(anon_client, test_settings, monkeyp
 
 
 @pytest.mark.anyio
-async def test_refresh_idempotent_replay_within_window(
-    anon_client, test_settings, monkeypatch
-):
+async def test_refresh_idempotent_replay_within_window(anon_client, test_settings, monkeypatch):
     """Retry within idempotency window replays the successor token (no lockout).
 
     Simulates: client sent /auth/refresh, old token was rotated atomically,
@@ -126,9 +124,7 @@ async def test_refresh_idempotent_replay_within_window(
 
 
 @pytest.mark.anyio
-async def test_refresh_replay_window_expired_returns_401(
-    anon_client, test_settings, monkeypatch
-):
+async def test_refresh_replay_window_expired_returns_401(anon_client, test_settings, monkeypatch):
     """Successor exists but was created after the idempotency window → 401.
 
     Once the replay window closes, old tokens must not grant access.
@@ -136,6 +132,7 @@ async def test_refresh_replay_window_expired_returns_401(
     monkeypatch.setenv("REFRESH_TOKEN_IDEMPOTENCY_WINDOW_SECONDS", "60")
     # Re-init settings so the env change is picked up.
     import config
+
     config.get_settings.cache_clear()
 
     successor = RefreshTokenRecord(
@@ -158,9 +155,7 @@ async def test_refresh_replay_window_expired_returns_401(
 
 
 @pytest.mark.anyio
-async def test_refresh_rotate_called_before_successor_lookup(
-    anon_client, test_settings, monkeypatch
-):
+async def test_refresh_rotate_called_before_successor_lookup(anon_client, test_settings, monkeypatch):
     """get_refresh_token_successor is only called after rotate_refresh_token returns None.
 
     If rotate succeeds, we must NOT query the successor table.
@@ -222,9 +217,7 @@ async def test_token_email_flow_returns_refresh_token(anon_client, test_settings
     monkeypatch.setattr("app.verify_secret", lambda *a, **kw: True)
     monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="rt-from-token"))
 
-    resp = await anon_client.post(
-        "/token", json={"email": "alice@example.com", "secret": "correctpass"}
-    )
+    resp = await anon_client.post("/token", json={"email": "alice@example.com", "secret": "correctpass"})
 
     assert resp.status_code == 200
     assert resp.json()["refresh_token"] == "rt-from-token"

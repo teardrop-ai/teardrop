@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -70,6 +70,7 @@ class TestSweepWithdrawalId:
 
     def test_valid_uuid_format(self):
         import re
+
         uid = _sweep_withdrawal_id("org-xyz", 999)
         assert re.match(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -179,10 +180,12 @@ class TestMarketplaceSweepOnce:
 
         mock_pool = MagicMock()
         mock_pool.fetch = AsyncMock(return_value=[org_row])
-        mock_pool.fetchrow = AsyncMock(side_effect=[
-            None,  # no existing withdrawal
-            {"sweep_attempt_count": 0},  # read attempt count after failure
-        ])
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                None,  # no existing withdrawal
+                {"sweep_attempt_count": 0},  # read attempt count after failure
+            ]
+        )
         mock_pool.execute = AsyncMock()
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
@@ -203,6 +206,7 @@ class TestMarketplaceSweepOnce:
     async def test_exhausts_withdrawal_after_max_retries(self, monkeypatch):
         """At max_retries the status should flip to 'exhausted'."""
         from config import get_settings
+
         settings = get_settings()
         max_retries = settings.marketplace_max_sweep_retries
 
@@ -211,10 +215,12 @@ class TestMarketplaceSweepOnce:
 
         mock_pool = MagicMock()
         mock_pool.fetch = AsyncMock(return_value=[org_row])
-        mock_pool.fetchrow = AsyncMock(side_effect=[
-            None,  # no existing withdrawal
-            {"sweep_attempt_count": max_retries - 1},  # already at limit
-        ])
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                None,  # no existing withdrawal
+                {"sweep_attempt_count": max_retries - 1},  # already at limit
+            ]
+        )
         mock_pool.execute = AsyncMock()
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
@@ -244,6 +250,7 @@ class TestMarketplaceSweepOnce:
 
         # First org raises; second succeeds.
         get_config_returns = [RuntimeError("unexpected!"), MagicMock(settlement_wallet=_VALID_ADDR)]
+
         async def _side_effect(org_id: str):
             val = get_config_returns.pop(0)
             if isinstance(val, Exception):

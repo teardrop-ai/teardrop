@@ -9,7 +9,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -111,14 +111,16 @@ class TestCheckDelegationBudget:
 class TestCheckDelegationAllowed:
     async def test_allowed_agent(self):
         pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value={
-            "id": "a-1",
-            "agent_url": "https://agent.example.com",
-            "label": "Test",
-            "max_cost_usdc": 50_000,
-            "require_x402": False,
-            "created_at": None,
-        })
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "id": "a-1",
+                "agent_url": "https://agent.example.com",
+                "label": "Test",
+                "max_cost_usdc": 50_000,
+                "require_x402": False,
+                "created_at": None,
+            }
+        )
         allowed, row = await check_delegation_allowed("org-1", "https://agent.example.com", pool)
         assert allowed is True
         assert row["max_cost_usdc"] == 50_000
@@ -171,9 +173,7 @@ class TestDelegateToAgentBilling:
         }
 
         with patch(f"{_A2A_MOD}.validate_url", return_value=None):
-            result = await delegate_to_agent(
-                "https://agent.example.com", "test", config=config
-            )
+            result = await delegate_to_agent("https://agent.example.com", "test", config=config)
         assert result["status"] == "failed"
         assert "allowed" in result["error"].lower()
 
@@ -188,14 +188,16 @@ class TestDelegateToAgentBilling:
         _config.get_settings.cache_clear()
 
         mock_pool = AsyncMock()
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "a-1",
-            "agent_url": "https://agent.example.com",
-            "label": "Test",
-            "max_cost_usdc": 0,
-            "require_x402": False,
-            "created_at": None,
-        })
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "id": "a-1",
+                "agent_url": "https://agent.example.com",
+                "label": "Test",
+                "max_cost_usdc": 0,
+                "require_x402": False,
+                "created_at": None,
+            }
+        )
 
         config = {
             "configurable": {
@@ -212,9 +214,7 @@ class TestDelegateToAgentBilling:
                 AsyncMock(return_value=0),
             ),
         ):
-            result = await delegate_to_agent(
-                "https://agent.example.com", "test", config=config
-            )
+            result = await delegate_to_agent("https://agent.example.com", "test", config=config)
         assert result["status"] == "failed"
         assert "insufficient" in result["error"].lower()
 
@@ -229,14 +229,16 @@ class TestDelegateToAgentBilling:
         _config.get_settings.cache_clear()
 
         mock_pool = AsyncMock()
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "a-1",
-            "agent_url": "https://agent.example.com",
-            "label": "Test",
-            "max_cost_usdc": 50000,
-            "require_x402": False,
-            "created_at": None,
-        })
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "id": "a-1",
+                "agent_url": "https://agent.example.com",
+                "label": "Test",
+                "max_cost_usdc": 50000,
+                "require_x402": False,
+                "created_at": None,
+            }
+        )
 
         mock_card = A2AAgentCard(name="BilledAgent", description="A billed agent")
         mock_response = A2ASendMessageResponse(
@@ -268,9 +270,7 @@ class TestDelegateToAgentBilling:
             patch(f"{_BILLING_MOD}.fund_delegation", mock_fund),
             patch(f"{_BILLING_MOD}.record_delegation_event", mock_record),
         ):
-            result = await delegate_to_agent(
-                "https://agent.example.com", "do work", config=config
-            )
+            result = await delegate_to_agent("https://agent.example.com", "do work", config=config)
 
         assert result["status"] == "completed"
         assert result["cost_usdc"] > 0
@@ -301,9 +301,7 @@ class TestDelegateToAgentBilling:
             patch(f"{_A2A_MOD}.send_message", AsyncMock(return_value=mock_response)),
             patch(f"{_A2A_MOD}.extract_result_text", return_value="Done"),
         ):
-            result = await delegate_to_agent(
-                "https://agent.example.com", "do stuff"
-            )
+            result = await delegate_to_agent("https://agent.example.com", "do stuff")
 
         assert result["cost_usdc"] == 0
         assert result["status"] == "completed"

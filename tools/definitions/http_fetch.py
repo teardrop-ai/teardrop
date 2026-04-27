@@ -22,15 +22,15 @@ logger = logging.getLogger(__name__)
 
 # RFC-1918, loopback, link-local, and cloud metadata ranges to block
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),        # RFC-1918
-    ipaddress.ip_network("172.16.0.0/12"),     # RFC-1918
-    ipaddress.ip_network("192.168.0.0/16"),    # RFC-1918
-    ipaddress.ip_network("169.254.0.0/16"),    # Link-local (metadata endpoint)
-    ipaddress.ip_network("0.0.0.0/8"),         # "This" network
-    ipaddress.ip_network("::1/128"),           # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA (private)
-    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+    ipaddress.ip_network("127.0.0.0/8"),  # Loopback
+    ipaddress.ip_network("10.0.0.0/8"),  # RFC-1918
+    ipaddress.ip_network("172.16.0.0/12"),  # RFC-1918
+    ipaddress.ip_network("192.168.0.0/16"),  # RFC-1918
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local (metadata endpoint)
+    ipaddress.ip_network("0.0.0.0/8"),  # "This" network
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA (private)
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 
@@ -97,9 +97,7 @@ async def async_validate_url(url: str) -> str | None:
 
 
 class HttpFetchInput(BaseModel):
-    url: str = Field(
-        ..., min_length=10, max_length=2000, description="URL to fetch (http or https only)"
-    )
+    url: str = Field(..., min_length=10, max_length=2000, description="URL to fetch (http or https only)")
     max_chars: int = Field(
         default=8000,
         ge=100,

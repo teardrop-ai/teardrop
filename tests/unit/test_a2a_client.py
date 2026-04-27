@@ -126,8 +126,7 @@ class TestDiscoverAgentCard:
         mock_resp.json.return_value = card_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), \
-             patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -150,8 +149,7 @@ class TestDiscoverAgentCard:
             await discover_agent_card("https://192.168.1.1")
 
     async def test_http_error(self):
-        with patch("a2a_client.validate_url", return_value=None), \
-             patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_resp = MagicMock()
             mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -191,8 +189,7 @@ class TestSendMessage:
         mock_resp.json.return_value = task_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), \
-             patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -218,8 +215,7 @@ class TestSendMessage:
         mock_resp.json.return_value = task_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), \
-             patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -309,18 +305,14 @@ class TestCheckDelegationAllowed:
             jwt_forward=True,
             created_at=None,
         )
-        allowed, result = await check_delegation_allowed(
-            "org-1", "https://agent.example.com", self._pool(row)
-        )
+        allowed, result = await check_delegation_allowed("org-1", "https://agent.example.com", self._pool(row))
         assert allowed is True
         assert result is not None
         assert result["jwt_forward"] is True
 
     async def test_agent_not_found_returns_false_none(self):
         """When the DB returns no row, function returns (False, None)."""
-        allowed, result = await check_delegation_allowed(
-            "org-1", "https://unknown.example.com", self._pool(None)
-        )
+        allowed, result = await check_delegation_allowed("org-1", "https://unknown.example.com", self._pool(None))
         assert allowed is False
         assert result is None
 
@@ -335,8 +327,6 @@ class TestCheckDelegationAllowed:
             jwt_forward=False,
             created_at=None,
         )
-        allowed, result = await check_delegation_allowed(
-            "org-1", "https://no-jwt.example.com", self._pool(row)
-        )
+        allowed, result = await check_delegation_allowed("org-1", "https://no-jwt.example.com", self._pool(row))
         assert allowed is True
         assert result["jwt_forward"] is False

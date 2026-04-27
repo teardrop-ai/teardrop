@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
@@ -51,15 +52,11 @@ def _build_mock_w3(
         return AsyncMock(return_value=result)
 
     # Aave v3 Pool.getUserAccountData
-    mock_contract.functions.getUserAccountData.return_value.call = _maybe_raise(
-        "getUserAccountData", account_data
-    )
+    mock_contract.functions.getUserAccountData.return_value.call = _maybe_raise("getUserAccountData", account_data)
 
     # Aave v3 DataProvider.getUserReserveData
     default_reserve = reserve_data or (0, 0, 0, 0, 0, 0, 0, 0, False)
-    mock_contract.functions.getUserReserveData.return_value.call = _maybe_raise(
-        "getUserReserveData", default_reserve
-    )
+    mock_contract.functions.getUserReserveData.return_value.call = _maybe_raise("getUserReserveData", default_reserve)
 
     # Compound v3 Comet.*
     mock_contract.functions.balanceOf.return_value.call = _maybe_raise(
@@ -67,12 +64,8 @@ def _build_mock_w3(
     )
     # balanceOf is overloaded between Comet (supply) and Uniswap NFPM (NFT count).
     # Our mock returns whichever value is set; tests should isolate protocol paths.
-    mock_contract.functions.borrowBalanceOf.return_value.call = _maybe_raise(
-        "borrowBalanceOf", comet_borrow
-    )
-    mock_contract.functions.numAssets.return_value.call = _maybe_raise(
-        "numAssets", comet_num_assets
-    )
+    mock_contract.functions.borrowBalanceOf.return_value.call = _maybe_raise("borrowBalanceOf", comet_borrow)
+    mock_contract.functions.numAssets.return_value.call = _maybe_raise("numAssets", comet_num_assets)
     if comet_asset_infos is None:
         comet_asset_infos = []
 
@@ -87,12 +80,8 @@ def _build_mock_w3(
 
     mock_contract.functions.getAssetInfo.side_effect = _asset_info_call
 
-    mock_contract.functions.userCollateral.return_value.call = _maybe_raise(
-        "userCollateral", comet_user_collateral
-    )
-    mock_contract.functions.isLiquidatable.return_value.call = _maybe_raise(
-        "isLiquidatable", comet_is_liquidatable
-    )
+    mock_contract.functions.userCollateral.return_value.call = _maybe_raise("userCollateral", comet_user_collateral)
+    mock_contract.functions.isLiquidatable.return_value.call = _maybe_raise("isLiquidatable", comet_is_liquidatable)
 
     # Uniswap v3 NFPM.tokenOfOwnerByIndex / positions
     uniswap_token_ids = uniswap_token_ids or []
@@ -108,14 +97,20 @@ def _build_mock_w3(
     mock_contract.functions.tokenOfOwnerByIndex.side_effect = _token_of_owner_call
 
     default_position = uniswap_position or (
-        0, "0x0000000000000000000000000000000000000000",
+        0,
         "0x0000000000000000000000000000000000000000",
         "0x0000000000000000000000000000000000000000",
-        0, 0, 0, 0, 0, 0, 0, 0,
+        "0x0000000000000000000000000000000000000000",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     )
-    mock_contract.functions.positions.return_value.call = _maybe_raise(
-        "positions", default_position
-    )
+    mock_contract.functions.positions.return_value.call = _maybe_raise("positions", default_position)
 
     mock_w3.eth.contract.return_value = mock_contract
 
@@ -152,9 +147,7 @@ class TestAaveV3:
             # 10 ETH collateral @ $2000 = $20000 → 20000 * 1e8 base units
             account_data=(20000 * 10**8, 0, 15000 * 10**8, 8500, 8000, 2**256 - 1),
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -174,9 +167,7 @@ class TestAaveV3:
         mock_w3 = _build_mock_w3(
             account_data=(10000 * 10**8, 2000 * 10**8, 5000 * 10**8, 8500, 8000, int(2.5 * 10**18)),
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -191,9 +182,7 @@ class TestAaveV3:
         mock_w3 = _build_mock_w3(
             account_data=(10000 * 10**8, 9500 * 10**8, 0, 8500, 8000, int(0.95 * 10**18)),
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -207,12 +196,17 @@ class TestAaveV3:
             account_data=(1 * 10**8, 0, 0, 8500, 8000, 2**256 - 1),
             reserve_data=(
                 10**18,  # currentATokenBalance = 1 token (18dec) — will show for 18dec assets only; for 6dec this is huge
-                0, 0, 0, 0, 0, 0, 0, True,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                True,
             ),
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -231,11 +225,11 @@ class TestCompoundV3:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         mock_w3 = _build_mock_w3(
-            comet_balance=0, comet_borrow=0, comet_num_assets=0,
+            comet_balance=0,
+            comet_borrow=0,
+            comet_num_assets=0,
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -251,9 +245,7 @@ class TestCompoundV3:
             comet_num_assets=0,
             comet_is_liquidatable=False,
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -273,8 +265,7 @@ class TestCompoundV3:
 
         # numAssets=1 → getAssetInfo(0) returns struct; userCollateral returns (1e18, 0)
         weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-        asset_info = (0, weth, "0x0000000000000000000000000000000000000000",
-                      0, 0, 0, 0, 0)
+        asset_info = (0, weth, "0x0000000000000000000000000000000000000000", 0, 0, 0, 0, 0)
         mock_w3 = _build_mock_w3(
             comet_balance=0,
             comet_borrow=1000 * 10**6,  # borrowed 1000 USDC
@@ -283,9 +274,7 @@ class TestCompoundV3:
             comet_user_collateral=(10**18, 0),  # 1 WETH
             comet_is_liquidatable=False,
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -311,9 +300,7 @@ class TestUniswapV3:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         mock_w3 = _build_mock_w3(uniswap_balance=0)
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
         assert result["uniswap_v3"] == []
@@ -323,13 +310,18 @@ class TestUniswapV3:
 
         # liquidity=0 and tokensOwed=0 → closed
         closed_position = (
-            0, "0x0000000000000000000000000000000000000000",
+            0,
+            "0x0000000000000000000000000000000000000000",
             "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
             "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            3000, -887220, 887220,
+            3000,
+            -887220,
+            887220,
             0,  # liquidity
-            0, 0,
-            0, 0,  # tokensOwed0, tokensOwed1
+            0,
+            0,
+            0,
+            0,  # tokensOwed0, tokensOwed1
         )
         mock_w3 = _build_mock_w3(
             comet_balance=0,  # shared balanceOf mock — Uniswap balanceOf will also read this path
@@ -339,12 +331,8 @@ class TestUniswapV3:
         )
         # Override: balanceOf is shared across Comet + Uniswap in our mock.
         # Force Uniswap path by setting balanceOf = 1.
-        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(
-            return_value=1
-        )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
         assert result["uniswap_v3"] == []
@@ -353,25 +341,26 @@ class TestUniswapV3:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         active_position = (
-            0, "0x0000000000000000000000000000000000000000",
+            0,
+            "0x0000000000000000000000000000000000000000",
             "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
             "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            3000, -887220, 887220,
+            3000,
+            -887220,
+            887220,
             10**15,  # liquidity
-            0, 0,
-            100, 200,  # tokensOwed0, tokensOwed1
+            0,
+            0,
+            100,
+            200,  # tokensOwed0, tokensOwed1
         )
         mock_w3 = _build_mock_w3(
             uniswap_balance=1,
             uniswap_token_ids=[42],
             uniswap_position=active_position,
         )
-        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(
-            return_value=1
-        )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
         positions = result["uniswap_v3"]
@@ -395,9 +384,7 @@ class TestPartialSuccess:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         mock_w3 = _build_mock_w3(raise_on={"getUserAccountData"})
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
@@ -413,12 +400,8 @@ class TestPartialSuccess:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         # All three protocols fail
-        mock_w3 = _build_mock_w3(
-            raise_on={"getUserAccountData", "balanceOf", "numAssets", "positions"}
-        )
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        mock_w3 = _build_mock_w3(raise_on={"getUserAccountData", "balanceOf", "numAssets", "positions"})
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         # Must not raise
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
@@ -437,9 +420,7 @@ class TestOutputSchema:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         mock_w3 = _build_mock_w3(block_number=99999)
-        monkeypatch.setattr(
-            "tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 

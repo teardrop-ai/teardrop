@@ -40,15 +40,14 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
 
     monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     import config
+
     config.get_settings.cache_clear()
     import org_tools
+
     org_tools._fernet = None
 
     # Apply migration SQL
-    migration_path = (
-        Path(__file__).resolve().parents[2]
-        / "migrations" / "versions" / "012_org_mcp_servers.sql"
-    )
+    migration_path = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "012_org_mcp_servers.sql"
     sql = migration_path.read_text()
     await db_pool.execute(sql)
 
@@ -60,9 +59,7 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
 
     # Cleanup
     async with db_pool.acquire() as conn:
-        await conn.execute(
-            "TRUNCATE TABLE org_mcp_server_events, org_mcp_servers RESTART IDENTITY CASCADE"
-        )
+        await conn.execute("TRUNCATE TABLE org_mcp_server_events, org_mcp_servers RESTART IDENTITY CASCADE")
     mcp_module._pool = None
     user_module._pool = None
     config.get_settings.cache_clear()
@@ -137,12 +134,8 @@ async def test_create_with_header_auth(test_org, monkeypatch):
 async def test_list_servers(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    await create_org_mcp_server(
-        test_org.id, name="srv_a", url="https://a.example.com", actor_id="u1"
-    )
-    await create_org_mcp_server(
-        test_org.id, name="srv_b", url="https://b.example.com", actor_id="u1"
-    )
+    await create_org_mcp_server(test_org.id, name="srv_a", url="https://a.example.com", actor_id="u1")
+    await create_org_mcp_server(test_org.id, name="srv_b", url="https://b.example.com", actor_id="u1")
 
     servers = await list_org_mcp_servers(test_org.id)
     assert len(servers) == 2
@@ -154,9 +147,7 @@ async def test_list_servers(test_org, monkeypatch):
 async def test_list_servers_active_only(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    srv = await create_org_mcp_server(
-        test_org.id, name="to_delete", url="https://x.example.com", actor_id="u1"
-    )
+    srv = await create_org_mcp_server(test_org.id, name="to_delete", url="https://x.example.com", actor_id="u1")
     await delete_org_mcp_server(srv.id, test_org.id, actor_id="u1")
 
     active = await list_org_mcp_servers(test_org.id, active_only=True)
@@ -171,9 +162,7 @@ async def test_list_servers_active_only(test_org, monkeypatch):
 async def test_update_server(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    srv = await create_org_mcp_server(
-        test_org.id, name="updatable", url="https://old.example.com", actor_id="u1"
-    )
+    srv = await create_org_mcp_server(test_org.id, name="updatable", url="https://old.example.com", actor_id="u1")
 
     updated = await update_org_mcp_server(
         srv.id,
@@ -189,9 +178,7 @@ async def test_update_server(test_org, monkeypatch):
 
 @pytest.mark.anyio
 async def test_update_server_not_found(test_org):
-    result = await update_org_mcp_server(
-        "nonexistent", test_org.id, actor_id="u1", name="x"
-    )
+    result = await update_org_mcp_server("nonexistent", test_org.id, actor_id="u1", name="x")
     assert result is None
 
 
@@ -199,9 +186,7 @@ async def test_update_server_not_found(test_org):
 async def test_delete_server(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    srv = await create_org_mcp_server(
-        test_org.id, name="deletable", url="https://d.example.com", actor_id="u1"
-    )
+    srv = await create_org_mcp_server(test_org.id, name="deletable", url="https://d.example.com", actor_id="u1")
 
     deleted = await delete_org_mcp_server(srv.id, test_org.id, actor_id="u1")
     assert deleted is True
@@ -224,14 +209,10 @@ async def test_delete_server_not_found(test_org):
 async def test_duplicate_name_rejected(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    await create_org_mcp_server(
-        test_org.id, name="unique_name", url="https://a.example.com", actor_id="u1"
-    )
+    await create_org_mcp_server(test_org.id, name="unique_name", url="https://a.example.com", actor_id="u1")
 
     with pytest.raises(ValueError, match="already exists"):
-        await create_org_mcp_server(
-            test_org.id, name="unique_name", url="https://b.example.com", actor_id="u1"
-        )
+        await create_org_mcp_server(test_org.id, name="unique_name", url="https://b.example.com", actor_id="u1")
 
 
 # ─── Quota Enforcement ───────────────────────────────────────────────────────
@@ -242,20 +223,15 @@ async def test_quota_enforcement(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
     import config
+
     monkeypatch.setenv("MAX_ORG_MCP_SERVERS", "2")
     config.get_settings.cache_clear()
 
-    await create_org_mcp_server(
-        test_org.id, name="s1", url="https://1.example.com", actor_id="u1"
-    )
-    await create_org_mcp_server(
-        test_org.id, name="s2", url="https://2.example.com", actor_id="u1"
-    )
+    await create_org_mcp_server(test_org.id, name="s1", url="https://1.example.com", actor_id="u1")
+    await create_org_mcp_server(test_org.id, name="s2", url="https://2.example.com", actor_id="u1")
 
     with pytest.raises(ValueError, match="limit reached"):
-        await create_org_mcp_server(
-            test_org.id, name="s3", url="https://3.example.com", actor_id="u1"
-        )
+        await create_org_mcp_server(test_org.id, name="s3", url="https://3.example.com", actor_id="u1")
 
 
 # ─── Cross-tenant isolation ──────────────────────────────────────────────────
@@ -265,9 +241,7 @@ async def test_quota_enforcement(test_org, monkeypatch):
 async def test_cross_tenant_isolation(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    srv = await create_org_mcp_server(
-        test_org.id, name="private", url="https://x.example.com", actor_id="u1"
-    )
+    srv = await create_org_mcp_server(test_org.id, name="private", url="https://x.example.com", actor_id="u1")
 
     # Another org cannot see this server
     fetched = await get_org_mcp_server(srv.id, "other-org-id")
@@ -281,9 +255,7 @@ async def test_cross_tenant_isolation(test_org, monkeypatch):
 async def test_audit_events_created(test_org, db_pool, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    srv = await create_org_mcp_server(
-        test_org.id, name="audited", url="https://a.example.com", actor_id="u1"
-    )
+    srv = await create_org_mcp_server(test_org.id, name="audited", url="https://a.example.com", actor_id="u1")
 
     events = await db_pool.fetch(
         "SELECT event_type FROM org_mcp_server_events WHERE server_id = $1 ORDER BY created_at",
@@ -318,9 +290,7 @@ async def test_audit_events_created(test_org, db_pool, monkeypatch):
 
 @pytest.mark.anyio
 async def test_ssrf_url_blocked(test_org, monkeypatch):
-    monkeypatch.setattr(
-        "tools.definitions.http_fetch.validate_url", lambda u: "Blocked IP"
-    )
+    monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: "Blocked IP")
 
     with pytest.raises(ValueError, match="URL blocked"):
         await create_org_mcp_server(

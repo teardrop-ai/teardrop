@@ -78,11 +78,7 @@ def _classify_aave_tier(raw_health_factor: int, total_debt_base: int) -> tuple[f
     Returns ``(None, "no_debt")`` when the wallet has no debt; otherwise a
     fine-grained 5-tier classification against HF boundaries 1.0 / 1.05 / 1.15 / 1.5.
     """
-    if (
-        total_debt_base == 0
-        or raw_health_factor >= _HEALTH_FACTOR_INFINITE_THRESHOLD
-        or raw_health_factor == _UINT256_MAX
-    ):
+    if total_debt_base == 0 or raw_health_factor >= _HEALTH_FACTOR_INFINITE_THRESHOLD or raw_health_factor == _UINT256_MAX:
         return None, TIER_NO_DEBT
     hf = raw_health_factor / 1e18
     if hf < 1.0:
@@ -120,9 +116,7 @@ class GetLiquidationRiskInput(BaseModel):
     @classmethod
     def _validate_wallets(cls, v: list[str]) -> list[str]:
         if len(v) > _MAX_WALLETS:
-            raise ValueError(
-                f"wallet_addresses list exceeds {_MAX_WALLETS}-address limit"
-            )
+            raise ValueError(f"wallet_addresses list exceeds {_MAX_WALLETS}-address limit")
         # Checksum every address (raises on malformed input) and dedupe while
         # preserving first-occurrence order.
         seen: set[str] = set()
@@ -203,8 +197,7 @@ async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
 
     account_data = await pool.functions.getUserAccountData(wallet).call()
-    (total_collateral_base, total_debt_base, _available_borrows_base,
-     liq_threshold, ltv, health_factor_raw) = account_data
+    (total_collateral_base, total_debt_base, _available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, tier = _classify_aave_tier(int(health_factor_raw), int(total_debt_base))
 
@@ -218,9 +211,7 @@ async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     )
 
 
-async def _fetch_compound_market_risk(
-    w3: Any, wallet: str, market: dict[str, str]
-) -> CompoundRisk | None:
+async def _fetch_compound_market_risk(w3: Any, wallet: str, market: dict[str, str]) -> CompoundRisk | None:
     """Fetch a single Compound v3 market's risk slice. Returns None if no borrow position."""
     market_addr = Web3.to_checksum_address(market["address"])
     comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
@@ -252,9 +243,7 @@ async def _fetch_compound_market_risk(
     )
 
 
-async def _fetch_compound_risk(
-    w3: Any, wallet: str, chain_id: int
-) -> list[CompoundRisk]:
+async def _fetch_compound_risk(w3: Any, wallet: str, chain_id: int) -> list[CompoundRisk]:
     """Fetch all Compound v3 market risks for a wallet on the given chain."""
     markets = _COMPOUND_V3_MARKETS.get(chain_id, [])
 
@@ -269,9 +258,7 @@ async def _fetch_compound_risk(
     return [r for r in results if r is not None]
 
 
-async def _assess_wallet(
-    w3: Any, wallet: str, chain_id: int, sem: asyncio.Semaphore
-) -> WalletRiskResult:
+async def _assess_wallet(w3: Any, wallet: str, chain_id: int, sem: asyncio.Semaphore) -> WalletRiskResult:
     """Assess risk for a single wallet across Aave + Compound. Failures are isolated per protocol."""
     errors: list[ProtocolErrorInfo] = []
     aave_result: AaveRisk | None = None
@@ -318,15 +305,11 @@ async def get_liquidation_risk(
 ) -> dict[str, Any]:
     """Assess liquidation risk across Aave v3 and Compound v3 for one or more wallets."""
     if chain_id not in _SUPPORTED_CHAINS:
-        raise ValueError(
-            f"Unsupported chain_id={chain_id}. Supported: 1 (Ethereum), 8453 (Base)."
-        )
+        raise ValueError(f"Unsupported chain_id={chain_id}. Supported: 1 (Ethereum), 8453 (Base).")
     if not wallet_addresses:
         raise ValueError("wallet_addresses must not be empty")
     if len(wallet_addresses) > _MAX_WALLETS:
-        raise ValueError(
-            f"wallet_addresses list exceeds {_MAX_WALLETS}-address limit"
-        )
+        raise ValueError(f"wallet_addresses list exceeds {_MAX_WALLETS}-address limit")
 
     # Checksum + dedupe (preserves first-occurrence order). Raises ValueError
     # from ``to_checksum_address`` on malformed input, rejecting the whole call.
@@ -343,10 +326,7 @@ async def get_liquidation_risk(
     sem = asyncio.Semaphore(_SEM_LIMIT)
 
     block_task = asyncio.create_task(w3.eth.block_number)
-    wallet_tasks = [
-        asyncio.create_task(_assess_wallet(w3, wallet, chain_id, sem))
-        for wallet in wallets
-    ]
+    wallet_tasks = [asyncio.create_task(_assess_wallet(w3, wallet, chain_id, sem)) for wallet in wallets]
 
     results = await asyncio.gather(*wallet_tasks)
 

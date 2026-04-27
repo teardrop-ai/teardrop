@@ -314,9 +314,7 @@ class TestExtractFacts:
 
     async def test_limits_to_five_facts(self, test_settings):
         mock_response = MagicMock()
-        mock_response.content = json.dumps(
-            {"facts": [f"fact {i}" for i in range(10)]}
-        )
+        mock_response.content = json.dumps({"facts": [f"fact {i}" for i in range(10)]})
         mock_llm = MagicMock()
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
@@ -346,19 +344,75 @@ class TestExtractAndStoreMemories:
                 AsyncMock(return_value=["fact one", "fact two"]),
             ),
         ):
-            count = await memory_module.extract_and_store_memories(
-                "org-1", "user-1", [], "run-1"
-            )
+            count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
 
         assert count == 2
 
+
+# ─── init_memory_db / close_memory_db / _get_pool ────────────────────────────
+
+
+@pytest.mark.anyio
+class TestInitCloseGetPool:
+    async def test_init_when_memory_disabled(self, test_settings, monkeypatch):
+        import config
+
+        monkeypatch.setenv("MEMORY_ENABLED", "false")
+        config.get_settings.cache_clear()
+        pool = _pool()
+        with patch.object(memory_module, "_pool", None):
+            await memory_module.init_memory_db(pool)
+            assert memory_module._pool is pool
+        config.get_settings.cache_clear()
+
+    async def test_init_when_no_openai_key(self, test_settings, monkeypatch):
+        import config
+
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+        config.get_settings.cache_clear()
+        pool = _pool()
+        with patch.object(memory_module, "_pool", None):
+            await memory_module.init_memory_db(pool)
+            assert memory_module._pool is pool
+        config.get_settings.cache_clear()
+
+    async def test_close_releases_pool(self, test_settings):
+        with patch.object(memory_module, "_pool", _pool()):
+            await memory_module.close_memory_db()
+        assert memory_module._pool is None
+
+    async def test_close_is_noop_when_none(self, test_settings):
+        with patch.object(memory_module, "_pool", None):
+            await memory_module.close_memory_db()  # should not raise
+
+    def test_get_pool_raises_when_uninitialised(self, test_settings):
+        with patch.object(memory_module, "_pool", None):
+            with pytest.raises(RuntimeError, match="not initialised"):
+                memory_module._get_pool()
+
+
+# ─── cleanup_expired_memories ────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestCleanupExpiredMemories:
+    async def test_returns_count(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="DELETE 7")
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.cleanup_expired_memories()
+        assert count == 7
+
+    async def test_handles_malformed_result(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="OK")
+        with patch.object(memory_module, "_pool", pool):
+            count = await memory_module.cleanup_expired_memories()
+        assert count == 0
+
     async def test_returns_zero_on_no_facts(self, test_settings):
-        with patch.object(
-            memory_module, "_extract_facts", AsyncMock(return_value=[])
-        ):
-            count = await memory_module.extract_and_store_memories(
-                "org-1", "user-1", [], "run-1"
-            )
+        with patch.object(memory_module, "_extract_facts", AsyncMock(return_value=[])):
+            count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
 
         assert count == 0
 
@@ -368,8 +422,6 @@ class TestExtractAndStoreMemories:
             "_extract_facts",
             AsyncMock(side_effect=Exception("boom")),
         ):
-            count = await memory_module.extract_and_store_memories(
-                "org-1", "user-1", [], "run-1"
-            )
+            count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
 
         assert count == 0

@@ -49,10 +49,7 @@ async def count_text_stats(text: str) -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="count_text_stats",
     version="1.0.0",
-    description=(
-        "Return word count, character count, sentence count,"
-        " and paragraph statistics for a given text."
-    ),
+    description=("Return word count, character count, sentence count, and paragraph statistics for a given text."),
     tags=["text", "analysis", "statistics"],
     input_schema=SummarizeTextInput,
     output_schema=SummarizeTextOutput,

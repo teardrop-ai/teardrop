@@ -59,9 +59,7 @@ async def test_create_invite_happy_path(api_client, monkeypatch):
     monkeypatch.setattr("app.create_org_invite", AsyncMock(return_value=invite))
     monkeypatch.setattr("app.send_invite_email", AsyncMock())
 
-    resp = await api_client.post(
-        "/org/invite", json={"email": "newbie@example.com", "role": "user"}
-    )
+    resp = await api_client.post("/org/invite", json={"email": "newbie@example.com", "role": "user"})
 
     assert resp.status_code == 201
     body = resp.json()
@@ -71,9 +69,7 @@ async def test_create_invite_happy_path(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_create_invite_no_auth_401(anon_client):
-    resp = await anon_client.post(
-        "/org/invite", json={"email": "newbie@example.com", "role": "user"}
-    )
+    resp = await anon_client.post("/org/invite", json={"email": "newbie@example.com", "role": "user"})
     assert resp.status_code == 401
 
 

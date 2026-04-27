@@ -53,12 +53,8 @@ class Settings(BaseSettings):
     agent_model: str = "claude-haiku-4-5-20251001"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
-    agent_llm_timeout_seconds: int = Field(
-        default=120, description="Timeout in seconds for the planner LLM call"
-    )
-    agent_ui_generator_timeout_seconds: int = Field(
-        default=60, description="Timeout in seconds for the UI generator LLM call"
-    )
+    agent_llm_timeout_seconds: int = Field(default=120, description="Timeout in seconds for the planner LLM call")
+    agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
 
     # ── LangSmith ──────────────────────────────────────────────────────────────
     langsmith_tracing: bool = False
@@ -67,24 +63,18 @@ class Settings(BaseSettings):
 
     # ── Tool Providers ──────────────────────────────────────────────────────────
     tavily_api_key: str = Field(default="", description="Tavily API key for web search")
-    coingecko_api_key: str = Field(
-        default="", description="CoinGecko demo API key (optional, raises rate limits)"
-    )
+    coingecko_api_key: str = Field(default="", description="CoinGecko demo API key (optional, raises rate limits)")
     coingecko_api_url: str = Field(
         default="https://api.coingecko.com/api/v3",
         description="CoinGecko API base URL",
     )
 
     # ── Tool Registry ──────────────────────────────────────────────────────────
-    tool_deprecation_window_days: int = Field(
-        default=90, description="Days before a deprecated tool version is removed"
-    )
+    tool_deprecation_window_days: int = Field(default=90, description="Days before a deprecated tool version is removed")
 
     # ── Rate Limiting ──────────────────────────────────────────────────────────
     rate_limit_requests_per_minute: int = 60
-    rate_limit_agent_rpm: int = Field(
-        default=30, description="Per-user rate limit for /agent/run (requests per minute)"
-    )
+    rate_limit_agent_rpm: int = Field(default=30, description="Per-user rate limit for /agent/run (requests per minute)")
     rate_limit_auth_rpm: int = Field(
         default=20,
         description="Per-IP rate limit for /token and /auth/siwe/nonce (requests per minute)",
@@ -102,9 +92,7 @@ class Settings(BaseSettings):
     )
     rate_limit_org_mcp_rpm: int = Field(
         default=200,
-        description=(
-            "Per-org aggregate rate limit for MCP requests via the gateway (requests per minute)."
-        ),
+        description=("Per-org aggregate rate limit for MCP requests via the gateway (requests per minute)."),
     )
     rate_limit_webhook_rpm: int = Field(
         default=120,
@@ -115,18 +103,12 @@ class Settings(BaseSettings):
     jwt_private_key_path: str = Field(
         default="keys/private.pem", description="Path to RSA private key (relative to project root)"
     )
-    jwt_public_key_path: str = Field(
-        default="keys/public.pem", description="Path to RSA public key (relative to project root)"
-    )
+    jwt_public_key_path: str = Field(default="keys/public.pem", description="Path to RSA public key (relative to project root)")
     jwt_algorithm: str = "RS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_issuer: str = "teardrop"
-    jwt_client_id: str = Field(
-        default="teardrop-client", description="Client ID for token endpoint"
-    )
-    jwt_client_secret: str = Field(
-        default="", description="Client secret for token endpoint (set in .env)"
-    )
+    jwt_client_id: str = Field(default="teardrop-client", description="Client ID for token endpoint")
+    jwt_client_secret: str = Field(default="", description="Client secret for token endpoint (set in .env)")
 
     @cached_property
     def jwt_private_key(self) -> str:
@@ -137,16 +119,10 @@ class Settings(BaseSettings):
         return (_PROJECT_ROOT / self.jwt_public_key_path).read_text()
 
     # ── Web3 / SIWE ────────────────────────────────────────────────────────────
-    ethereum_rpc_url: str = Field(
-        default="", description="Ethereum mainnet JSON-RPC URL (Alchemy/Infura/etc.)"
-    )
+    ethereum_rpc_url: str = Field(default="", description="Ethereum mainnet JSON-RPC URL (Alchemy/Infura/etc.)")
     base_rpc_url: str = Field(default="", description="Base L2 JSON-RPC URL")
-    siwe_domain: str = Field(
-        default="", description="Expected domain in SIWE messages (defaults to app_host if empty)"
-    )
-    siwe_nonce_ttl_seconds: int = Field(
-        default=300, description="SIWE nonce validity window in seconds"
-    )
+    siwe_domain: str = Field(default="", description="Expected domain in SIWE messages (defaults to app_host if empty)")
+    siwe_nonce_ttl_seconds: int = Field(default=300, description="SIWE nonce validity window in seconds")
 
     @property
     def effective_siwe_domain(self) -> str:
@@ -174,16 +150,12 @@ class Settings(BaseSettings):
     )
 
     # ── Billing / x402 ────────────────────────────────────────────────────────
-    billing_enabled: bool = Field(
-        default=False, description="Enable x402 on-chain billing for paid endpoints"
-    )
+    billing_enabled: bool = Field(default=False, description="Enable x402 on-chain billing for paid endpoints")
     x402_facilitator_url: str = Field(
         default="https://x402.org/facilitator",
         description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",
     )
-    x402_pay_to_address: str = Field(
-        default="", description="Treasury wallet address that receives USDC payments"
-    )
+    x402_pay_to_address: str = Field(default="", description="Treasury wallet address that receives USDC payments")
     x402_network: str = Field(
         default="eip155:84532",
         description="x402 network identifier (Base Sepolia for dev, eip155:8453 for prod)",
@@ -194,10 +166,7 @@ class Settings(BaseSettings):
     )
     x402_scheme: str = Field(
         default="exact",
-        description=(
-            "Payment scheme: 'exact' (flat per-run) or 'upto' (usage-based, requires x402 "
-            "upto support)"
-        ),
+        description=("Payment scheme: 'exact' (flat per-run) or 'upto' (usage-based, requires x402 upto support)"),
     )
     x402_upto_max_amount: str = Field(
         default="$0.50",
@@ -230,12 +199,8 @@ class Settings(BaseSettings):
         ),
     )
     # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
-    stripe_secret_key: str = Field(
-        default="", description="Stripe secret key (sk_live_... or sk_test_...)"
-    )
-    stripe_webhook_secret: str = Field(
-        default="", description="Stripe webhook signing secret (whsec_...)"
-    )
+    stripe_secret_key: str = Field(default="", description="Stripe secret key (sk_live_... or sk_test_...)")
+    stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret (whsec_...)")
 
     # ── Database ──────────────────────────────────────────────────────────────
     pg_command_timeout: float = Field(
@@ -258,24 +223,16 @@ class Settings(BaseSettings):
     settlement_retry_interval_seconds: int = Field(
         default=10, description="Background worker poll interval for retrying failed settlements"
     )
-    settlement_max_retries: int = Field(
-        default=5, description="Max retry attempts before marking a settlement as exhausted"
-    )
+    settlement_max_retries: int = Field(default=5, description="Max retry attempts before marking a settlement as exhausted")
 
     # ── Persistent Memory (per-org RAG) ─────────────────────────────────────
     memory_enabled: bool = Field(
         default=True,
         description="Enable persistent agent memory. Auto-disabled if openai_api_key is empty.",
     )
-    memory_top_k: int = Field(
-        default=5, description="Number of memories to retrieve per agent run"
-    )
-    memory_max_per_org: int = Field(
-        default=1000, description="Maximum stored memories per organisation"
-    )
-    memory_ttl_days: int = Field(
-        default=0, description="Memory expiry in days (0 = never expire)"
-    )
+    memory_top_k: int = Field(default=5, description="Number of memories to retrieve per agent run")
+    memory_max_per_org: int = Field(default=1000, description="Maximum stored memories per organisation")
+    memory_ttl_days: int = Field(default=0, description="Memory expiry in days (0 = never expire)")
     memory_cleanup_interval_seconds: int = Field(
         default=3600, description="Background worker interval for deleting expired memories"
     )
@@ -289,22 +246,13 @@ class Settings(BaseSettings):
     )
 
     # ── Custom Tools (per-org webhook tools) ──────────────────────────────────
-    max_org_tools: int = Field(
-        default=50, description="Maximum custom tools per organisation"
-    )
-    max_custom_tool_calls_per_run: int = Field(
-        default=5, description="Maximum custom-tool webhook calls per agent run"
-    )
+    max_org_tools: int = Field(default=50, description="Maximum custom tools per organisation")
+    max_custom_tool_calls_per_run: int = Field(default=5, description="Maximum custom-tool webhook calls per agent run")
     org_tool_encryption_key: str = Field(
         default="",
-        description=(
-            "Fernet key for encrypting webhook auth headers"
-            " (generate via Fernet.generate_key())"
-        ),
+        description=("Fernet key for encrypting webhook auth headers (generate via Fernet.generate_key())"),
     )
-    org_tools_cache_ttl_seconds: int = Field(
-        default=60, description="TTL for per-org tool cache in seconds"
-    )
+    org_tools_cache_ttl_seconds: int = Field(default=60, description="TTL for per-org tool cache in seconds")
 
     # ── LLM Config Encryption ─────────────────────────────────────────────────
     llm_config_encryption_key: str = Field(
@@ -317,12 +265,8 @@ class Settings(BaseSettings):
     )
 
     # ── MCP Client (per-org external MCP servers) ─────────────────────────────
-    max_org_mcp_servers: int = Field(
-        default=5, description="Maximum external MCP servers per organisation"
-    )
-    max_mcp_tools_per_server: int = Field(
-        default=50, description="Maximum tools to import from a single MCP server"
-    )
+    max_org_mcp_servers: int = Field(default=5, description="Maximum external MCP servers per organisation")
+    max_mcp_tools_per_server: int = Field(default=50, description="Maximum tools to import from a single MCP server")
     mcp_client_connect_timeout_seconds: int = Field(
         default=10, description="Timeout for establishing a connection to an MCP server"
     )
@@ -331,22 +275,16 @@ class Settings(BaseSettings):
     )
 
     # ── A2A Delegation (outbound agent-to-agent calls) ────────────────────────
-    a2a_delegation_enabled: bool = Field(
-        default=False, description="Enable outbound A2A delegation via delegate_to_agent tool"
-    )
+    a2a_delegation_enabled: bool = Field(default=False, description="Enable outbound A2A delegation via delegate_to_agent tool")
     a2a_delegation_timeout_seconds: int = Field(
         default=120, description="HTTP timeout for outbound A2A /message:send calls (seconds)"
     )
-    a2a_delegation_max_per_run: int = Field(
-        default=3, description="Maximum delegate_to_agent calls allowed per agent run"
-    )
+    a2a_delegation_max_per_run: int = Field(default=3, description="Maximum delegate_to_agent calls allowed per agent run")
     a2a_delegation_require_allowlist: bool = Field(
         default=True,
         description="When true, delegation fails if the target agent is not on the org's allowlist. Security-first default.",
     )
-    a2a_agent_card_cache_ttl_seconds: int = Field(
-        default=300, description="TTL for caching remote agent cards (seconds)"
-    )
+    a2a_agent_card_cache_ttl_seconds: int = Field(default=300, description="TTL for caching remote agent cards (seconds)")
 
     # ── A2A Delegation Billing ────────────────────────────────────────────────
     a2a_delegation_billing_enabled: bool = Field(
@@ -415,9 +353,7 @@ class Settings(BaseSettings):
     )
 
     # ── Marketplace (paid MCP tool hosting + author revenue share) ─────────────
-    marketplace_enabled: bool = Field(
-        default=False, description="Enable the paid MCP tool marketplace"
-    )
+    marketplace_enabled: bool = Field(default=False, description="Enable the paid MCP tool marketplace")
     marketplace_default_revenue_share_bps: int = Field(
         default=7000,
         description="Default author revenue share in basis points (7000 = 70%)",
@@ -512,9 +448,7 @@ class Settings(BaseSettings):
     )
 
     # ── Refresh Tokens ────────────────────────────────────────────────────────
-    refresh_token_expire_days: int = Field(
-        default=30, description="Refresh token validity window in days"
-    )
+    refresh_token_expire_days: int = Field(default=30, description="Refresh token validity window in days")
     refresh_token_cleanup_interval_seconds: int = Field(
         default=3600,
         description="Background worker interval for deleting revoked+expired refresh tokens (seconds)",
@@ -538,8 +472,7 @@ class Settings(BaseSettings):
             provider = entry.get("provider", "")
             if provider not in ALLOWED_PROVIDERS:
                 raise ValueError(
-                    f"default_model_pool contains unknown provider '{provider}'. "
-                    f"Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}"
+                    f"default_model_pool contains unknown provider '{provider}'. Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}"
                 )
             if not entry.get("model"):
                 raise ValueError("default_model_pool entry missing 'model' key")

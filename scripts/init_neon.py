@@ -49,9 +49,7 @@ async def main() -> None:
     print("  ✓ checkpointer tables ready")
 
     # ── Verify ───────────────────────────────────────────────────────────
-    tables = await pool.fetch(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
-    )
+    tables = await pool.fetch("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")
     print(f"\nPublic tables ({len(tables)}):")
     for t in tables:
         print(f"  - {t['tablename']}")

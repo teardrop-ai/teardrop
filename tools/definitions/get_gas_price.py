@@ -87,18 +87,14 @@ async def get_gas_price(chain_id: int = 1) -> dict[str, Any]:
     gas_limit: int = block.get("gasLimit", 1)
 
     base_fee_gwei = str(Web3.from_wei(base_fee, "gwei")) if base_fee is not None else None
-    priority_fee_gwei = (
-        str(Web3.from_wei(priority_fee_wei, "gwei")) if priority_fee_wei is not None else None
-    )
+    priority_fee_gwei = str(Web3.from_wei(priority_fee_wei, "gwei")) if priority_fee_wei is not None else None
 
     # Next-block base fee (EIP-1559 formula).
     next_base_fee_gwei: str | None = None
     gas_used_ratio: float | None = None
     if base_fee is not None and gas_limit > 0:
         gas_used_ratio = round(gas_used / gas_limit, 4)
-        next_base_fee_gwei = str(
-            Web3.from_wei(_next_base_fee(base_fee, gas_used, gas_limit), "gwei")
-        )
+        next_base_fee_gwei = str(Web3.from_wei(_next_base_fee(base_fee, gas_used, gas_limit), "gwei"))
 
     # Suggested gas price = base_fee + priority_fee (EIP-1559).
     # Fall back to legacy eth_gasPrice on pre-EIP-1559 chains.

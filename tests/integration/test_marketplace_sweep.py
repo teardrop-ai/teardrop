@@ -6,23 +6,19 @@ CDP / agent_wallet calls are mocked so no real on-chain transfers occur.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
 
 import marketplace as marketplace_module
+import users as users_module
 from marketplace import (
-    AuthorWithdrawal,
-    list_exhausted_withdrawals,
     marketplace_sweep_once,
     reset_withdrawal,
     set_author_config,
 )
-from users import create_org, create_user
-
-import users as users_module
+from users import create_org
 
 _VALID_ADDR = "0x1234567890123456789012345678901234567890"
 
@@ -152,8 +148,7 @@ async def test_sweep_cdp_failure_sets_backoff(sweep_db_pool):
     assert count == 0
 
     wd_row = await pool.fetchrow(
-        "SELECT status, sweep_attempt_count, next_sweep_at, last_sweep_error "
-        "FROM tool_author_withdrawals WHERE org_id = $1",
+        "SELECT status, sweep_attempt_count, next_sweep_at, last_sweep_error FROM tool_author_withdrawals WHERE org_id = $1",
         org.id,
     )
     assert wd_row["status"] == "failed"
@@ -353,7 +348,4 @@ async def test_sweep_balance_warning_logged_on_low_balance(sweep_db_pool, caplog
             count = await marketplace_sweep_once()
 
     assert count == 1
-    assert any(
-        "settlement wallet below threshold" in r.message and r.levelno == logging.ERROR
-        for r in caplog.records
-    )
+    assert any("settlement wallet below threshold" in r.message and r.levelno == logging.ERROR for r in caplog.records)

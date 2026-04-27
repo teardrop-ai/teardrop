@@ -27,12 +27,14 @@ async def x402_client(test_settings, monkeypatch):
 
 
 def _tools_call_body(tool_name: str = "web_search", req_id: int = 1) -> str:
-    return json.dumps({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": req_id,
-        "params": {"name": tool_name, "arguments": {"query": "test"}},
-    })
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": req_id,
+            "params": {"name": tool_name, "arguments": {"query": "test"}},
+        }
+    )
 
 
 @pytest.mark.asyncio

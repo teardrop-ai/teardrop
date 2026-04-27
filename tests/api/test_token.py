@@ -185,9 +185,7 @@ async def test_token_db_client_credentials_wrong_secret(anon_client, monkeypatch
 
 
 @pytest.mark.anyio
-async def test_token_unknown_client_id_falls_back_to_config(
-    anon_client, test_settings, monkeypatch
-):
+async def test_token_unknown_client_id_falls_back_to_config(anon_client, test_settings, monkeypatch):
     """Unknown client_id (not in DB) falls back to config-based check."""
     monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
     monkeypatch.setattr("app.settings", test_settings)

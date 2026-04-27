@@ -142,4 +142,3 @@ class TestCalculateByokOrchestrationCost:
             with patch("billing.get_live_pricing_for_model", new=AsyncMock(return_value=rule)):
                 result = _run(calculate_byok_orchestration_cost(100, 100, "google", ""))
         assert result == 0
-

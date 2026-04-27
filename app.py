@@ -113,6 +113,34 @@ from billing import (
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
+from email_utils import send_invite_email, send_verification_email
+from llm_config import (
+    ALLOWED_ROUTING_PREFERENCES,
+    OrgLlmConfig,
+    close_llm_config_db,
+    delete_org_llm_config,
+    get_org_llm_config,
+    get_org_llm_config_cached,
+    init_llm_config_db,
+    resolve_llm_config,
+    upsert_org_llm_config,
+)
+from marketplace import (
+    check_org_subscription,
+    close_marketplace_db,
+    complete_withdrawal,
+    get_author_balance,
+    get_author_config,
+    get_author_earnings_history,
+    get_marketplace_catalog,
+    get_marketplace_tool_by_name,
+    init_marketplace_db,
+    list_pending_withdrawals,
+    process_withdrawal,
+    record_tool_call_earnings,
+    request_withdrawal,
+    set_author_config,
+)
 from mcp_client import (
     OrgMcpServer,
     build_mcp_langchain_tools,
@@ -136,36 +164,6 @@ from memory import (
     list_memories,
     recall_memories,
     store_memory,
-)
-from email_utils import send_invite_email, send_verification_email
-from llm_config import (
-    ALLOWED_ROUTING_PREFERENCES,
-    OrgLlmConfig,
-    build_llm_config_dict,
-    close_llm_config_db,
-    delete_org_llm_config,
-    get_org_llm_config,
-    get_org_llm_config_cached,
-    init_llm_config_db,
-    invalidate_llm_config_cache,
-    resolve_llm_config,
-    upsert_org_llm_config,
-)
-from marketplace import (
-    check_org_subscription,
-    close_marketplace_db,
-    complete_withdrawal,
-    get_author_balance,
-    get_author_config,
-    get_author_earnings_history,
-    get_marketplace_catalog,
-    get_marketplace_tool_by_name,
-    init_marketplace_db,
-    list_pending_withdrawals,
-    process_withdrawal,
-    record_tool_call_earnings,
-    request_withdrawal,
-    set_author_config,
 )
 from org_tools import (
     OrgTool,
@@ -192,6 +190,7 @@ from usage import (
     record_usage_event,
 )
 from users import (
+    User,
     cleanup_expired_refresh_tokens,
     close_user_db,
     consume_org_invite,
@@ -206,17 +205,16 @@ from users import (
     get_client_credential_by_id,
     get_org_by_id,
     get_org_by_name,
-    get_refresh_token_successor,
-    list_org_client_credentials,
     get_org_invite,
+    get_refresh_token_successor,
     get_user_by_email,
     get_user_by_org_id,
     init_user_db,
+    list_org_client_credentials,
     mark_user_verified,
     register_org_and_user,
     revoke_refresh_token,
     rotate_refresh_token,
-    User,
     verify_secret,
 )
 from wallets import (
@@ -251,12 +249,9 @@ def _validate_production_config(s: "Settings") -> None:
     if not s.jwt_client_secret:
         if is_prod:
             raise RuntimeError(
-                "JWT_CLIENT_SECRET is not set. "
-                "Generate a strong random secret and set it as an environment variable."
+                "JWT_CLIENT_SECRET is not set. Generate a strong random secret and set it as an environment variable."
             )
-        logger.warning(
-            "%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix
-        )
+        logger.warning("%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix)
 
     # CORS — open wildcard is acceptable for bearer-token APIs, but flag it loudly.
     if s.cors_origins in ("", "*"):
@@ -325,8 +320,7 @@ def _validate_production_config(s: "Settings") -> None:
     configured_count = len(pool_providers) - len(missing_providers)
     for mp in missing_providers:
         logger.warning(
-            "%s ⚠  %s_API_KEY is unset but default_model_pool includes '%s' — "
-            "that routing tier will fail at runtime",
+            "%s ⚠  %s_API_KEY is unset but default_model_pool includes '%s' — that routing tier will fail at runtime",
             prefix,
             mp.upper().replace("-", "_"),
             mp,
@@ -361,8 +355,7 @@ def _validate_production_config(s: "Settings") -> None:
     # Guard 2: Testnet network must not be used in production.
     if is_prod and s.marketplace_enabled and s.cdp_network == "base-sepolia":
         raise RuntimeError(
-            "CDP_NETWORK is 'base-sepolia' (testnet) in a production deployment. "
-            "Set CDP_NETWORK=base to use Base mainnet."
+            "CDP_NETWORK is 'base-sepolia' (testnet) in a production deployment. Set CDP_NETWORK=base to use Base mainnet."
         )
 
     # Guard 3: Settlement chain ID must be Base mainnet in production.
@@ -375,11 +368,7 @@ def _validate_production_config(s: "Settings") -> None:
     # Guard 4: Mismatched network name vs chain ID (silent config error).
     _network_chain_pairs = {"base-sepolia": 84532, "base": 8453}
     _expected_chain = _network_chain_pairs.get(s.cdp_network)
-    if (
-        s.marketplace_enabled
-        and _expected_chain is not None
-        and s.marketplace_settlement_chain_id != _expected_chain
-    ):
+    if s.marketplace_enabled and _expected_chain is not None and s.marketplace_settlement_chain_id != _expected_chain:
         logger.warning(
             "%s ⚠  CDP_NETWORK='%s' expects chain_id=%d but "
             "MARKETPLACE_SETTLEMENT_CHAIN_ID=%d — network/chain mismatch may cause "
@@ -403,8 +392,7 @@ def _validate_production_config(s: "Settings") -> None:
     # Log CDP state so operators can confirm configuration at startup.
     if s.agent_wallet_enabled or s.marketplace_enabled:
         logger.info(
-            "%s   CDP: wallet_enabled=%s configured=%s network=%s settlement_account=%s "
-            "settlement_chain=%d tx_timeout=%ds",
+            "%s   CDP: wallet_enabled=%s configured=%s network=%s settlement_account=%s settlement_chain=%d tx_timeout=%ds",
             prefix,
             s.agent_wallet_enabled,
             s.cdp_configured,
@@ -504,6 +492,7 @@ async def lifespan(app: FastAPI):
     async def _init_conn(conn: asyncpg.Connection) -> None:
         try:
             from pgvector.asyncpg import register_vector
+
             await register_vector(conn)
         except Exception:
             pass  # pgvector unavailable; memory features will be disabled
@@ -571,10 +560,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Teardrop",
-    description=(
-        "Intelligence beyond the browser. "
-        "AG-UI streaming agent backed by LangGraph + Anthropic Claude."
-    ),
+    description=("Intelligence beyond the browser. AG-UI streaming agent backed by LangGraph + Anthropic Claude."),
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
@@ -792,16 +778,20 @@ async def jwks() -> JSONResponse:
         length = (n.bit_length() + 7) // 8
         return base64.urlsafe_b64encode(n.to_bytes(length, "big")).rstrip(b"=").decode()
 
-    return JSONResponse(content={
-        "keys": [{
-            "kty": "RSA",
-            "use": "sig",
-            "alg": "RS256",
-            "kid": "teardrop-rs256",
-            "n": _b64url(nums.n),
-            "e": _b64url(nums.e),
-        }],
-    })
+    return JSONResponse(
+        content={
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "kid": "teardrop-rs256",
+                    "n": _b64url(nums.n),
+                    "e": _b64url(nums.e),
+                }
+            ],
+        }
+    )
 
 
 @app.get("/.well-known/agent-card.json", tags=["A2A"])
@@ -812,8 +802,7 @@ async def agent_card() -> JSONResponse:
             "schema_version": "1.0",
             "name": "Teardrop",
             "description": (
-                "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI "
-                "streaming, and A2UI rendering."
+                "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering."
             ),
             "version": app.version,
             "url": f"http://{settings.app_host}:{settings.app_port}",
@@ -829,9 +818,13 @@ async def agent_card() -> JSONResponse:
                     "network": settings.x402_network,
                     "payment_endpoint": "/agent/run",
                     "pricing_endpoint": "/billing/pricing",
-                    **({
-                        "max_amount": settings.x402_upto_max_amount,
-                    } if settings.x402_scheme == "upto" else {}),
+                    **(
+                        {
+                            "max_amount": settings.x402_upto_max_amount,
+                        }
+                        if settings.x402_scheme == "upto"
+                        else {}
+                    ),
                 },
             },
             "protocols": ["ag-ui", "a2a", "mcp"],
@@ -879,11 +872,13 @@ async def mcp_server_card() -> JSONResponse:
         try:
             mp_tools = await list_marketplace_tools()
             for mt in mp_tools:
-                tools.append({
-                    "name": mt.name,
-                    "description": mt.marketplace_description or mt.description,
-                    "inputSchema": mt.input_schema,
-                })
+                tools.append(
+                    {
+                        "name": mt.name,
+                        "description": mt.marketplace_description or mt.description,
+                        "inputSchema": mt.input_schema,
+                    }
+                )
         except Exception:
             logger.debug("Failed to load marketplace tools for server card", exc_info=True)
     return JSONResponse(
@@ -1073,9 +1068,7 @@ async def _run_billing_gate(
             return billing, None
 
         # No credit balance: require per-request x402 exact payment.
-        payment_header = request.headers.get("payment-signature") or request.headers.get(
-            "x-payment"
-        )
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
         if not payment_header:
             return BillingResult(), JSONResponse(
                 status_code=402,
@@ -1298,9 +1291,7 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
             detail="An account with that email or organisation name already exists.",
         )
     verification_token = await create_verification_token(user.id)
-    asyncio.create_task(
-        send_verification_email(user.email, verification_token, settings.app_base_url)
-    )
+    asyncio.create_task(send_verification_email(user.email, verification_token, settings.app_base_url))
     logger.info("register org=%s user=%s", org.id, user.id)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
@@ -1334,12 +1325,8 @@ async def resend_verification(body: ResendVerificationRequest, request: Request)
     user = await get_user_by_email(body.email)
     if user is not None and not user.is_verified:
         verification_token = await create_verification_token(user.id)
-        asyncio.create_task(
-            send_verification_email(user.email, verification_token, settings.app_base_url)
-        )
-    return JSONResponse(
-        content={"message": "If that email is registered, a verification link has been sent."}
-    )
+        asyncio.create_task(send_verification_email(user.email, verification_token, settings.app_base_url))
+    return JSONResponse(content={"message": "If that email is registered, a verification link has been sent."})
 
 
 # ─── Refresh tokens ────────────────────────────────────────────────────────────
@@ -1367,9 +1354,7 @@ async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSON
     )
     if result is not None:
         record, new_refresh = result
-        access_token = create_access_token(
-            subject=record.user_id, extra_claims=record.extra_claims
-        )
+        access_token = create_access_token(subject=record.user_id, extra_claims=record.extra_claims)
         return JSONResponse(
             content={
                 "access_token": access_token,
@@ -1386,14 +1371,13 @@ async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSON
     # locked out.
     successor = await get_refresh_token_successor(body.refresh_token)
     if successor is not None:
-        from datetime import timezone as _tz
         from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
         window = settings.refresh_token_idempotency_window_seconds
         age = (_dt.now(_tz.utc) - successor.created_at).total_seconds()
         if age <= window:
-            access_token = create_access_token(
-                subject=successor.user_id, extra_claims=successor.extra_claims
-            )
+            access_token = create_access_token(subject=successor.user_id, extra_claims=successor.extra_claims)
             return JSONResponse(
                 content={
                     "access_token": access_token,
@@ -1445,15 +1429,9 @@ async def create_invite(
         email=body.email,
         role=body.role,
     )
-    invite_url = (
-        f"{settings.app_base_url.rstrip('/')}/register/invite?token={invite.token}"
-        if settings.app_base_url
-        else None
-    )
+    invite_url = f"{settings.app_base_url.rstrip('/')}/register/invite?token={invite.token}" if settings.app_base_url else None
     if body.email:
-        asyncio.create_task(
-            send_invite_email(body.email, invite.token, org_id, settings.app_base_url)
-        )
+        asyncio.create_task(send_invite_email(body.email, invite.token, org_id, settings.app_base_url))
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={
@@ -1563,9 +1541,7 @@ async def agent_run(
     # Token-based cost is computed post-run at the debit step.
     platform_fee = get_byok_platform_fee(is_byok)
 
-    billing, gate_response = await _run_billing_gate(
-        request, payload, org_id, is_byok=is_byok, platform_fee=platform_fee
-    )
+    billing, gate_response = await _run_billing_gate(request, payload, org_id, is_byok=is_byok, platform_fee=platform_fee)
     if gate_response is not None:
         return gate_response
 
@@ -1727,10 +1703,7 @@ async def agent_run(
                             _EV_SURFACE_UPDATE,
                             {
                                 "surface_id": run_id,
-                                "components": [
-                                    c if isinstance(c, dict) else c.model_dump()
-                                    for c in ui_components
-                                ],
+                                "components": [c if isinstance(c, dict) else c.model_dump() for c in ui_components],
                             },
                         )
 
@@ -1796,9 +1769,7 @@ async def agent_run(
             try:
                 state_msgs = (state_snapshot.values or {}).get("messages", [])
                 if state_msgs:
-                    asyncio.create_task(
-                        extract_and_store_memories(org_id, user_id, state_msgs, run_id)
-                    )
+                    asyncio.create_task(extract_and_store_memories(org_id, user_id, state_msgs, run_id))
             except Exception:
                 logger.debug("Memory extraction kickoff failed", exc_info=True)
 
@@ -1843,13 +1814,18 @@ async def agent_run(
                 else:
                     await record_settlement(usage_event.id, debit_amount, "", "failed")
                     await enqueue_failed_settlement(
-                        usage_event.id, org_id, run_id, "credit", debit_amount,
+                        usage_event.id,
+                        org_id,
+                        run_id,
+                        "credit",
+                        debit_amount,
                     )
                     logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
                 # x402 on-chain settlement.
                 billing_settled = await settle_payment(
-                    billing, actual_cost_usdc=cost_usdc,
+                    billing,
+                    actual_cost_usdc=cost_usdc,
                 )
                 if billing_settled.settled:
                     await record_settlement(
@@ -1872,7 +1848,11 @@ async def agent_run(
                 else:
                     await record_settlement(usage_event.id, 0, "", "failed")
                     await enqueue_failed_settlement(
-                        usage_event.id, org_id, run_id, "x402", cost_usdc,
+                        usage_event.id,
+                        org_id,
+                        run_id,
+                        "x402",
+                        cost_usdc,
                         payment_payload=str(billing.payment_payload) if billing.payment_payload else None,
                     )
                     logger.warning(
@@ -2007,10 +1987,7 @@ async def get_org_credentials(
             detail="No org_id in token — credentials require an org-scoped session.",
         )
     credentials = await list_org_client_credentials(org_id)
-    return JSONResponse(content=[
-        {"client_id": c.client_id, "created_at": c.created_at.isoformat()}
-        for c in credentials
-    ])
+    return JSONResponse(content=[{"client_id": c.client_id, "created_at": c.created_at.isoformat()} for c in credentials])
 
 
 @app.post("/org/credentials/regenerate", tags=["Credentials"])
@@ -2334,9 +2311,7 @@ async def billing_history(
 ) -> JSONResponse:
     """Return settlement history for the authenticated user."""
     history = await get_billing_history(payload["sub"], min(limit, 200))
-    return JSONResponse(
-        content=[{**row, "created_at": row["created_at"].isoformat()} for row in history]
-    )
+    return JSONResponse(content=[{**row, "created_at": row["created_at"].isoformat()} for row in history])
 
 
 class ToolPricingOverrideRequest(BaseModel):
@@ -2423,13 +2398,15 @@ async def billing_balance(
         )
     balance = await get_credit_balance(org_id)
     spending = await get_org_spending_config(org_id)
-    return JSONResponse(content={
-        "org_id": org_id,
-        "balance_usdc": balance,
-        "spending_limit_usdc": spending["spending_limit_usdc"],
-        "is_paused": spending["is_paused"],
-        "daily_spend_usdc": spending["daily_spend_usdc"],
-    })
+    return JSONResponse(
+        content={
+            "org_id": org_id,
+            "balance_usdc": balance,
+            "spending_limit_usdc": spending["spending_limit_usdc"],
+            "is_paused": spending["is_paused"],
+            "daily_spend_usdc": spending["daily_spend_usdc"],
+        }
+    )
 
 
 @app.get("/billing/invoices", tags=["Billing"])
@@ -2578,9 +2555,7 @@ async def billing_credit_history(
 
 
 class StripeTopupRequest(BaseModel):
-    amount_cents: int = Field(
-        ..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)"
-    )
+    amount_cents: int = Field(..., ge=100, le=1_000_000, description="USD cents (100 = $1.00, max $10,000)")
     return_url: str = Field(
         ...,
         min_length=20,
@@ -2605,9 +2580,7 @@ async def billing_topup_stripe(
             detail="No org_id in token — top-up requires an org-scoped credential.",
         )
     user_id: str = payload.get("sub", "")
-    session_data = await create_stripe_embedded_session(
-        org_id, user_id, body.amount_cents, body.return_url
-    )
+    session_data = await create_stripe_embedded_session(org_id, user_id, body.amount_cents, body.return_url)
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=session_data,
@@ -2623,9 +2596,7 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
     import stripe as _stripe  # noqa: PLC0415
 
     client_ip = request.client.host if request.client else "unknown"
-    allowed, _, _ = await _check_rate_limit(
-        f"webhook:{client_ip}", settings.rate_limit_webhook_rpm
-    )
+    allowed, _, _ = await _check_rate_limit(f"webhook:{client_ip}", settings.rate_limit_webhook_rpm)
     if not allowed:
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -2634,20 +2605,14 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
 
     payload = await request.body()
     if len(payload) > _MAX_STRIPE_WEBHOOK_PAYLOAD:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Payload too large"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload too large")
     sig_header = request.headers.get("stripe-signature", "")
     try:
         await handle_stripe_webhook(payload, sig_header)
     except _stripe.SignatureVerificationError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Stripe signature")
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid webhook payload")
     return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok"})
 
 
@@ -2702,10 +2667,7 @@ async def billing_usdc_topup_requirements(
         ...,
         ge=1_000_000,
         le=10_000_000_000,
-        description=(
-            "Amount in atomic USDC (6 decimals)."
-            " Min $1.00 = 1_000_000. Max $10,000 = 10_000_000_000."
-        ),
+        description=("Amount in atomic USDC (6 decimals). Min $1.00 = 1_000_000. Max $10,000 = 10_000_000_000."),
     ),
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -2740,9 +2702,7 @@ class UsdcTopupRequest(BaseModel):
         le=10_000_000_000,
         description="Amount in atomic USDC (6 decimals). Min $1.00 = 1_000_000.",
     )
-    payment_header: str = Field(
-        ..., description="Base64-encoded signed EIP-3009 PaymentPayload (X-PAYMENT format)."
-    )
+    payment_header: str = Field(..., description="Base64-encoded signed EIP-3009 PaymentPayload (X-PAYMENT format).")
 
 
 @app.post("/billing/topup/usdc", tags=["Billing"])
@@ -3010,10 +2970,15 @@ async def patch_tool(
 
     kwargs: dict[str, Any] = {}
     _updatable = (
-        "description", "webhook_url", "webhook_method",
-        "auth_header_name", "auth_header_value",
-        "timeout_seconds", "is_active",
-        "publish_as_mcp", "marketplace_description",
+        "description",
+        "webhook_url",
+        "webhook_method",
+        "auth_header_name",
+        "auth_header_value",
+        "timeout_seconds",
+        "is_active",
+        "publish_as_mcp",
+        "marketplace_description",
         "base_price_usdc",
     )
     for field_name in _updatable:
@@ -3288,9 +3253,7 @@ async def list_memories_endpoint(
     ]
     next_cursor = serialized[-1]["created_at"] if serialized else None
     total = await count_memories(org_id)
-    return JSONResponse(
-        content={"items": serialized, "total": total, "next_cursor": next_cursor}
-    )
+    return JSONResponse(content={"items": serialized, "total": total, "next_cursor": next_cursor})
 
 
 @app.post("/memories", tags=["Memory"])
@@ -3386,9 +3349,7 @@ class CreateMcpServerRequest(BaseModel):
 
 
 class UpdateMcpServerRequest(BaseModel):
-    name: str | None = Field(
-        default=None, min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
-    )
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     url: str | None = Field(default=None, max_length=2048)
     auth_type: str | None = Field(default=None, pattern=r"^(none|bearer|header)$")
     auth_token: str | None = None
@@ -3495,8 +3456,13 @@ async def patch_mcp_server(
 
     kwargs: dict[str, Any] = {}
     _mcp_updatable = (
-        "name", "url", "auth_type", "auth_token",
-        "auth_header_name", "timeout_seconds", "is_active",
+        "name",
+        "url",
+        "auth_type",
+        "auth_token",
+        "auth_header_name",
+        "timeout_seconds",
+        "is_active",
     )
     for field_name in _mcp_updatable:
         val = getattr(body, field_name, None)
@@ -3634,19 +3600,21 @@ async def admin_list_a2a_agents(
         " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
         org_id,
     )
-    return JSONResponse(content=[
-        {
-            "id": r["id"],
-            "org_id": r["org_id"],
-            "agent_url": r["agent_url"],
-            "label": r["label"],
-            "max_cost_usdc": r["max_cost_usdc"],
-            "require_x402": r["require_x402"],
-            "jwt_forward": r["jwt_forward"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        }
-        for r in rows
-    ])
+    return JSONResponse(
+        content=[
+            {
+                "id": r["id"],
+                "org_id": r["org_id"],
+                "agent_url": r["agent_url"],
+                "label": r["label"],
+                "max_cost_usdc": r["max_cost_usdc"],
+                "require_x402": r["require_x402"],
+                "jwt_forward": r["jwt_forward"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+    )
 
 
 @app.delete("/admin/a2a/agents/{agent_id}", tags=["Admin"])
@@ -3733,18 +3701,20 @@ async def list_a2a_agents(
         " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
         org_id,
     )
-    return JSONResponse(content=[
-        {
-            "id": r["id"],
-            "agent_url": r["agent_url"],
-            "label": r["label"],
-            "max_cost_usdc": r["max_cost_usdc"],
-            "require_x402": r["require_x402"],
-            "jwt_forward": r["jwt_forward"],
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        }
-        for r in rows
-    ])
+    return JSONResponse(
+        content=[
+            {
+                "id": r["id"],
+                "agent_url": r["agent_url"],
+                "label": r["label"],
+                "max_cost_usdc": r["max_cost_usdc"],
+                "require_x402": r["require_x402"],
+                "jwt_forward": r["jwt_forward"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
+    )
 
 
 @app.delete("/a2a/agents/{agent_id}", tags=["A2A"])
@@ -3777,21 +3747,23 @@ async def list_delegation_events(
 
     org_id: str = payload.get("org_id", payload["sub"])
     events = await get_delegation_events(org_id, limit=min(limit, 200))
-    return JSONResponse(content=[
-        {
-            "id": e["id"],
-            "run_id": e["run_id"],
-            "agent_url": e["agent_url"],
-            "agent_name": e["agent_name"],
-            "task_status": e["task_status"],
-            "cost_usdc": e["cost_usdc"],
-            "billing_method": e["billing_method"],
-            "settlement_tx": e["settlement_tx"],
-            "error": e["error"],
-            "created_at": e["created_at"].isoformat() if e["created_at"] else None,
-        }
-        for e in events
-    ])
+    return JSONResponse(
+        content=[
+            {
+                "id": e["id"],
+                "run_id": e["run_id"],
+                "agent_url": e["agent_url"],
+                "agent_name": e["agent_name"],
+                "task_status": e["task_status"],
+                "cost_usdc": e["cost_usdc"],
+                "billing_method": e["billing_method"],
+                "settlement_tx": e["settlement_tx"],
+                "error": e["error"],
+                "created_at": e["created_at"].isoformat() if e["created_at"] else None,
+            }
+            for e in events
+        ]
+    )
 
 
 # ─── MCP Marketplace – JSON-RPC Handler ─────────────────────────────────────
@@ -3903,11 +3875,16 @@ async def mcp_jsonrpc_handler(
 
     # ── initialize ────────────────────────────────────────────────────────
     if method == "initialize":
-        return JSONResponse(content=_jsonrpc_result(req_id, {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "teardrop-marketplace", "version": app.version},
-        }))
+        return JSONResponse(
+            content=_jsonrpc_result(
+                req_id,
+                {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "teardrop-marketplace", "version": app.version},
+                },
+            )
+        )
 
     # ── tools/list ────────────────────────────────────────────────────────
     if method == "tools/list":
@@ -3928,11 +3905,13 @@ async def mcp_jsonrpc_handler(
 
         # Include built-in tools as well
         for bt in registry.list_latest():
-            tools_list.append({
-                "name": bt.name,
-                "description": bt.description,
-                "inputSchema": bt.input_schema.model_json_schema(),
-            })
+            tools_list.append(
+                {
+                    "name": bt.name,
+                    "description": bt.description,
+                    "inputSchema": bt.input_schema.model_json_schema(),
+                }
+            )
 
         return JSONResponse(content=_jsonrpc_result(req_id, {"tools": tools_list}))
 
@@ -3960,14 +3939,14 @@ async def mcp_jsonrpc_handler(
         # Subscription gate: marketplace tools require an active subscription.
         if is_marketplace_tool:
             if not await check_org_subscription(org_id, tool_name):
-                logger.info(
-                    "mcp/v1 subscription check failed org_id=%s tool=%s", org_id, tool_name
+                logger.info("mcp/v1 subscription check failed org_id=%s tool=%s", org_id, tool_name)
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32001,
+                        f"Not subscribed to marketplace tool '{tool_name}'. Subscribe via POST /marketplace/subscriptions.",
+                    )
                 )
-                return JSONResponse(content=_jsonrpc_error(
-                    req_id, -32001,
-                    f"Not subscribed to marketplace tool '{tool_name}'. "
-                    "Subscribe via POST /marketplace/subscriptions.",
-                ))
 
         # Price resolution: admin override (qualified) > admin override (bare) > author price > default
         tool_cost = overrides.get(tool_name, overrides.get(actual_tool_name, default_cost))
@@ -3977,10 +3956,13 @@ async def mcp_jsonrpc_handler(
         if s.billing_enabled:
             billing = await verify_credit(org_id, tool_cost)
             if not billing.verified:
-                return JSONResponse(content=_jsonrpc_error(
-                    req_id, -32000,
-                    f"Insufficient credit balance. Required: {tool_cost} USDC atomic units.",
-                ))
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32000,
+                        f"Insufficient credit balance. Required: {tool_cost} USDC atomic units.",
+                    )
+                )
 
         # ── Resolve and execute tool ──────────────────────────────────
         result: Any
@@ -4034,20 +4016,30 @@ async def mcp_jsonrpc_handler(
 
         # Format MCP-spec tool result
         if isinstance(result, dict) and "error" in result:
-            return JSONResponse(content=_jsonrpc_result(req_id, {
-                "content": [{"type": "text", "text": json.dumps(result)}],
-                "isError": True,
-            }))
+            return JSONResponse(
+                content=_jsonrpc_result(
+                    req_id,
+                    {
+                        "content": [{"type": "text", "text": json.dumps(result)}],
+                        "isError": True,
+                    },
+                )
+            )
 
-        return JSONResponse(content=_jsonrpc_result(req_id, {
-            "content": [
+        return JSONResponse(
+            content=_jsonrpc_result(
+                req_id,
                 {
-                    "type": "text",
-                    "text": json.dumps(result) if not isinstance(result, str) else result,
-                }
-            ],
-            "isError": False,
-        }))
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result) if not isinstance(result, str) else result,
+                        }
+                    ],
+                    "isError": False,
+                },
+            )
+        )
 
     # Unknown method
     return JSONResponse(content=_jsonrpc_error(req_id, -32601, f"Method not found: {method}"))
@@ -4082,12 +4074,14 @@ async def set_marketplace_author_config(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    return JSONResponse(content={
-        "org_id": config.org_id,
-        "settlement_wallet": config.settlement_wallet,
-        "created_at": config.created_at.isoformat(),
-        "updated_at": config.updated_at.isoformat(),
-    })
+    return JSONResponse(
+        content={
+            "org_id": config.org_id,
+            "settlement_wallet": config.settlement_wallet,
+            "created_at": config.created_at.isoformat(),
+            "updated_at": config.updated_at.isoformat(),
+        }
+    )
 
 
 @app.get("/marketplace/author-config", tags=["Marketplace"])
@@ -4101,19 +4095,23 @@ async def get_marketplace_author_config_endpoint(
 
     config = await get_author_config(org_id)
     if config is None:
-        return JSONResponse(content={
-            "org_id": org_id,
-            "settlement_wallet": None,
-            "created_at": None,
-            "updated_at": None,
-        })
+        return JSONResponse(
+            content={
+                "org_id": org_id,
+                "settlement_wallet": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        )
 
-    return JSONResponse(content={
-        "org_id": config.org_id,
-        "settlement_wallet": config.settlement_wallet,
-        "created_at": config.created_at.isoformat(),
-        "updated_at": config.updated_at.isoformat(),
-    })
+    return JSONResponse(
+        content={
+            "org_id": config.org_id,
+            "settlement_wallet": config.settlement_wallet,
+            "created_at": config.created_at.isoformat(),
+            "updated_at": config.updated_at.isoformat(),
+        }
+    )
 
 
 @app.get("/marketplace/balance", tags=["Marketplace"])
@@ -4154,25 +4152,25 @@ async def get_marketplace_earnings(
                 detail="Invalid cursor format — must be an ISO 8601 timestamp.",
             )
 
-    earnings, next_cursor = await get_author_earnings_history(
-        org_id, cursor=cursor_dt, limit=limit, tool_name=tool_name
+    earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor_dt, limit=limit, tool_name=tool_name)
+    return JSONResponse(
+        content={
+            "earnings": [
+                {
+                    "id": e.id,
+                    "tool_name": e.tool_name,
+                    "caller_org_id": e.caller_org_id,
+                    "total_cost_usdc": e.amount_usdc,
+                    "author_share_usdc": e.author_share_usdc,
+                    "platform_share_usdc": e.platform_share_usdc,
+                    "status": e.status,
+                    "created_at": e.created_at.isoformat(),
+                }
+                for e in earnings
+            ],
+            "next_cursor": next_cursor,
+        }
     )
-    return JSONResponse(content={
-        "earnings": [
-            {
-                "id": e.id,
-                "tool_name": e.tool_name,
-                "caller_org_id": e.caller_org_id,
-                "total_cost_usdc": e.amount_usdc,
-                "author_share_usdc": e.author_share_usdc,
-                "platform_share_usdc": e.platform_share_usdc,
-                "status": e.status,
-                "created_at": e.created_at.isoformat(),
-            }
-            for e in earnings
-        ],
-        "next_cursor": next_cursor,
-    })
 
 
 class WithdrawRequest(BaseModel):
@@ -4194,14 +4192,17 @@ async def request_marketplace_withdrawal(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    return JSONResponse(status_code=status.HTTP_201_CREATED, content={
-        "id": withdrawal.id,
-        "org_id": withdrawal.org_id,
-        "amount_usdc": withdrawal.amount_usdc,
-        "wallet": withdrawal.wallet,
-        "status": withdrawal.status,
-        "created_at": withdrawal.created_at.isoformat(),
-    })
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": withdrawal.id,
+            "org_id": withdrawal.org_id,
+            "amount_usdc": withdrawal.amount_usdc,
+            "wallet": withdrawal.wallet,
+            "status": withdrawal.status,
+            "created_at": withdrawal.created_at.isoformat(),
+        },
+    )
 
 
 @app.get("/marketplace/withdrawals", tags=["Marketplace"])
@@ -4228,21 +4229,23 @@ async def get_marketplace_withdrawals(
             )
 
     withdrawals, next_cursor = await list_org_withdrawals(org_id, limit=limit, cursor=cursor_dt)
-    return JSONResponse(content={
-        "withdrawals": [
-            {
-                "id": w.id,
-                "amount_usdc": w.amount_usdc,
-                "wallet": w.wallet,
-                "tx_hash": w.tx_hash,
-                "status": w.status,
-                "created_at": w.created_at.isoformat(),
-                "settled_at": w.settled_at.isoformat() if w.settled_at else None,
-            }
-            for w in withdrawals
-        ],
-        "next_cursor": next_cursor,
-    })
+    return JSONResponse(
+        content={
+            "withdrawals": [
+                {
+                    "id": w.id,
+                    "amount_usdc": w.amount_usdc,
+                    "wallet": w.wallet,
+                    "tx_hash": w.tx_hash,
+                    "status": w.status,
+                    "created_at": w.created_at.isoformat(),
+                    "settled_at": w.settled_at.isoformat() if w.settled_at else None,
+                }
+                for w in withdrawals
+            ],
+            "next_cursor": next_cursor,
+        }
+    )
 
 
 _CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc"})
@@ -4299,22 +4302,24 @@ async def get_marketplace_catalog_endpoint(
     if len(catalog) == limit:
         next_cursor = _build_catalog_cursor(catalog[-1], sort)
 
-    return JSONResponse(content={
-        "tools": [
-            {
-                "name": t.qualified_name,
-                "description": t.marketplace_description,
-                "input_schema": t.input_schema,
-                "cost_usdc": t.cost_usdc,
-                # author_slug is the canonical filter key; author is kept for
-                # backward compatibility and human display.
-                "author": t.author_org_name,
-                "author_slug": t.author_org_slug,
-            }
-            for t in catalog
-        ],
-        "next_cursor": next_cursor,
-    })
+    return JSONResponse(
+        content={
+            "tools": [
+                {
+                    "name": t.qualified_name,
+                    "description": t.marketplace_description,
+                    "input_schema": t.input_schema,
+                    "cost_usdc": t.cost_usdc,
+                    # author_slug is the canonical filter key; author is kept for
+                    # backward compatibility and human display.
+                    "author": t.author_org_name,
+                    "author_slug": t.author_org_slug,
+                }
+                for t in catalog
+            ],
+            "next_cursor": next_cursor,
+        }
+    )
 
 
 # ─── Marketplace Subscriptions ────────────────────────────────────────────────
@@ -4359,16 +4364,18 @@ async def list_marketplace_subscriptions(
 
     org_id: str = payload.get("org_id", "")
     subs = await get_org_subscriptions(org_id)
-    return JSONResponse(content={
-        "subscriptions": [
-            {
-                "id": s.id,
-                "qualified_tool_name": s.qualified_tool_name,
-                "subscribed_at": s.subscribed_at.isoformat(),
-            }
-            for s in subs
-        ]
-    })
+    return JSONResponse(
+        content={
+            "subscriptions": [
+                {
+                    "id": s.id,
+                    "qualified_tool_name": s.qualified_tool_name,
+                    "subscribed_at": s.subscribed_at.isoformat(),
+                }
+                for s in subs
+            ]
+        }
+    )
 
 
 @app.delete("/marketplace/subscriptions/{subscription_id}", tags=["Marketplace"])
@@ -4402,12 +4409,14 @@ async def admin_process_withdrawal(
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 
-    return JSONResponse(content={
-        "id": withdrawal.id,
-        "org_id": withdrawal.org_id,
-        "amount_usdc": withdrawal.amount_usdc,
-        "status": withdrawal.status,
-    })
+    return JSONResponse(
+        content={
+            "id": withdrawal.id,
+            "org_id": withdrawal.org_id,
+            "amount_usdc": withdrawal.amount_usdc,
+            "status": withdrawal.status,
+        }
+    )
 
 
 class CompleteWithdrawalRequest(BaseModel):
@@ -4436,20 +4445,22 @@ async def admin_list_withdrawals(
 ) -> JSONResponse:
     """Admin: list pending withdrawals, optionally filtered by org."""
     withdrawals = await list_pending_withdrawals(org_id)
-    return JSONResponse(content={
-        "withdrawals": [
-            {
-                "id": w.id,
-                "org_id": w.org_id,
-                "amount_usdc": w.amount_usdc,
-                "wallet": w.wallet,
-                "status": w.status,
-                "created_at": w.created_at.isoformat(),
-                "settled_at": w.settled_at.isoformat() if w.settled_at else None,
-            }
-            for w in withdrawals
-        ]
-    })
+    return JSONResponse(
+        content={
+            "withdrawals": [
+                {
+                    "id": w.id,
+                    "org_id": w.org_id,
+                    "amount_usdc": w.amount_usdc,
+                    "wallet": w.wallet,
+                    "status": w.status,
+                    "created_at": w.created_at.isoformat(),
+                    "settled_at": w.settled_at.isoformat() if w.settled_at else None,
+                }
+                for w in withdrawals
+            ]
+        }
+    )
 
 
 @app.post("/admin/marketplace/sweep", tags=["Admin"])
@@ -4478,6 +4489,7 @@ async def admin_marketplace_sweep_status(
 
     def _fmt(w: object) -> dict:
         from marketplace import AuthorWithdrawal  # noqa: PLC0415
+
         assert isinstance(w, AuthorWithdrawal)
         return {
             "id": w.id,
@@ -4490,10 +4502,12 @@ async def admin_marketplace_sweep_status(
             "created_at": w.created_at.isoformat(),
         }
 
-    return JSONResponse(content={
-        "pending": [_fmt(w) for w in pending],
-        "exhausted": [_fmt(w) for w in exhausted],
-    })
+    return JSONResponse(
+        content={
+            "pending": [_fmt(w) for w in pending],
+            "exhausted": [_fmt(w) for w in exhausted],
+        }
+    )
 
 
 @app.post("/admin/marketplace/sweep-retry/{withdrawal_id}", tags=["Admin"])
@@ -4535,7 +4549,7 @@ async def admin_marketplace_settlement_balance(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Admin: query the USDC balance of the marketplace settlement CDP wallet."""
-    from agent_wallets import _get_cdp_client, _require_cdp_enabled, _chain_id_to_network
+    from agent_wallets import _chain_id_to_network, _get_cdp_client, _require_cdp_enabled
 
     settings = get_settings()
     _require_cdp_enabled()
@@ -4546,9 +4560,7 @@ async def admin_marketplace_settlement_balance(
     balance_usdc = 0
     async with _get_cdp_client() as cdp:
         account = await cdp.evm.get_or_create_account(name=account_name)
-        balances = await cdp.evm.list_token_balances(
-            address=account.address, network=network
-        )
+        balances = await cdp.evm.list_token_balances(address=account.address, network=network)
         for tb in balances:
             symbol = getattr(tb, "symbol", "") or ""
             if symbol.upper() == "USDC":
@@ -4559,12 +4571,14 @@ async def admin_marketplace_settlement_balance(
                     balance_usdc = int(Decimal(str(amt)) * Decimal("1_000_000"))
                 break
 
-    return JSONResponse(content={
-        "account": account_name,
-        "address": account.address,
-        "chain_id": chain_id,
-        "balance_usdc": balance_usdc,
-    })
+    return JSONResponse(
+        content={
+            "account": account_name,
+            "address": account.address,
+            "chain_id": chain_id,
+            "balance_usdc": balance_usdc,
+        }
+    )
 
 
 # ─── Entry point for `python app.py` ─────────────────────────────────────────

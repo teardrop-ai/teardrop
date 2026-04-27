@@ -93,9 +93,7 @@ async def test_auth_gate_rejects_expired_token(mcp_client, test_settings):
         "exp": datetime.now(timezone.utc) - timedelta(hours=1),
         "org_id": "test-org",
     }
-    expired_token = pyjwt.encode(
-        payload, test_settings.jwt_private_key, algorithm="RS256"
-    )
+    expired_token = pyjwt.encode(payload, test_settings.jwt_private_key, algorithm="RS256")
 
     resp = await mcp_client.post(
         "/tools/mcp",

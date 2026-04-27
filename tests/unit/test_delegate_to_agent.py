@@ -120,7 +120,8 @@ class TestDelegateToAgent:
             ),
         ):
             result = await delegate_to_agent(
-                "https://agent.example.com", "test task",
+                "https://agent.example.com",
+                "test task",
             )
             assert result["status"] == "failed"
             assert "Connection refused" in result["error"]
@@ -181,7 +182,8 @@ class TestDelegateToAgent:
             patch(f"{_MOD}.extract_result_text", return_value=""),
         ):
             result = await delegate_to_agent(
-                "https://agent.example.com", "do something",
+                "https://agent.example.com",
+                "do something",
             )
             assert result["status"] == "failed"
             assert result["error"] is not None
@@ -201,7 +203,8 @@ class TestDelegateToAgent:
             patch(f"{_MOD}.send_message", AsyncMock(side_effect=Exception("Timeout"))),
         ):
             result = await delegate_to_agent(
-                "https://agent.example.com", "do something",
+                "https://agent.example.com",
+                "do something",
             )
             assert result["status"] == "failed"
             assert "Timeout" in result["error"]

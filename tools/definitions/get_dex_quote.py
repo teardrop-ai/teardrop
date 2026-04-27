@@ -63,17 +63,17 @@ _KNOWN_DECIMALS: dict[int, dict[str, int]] = {
     1: {
         "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2": 18,  # WETH
         "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0": 18,  # wstETH
-        "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599": 8,   # WBTC
-        "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": 8,   # cbBTC
-        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": 6,   # USDC
-        "0xdAC17F958D2ee523a2206206994597C13D831ec7": 6,   # USDT
+        "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599": 8,  # WBTC
+        "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": 8,  # cbBTC
+        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": 6,  # USDC
+        "0xdAC17F958D2ee523a2206206994597C13D831ec7": 6,  # USDT
         "0x6B175474E89094C44Da98b954EedeAC495271d0F": 18,  # DAI
     },
     8453: {
         "0x4200000000000000000000000000000000000006": 18,  # WETH
-        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": 6,   # USDC (native)
-        "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA": 6,   # USDbC (bridged)
-        "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": 8,   # cbBTC
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913": 6,  # USDC (native)
+        "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA": 6,  # USDbC (bridged)
+        "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": 8,  # cbBTC
         "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb": 18,  # DAI
     },
 }
@@ -173,7 +173,7 @@ class GetDexQuoteInput(BaseModel):
         if n <= 0:
             raise ValueError("amount_in must be > 0")
         if n >= _MAX_AMOUNT_IN:
-            raise ValueError(f"amount_in exceeds safety cap of 2^128")
+            raise ValueError("amount_in exceeds safety cap of 2^128")
         return str(n)
 
     @field_validator("chain_id")
@@ -212,9 +212,7 @@ class GetDexQuoteOutput(BaseModel):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _resolve_decimals(
-    w3: Any, chain_id: int, address: str, sem: asyncio.Semaphore
-) -> int:
+async def _resolve_decimals(w3: Any, chain_id: int, address: str, sem: asyncio.Semaphore) -> int:
     """Return the ERC-20 decimals for ``address`` on ``chain_id``.
 
     Static map → TTL cache → on-chain ``decimals()`` fallback. On failure,
@@ -238,7 +236,9 @@ async def _resolve_decimals(
         except Exception as exc:
             logger.warning(
                 "decimals() fallback to 18 for %s on chain %d: %s",
-                address, chain_id, exc,
+                address,
+                chain_id,
+                exc,
             )
             value = 18
 
@@ -323,18 +323,11 @@ async def get_dex_quote(
     amount_in_int = int(amount_in)
 
     # Resolve decimals and block number in parallel with the tier quotes.
-    decimals_in_task = asyncio.create_task(
-        _resolve_decimals(w3, chain_id, token_in, sem)
-    )
-    decimals_out_task = asyncio.create_task(
-        _resolve_decimals(w3, chain_id, token_out, sem)
-    )
+    decimals_in_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_in, sem))
+    decimals_out_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_out, sem))
     block_task = asyncio.create_task(w3.eth.block_number)
     tier_tasks = [
-        asyncio.create_task(
-            _quote_one_tier(quoter, token_in, token_out, amount_in_int, fee, sem)
-        )
-        for fee in _FEE_TIERS
+        asyncio.create_task(_quote_one_tier(quoter, token_in, token_out, amount_in_int, fee, sem)) for fee in _FEE_TIERS
     ]
 
     decimals_in = await decimals_in_task

@@ -114,9 +114,7 @@ def _stub_results(query: str, num_results: int) -> dict[str, Any]:
             {
                 "title": "Placeholder result – configure TAVILY_API_KEY",
                 "url": "https://example.com",
-                "snippet": (
-                    "This is a stub result. Set TAVILY_API_KEY in .env to get live search results."
-                ),
+                "snippet": ("This is a stub result. Set TAVILY_API_KEY in .env to get live search results."),
                 "score": None,
             }
         ],

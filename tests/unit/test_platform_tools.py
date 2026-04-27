@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import json
-import time
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,12 +12,10 @@ from httpx import ASGITransport, AsyncClient
 import config
 from marketplace import (
     MarketplaceTool,
+    _invalidate_platform_tool_cache,
     get_marketplace_catalog,
     get_platform_tool_price,
-    _PLATFORM_TOOL_CACHE,
-    _invalidate_platform_tool_cache,
 )
-
 
 # ─── get_marketplace_catalog with platform tools ─────────────────────────────
 
@@ -191,18 +187,17 @@ class TestMCPBillingGatePlatformTools:
     """Integration-level tests verifying the billing gate detects platform tools."""
 
     @pytest.mark.asyncio
-    async def test_platform_tool_billed_at_platform_price(
-        self, billing_client, test_jwt_token
-    ):
+    async def test_platform_tool_billed_at_platform_price(self, billing_client, test_jwt_token):
         """A platform tool call should be billed at its marketplace_platform_tools price."""
-        import json
 
-        body = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "id": 1,
-            "params": {"name": "get_token_price", "arguments": {"symbols": "eth"}},
-        })
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "id": 1,
+                "params": {"name": "get_token_price", "arguments": {"symbols": "eth"}},
+            }
+        )
 
         with (
             patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
@@ -225,23 +220,20 @@ class TestMCPBillingGatePlatformTools:
             )
 
         if resp.status_code == 200:
-            mock_debit.assert_called_once_with(
-                "test-org-id", 2000, reason="mcp:get_token_price"
-            )
+            mock_debit.assert_called_once_with("test-org-id", 2000, reason="mcp:get_token_price")
 
     @pytest.mark.asyncio
-    async def test_non_platform_tool_uses_default_cost(
-        self, billing_client, test_jwt_token
-    ):
+    async def test_non_platform_tool_uses_default_cost(self, billing_client, test_jwt_token):
         """A non-platform, non-marketplace tool falls back to default pricing."""
-        import json
 
-        body = json.dumps({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "id": 1,
-            "params": {"name": "calculate", "arguments": {"expression": "1+1"}},
-        })
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "id": 1,
+                "params": {"name": "calculate", "arguments": {"expression": "1+1"}},
+            }
+        )
 
         with (
             patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
@@ -265,6 +257,4 @@ class TestMCPBillingGatePlatformTools:
 
         if resp.status_code == 200:
             # Should use default cost (1000), not a platform price
-            mock_debit.assert_called_once_with(
-                "test-org-id", 1000, reason="mcp:calculate"
-            )
+            mock_debit.assert_called_once_with("test-org-id", 1000, reason="mcp:calculate")

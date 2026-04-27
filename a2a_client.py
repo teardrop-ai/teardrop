@@ -340,9 +340,7 @@ def extract_result_text(response: A2ASendMessageResponse) -> str:
 # ─── Allowlist enforcement ────────────────────────────────────────────────────
 
 
-async def check_delegation_allowed(
-    org_id: str, agent_url: str, pool
-) -> tuple[bool, dict | None]:
+async def check_delegation_allowed(org_id: str, agent_url: str, pool) -> tuple[bool, dict | None]:
     """Check if *agent_url* is in the org's a2a_allowed_agents table.
 
     Returns (allowed, row_dict) — row_dict contains max_cost_usdc,
@@ -439,6 +437,7 @@ def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
         raw_header = resp.headers.get("X-PAYMENT-REQUIRED", "")
         if raw_header:
             import json as _json
+
             reqs_data = _json.loads(base64.b64decode(raw_header))
         else:
             body = resp.json()
@@ -455,6 +454,7 @@ def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
 
         # Encode payload for the X-PAYMENT header.
         import json as _json
+
         payload_json = _json.dumps(
             payload.model_dump() if hasattr(payload, "model_dump") else payload,
             default=str,

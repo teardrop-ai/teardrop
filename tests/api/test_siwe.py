@@ -212,7 +212,7 @@ async def test_auth_me_email_user(api_client, monkeypatch):
         created_at=datetime.now(),
     )
     monkeypatch.setattr("app.get_org_by_id", AsyncMock(return_value=mock_org))
-    
+
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
     body = resp.json()

@@ -210,13 +210,18 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
 @pytest.mark.anyio
 async def test_billing_balance_returns_balance(api_client, monkeypatch):
     monkeypatch.setattr("app.get_credit_balance", AsyncMock(return_value=500_000))
-    monkeypatch.setattr("app.get_org_spending_config", AsyncMock(return_value={
-        "org_id": "test-org-id",
-        "balance_usdc": 500_000,
-        "spending_limit_usdc": 0,
-        "is_paused": False,
-        "daily_spend_usdc": 0,
-    }))
+    monkeypatch.setattr(
+        "app.get_org_spending_config",
+        AsyncMock(
+            return_value={
+                "org_id": "test-org-id",
+                "balance_usdc": 500_000,
+                "spending_limit_usdc": 0,
+                "is_paused": False,
+                "daily_spend_usdc": 0,
+            }
+        ),
+    )
 
     resp = await api_client.get("/billing/balance")
     assert resp.status_code == 200
@@ -728,4 +733,3 @@ async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_clien
     resp = await admin_api_client.delete("/admin/pricing/tools/nonexistent_tool")
     assert resp.status_code == 404
     assert "No pricing override found" in resp.json()["detail"]
-

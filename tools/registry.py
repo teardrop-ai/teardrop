@@ -29,20 +29,14 @@ class ToolDefinition(BaseModel):
     description: str = Field(..., description="Human/agent-readable description")
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
     input_schema: Any = Field(..., description="Pydantic BaseModel class for input validation")
-    output_schema: Any = Field(
-        default=None, description="Optional Pydantic BaseModel class for output validation"
-    )
-    implementation: Callable[..., Any] = Field(
-        ..., description="Async callable that executes the tool"
-    )
+    output_schema: Any = Field(default=None, description="Optional Pydantic BaseModel class for output validation")
+    implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
 
     # Deprecation lifecycle
     deprecated: bool = False
     deprecated_at: datetime | None = None
     deprecation_days: int = 90
-    superseded_by: str | None = Field(
-        default=None, description="Version string of the replacement, e.g. '2.0.0'"
-    )
+    superseded_by: str | None = Field(default=None, description="Version string of the replacement, e.g. '2.0.0'")
 
     model_config = {"arbitrary_types_allowed": True}
 

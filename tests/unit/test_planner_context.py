@@ -23,7 +23,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from agent.nodes import planner_node
 from agent.state import AgentState
 
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -93,9 +92,7 @@ async def test_system_prompt_contains_current_date():
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
     today_year = str(datetime.now(timezone.utc).year)
-    assert today_year in system_prompt, (
-        f"Expected current year {today_year} in system prompt, got:\n{system_prompt[:500]}"
-    )
+    assert today_year in system_prompt, f"Expected current year {today_year} in system prompt, got:\n{system_prompt[:500]}"
     assert "Date & Time (UTC)" in system_prompt
     assert "ISO 8601" in system_prompt
 

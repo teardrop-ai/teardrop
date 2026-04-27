@@ -21,17 +21,13 @@ class TestGetWalletPortfolio:
         mock_contract.functions.balanceOf.return_value.call = AsyncMock(return_value=0)
         mock_w3.eth.contract.return_value = mock_contract
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
 
         # Mock price fetch
         async def mock_fetch_prices(cg_ids):
             return {cid: 3000.0 if cid == "ethereum" else 1.0 for cid in cg_ids}
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices)
 
         result = await get_wallet_portfolio(
             wallet_address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
@@ -63,21 +59,15 @@ class TestGetWalletPortfolio:
             return 0
 
         mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(
-            side_effect=balance_side_effect
-        )
+        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
         mock_w3.eth.contract.return_value = mock_contract
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
 
         async def mock_fetch_prices(cg_ids):
             return {cid: 1.0 for cid in cg_ids}
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices)
 
         result = await get_wallet_portfolio(
             wallet_address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
@@ -102,25 +92,23 @@ class TestGetWalletPortfolio:
             return 10_000_000_000  # 10000 USDC
 
         mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(
-            side_effect=balance_side_effect
-        )
+        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
         mock_w3.eth.contract.return_value = mock_contract
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
 
         async def mock_fetch_prices(cg_ids):
             prices = {
-                "ethereum": 3000.0, "usd-coin": 1.0, "tether": 1.0,
-                "dai": 1.0, "weth": 3000.0, "wrapped-bitcoin": 65000.0,
+                "ethereum": 3000.0,
+                "usd-coin": 1.0,
+                "tether": 1.0,
+                "dai": 1.0,
+                "weth": 3000.0,
+                "wrapped-bitcoin": 65000.0,
             }
             return {cid: prices.get(cid, 0.0) for cid in cg_ids}
 
-        monkeypatch.setattr(
-            "tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices
-        )
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices)
 
         result = await get_wallet_portfolio(
             wallet_address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",

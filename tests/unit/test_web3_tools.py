@@ -20,9 +20,7 @@ class TestGetEthBalance:
         mock_w3 = MagicMock()
         mock_w3.eth.get_balance = AsyncMock(return_value=1_000_000_000_000_000_000)  # 1 ETH in wei
 
-        monkeypatch.setattr(
-            "tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_eth_balance("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=1)
 
@@ -41,9 +39,7 @@ class TestGetEthBalance:
 
         monkeypatch.setattr(
             "tools.definitions.get_eth_balance.get_web3",
-            lambda chain_id: (_ for _ in ()).throw(
-                ValueError(f"Unsupported or unconfigured chain_id={chain_id}")
-            ),
+            lambda chain_id: (_ for _ in ()).throw(ValueError(f"Unsupported or unconfigured chain_id={chain_id}")),
         )
 
         with pytest.raises(Exception):
@@ -57,9 +53,7 @@ class TestGetEthBalance:
         mock_w3 = MagicMock()
         mock_w3.eth.get_balance = AsyncMock(return_value=500_000_000_000_000_000)  # 0.5 ETH
 
-        monkeypatch.setattr(
-            "tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_eth_balance.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_eth_balance("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chain_id=8453)
         assert result["chain_id"] == 8453
@@ -73,9 +67,7 @@ class TestGetErc20Balance:
         from tools.definitions.get_erc20_balance import get_erc20_balance
 
         mock_w3 = MagicMock()
-        monkeypatch.setattr(
-            "tools.definitions.get_erc20_balance.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_erc20_balance.get_web3", lambda chain_id=1: mock_w3)
 
         # Patch _fetch_token_info so no real contract calls are made
         monkeypatch.setattr(
@@ -170,9 +162,7 @@ class TestGetTransaction:
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
         mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
 
-        monkeypatch.setattr(
-            "tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_transaction("0xdeadbeef", chain_id=1)
 
@@ -197,9 +187,7 @@ class TestGetTransaction:
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
         mock_w3.eth.get_transaction_receipt = AsyncMock(side_effect=Exception("not found"))
 
-        monkeypatch.setattr(
-            "tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_transaction("0xpending", chain_id=1)
 
@@ -299,6 +287,7 @@ class TestResolveEns:
 
     def test_invalid_input_raises_validation_error(self):
         from pydantic import ValidationError
+
         from tools.definitions.resolve_ens import ResolveEnsInput
 
         with pytest.raises(ValidationError):
@@ -306,6 +295,7 @@ class TestResolveEns:
 
     def test_empty_input_raises_validation_error(self):
         from pydantic import ValidationError
+
         from tools.definitions.resolve_ens import ResolveEnsInput
 
         with pytest.raises(ValidationError):

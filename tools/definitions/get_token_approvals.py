@@ -105,17 +105,11 @@ class GetTokenApprovalsInput(BaseModel):
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
     tokens: list[str] | None = Field(
         default=None,
-        description=(
-            "Token contract addresses to check (max 50). "
-            "Defaults to the platform tracked token list."
-        ),
+        description=("Token contract addresses to check (max 50). Defaults to the platform tracked token list."),
     )
     spenders: list[str] | None = Field(
         default=None,
-        description=(
-            "Spender contract addresses to check (max 20). "
-            "Defaults to the curated DeFi protocol list."
-        ),
+        description=("Spender contract addresses to check (max 20). Defaults to the curated DeFi protocol list."),
     )
 
     @field_validator("tokens")
@@ -163,9 +157,7 @@ class GetTokenApprovalsOutput(BaseModel):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _risk_level(
-    is_unlimited: bool, spender_name: str | None
-) -> Literal["low", "medium", "high"]:
+def _risk_level(is_unlimited: bool, spender_name: str | None) -> Literal["low", "medium", "high"]:
     """Derive risk level from approval metadata.
 
     high   — unlimited approval granted to an unrecognised spender.
@@ -229,9 +221,7 @@ async def get_token_approvals(
     trusted = _TRUSTED_SPENDERS.get(chain_id, {})
 
     # Symbol lookup from tracked list (best-effort; None for unknown tokens).
-    symbol_lookup: dict[str, str] = {
-        t["address"]: t["symbol"] for t in _TRACKED_TOKENS.get(chain_id, [])
-    }
+    symbol_lookup: dict[str, str] = {t["address"]: t["symbol"] for t in _TRACKED_TOKENS.get(chain_id, [])}
 
     sem = asyncio.Semaphore(_SEM_LIMIT)
 
@@ -258,14 +248,15 @@ async def get_token_approvals(
             except Exception as exc:
                 logger.debug(
                     "allowance(%s, owner=%s, spender=%s): %s",
-                    token_addr, wallet, spender_addr, exc,
+                    token_addr,
+                    wallet,
+                    spender_addr,
+                    exc,
                 )
                 return None
 
     pairs = [(t, s) for t in token_list for s in spender_list]
-    results: list[dict[str, Any] | None] = await asyncio.gather(
-        *[_check(t, s) for t, s in pairs]
-    )
+    results: list[dict[str, Any] | None] = await asyncio.gather(*[_check(t, s) for t, s in pairs])
     approvals = [r for r in results if r is not None]
 
     # Sort by risk descending so high-risk entries appear first.
@@ -276,15 +267,9 @@ async def get_token_approvals(
     high_risk_count = sum(1 for a in approvals if a["risk_level"] == "high")
     unknown_count = sum(1 for a in approvals if a["spender_name"] is None)
 
-    note = (
-        "Non-zero ERC-20 allowances only. "
-        "Permit2 sub-allowances (off-chain signed permits) are not reflected here."
-    )
+    note = "Non-zero ERC-20 allowances only. Permit2 sub-allowances (off-chain signed permits) are not reflected here."
     if any(a["is_permit2"] for a in approvals):
-        note += (
-            " Permit2 approval detected — downstream per-token permits are signed "
-            "off-chain and require separate inspection."
-        )
+        note += " Permit2 approval detected — downstream per-token permits are signed off-chain and require separate inspection."
 
     return {
         "wallet_address": wallet,

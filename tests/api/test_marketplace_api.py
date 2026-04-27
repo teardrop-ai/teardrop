@@ -31,11 +31,15 @@ async def test_set_author_config_success(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/marketplace/author-config", json={
-        "settlement_wallet": _VALID_ADDR,
-    })
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={
+            "settlement_wallet": _VALID_ADDR,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["settlement_wallet"] == _VALID_ADDR
 
@@ -51,11 +55,15 @@ async def test_set_author_config_invalid_wallet(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/marketplace/author-config", json={
-        "settlement_wallet": "0x" + "00" * 20,  # zero address
-    })
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={
+            "settlement_wallet": "0x" + "00" * 20,  # zero address
+        },
+    )
     assert resp.status_code == 422
 
     config.get_settings.cache_clear()
@@ -179,6 +187,7 @@ async def test_catalog_success(anon_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import config
+
     config.get_settings.cache_clear()
 
     resp = await anon_client.get("/marketplace/catalog")
@@ -199,13 +208,17 @@ async def test_mcp_initialize(api_client, monkeypatch):
     monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["result"]["serverInfo"]["name"] == "teardrop-marketplace"
@@ -234,13 +247,17 @@ async def test_mcp_tools_list(api_client, monkeypatch):
     monkeypatch.setattr("app.registry.list_latest", MagicMock(return_value=[]))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["result"]["tools"]) == 1
@@ -259,14 +276,18 @@ async def test_mcp_tools_call_not_found(api_client, monkeypatch):
     monkeypatch.setattr("app.get_marketplace_tool_by_name", AsyncMock(return_value=None))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {"name": "acme/nonexistent", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "acme/nonexistent", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "error" in data
@@ -280,13 +301,17 @@ async def test_mcp_invalid_jsonrpc(api_client, monkeypatch):
     monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "1.0",
-        "id": 1,
-        "method": "initialize",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "1.0",
+            "id": 1,
+            "method": "initialize",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["error"]["code"] == -32600
@@ -300,13 +325,17 @@ async def test_mcp_unknown_method(api_client, monkeypatch):
     monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "fake/method",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "fake/method",
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["error"]["code"] == -32601
@@ -320,13 +349,17 @@ async def test_mcp_rate_limited(api_client, monkeypatch):
     monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(False, 0, 0)))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+        },
+    )
     assert resp.status_code == 429
 
     config.get_settings.cache_clear()
@@ -337,13 +370,17 @@ async def test_mcp_disabled(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+        },
+    )
     assert resp.status_code == 404
 
     config.get_settings.cache_clear()
@@ -370,14 +407,18 @@ async def test_mcp_tools_call_success(api_client, monkeypatch):
     )
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 5,
-        "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "result" in data
@@ -402,14 +443,18 @@ async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
     )
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 6,
-        "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "error" in data
@@ -513,9 +558,12 @@ async def test_subscribe_success(api_client, monkeypatch):
     )
     monkeypatch.setattr("marketplace.subscribe_to_tool", AsyncMock(return_value=sub))
 
-    resp = await api_client.post("/marketplace/subscriptions", json={
-        "qualified_tool_name": "acme/weather",
-    })
+    resp = await api_client.post(
+        "/marketplace/subscriptions",
+        json={
+            "qualified_tool_name": "acme/weather",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["qualified_tool_name"] == "acme/weather"
@@ -525,9 +573,12 @@ async def test_subscribe_success(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_subscribe_invalid_name(api_client, monkeypatch):
     """Reject tool names without org slug."""
-    resp = await api_client.post("/marketplace/subscriptions", json={
-        "qualified_tool_name": "no_slash_here",
-    })
+    resp = await api_client.post(
+        "/marketplace/subscriptions",
+        json={
+            "qualified_tool_name": "no_slash_here",
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -538,9 +589,12 @@ async def test_subscribe_tool_not_found(api_client, monkeypatch):
         AsyncMock(side_effect=ValueError("Marketplace tool not found: bad/tool")),
     )
 
-    resp = await api_client.post("/marketplace/subscriptions", json={
-        "qualified_tool_name": "bad/tool",
-    })
+    resp = await api_client.post(
+        "/marketplace/subscriptions",
+        json={
+            "qualified_tool_name": "bad/tool",
+        },
+    )
     assert resp.status_code == 422
 
 
@@ -550,8 +604,11 @@ async def test_list_subscriptions(api_client, monkeypatch):
 
     subs = [
         MarketplaceSubscription(
-            id="sub-1", org_id="test-org-id",
-            qualified_tool_name="acme/weather", is_active=True, subscribed_at=_NOW,
+            id="sub-1",
+            org_id="test-org-id",
+            qualified_tool_name="acme/weather",
+            is_active=True,
+            subscribed_at=_NOW,
         ),
     ]
     monkeypatch.setattr("marketplace.get_org_subscriptions", AsyncMock(return_value=subs))
@@ -593,14 +650,18 @@ async def test_mcp_v1_unsubscribed_tool_blocked(api_client, monkeypatch):
     monkeypatch.setattr("app.check_org_subscription", AsyncMock(return_value=False))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 20,
-        "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "error" in data
@@ -625,14 +686,18 @@ async def test_mcp_v1_subscribed_tool_proceeds(api_client, monkeypatch):
     monkeypatch.setattr("app._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 21,
-        "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     assert "result" in resp.json()
 
@@ -654,14 +719,18 @@ async def test_mcp_v1_builtin_tool_skips_subscription_check(api_client, monkeypa
     )
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0",
-        "id": 22,
-        "method": "tools/call",
-        "params": {"name": "builtin_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": {"name": "builtin_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     # Should reach tool-not-found, NOT the subscription gate
@@ -675,12 +744,14 @@ async def test_mcp_v1_builtin_tool_skips_subscription_check(api_client, monkeypa
 async def test_check_org_subscription_cache_hit(monkeypatch):
     """Second call within TTL uses cache; DB is only queried once."""
     import marketplace
-    from marketplace import check_org_subscription, _SUBSCRIPTION_CACHE
-    from marketplace import MarketplaceSubscription
+    from marketplace import _SUBSCRIPTION_CACHE, MarketplaceSubscription, check_org_subscription
 
     sub = MarketplaceSubscription(
-        id="s1", org_id="org-cache-hit",
-        qualified_tool_name="acme/tool", is_active=True, subscribed_at=_NOW,
+        id="s1",
+        org_id="org-cache-hit",
+        qualified_tool_name="acme/tool",
+        is_active=True,
+        subscribed_at=_NOW,
     )
     mock_get = AsyncMock(return_value=[sub])
     monkeypatch.setattr(marketplace, "get_org_subscriptions", mock_get)
@@ -699,7 +770,7 @@ async def test_check_org_subscription_cache_hit(monkeypatch):
 async def test_check_org_subscription_not_subscribed(monkeypatch):
     """Returns False when org has no active subscription for the tool."""
     import marketplace
-    from marketplace import check_org_subscription, _SUBSCRIPTION_CACHE
+    from marketplace import _SUBSCRIPTION_CACHE, check_org_subscription
 
     monkeypatch.setattr(marketplace, "get_org_subscriptions", AsyncMock(return_value=[]))
     _SUBSCRIPTION_CACHE.pop("org-no-sub", None)
@@ -714,6 +785,7 @@ async def test_check_org_subscription_not_subscribed(monkeypatch):
 async def test_check_org_subscription_cache_invalidated_on_subscribe(monkeypatch):
     """Subscribing to a tool immediately drops the org's cache entry."""
     import time
+
     import marketplace
     from marketplace import _SUBSCRIPTION_CACHE
 
@@ -724,7 +796,8 @@ async def test_check_org_subscription_cache_invalidated_on_subscribe(monkeypatch
     pool_mock.execute = AsyncMock(return_value="INSERT 1")
     monkeypatch.setattr(marketplace, "_get_pool", MagicMock(return_value=pool_mock))
     monkeypatch.setattr(
-        marketplace, "get_marketplace_tool_by_name",
+        marketplace,
+        "get_marketplace_tool_by_name",
         AsyncMock(return_value={"org_id": "author", "name": "t"}),
     )
 
@@ -741,24 +814,35 @@ async def test_create_tool_with_base_price(api_client, monkeypatch):
     from org_tools import OrgTool
 
     tool = OrgTool(
-        id="t-1", org_id="test-org-id", name="my_tool",
-        description="desc", input_schema={"type": "object"},
-        webhook_url="https://example.com/hook", webhook_method="POST",
-        has_auth=False, timeout_seconds=10, is_active=True,
-        publish_as_mcp=True, marketplace_description="mp desc",
+        id="t-1",
+        org_id="test-org-id",
+        name="my_tool",
+        description="desc",
+        input_schema={"type": "object"},
+        webhook_url="https://example.com/hook",
+        webhook_method="POST",
+        has_auth=False,
+        timeout_seconds=10,
+        is_active=True,
+        publish_as_mcp=True,
+        marketplace_description="mp desc",
         base_price_usdc=5_000_000,
-        created_at=_NOW, updated_at=_NOW,
+        created_at=_NOW,
+        updated_at=_NOW,
     )
     monkeypatch.setattr("app.create_org_tool", AsyncMock(return_value=tool))
     monkeypatch.setattr("app.invalidate_org_tools_cache", AsyncMock())
 
-    resp = await api_client.post("/tools", json={
-        "name": "my_tool",
-        "description": "desc",
-        "input_schema": {"type": "object"},
-        "webhook_url": "https://example.com/hook",
-        "base_price_usdc": 5_000_000,
-    })
+    resp = await api_client.post(
+        "/tools",
+        json={
+            "name": "my_tool",
+            "description": "desc",
+            "input_schema": {"type": "object"},
+            "webhook_url": "https://example.com/hook",
+            "base_price_usdc": 5_000_000,
+        },
+    )
     assert resp.status_code == 201
     assert resp.json()["base_price_usdc"] == 5_000_000
 
@@ -776,21 +860,29 @@ async def test_mcp_tools_call_uses_author_price(api_client, monkeypatch):
     monkeypatch.setattr("app.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "app.get_marketplace_tool_by_name",
-        AsyncMock(return_value={
-            "org_id": "author-org-id",
-            "name": "my_tool",
-            "base_price_usdc": 2_000_000,
-        }),
+        AsyncMock(
+            return_value={
+                "org_id": "author-org-id",
+                "name": "my_tool",
+                "base_price_usdc": 2_000_000,
+            }
+        ),
     )
     monkeypatch.setattr("app._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     assert "result" in resp.json()
 
@@ -808,10 +900,13 @@ async def test_admin_pricing_accepts_marketplace_tool(admin_api_client, monkeypa
     )
     monkeypatch.setattr("app.upsert_tool_pricing_override", AsyncMock())
 
-    resp = await admin_api_client.post("/admin/pricing/tools", json={
-        "tool_name": "acme/weather",
-        "cost_usdc": 1_000_000,
-    })
+    resp = await admin_api_client.post(
+        "/admin/pricing/tools",
+        json={
+            "tool_name": "acme/weather",
+            "cost_usdc": 1_000_000,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["updated"] is True
 
@@ -830,11 +925,13 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
     monkeypatch.setattr("app.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "app.get_marketplace_tool_by_name",
-        AsyncMock(return_value={
-            "org_id": "author-org-id",
-            "name": "my_tool",
-            "base_price_usdc": 1_000,
-        }),
+        AsyncMock(
+            return_value={
+                "org_id": "author-org-id",
+                "name": "my_tool",
+                "base_price_usdc": 1_000,
+            }
+        ),
     )
     monkeypatch.setattr(
         "app.verify_credit",
@@ -846,12 +943,18 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
     monkeypatch.setattr("app.record_tool_call_earnings", mock_earnings)
 
     import config
+
     config.get_settings.cache_clear()
 
-    resp = await api_client.post("/mcp/v1", json={
-        "jsonrpc": "2.0", "id": 99, "method": "tools/call",
-        "params": {"name": "acme/my_tool", "arguments": {}},
-    })
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["result"]["isError"] is False
 

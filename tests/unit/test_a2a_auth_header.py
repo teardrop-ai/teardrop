@@ -32,8 +32,7 @@ async def test_send_message_with_auth_header():
         async def post(self, *a, **kw):
             return mock_resp
 
-    with patch.object(a2a_client.httpx, "AsyncClient", FakeClient), \
-         patch.object(a2a_client, "validate_url", return_value=None):
+    with patch.object(a2a_client.httpx, "AsyncClient", FakeClient), patch.object(a2a_client, "validate_url", return_value=None):
         await a2a_client.send_message(
             "https://agent.example.com",
             "hello",
@@ -66,8 +65,7 @@ async def test_send_message_without_auth_header():
         async def post(self, *a, **kw):
             return mock_resp
 
-    with patch.object(a2a_client.httpx, "AsyncClient", FakeClient), \
-         patch.object(a2a_client, "validate_url", return_value=None):
+    with patch.object(a2a_client.httpx, "AsyncClient", FakeClient), patch.object(a2a_client, "validate_url", return_value=None):
         await a2a_client.send_message(
             "https://agent.example.com",
             "hello",

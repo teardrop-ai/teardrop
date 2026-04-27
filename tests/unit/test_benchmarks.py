@@ -74,3 +74,156 @@ class TestBuildBenchmarksResponse:
             result = await build_benchmarks_response()
             for model in result["models"]:
                 assert "benchmarks" not in model
+
+
+# ─── DB pool helpers ──────────────────────────────────────────────────────────
+
+
+def _pool():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    return pool
+
+
+@pytest.mark.anyio
+class TestBenchmarksDbHelpers:
+    async def test_init_sets_pool(self):
+        import benchmarks as bm_module
+
+        pool = _pool()
+        with patch.object(bm_module, "_pool", None):
+            await bm_module.init_benchmarks_db(pool)
+            assert bm_module._pool is pool
+
+    async def test_close_clears_pool(self):
+        import benchmarks as bm_module
+
+        with patch.object(bm_module, "_pool", _pool()):
+            await bm_module.close_benchmarks_db()
+        assert bm_module._pool is None
+
+    def test_get_pool_raises_when_uninitialised(self):
+        import benchmarks as bm_module
+
+        with patch.object(bm_module, "_pool", None):
+            with pytest.raises(RuntimeError, match="not initialised"):
+                bm_module._get_pool()
+
+
+# ─── get_model_context_specs ──────────────────────────────────────────────────
+
+
+class TestGetModelContextSpecs:
+    def test_known_model(self):
+        from benchmarks import get_model_context_specs
+
+        specs = get_model_context_specs("anthropic", "claude-sonnet-4-20250514")
+        assert specs["context_window"] == 200_000
+        assert specs["supports_tools"] is True
+
+    def test_unknown_model_returns_defaults(self):
+        from benchmarks import _DEFAULT_MODEL_SPECS, get_model_context_specs
+
+        specs = get_model_context_specs("unknown", "mystery-model")
+        assert specs["context_window"] == _DEFAULT_MODEL_SPECS["context_window"]
+
+
+# ─── get_model_benchmarks ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGetModelBenchmarks:
+    async def test_scoped_org_bypasses_cache(self):
+        import benchmarks as bm_module
+
+        pool = _pool()
+        pool.fetch = AsyncMock(return_value=[])
+        with patch.object(bm_module, "_pool", pool):
+            result = await bm_module.get_model_benchmarks(org_id="org-1")
+        assert isinstance(result, dict)
+        pool.fetch.assert_called_once()
+
+    async def test_global_returns_empty_when_no_pool(self):
+        import benchmarks as bm_module
+
+        with (
+            patch.object(bm_module, "_pool", None),
+            patch.object(bm_module, "_benchmark_cache", None),
+            patch.object(bm_module, "_benchmark_cache_expires", 0.0),
+            patch("benchmarks.get_redis", return_value=None),
+        ):
+            result = await bm_module.get_model_benchmarks()
+        assert result == {}
+
+    async def test_global_uses_in_process_cache(self):
+        import time
+
+        import benchmarks as bm_module
+
+        cached = {"anthropic:test-model": {"total_runs_7d": 50}}
+        with (
+            patch.object(bm_module, "_benchmark_cache", cached),
+            patch.object(bm_module, "_benchmark_cache_expires", time.monotonic() + 9999),
+            patch("benchmarks.get_redis", return_value=None),
+        ):
+            result = await bm_module.get_model_benchmarks()
+        assert result == cached
+
+    async def test_query_benchmarks_returns_result(self):
+        import benchmarks as bm_module
+
+        pool = _pool()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-20250514",
+                    "total_runs": 100,
+                    "avg_latency_ms": 1800.0,
+                    "p95_latency_ms": 3500.0,
+                    "avg_cost_usdc": 25000.0,
+                    "avg_tokens_per_sec": 40.0,
+                }
+            ]
+        )
+        with patch.object(bm_module, "_pool", pool):
+            result = await bm_module._query_benchmarks()
+        assert "anthropic:claude-sonnet-4-20250514" in result
+        assert result["anthropic:claude-sonnet-4-20250514"]["total_runs_7d"] == 100
+
+    async def test_query_benchmarks_handles_null_metrics(self):
+        import benchmarks as bm_module
+
+        pool = _pool()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "provider": "openai",
+                    "model": "gpt-4o",
+                    "total_runs": 50,
+                    "avg_latency_ms": None,
+                    "p95_latency_ms": None,
+                    "avg_cost_usdc": None,
+                    "avg_tokens_per_sec": None,
+                }
+            ]
+        )
+        with patch.object(bm_module, "_pool", pool):
+            result = await bm_module._query_benchmarks()
+        entry = result["openai:gpt-4o"]
+        assert entry["avg_latency_ms"] is None
+
+    async def test_global_caches_result_from_db(self):
+        import benchmarks as bm_module
+
+        pool = _pool()
+        pool.fetch = AsyncMock(return_value=[])
+        with (
+            patch.object(bm_module, "_pool", pool),
+            patch.object(bm_module, "_benchmark_cache", None),
+            patch.object(bm_module, "_benchmark_cache_expires", 0.0),
+            patch("benchmarks.get_redis", return_value=None),
+        ):
+            result = await bm_module.get_model_benchmarks()
+        assert isinstance(result, dict)
+        pool.fetch.assert_called_once()

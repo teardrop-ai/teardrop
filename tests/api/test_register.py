@@ -105,9 +105,7 @@ async def test_register_missing_email_422(anon_client):
 
 @pytest.mark.anyio
 async def test_register_missing_org_name_422(anon_client):
-    resp = await anon_client.post(
-        "/register", json={"email": "a@b.com", "password": "strongpass1"}
-    )
+    resp = await anon_client.post("/register", json={"email": "a@b.com", "password": "strongpass1"})
     assert resp.status_code == 422
 
 

@@ -16,7 +16,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
-from agent.llm import extract_usage, get_llm, get_llm_for_request
+from agent.llm import extract_usage, get_llm_for_request
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from benchmarks import get_model_context_specs
 from config import get_settings
@@ -121,14 +121,8 @@ def _build_planner_system_messages(
     # to prevent cross-org cache pollution.
     cached_prompt = _PLANNER_SYSTEM
     if platform_tools:
-        platform_tool_lines = [
-            f"- **{t.name}**: {t.description.splitlines()[0]}"
-            for t in platform_tools
-        ]
-        cached_prompt += (
-            "\n\n## Available Platform Tools\n"
-            + "\n".join(platform_tool_lines)
-        )
+        platform_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in platform_tools]
+        cached_prompt += "\n\n## Available Platform Tools\n" + "\n".join(platform_tool_lines)
 
     # ── Uncached suffix: org memory + runtime context + org-specific tools ─
     uncached_parts: list[str] = []
@@ -141,8 +135,7 @@ def _build_planner_system_messages(
         uncached_parts.append(
             "## Relevant Context from Memory\n"
             "The following facts were recalled from previous interactions with this organisation. "
-            "Use them as background context only — do not repeat them verbatim unless asked.\n"
-            + memory_block
+            "Use them as background context only — do not repeat them verbatim unless asked.\n" + memory_block
         )
 
     now = datetime.now(timezone.utc)
@@ -150,8 +143,7 @@ def _build_planner_system_messages(
         f"- **Date & Time (UTC)**: {now.strftime('%A, %B %d, %Y at %H:%M:%S UTC')}",
         f"- **ISO 8601**: {now.isoformat()}",
         f"- **Model**: {provider}/{model}",
-        f"- **Model Knowledge Cutoff**: {model_specs['knowledge_cutoff']} "
-        f"({model_specs['training_cutoff_note']})",
+        f"- **Model Knowledge Cutoff**: {model_specs['knowledge_cutoff']} ({model_specs['training_cutoff_note']})",
         f"- **Context Window**: {model_specs['context_window']:,} tokens",
         f"- **Max Response Tokens**: {max_tokens:,}",
         f"- **Request Timeout**: {timeout_seconds}s",
@@ -173,18 +165,12 @@ def _build_planner_system_messages(
         "Use this information to ground your responses in current reality. "
         "When answering questions about 'today', 'this year', 'last year', recent events, "
         "or any time-relative analysis, always anchor to the date above — "
-        "never assume dates based on your training data.\n"
-        + "\n".join(context_lines)
+        "never assume dates based on your training data.\n" + "\n".join(context_lines)
     )
 
     if org_tools:
-        org_tool_lines = [
-            f"- **{t.name}**: {t.description.splitlines()[0]}"
-            for t in org_tools
-        ]
-        uncached_parts.append(
-            "## Additional Organisation Tools\n" + "\n".join(org_tool_lines)
-        )
+        org_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in org_tools]
+        uncached_parts.append("## Additional Organisation Tools\n" + "\n".join(org_tool_lines))
 
     uncached_prompt = "\n\n".join(uncached_parts)
 
@@ -314,13 +300,15 @@ async def _execute_single_tool(
                 usage = metadata.get("_usage", {})
                 delegation_count = usage.get("delegation_count", 0)
                 if delegation_count >= _s.a2a_delegation_max_per_run:
-                    content = json.dumps({
-                        "agent_name": "unknown",
-                        "status": "failed",
-                        "result": "",
-                        "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
-                        "cost_usdc": 0,
-                    })
+                    content = json.dumps(
+                        {
+                            "agent_name": "unknown",
+                            "status": "failed",
+                            "result": "",
+                            "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
+                            "cost_usdc": 0,
+                        }
+                    )
                     return ToolMessage(content=content, tool_call_id=call_id), tool_name
 
                 from billing import _get_pool as _get_billing_pool
@@ -361,9 +349,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
-    results = await asyncio.gather(
-        *[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls]
-    )
+    results = await asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls])
     tool_messages = [msg for msg, _ in results]
     tool_names_acc.extend(name for _, name in results)
 

@@ -56,13 +56,17 @@ def _embed_patch():
 async def test_store_and_recall(test_user):
     with _embed_patch():
         entry = await store_memory(
-            test_user.org_id, test_user.id, "user prefers dark mode",
+            test_user.org_id,
+            test_user.id,
+            "user prefers dark mode",
         )
         assert entry is not None
         assert entry.content == "user prefers dark mode"
 
         results = await recall_memories(
-            test_user.org_id, "dark mode", top_k=3,
+            test_user.org_id,
+            "dark mode",
+            top_k=3,
         )
         assert len(results) >= 1
         assert results[0].content == "user prefers dark mode"

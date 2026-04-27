@@ -43,10 +43,7 @@ class ResolveEnsInput(BaseModel):
             raise ValueError("name must not be empty")
         # Allow 0x addresses (reverse lookup) or ENS name patterns.
         if not _ADDR_RE.match(stripped) and not _ENS_RE.match(stripped.lower()):
-            raise ValueError(
-                "name must be a valid ENS name (e.g. 'vitalik.eth') "
-                "or an Ethereum address (0x…)"
-            )
+            raise ValueError("name must be a valid ENS name (e.g. 'vitalik.eth') or an Ethereum address (0x…)")
         return stripped
 
 

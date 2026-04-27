@@ -43,9 +43,7 @@ class DelegateToAgentOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def delegate_to_agent(
-    agent_url: str, task_description: str, *, config: dict | None = None
-) -> dict[str, Any]:
+async def delegate_to_agent(agent_url: str, task_description: str, *, config: dict | None = None) -> dict[str, Any]:
     """Delegate a task to a remote A2A agent and return the result.
 
     This tool discovers the remote agent's capabilities via its published agent
@@ -110,8 +108,7 @@ async def delegate_to_agent(
                 "status": "failed",
                 "result": "",
                 "error": (
-                    f"Agent {agent_url} is not in your organisation's allowed agents list. "
-                    "Add it via POST /a2a/agents first."
+                    f"Agent {agent_url} is not in your organisation's allowed agents list. Add it via POST /a2a/agents first."
                 ),
                 "cost_usdc": 0,
             }
@@ -135,8 +132,7 @@ async def delegate_to_agent(
                 "status": "failed",
                 "result": "",
                 "error": (
-                    f"Agent {agent_url} is not in your organisation's allowed agents list. "
-                    "Add it via POST /a2a/agents first."
+                    f"Agent {agent_url} is not in your organisation's allowed agents list. Add it via POST /a2a/agents first."
                 ),
                 "cost_usdc": 0,
             }
@@ -245,7 +241,8 @@ async def delegate_to_agent(
             cost_usdc = 0
             logger.warning(
                 "delegate_to_agent: fund_delegation failed org=%s cost=%s",
-                org_id, cost_usdc,
+                org_id,
+                cost_usdc,
             )
 
         await record_delegation_event(

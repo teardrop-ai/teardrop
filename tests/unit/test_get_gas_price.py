@@ -53,9 +53,7 @@ class TestGetGasPrice:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block())
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -71,8 +69,9 @@ class TestGetGasPrice:
         assert 0.0 <= result["gas_used_ratio"] <= 1.0
 
     async def test_gas_price_is_base_plus_priority(self, test_settings, monkeypatch):
-        from tools.definitions.get_gas_price import get_gas_price
         from web3 import Web3
+
+        from tools.definitions.get_gas_price import get_gas_price
 
         monkeypatch.setattr("tools.definitions.get_gas_price._GAS_CACHE", {})
 
@@ -82,9 +81,7 @@ class TestGetGasPrice:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block(base_fee=base_fee))
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -110,9 +107,7 @@ class TestGetGasPrice:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = counting_get_block
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -131,9 +126,7 @@ class TestGetGasPrice:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block())
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -151,18 +144,15 @@ class TestGetGasPrice:
         legacy_price = 20_000_000_000
 
         mock_w3 = MagicMock()
-        mock_w3.eth.get_block = AsyncMock(
-            return_value={"gasUsed": 0, "gasLimit": 15_000_000}
-        )
+        mock_w3.eth.get_block = AsyncMock(return_value={"gasUsed": 0, "gasLimit": 15_000_000})
+
         # Simulate legacy eth_gasPrice as an awaitable coroutine.
         async def _fake_gas_price():
             return legacy_price
 
         mock_w3.eth.gas_price = _fake_gas_price()
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -182,9 +172,7 @@ class TestGetGasPrice:
         mock_w3 = MagicMock()
         mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block(base_fee=100_000_000))
 
-        monkeypatch.setattr(
-            "tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
 
         with patch(
             "tools.definitions.get_gas_price._get_max_priority_fee",
@@ -193,5 +181,3 @@ class TestGetGasPrice:
             result = await get_gas_price(chain_id=8453)
 
         assert result["chain_id"] == 8453
-
-

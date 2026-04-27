@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, create_model
 
 from cache import get_redis
 from config import get_settings
-from tools.definitions.http_fetch import async_validate_url, validate_url
+from tools.definitions.http_fetch import async_validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -191,8 +191,7 @@ async def create_org_tool(
         config = await get_author_config(org_id)
         if config is None:
             raise ValueError(
-                "Cannot publish tool to marketplace — register a settlement wallet first "
-                "via POST /marketplace/author-config"
+                "Cannot publish tool to marketplace — register a settlement wallet first via POST /marketplace/author-config"
             )
 
     try:
@@ -353,9 +352,7 @@ async def update_org_tool(
 
             config = await get_author_config(org_id)
             if config is None:
-                raise ValueError(
-                    "Cannot publish tool to marketplace — register a settlement wallet first"
-                )
+                raise ValueError("Cannot publish tool to marketplace — register a settlement wallet first")
         _add("publish_as_mcp", publish_as_mcp)
     if marketplace_description is not None:
         _add("marketplace_description", marketplace_description)
@@ -378,11 +375,7 @@ async def update_org_tool(
     params.append(tool_id)
     params.append(org_id)
 
-    query = (
-        f"UPDATE org_tools SET {', '.join(sets)}"
-        f" WHERE id = ${idx} AND org_id = ${idx + 1}"
-        " RETURNING *"
-    )
+    query = f"UPDATE org_tools SET {', '.join(sets)} WHERE id = ${idx} AND org_id = ${idx + 1} RETURNING *"
     updated = await pool.fetchrow(query, *params)
 
     await _record_event(org_id, tool_id, row["name"], "updated", actor_id)
@@ -398,17 +391,14 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
     """Soft-delete a tool (set is_active=False).  Returns True if found."""
     pool = _get_pool()
     result = await pool.execute(
-        "UPDATE org_tools SET is_active = FALSE, updated_at = NOW()"
-        " WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
+        "UPDATE org_tools SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND org_id = $2 AND is_active = TRUE",
         tool_id,
         org_id,
     )
     deleted = result.split()[-1] != "0"  # "UPDATE N"
     if deleted:
         # Fetch name for audit
-        row = await pool.fetchrow(
-            "SELECT name, publish_as_mcp FROM org_tools WHERE id = $1", tool_id
-        )
+        row = await pool.fetchrow("SELECT name, publish_as_mcp FROM org_tools WHERE id = $1", tool_id)
         name = row["name"] if row else tool_id
         await _record_event(org_id, tool_id, name, "deleted", actor_id)
         await invalidate_org_tools_cache(org_id)
@@ -535,10 +525,7 @@ async def list_marketplace_tools() -> list[OrgTool]:
             return _marketplace_cache[0]
 
         pool = _get_pool()
-        rows = await pool.fetch(
-            "SELECT * FROM org_tools WHERE publish_as_mcp = TRUE AND is_active = TRUE"
-            " ORDER BY name"
-        )
+        rows = await pool.fetch("SELECT * FROM org_tools WHERE publish_as_mcp = TRUE AND is_active = TRUE ORDER BY name")
         tools = [_row_to_org_tool(r) for r in rows]
         ttl = settings.org_tools_cache_ttl_seconds
         _marketplace_cache = (tools, time.monotonic() + ttl)
@@ -562,9 +549,7 @@ async def invalidate_marketplace_cache() -> None:
         try:
             await redis.delete("teardrop:marketplace:tools")
         except Exception:
-            logger.warning(
-                "Redis marketplace cache invalidation failed (non-fatal)", exc_info=True
-            )
+            logger.warning("Redis marketplace cache invalidation failed (non-fatal)", exc_info=True)
 
 
 # ─── Dynamic Pydantic model from JSON Schema ─────────────────────────────────
@@ -692,13 +677,10 @@ async def build_org_langchain_tools(
     # We need auth data to build the tools — fetch raw rows.
     pool = _get_pool()
     rows = await pool.fetch(
-        "SELECT id, auth_header_name, auth_header_enc FROM org_tools"
-        " WHERE org_id = $1 AND is_active = TRUE",
+        "SELECT id, auth_header_name, auth_header_enc FROM org_tools WHERE org_id = $1 AND is_active = TRUE",
         org_id,
     )
-    auth_lookup = {
-        r["id"]: (r["auth_header_name"], r["auth_header_enc"]) for r in rows
-    }
+    auth_lookup = {r["id"]: (r["auth_header_name"], r["auth_header_enc"]) for r in rows}
 
     tools_list: list[StructuredTool] = []
     tools_by_name: dict[str, StructuredTool] = {}

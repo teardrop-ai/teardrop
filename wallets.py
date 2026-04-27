@@ -125,8 +125,7 @@ async def get_wallet_by_address(address: str, chain_id: int = 1) -> Wallet | Non
     """Look up a wallet by EIP-55 address and chain ID."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at"
-        " FROM wallets WHERE address = $1 AND chain_id = $2",
+        "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at FROM wallets WHERE address = $1 AND chain_id = $2",
         address,
         chain_id,
     )

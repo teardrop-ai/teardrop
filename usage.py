@@ -81,12 +81,8 @@ async def init_usage_db(pool: asyncpg.Pool) -> None:
         )
         """
     )
-    await pool.execute(
-        "CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events (user_id, created_at)"
-    )
-    await pool.execute(
-        "CREATE INDEX IF NOT EXISTS idx_usage_org ON usage_events (org_id, created_at)"
-    )
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_events (user_id, created_at)")
+    await pool.execute("CREATE INDEX IF NOT EXISTS idx_usage_org ON usage_events (org_id, created_at)")
     logger.info("Usage tables ready (Postgres)")
 
 

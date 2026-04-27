@@ -222,9 +222,11 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
     )
     monkeypatch.setattr(
         "app.discover_mcp_tools",
-        AsyncMock(return_value=[
-            {"name": "add", "description": "Add numbers", "input_schema": {}},
-        ]),
+        AsyncMock(
+            return_value=[
+                {"name": "add", "description": "Add numbers", "input_schema": {}},
+            ]
+        ),
     )
 
     resp = await api_client.post("/mcp/servers/srv-1/discover")

@@ -124,3 +124,13 @@ class TestInitAndClose:
         with patch.object(usage_module, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):
                 _get_pool()
+
+    async def test_init_usage_db_sets_pool_and_creates_tables(self):
+        from usage import init_usage_db
+
+        pool = MagicMock()
+        pool.execute = AsyncMock()
+        with patch.object(usage_module, "_pool", None):
+            await init_usage_db(pool)
+        assert usage_module._pool is pool
+        assert pool.execute.call_count == 3  # CREATE TABLE + 2 CREATE INDEX

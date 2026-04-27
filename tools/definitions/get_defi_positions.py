@@ -75,20 +75,29 @@ _AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
 # tool stays correct as Compound adds collaterals.
 _COMPOUND_V3_MARKETS: dict[int, list[dict[str, str]]] = {
     1: [
-        {"name": "cUSDCv3", "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
-         "base_symbol": "USDC", "base_decimals": "6"},
-        {"name": "cWETHv3", "address": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
-         "base_symbol": "WETH", "base_decimals": "18"},
-        {"name": "cUSDTv3", "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
-         "base_symbol": "USDT", "base_decimals": "6"},
+        {"name": "cUSDCv3", "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3", "base_symbol": "USDC", "base_decimals": "6"},
+        {
+            "name": "cWETHv3",
+            "address": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
+            "base_symbol": "WETH",
+            "base_decimals": "18",
+        },
+        {"name": "cUSDTv3", "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840", "base_symbol": "USDT", "base_decimals": "6"},
     ],
     8453: [
-        {"name": "cUSDCv3", "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
-         "base_symbol": "USDC", "base_decimals": "6"},
-        {"name": "cWETHv3", "address": "0x46e6b214b524310239732D51387075E0e70970bf",
-         "base_symbol": "WETH", "base_decimals": "18"},
-        {"name": "cUSDbCv3", "address": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf",
-         "base_symbol": "USDbC", "base_decimals": "6"},
+        {"name": "cUSDCv3", "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F", "base_symbol": "USDC", "base_decimals": "6"},
+        {
+            "name": "cWETHv3",
+            "address": "0x46e6b214b524310239732D51387075E0e70970bf",
+            "base_symbol": "WETH",
+            "base_decimals": "18",
+        },
+        {
+            "name": "cUSDbCv3",
+            "address": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf",
+            "base_symbol": "USDbC",
+            "base_decimals": "6",
+        },
     ],
 }
 
@@ -349,8 +358,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
 
     # Aggregate account snapshot
     account_data = await pool.functions.getUserAccountData(wallet).call()
-    (total_collateral_base, total_debt_base, available_borrows_base,
-     liq_threshold, ltv, health_factor_raw) = account_data
+    (total_collateral_base, total_debt_base, available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
 
@@ -395,9 +403,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     )
 
 
-async def _fetch_compound_market(
-    w3: Any, wallet: str, market: dict[str, str]
-) -> CompoundMarketPosition | None:
+async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -> CompoundMarketPosition | None:
     """Fetch a single Compound v3 Comet market position. Returns None if no position."""
     market_addr = Web3.to_checksum_address(market["address"])
     comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
@@ -411,9 +417,7 @@ async def _fetch_compound_market(
     )
 
     # Discover collateral asset list, then fetch userCollateral per asset in parallel
-    asset_infos = await asyncio.gather(
-        *[comet.functions.getAssetInfo(i).call() for i in range(int(num_assets))]
-    )
+    asset_infos = await asyncio.gather(*[comet.functions.getAssetInfo(i).call() for i in range(int(num_assets))])
 
     async def _collateral(asset_info: Any) -> CompoundCollateral | None:
         try:
@@ -443,7 +447,7 @@ async def _fetch_compound_market(
         base_asset_symbol=market["base_symbol"],
         # Compound's baseToken is implicit in the market — we carry the symbol/decimals
         # statically to avoid an extra RPC call. The market address is the Comet proxy.
-        base_asset_address=market_addr,  # Comet's base asset is fixed at deploy time; consumers should treat market_address as the canonical market identifier
+        base_asset_address=market_addr,  # Comet proxy; treat market_address as canonical
         supplied_amount=f"{int(supplied) / base_divisor:.6f}",
         borrowed_amount=f"{int(borrowed) / base_divisor:.6f}",
         collateral=collateral,
@@ -451,9 +455,7 @@ async def _fetch_compound_market(
     )
 
 
-async def _fetch_compound_v3(
-    w3: Any, wallet: str, chain_id: int
-) -> list[CompoundMarketPosition]:
+async def _fetch_compound_v3(w3: Any, wallet: str, chain_id: int) -> list[CompoundMarketPosition]:
     """Fetch all Compound v3 market positions for a wallet on the given chain."""
     markets = _COMPOUND_V3_MARKETS.get(chain_id, [])
 
@@ -494,13 +496,21 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
             return None
         try:
             result = await nfpm.functions.positions(token_id).call()
-            (_nonce, _operator, token0, token1, fee, tick_lower, tick_upper,
-             liquidity, _f0, _f1, tokens_owed_0, tokens_owed_1) = result
-            is_closed = (
-                int(liquidity) == 0
-                and int(tokens_owed_0) == 0
-                and int(tokens_owed_1) == 0
-            )
+            (
+                _nonce,
+                _operator,
+                token0,
+                token1,
+                fee,
+                tick_lower,
+                tick_upper,
+                liquidity,
+                _f0,
+                _f1,
+                tokens_owed_0,
+                tokens_owed_1,
+            ) = result
+            is_closed = int(liquidity) == 0 and int(tokens_owed_0) == 0 and int(tokens_owed_1) == 0
             if is_closed:
                 return None
             return UniswapV3Position(

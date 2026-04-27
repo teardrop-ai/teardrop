@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 _WALLET_A = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"  # vitalik.eth
 _WALLET_B = "0xBE0eB53F46cd790Cd13851d5EFf43D12404d33E8"  # binance7
@@ -54,9 +55,7 @@ def _build_mock_w3(
         if wallet_arg in compound_raise_wallets:
             m.call = AsyncMock(side_effect=Exception("simulated compound failure"))
         else:
-            m.call = AsyncMock(
-                return_value=compound_borrow_by_wallet.get(wallet_arg, compound_borrow_default)
-            )
+            m.call = AsyncMock(return_value=compound_borrow_by_wallet.get(wallet_arg, compound_borrow_default))
         return m
 
     mock_contract.functions.borrowBalanceOf.side_effect = _borrow_call
@@ -66,11 +65,7 @@ def _build_mock_w3(
         if wallet_arg in compound_raise_wallets:
             m.call = AsyncMock(side_effect=Exception("simulated compound failure"))
         else:
-            m.call = AsyncMock(
-                return_value=compound_liquidatable_by_wallet.get(
-                    wallet_arg, compound_liquidatable_default
-                )
-            )
+            m.call = AsyncMock(return_value=compound_liquidatable_by_wallet.get(wallet_arg, compound_liquidatable_default))
         return m
 
     mock_contract.functions.isLiquidatable.side_effect = _liq_call
@@ -88,9 +83,7 @@ def _build_mock_w3(
 
 
 def _patch(monkeypatch, mock_w3):
-    monkeypatch.setattr(
-        "tools.definitions.get_liquidation_risk.get_web3", lambda chain_id=1: mock_w3
-    )
+    monkeypatch.setattr("tools.definitions.get_liquidation_risk.get_web3", lambda chain_id=1: mock_w3)
 
 
 # ─── Input validation ────────────────────────────────────────────────────────
@@ -119,6 +112,7 @@ class TestInputValidation:
         ]
         # Use Web3 to checksum so validator accepts shapes
         from web3 import Web3
+
         wallets = [Web3.to_checksum_address(w) for w in wallets]
         with pytest.raises(ValueError, match="50"):
             await get_liquidation_risk(wallet_addresses=wallets, chain_id=1)
@@ -127,9 +121,7 @@ class TestInputValidation:
         from tools.definitions.get_liquidation_risk import get_liquidation_risk
 
         with pytest.raises(Exception):  # noqa: BLE001
-            await get_liquidation_risk(
-                wallet_addresses=["not-an-address"], chain_id=1
-            )
+            await get_liquidation_risk(wallet_addresses=["not-an-address"], chain_id=1)
 
     async def test_duplicates_deduped_silently(self, test_settings, monkeypatch):
         from tools.definitions.get_liquidation_risk import get_liquidation_risk
@@ -137,9 +129,7 @@ class TestInputValidation:
         mock_w3 = _build_mock_w3()
         _patch(monkeypatch, mock_w3)
 
-        result = await get_liquidation_risk(
-            wallet_addresses=[_WALLET_A, _WALLET_A, _WALLET_B], chain_id=1
-        )
+        result = await get_liquidation_risk(wallet_addresses=[_WALLET_A, _WALLET_A, _WALLET_B], chain_id=1)
 
         # Only 2 unique wallets should be in results
         assert len(result["results"]) == 2
@@ -148,9 +138,10 @@ class TestInputValidation:
         assert addrs == [_WALLET_A, _WALLET_B]
 
     async def test_pydantic_input_validates_cap(self):
+        from web3 import Web3
+
         from tools.definitions.get_liquidation_risk import GetLiquidationRiskInput
 
-        from web3 import Web3
         wallets = [Web3.to_checksum_address("0x" + f"{i:040x}"[:40]) for i in range(1, 52)]
         with pytest.raises(ValueError):
             GetLiquidationRiskInput(wallet_addresses=wallets)
@@ -167,13 +158,13 @@ class TestAaveTiers:
         [
             (0.5, "liquidatable"),
             (0.999, "liquidatable"),
-            (1.0, "critical"),        # boundary: hf >= 1.0 && < 1.05
+            (1.0, "critical"),  # boundary: hf >= 1.0 && < 1.05
             (1.049, "critical"),
-            (1.05, "warning"),        # boundary
+            (1.05, "warning"),  # boundary
             (1.149, "warning"),
-            (1.15, "caution"),        # boundary
+            (1.15, "caution"),  # boundary
             (1.499, "caution"),
-            (1.5, "healthy"),         # boundary
+            (1.5, "healthy"),  # boundary
             (2.5, "healthy"),
         ],
     )
@@ -186,9 +177,7 @@ class TestAaveTiers:
         mock_w3 = _build_mock_w3(aave_by_wallet={_WALLET_A: aave_data})
         _patch(monkeypatch, mock_w3)
 
-        result = await get_liquidation_risk(
-            wallet_addresses=[_WALLET_A], chain_id=1
-        )
+        result = await get_liquidation_risk(wallet_addresses=[_WALLET_A], chain_id=1)
 
         assert result["results"][0]["aave"]["risk_tier"] == expected_tier
 
@@ -352,9 +341,7 @@ class TestFailureIsolation:
         )
         _patch(monkeypatch, mock_w3)
 
-        result = await get_liquidation_risk(
-            wallet_addresses=[_WALLET_A, _WALLET_B], chain_id=1
-        )
+        result = await get_liquidation_risk(wallet_addresses=[_WALLET_A, _WALLET_B], chain_id=1)
 
         assert len(result["results"]) == 2
         # Wallet A errored out on Aave
@@ -384,9 +371,7 @@ class TestSummary:
         )
         _patch(monkeypatch, mock_w3)
 
-        result = await get_liquidation_risk(
-            wallet_addresses=[_WALLET_A, _WALLET_B, _WALLET_C], chain_id=1
-        )
+        result = await get_liquidation_risk(wallet_addresses=[_WALLET_A, _WALLET_B, _WALLET_C], chain_id=1)
 
         s = result["summary"]
         assert s["total_wallets"] == 3

@@ -120,9 +120,6 @@ async def db_pool(docker_postgres: str):
 
     # Truncate all tables so each test function gets a clean slate.
     async with pool.acquire() as conn:
-        await conn.execute(
-            "TRUNCATE TABLE siwe_nonces, wallets, usage_events, users, orgs RESTART "
-            "IDENTITY CASCADE"
-        )
+        await conn.execute("TRUNCATE TABLE siwe_nonces, wallets, usage_events, users, orgs RESTART IDENTITY CASCADE")
 
     await pool.close()

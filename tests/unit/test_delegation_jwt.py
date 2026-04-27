@@ -36,26 +36,38 @@ async def test_jwt_forward_enabled():
     """When allowlist has jwt_forward=true and jwt_token exists, auth_header is passed."""
     agent_url = "https://agent.example.com"
 
-    with patch("a2a_client.validate_url", return_value=None), \
-         patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(True, {
-             "jwt_forward": True,
-             "max_cost_usdc": 0,
-             "require_x402": False,
-         }))), \
-         patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)), \
-         patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send, \
-         patch("a2a_client.extract_result_text", return_value="ok"):
+    with (
+        patch("a2a_client.validate_url", return_value=None),
+        patch(
+            "a2a_client.check_delegation_allowed",
+            AsyncMock(
+                return_value=(
+                    True,
+                    {
+                        "jwt_forward": True,
+                        "max_cost_usdc": 0,
+                        "require_x402": False,
+                    },
+                )
+            ),
+        ),
+        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
+        patch("a2a_client.extract_result_text", return_value="ok"),
+    ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
         result = await delegate_to_agent(
             agent_url=agent_url,
             task_description="do something",
-            config={"configurable": {
-                "org_id": "org-1",
-                "run_id": "run-1",
-                "db_pool": MagicMock(),
-                "jwt_token": "my-secret-jwt",
-            }},
+            config={
+                "configurable": {
+                    "org_id": "org-1",
+                    "run_id": "run-1",
+                    "db_pool": MagicMock(),
+                    "jwt_token": "my-secret-jwt",
+                }
+            },
         )
 
     assert result["status"] == "completed"
@@ -68,26 +80,38 @@ async def test_jwt_forward_disabled():
     """When jwt_forward=false, no auth_header is passed."""
     agent_url = "https://agent.example.com"
 
-    with patch("a2a_client.validate_url", return_value=None), \
-         patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(True, {
-             "jwt_forward": False,
-             "max_cost_usdc": 0,
-             "require_x402": False,
-         }))), \
-         patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)), \
-         patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send, \
-         patch("a2a_client.extract_result_text", return_value="ok"):
+    with (
+        patch("a2a_client.validate_url", return_value=None),
+        patch(
+            "a2a_client.check_delegation_allowed",
+            AsyncMock(
+                return_value=(
+                    True,
+                    {
+                        "jwt_forward": False,
+                        "max_cost_usdc": 0,
+                        "require_x402": False,
+                    },
+                )
+            ),
+        ),
+        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
+        patch("a2a_client.extract_result_text", return_value="ok"),
+    ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
         result = await delegate_to_agent(
             agent_url=agent_url,
             task_description="do something",
-            config={"configurable": {
-                "org_id": "org-1",
-                "run_id": "run-1",
-                "db_pool": MagicMock(),
-                "jwt_token": "my-secret-jwt",
-            }},
+            config={
+                "configurable": {
+                    "org_id": "org-1",
+                    "run_id": "run-1",
+                    "db_pool": MagicMock(),
+                    "jwt_token": "my-secret-jwt",
+                }
+            },
         )
 
     assert result["status"] == "completed"
@@ -102,18 +126,22 @@ async def test_allowlist_enforced(monkeypatch):
 
     agent_url = "https://agent.example.com"
 
-    with patch("a2a_client.validate_url", return_value=None), \
-         patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))):
+    with (
+        patch("a2a_client.validate_url", return_value=None),
+        patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
+    ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
         result = await delegate_to_agent(
             agent_url=agent_url,
             task_description="do something",
-            config={"configurable": {
-                "org_id": "org-1",
-                "run_id": "run-1",
-                "db_pool": MagicMock(),
-            }},
+            config={
+                "configurable": {
+                    "org_id": "org-1",
+                    "run_id": "run-1",
+                    "db_pool": MagicMock(),
+                }
+            },
         )
 
     assert result["status"] == "failed"
@@ -128,21 +156,25 @@ async def test_allowlist_not_enforced(monkeypatch):
 
     agent_url = "https://agent.example.com"
 
-    with patch("a2a_client.validate_url", return_value=None), \
-         patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))), \
-         patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)), \
-         patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)), \
-         patch("a2a_client.extract_result_text", return_value="ok"):
+    with (
+        patch("a2a_client.validate_url", return_value=None),
+        patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
+        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)),
+        patch("a2a_client.extract_result_text", return_value="ok"),
+    ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
         result = await delegate_to_agent(
             agent_url=agent_url,
             task_description="do something",
-            config={"configurable": {
-                "org_id": "org-1",
-                "run_id": "run-1",
-                "db_pool": MagicMock(),
-            }},
+            config={
+                "configurable": {
+                    "org_id": "org-1",
+                    "run_id": "run-1",
+                    "db_pool": MagicMock(),
+                }
+            },
         )
 
     assert result["status"] == "completed"

@@ -81,8 +81,9 @@ async def test_db_error_returns_500(test_settings, monkeypatch):
     Uses raise_app_exceptions=False so the HTTP response is inspectable rather
     than the exception propagating through the test transport.
     """
-    from app import app
     from httpx import ASGITransport, AsyncClient
+
+    from app import app
 
     monkeypatch.setattr(
         "app.handle_stripe_webhook",

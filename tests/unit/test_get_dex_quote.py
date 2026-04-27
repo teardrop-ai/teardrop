@@ -26,9 +26,7 @@ class TestGetDexQuoteInput:
     def test_valid_minimal(self):
         from tools.definitions.get_dex_quote import GetDexQuoteInput
 
-        obj = GetDexQuoteInput(
-            token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="1000000000000000000"
-        )
+        obj = GetDexQuoteInput(token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="1000000000000000000")
         assert obj.chain_id == 1
 
     def test_non_checksum_address_rejected(self):
@@ -45,25 +43,19 @@ class TestGetDexQuoteInput:
         from tools.definitions.get_dex_quote import GetDexQuoteInput
 
         with pytest.raises(ValidationError, match="> 0"):
-            GetDexQuoteInput(
-                token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="0"
-            )
+            GetDexQuoteInput(token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="0")
 
     def test_negative_amount_rejected(self):
         from tools.definitions.get_dex_quote import GetDexQuoteInput
 
         with pytest.raises(ValidationError, match="> 0"):
-            GetDexQuoteInput(
-                token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="-5"
-            )
+            GetDexQuoteInput(token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="-5")
 
     def test_non_numeric_amount_rejected(self):
         from tools.definitions.get_dex_quote import GetDexQuoteInput
 
         with pytest.raises(ValidationError, match="uint256"):
-            GetDexQuoteInput(
-                token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="abc"
-            )
+            GetDexQuoteInput(token_in=_WETH_ETH, token_out=_USDC_ETH, amount_in="abc")
 
     def test_amount_over_cap_rejected(self):
         from tools.definitions.get_dex_quote import GetDexQuoteInput
@@ -104,6 +96,7 @@ class TestGetDexQuoteInput:
 class TestResolveDecimals:
     async def test_static_map_hit_no_rpc(self, test_settings):
         import asyncio
+
         from tools.definitions.get_dex_quote import _resolve_decimals
 
         mock_w3 = MagicMock()
@@ -115,6 +108,7 @@ class TestResolveDecimals:
 
     async def test_fallback_rpc_call(self, test_settings, monkeypatch):
         import asyncio
+
         import tools.definitions.get_dex_quote as mod
 
         # Ensure unknown token has no cache entry from another test.
@@ -130,15 +124,14 @@ class TestResolveDecimals:
 
     async def test_fallback_on_rpc_failure_defaults_to_18(self, test_settings):
         import asyncio
+
         import tools.definitions.get_dex_quote as mod
 
         mod._decimals_cache.clear()
 
         mock_w3 = MagicMock()
         mock_contract = MagicMock()
-        mock_contract.functions.decimals.return_value.call = AsyncMock(
-            side_effect=Exception("rpc timeout")
-        )
+        mock_contract.functions.decimals.return_value.call = AsyncMock(side_effect=Exception("rpc timeout"))
         mock_w3.eth.contract.return_value = mock_contract
 
         result = await mod._resolve_decimals(mock_w3, 1, _UNKNOWN_TOKEN, asyncio.Semaphore(1))
@@ -177,11 +170,7 @@ class TestGetDexQuote:
                 if isinstance(outcome, Exception):
                     stub.call = AsyncMock(side_effect=outcome)
                 elif outcome is None:
-                    stub.call = AsyncMock(
-                        side_effect=ContractLogicError(
-                            "execution reverted: Unexpected error"
-                        )
-                    )
+                    stub.call = AsyncMock(side_effect=ContractLogicError("execution reverted: Unexpected error"))
                 else:
                     stub.call = AsyncMock(return_value=outcome)
                 return stub
@@ -192,15 +181,11 @@ class TestGetDexQuote:
         mock_w3.eth.contract.side_effect = _contract_factory
         return mock_w3
 
-    async def test_all_tiers_revert_returns_no_liquidity(
-        self, test_settings, monkeypatch
-    ):
+    async def test_all_tiers_revert_returns_no_liquidity(self, test_settings, monkeypatch):
         from tools.definitions.get_dex_quote import get_dex_quote
 
         mock_w3 = self._make_mock_w3({})  # every tier → pool_not_found
-        monkeypatch.setattr(
-            "tools.definitions.get_dex_quote.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_dex_quote.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_dex_quote(
             token_in=_WETH_ETH,
@@ -214,9 +199,7 @@ class TestGetDexQuote:
         assert result["amount_out"] == "0"
         assert len(result["quotes_per_tier"]) == 4
         assert all(q["success"] is False for q in result["quotes_per_tier"])
-        assert all(
-            q["error"] == "pool_not_found" for q in result["quotes_per_tier"]
-        )
+        assert all(q["error"] == "pool_not_found" for q in result["quotes_per_tier"])
 
     async def test_best_tier_selected_from_multiple(self, test_settings, monkeypatch):
         from tools.definitions.get_dex_quote import get_dex_quote
@@ -228,9 +211,7 @@ class TestGetDexQuote:
                 3000: (3_180_000_000, 79228162514264337593543950336, 2, 120_000),
             }
         )
-        monkeypatch.setattr(
-            "tools.definitions.get_dex_quote.get_web3", lambda chain_id=1: mock_w3
-        )
+        monkeypatch.setattr("tools.definitions.get_dex_quote.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_dex_quote(
             token_in=_WETH_ETH,
@@ -274,14 +255,10 @@ class TestGetDexQuote:
             )
 
     async def test_base_chain_uses_base_quoter(self, test_settings, monkeypatch):
-        from tools.definitions.get_dex_quote import get_dex_quote, _QUOTER_V2
+        from tools.definitions.get_dex_quote import _QUOTER_V2, get_dex_quote
 
-        mock_w3 = self._make_mock_w3(
-            {500: (3_200_000_000, 79228162514264337593543950336, 2, 120_000)}
-        )
-        monkeypatch.setattr(
-            "tools.definitions.get_dex_quote.get_web3", lambda chain_id=8453: mock_w3
-        )
+        mock_w3 = self._make_mock_w3({500: (3_200_000_000, 79228162514264337593543950336, 2, 120_000)})
+        monkeypatch.setattr("tools.definitions.get_dex_quote.get_web3", lambda chain_id=8453: mock_w3)
 
         result = await get_dex_quote(
             token_in=_WETH_BASE,
@@ -294,10 +271,7 @@ class TestGetDexQuote:
         assert result["fee_tier_used"] == 500
         # Verify Base QuoterV2 address was used via contract factory call args.
         contract_calls = mock_w3.eth.contract.call_args_list
-        addresses_used = [
-            call.kwargs.get("address") or (call.args[0] if call.args else None)
-            for call in contract_calls
-        ]
+        addresses_used = [call.kwargs.get("address") or (call.args[0] if call.args else None) for call in contract_calls]
         assert _QUOTER_V2[8453] in addresses_used
 
 

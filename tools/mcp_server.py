@@ -31,9 +31,7 @@ logger = logging.getLogger(__name__)
 mcp = fastmcp.FastMCP(
     name="teardrop-tools",
     version="1.0.0",
-    instructions=(
-        "Teardrop MCP tool server. Provides tools auto-registered from the Teardrop tool registry."
-    ),
+    instructions=("Teardrop MCP tool server. Provides tools auto-registered from the Teardrop tool registry."),
 )
 
 
@@ -58,18 +56,12 @@ def _register_tools_with_mcp() -> None:
                     name,
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     annotation=fi.annotation if fi.annotation is not None else Any,
-                    default=(
-                        inspect.Parameter.empty if fi.is_required() else fi.default
-                    ),
+                    default=(inspect.Parameter.empty if fi.is_required() else fi.default),
                 )
                 for name, fi in schema.model_fields.items()
             ]
             handler.__signature__ = inspect.Signature(params)
-            handler.__annotations__ = {
-                p.name: p.annotation
-                for p in params
-                if p.annotation is not inspect.Parameter.empty
-            }
+            handler.__annotations__ = {p.name: p.annotation for p in params if p.annotation is not inspect.Parameter.empty}
             return handler
 
         handler = _make_handler(implementation, input_schema)

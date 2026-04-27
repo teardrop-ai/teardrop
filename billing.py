@@ -154,12 +154,13 @@ class TTLCache(Generic[T]):
         self._value = None
         self._expires = 0.0
 
+
 # ─── Lazy x402 imports (only when billing is enabled) ─────────────────────────
 
 _server = None  # x402ResourceServer instance
 _requirements_cache: list | None = None  # cached PaymentRequirements for /agent/run
 _exact_requirements_cache: list | None = None  # exact-scheme requirements (always built)
-_upto_requirements_cache: list | None = None   # upto-scheme requirements (when opted in)
+_upto_requirements_cache: list | None = None  # upto-scheme requirements (when opted in)
 
 # ─── Pricing TTL cache ────────────────────────────────────────────────────────
 # Note: ``_live_pricing_cache`` and ``_tool_overrides_cache_obj`` (declared
@@ -219,8 +220,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
             )
         except ImportError as exc:
             raise RuntimeError(
-                "x402 upto scheme is not available in the installed package. "
-                "Upgrade: pip install 'x402[fastapi,evm]>=2.8.0'"
+                "x402 upto scheme is not available in the installed package. Upgrade: pip install 'x402[fastapi,evm]>=2.8.0'"
             ) from exc
 
         server.register(settings.x402_network, UptoEvmServerScheme())
@@ -262,9 +262,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         _upto_requirements_cache = None
         _requirements_cache = list(_exact_requirements_cache)
 
-    advertised_price = (
-        settings.x402_upto_max_amount if settings.x402_scheme == "upto" else price_str
-    )
+    advertised_price = settings.x402_upto_max_amount if settings.x402_scheme == "upto" else price_str
     logger.info(
         "Billing initialised: network=%s pay_to=%s price=%s scheme=%s",
         settings.x402_network,
@@ -480,8 +478,7 @@ async def verify_payment(payment_header: str) -> BillingResult:
         try:
             result = await server.verify_payment(payload, requirement)
         except Exception as exc:
-            logger.debug("Verification attempt failed for scheme=%s: %s",
-                         getattr(requirement, "scheme", "?"), exc)
+            logger.debug("Verification attempt failed for scheme=%s: %s", getattr(requirement, "scheme", "?"), exc)
             last_error = f"Verification failed: {exc}"
             continue
 
@@ -495,8 +492,9 @@ async def verify_payment(payment_header: str) -> BillingResult:
             )
 
         reason = result.invalid_reason or result.invalid_message or "invalid signature or amount"
-        logger.debug("Payment verification failed for scheme=%s: %s (payer=%s)",
-                     getattr(requirement, "scheme", "?"), reason, result.payer)
+        logger.debug(
+            "Payment verification failed for scheme=%s: %s (payer=%s)", getattr(requirement, "scheme", "?"), reason, result.payer
+        )
         last_error = f"Payment verification failed: {reason}"
 
     logger.warning("All payment requirements failed verification: %s", last_error)
@@ -550,9 +548,7 @@ async def settle_payment(
         return billing_result
 
     billing_result.settled = True
-    billing_result.tx_hash = (
-        getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
-    )
+    billing_result.tx_hash = getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
 
     # For upto, record the actual cost we settled; for exact, use the requirement amount.
     if billing_result.scheme == "upto" and actual_cost_usdc is not None:
@@ -612,9 +608,7 @@ async def get_current_pricing() -> PricingRule | None:
     return PricingRule(**dict(row))
 
 
-async def get_current_pricing_for_model(
-    provider: str, model: str, *, is_byok: bool = False
-) -> PricingRule | None:
+async def get_current_pricing_for_model(provider: str, model: str, *, is_byok: bool = False) -> PricingRule | None:
     """Return the most specific pricing rule for a provider/model (direct DB query).
 
     Resolution order: exact model match → provider-level → global default.
@@ -660,9 +654,7 @@ _model_pricing_cache: dict[str, tuple[PricingRule | None, float]] = {}
 _model_pricing_lock: asyncio.Lock | None = None
 
 
-async def get_live_pricing_for_model(
-    provider: str, model: str, *, is_byok: bool = False
-) -> PricingRule | None:
+async def get_live_pricing_for_model(provider: str, model: str, *, is_byok: bool = False) -> PricingRule | None:
     """Return model-specific pricing using a TTL cache.
 
     Falls back through: model-specific → provider-level → global default.
@@ -776,7 +768,6 @@ async def get_live_pricing() -> PricingRule | None:
     return await _live_pricing_cache.get()
 
 
-
 # ─── Tool pricing override queries ───────────────────────────────────────────
 
 
@@ -798,9 +789,7 @@ async def get_tool_pricing_overrides() -> dict[str, int]:
     return result if result is not None else {}
 
 
-async def upsert_tool_pricing_override(
-    tool_name: str, cost_usdc: int, description: str
-) -> None:
+async def upsert_tool_pricing_override(tool_name: str, cost_usdc: int, description: str) -> None:
     """Insert or update a tool pricing override and invalidate the cache."""
     pool = _get_pool()
     await pool.execute(
@@ -822,17 +811,13 @@ async def upsert_tool_pricing_override(
 async def delete_tool_pricing_override(tool_name: str) -> bool:
     """Delete a tool pricing override. Returns True if a row was deleted."""
     pool = _get_pool()
-    result = await pool.execute(
-        "DELETE FROM tool_pricing_overrides WHERE tool_name = $1", tool_name
-    )
+    result = await pool.execute("DELETE FROM tool_pricing_overrides WHERE tool_name = $1", tool_name)
     deleted = result.split()[-1] != "0"
     await _tool_overrides_cache_obj.invalidate()
     return deleted
 
 
-async def calculate_run_cost_usdc(
-    usage_data: dict, provider: str = "", model: str = ""
-) -> int:
+async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: str = "") -> int:
     """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
 
     Uses per-unit token and tool-call rates from the live pricing rule when
@@ -868,24 +853,17 @@ async def calculate_run_cost_usdc(
     tool_calls = int(usage_data.get("tool_calls", 0))
     tool_names: list[str] = usage_data.get("tool_names") or []
 
-    has_per_unit_rates = (
-        rule.tokens_in_cost_per_1k > 0 or rule.tokens_out_cost_per_1k > 0 or rule.tool_call_cost > 0
-    )
+    has_per_unit_rates = rule.tokens_in_cost_per_1k > 0 or rule.tokens_out_cost_per_1k > 0 or rule.tool_call_cost > 0
 
     if not has_per_unit_rates:
         # Flat-rate rule: every run costs run_price_usdc.
         return rule.run_price_usdc
 
-    token_cost = (
-        (tokens_in // 1000) * rule.tokens_in_cost_per_1k
-        + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
-    )
+    token_cost = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
 
     if tool_names:
         overrides = await get_tool_pricing_overrides()
-        named_cost = sum(
-            overrides.get(name, rule.tool_call_cost) for name in tool_names
-        )
+        named_cost = sum(overrides.get(name, rule.tool_call_cost) for name in tool_names)
         # Defensive fallback: bill any gap (e.g. tool_calls counted but name not recorded)
         unnamed_calls = max(0, tool_calls - len(tool_names))
         tool_cost = named_cost + unnamed_calls * rule.tool_call_cost
@@ -1064,9 +1042,7 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
 
     # Check 1: admin pause.
     if is_paused:
-        return BillingResult(
-            error="Org billing is paused by admin. Contact your administrator."
-        )
+        return BillingResult(error="Org billing is paused by admin. Contact your administrator.")
 
     # Check 2: sufficient balance.
     if balance < min_balance_usdc:
@@ -1092,10 +1068,7 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
         daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
         if daily_spend + min_balance_usdc > spending_limit:
             return BillingResult(
-                error=(
-                    f"Daily spending limit reached: {daily_spend} of "
-                    f"{spending_limit} atomic USDC used in the last 24 hours."
-                )
+                error=(f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours.")
             )
 
     return BillingResult(verified=True, billing_method="credit")
@@ -1218,9 +1191,7 @@ async def get_credit_history(
 # ─── Stripe (prepaid credit top-up) ──────────────────────────────────────────
 
 
-async def create_stripe_embedded_session(
-    org_id: str, user_id: str, amount_cents: int, return_url: str
-) -> dict[str, str]:
+async def create_stripe_embedded_session(org_id: str, user_id: str, amount_cents: int, return_url: str) -> dict[str, str]:
     """Create a Stripe Checkout session for embedded checkout (prepaid credit top-up).
 
     amount_cents is USD cents (100 = $1.00).
@@ -1261,9 +1232,7 @@ async def create_stripe_embedded_session(
         return_url=return_url,
     )
     if not session.client_secret:
-        raise RuntimeError(
-            f"Stripe returned a session without client_secret (session_id={session.id})"
-        )
+        raise RuntimeError(f"Stripe returned a session without client_secret (session_id={session.id})")
     return {"client_secret": session.client_secret, "session_id": session.id}
 
 
@@ -1293,9 +1262,7 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
     if session.payment_status != "paid":
         return
 
-    org_id: str | None = session.client_reference_id or (
-        session.metadata.get("org_id") if session.metadata else None
-    )
+    org_id: str | None = session.client_reference_id or (session.metadata.get("org_id") if session.metadata else None)
     if not org_id:
         logger.error("stripe webhook: no org_id in event %s", event.id)
         return
@@ -1479,11 +1446,7 @@ async def verify_and_settle_usdc_topup(
         return BillingResult(error=f"Verification failed: {exc}")
 
     if not verify_result.is_valid:
-        reason = (
-            verify_result.invalid_reason
-            or verify_result.invalid_message
-            or "invalid signature or amount"
-        )
+        reason = verify_result.invalid_reason or verify_result.invalid_message or "invalid signature or amount"
         logger.warning("usdc_topup: verification failed: %s", reason)
         return BillingResult(error=f"Payment verification failed: {reason}")
 
@@ -1497,11 +1460,7 @@ async def verify_and_settle_usdc_topup(
         logger.error("usdc_topup: facilitator rejected settlement")
         return BillingResult(error="Settlement rejected by facilitator")
 
-    tx_hash = (
-        getattr(settle_result, "tx_hash", "")
-        or getattr(settle_result, "transaction_hash", "")
-        or ""
-    )
+    tx_hash = getattr(settle_result, "tx_hash", "") or getattr(settle_result, "transaction_hash", "") or ""
     logger.info("usdc_topup: settled tx_hash=%s amount_usdc=%s", tx_hash, amount_usdc)
     return BillingResult(verified=True, settled=True, tx_hash=tx_hash, amount_usdc=amount_usdc)
 
@@ -1609,9 +1568,7 @@ async def enqueue_failed_settlement(
             billing_method,
         )
     except Exception:
-        logger.exception(
-            "Failed to enqueue settlement for retry: run_id=%s", run_id
-        )
+        logger.exception("Failed to enqueue settlement for retry: run_id=%s", run_id)
 
 
 async def process_pending_settlements() -> int:
@@ -1650,9 +1607,7 @@ async def process_pending_settlements() -> int:
 
         try:
             if billing_method == "credit":
-                success = await debit_credit(
-                    row["org_id"], row["amount_usdc"], reason=f"run:{row['run_id']}"
-                )
+                success = await debit_credit(row["org_id"], row["amount_usdc"], reason=f"run:{row['run_id']}")
                 if not success:
                     error_msg = "debit_credit returned False"
             else:
@@ -1662,9 +1617,7 @@ async def process_pending_settlements() -> int:
                 retry_count = max_retries  # force exhaustion
         except Exception as exc:
             error_msg = str(exc)
-            logger.warning(
-                "Settlement retry failed: id=%s error=%s", settlement_id, exc
-            )
+            logger.warning("Settlement retry failed: id=%s error=%s", settlement_id, exc)
 
         if success:
             await pool.execute(
@@ -1676,9 +1629,7 @@ async def process_pending_settlements() -> int:
                 settlement_id,
                 retry_count,
             )
-            await record_settlement(
-                row["usage_event_id"], row["amount_usdc"], "", "settled"
-            )
+            await record_settlement(row["usage_event_id"], row["amount_usdc"], "", "settled")
             processed += 1
             logger.info(
                 "Settlement retry succeeded: id=%s run_id=%s attempt=%d",
@@ -1852,18 +1803,12 @@ async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str 
     # Apply global cap.
     cap = settings.a2a_delegation_max_cost_usdc
     if estimated_cost_usdc > cap:
-        return (
-            f"Estimated delegation cost ({estimated_cost_usdc} atomic USDC) "
-            f"exceeds global cap ({cap})."
-        )
+        return f"Estimated delegation cost ({estimated_cost_usdc} atomic USDC) exceeds global cap ({cap})."
 
     # Check credit balance.
     balance = await get_credit_balance(org_id)
     if balance < estimated_cost_usdc:
-        return (
-            f"Insufficient credit for delegation: balance {balance} atomic USDC, "
-            f"estimated cost {estimated_cost_usdc}."
-        )
+        return f"Insufficient credit for delegation: balance {balance} atomic USDC, estimated cost {estimated_cost_usdc}."
 
     return None
 
@@ -1918,10 +1863,7 @@ async def calculate_byok_orchestration_cost(
     if rule is None:
         return floor
 
-    computed = (
-        (tokens_in // 1000) * rule.tokens_in_cost_per_1k
-        + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
-    )
+    computed = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
 
     # Apply floor so zero-token runs (e.g. tool-only or very short prompts) still
     # register as a paid transaction in the ledger.
@@ -1977,7 +1919,9 @@ async def record_delegation_event(
     except Exception:
         logger.exception(
             "Failed to record delegation event org=%s run=%s agent=%s",
-            org_id, run_id, agent_url,
+            org_id,
+            run_id,
+            agent_url,
         )
 
 
@@ -2025,10 +1969,7 @@ def get_treasury_signer():
     """
     settings = get_settings()
     if not settings.x402_treasury_private_key:
-        raise RuntimeError(
-            "x402_treasury_private_key is not configured — "
-            "cannot sign outbound x402 delegation payments"
-        )
+        raise RuntimeError("x402_treasury_private_key is not configured — cannot sign outbound x402 delegation payments")
 
     from eth_account import Account
     from x402.mechanisms.evm import EthAccountSigner

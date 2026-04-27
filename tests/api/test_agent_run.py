@@ -138,11 +138,7 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monke
     mock_graph.astream_events = _empty_astream_events
     mock_graph.aget_state = AsyncMock(
         return_value=MagicMock(
-            values={
-                "metadata": {
-                    "_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []}
-                }
-            }
+            values={"metadata": {"_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []}}}
         )
     )
 

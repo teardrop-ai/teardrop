@@ -74,9 +74,7 @@ async def test_resend_verification_unverified_user(anon_client, monkeypatch):
     monkeypatch.setattr("app.create_verification_token", create_vt)
     monkeypatch.setattr("app.send_verification_email", AsyncMock())
 
-    resp = await anon_client.post(
-        "/auth/resend-verification", json={"email": "user@example.com"}
-    )
+    resp = await anon_client.post("/auth/resend-verification", json={"email": "user@example.com"})
 
     assert resp.status_code == 200
     create_vt.assert_awaited_once_with(user.id)
@@ -91,9 +89,7 @@ async def test_resend_verification_already_verified_is_noop(anon_client, monkeyp
     monkeypatch.setattr("app.create_verification_token", create_vt)
     monkeypatch.setattr("app.send_verification_email", AsyncMock())
 
-    resp = await anon_client.post(
-        "/auth/resend-verification", json={"email": "user@example.com"}
-    )
+    resp = await anon_client.post("/auth/resend-verification", json={"email": "user@example.com"})
 
     assert resp.status_code == 200
     create_vt.assert_not_awaited()
@@ -104,9 +100,7 @@ async def test_resend_verification_unknown_email_no_oracle(anon_client, monkeypa
     """Unknown email must still return 200 — no disclosure of account existence."""
     monkeypatch.setattr("app.get_user_by_email", AsyncMock(return_value=None))
 
-    resp = await anon_client.post(
-        "/auth/resend-verification", json={"email": "ghost@example.com"}
-    )
+    resp = await anon_client.post("/auth/resend-verification", json={"email": "ghost@example.com"})
 
     assert resp.status_code == 200
 
@@ -122,15 +116,14 @@ async def test_token_gate_blocks_unverified_user(anon_client, test_settings, mon
     monkeypatch.setenv("REQUIRE_EMAIL_VERIFICATION", "true")
     _config.get_settings.cache_clear()
     import app as _app
+
     monkeypatch.setattr(_app, "settings", _config.get_settings())
 
     user = _mock_user(is_verified=False)
     monkeypatch.setattr("app.get_user_by_email", AsyncMock(return_value=user))
     monkeypatch.setattr("app.verify_secret", lambda *a, **kw: True)
 
-    resp = await anon_client.post(
-        "/token", json={"email": "user@example.com", "secret": "correctpass"}
-    )
+    resp = await anon_client.post("/token", json={"email": "user@example.com", "secret": "correctpass"})
     assert resp.status_code == 403
 
 
@@ -142,6 +135,7 @@ async def test_token_gate_passes_verified_user(anon_client, test_settings, monke
     monkeypatch.setenv("REQUIRE_EMAIL_VERIFICATION", "true")
     _config.get_settings.cache_clear()
     import app as _app
+
     monkeypatch.setattr(_app, "settings", _config.get_settings())
 
     user = _mock_user(is_verified=True)
@@ -149,7 +143,5 @@ async def test_token_gate_passes_verified_user(anon_client, test_settings, monke
     monkeypatch.setattr("app.verify_secret", lambda *a, **kw: True)
     monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="rt"))
 
-    resp = await anon_client.post(
-        "/token", json={"email": "user@example.com", "secret": "correctpass"}
-    )
+    resp = await anon_client.post("/token", json={"email": "user@example.com", "secret": "correctpass"})
     assert resp.status_code == 200

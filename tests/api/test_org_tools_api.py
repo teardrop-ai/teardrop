@@ -230,10 +230,11 @@ async def test_create_tool_publish_requires_author_config(api_client, monkeypatc
     monkeypatch.setattr("app.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
         "app.create_org_tool",
-        AsyncMock(side_effect=ValueError(
-            "Cannot publish tool to marketplace — register a settlement wallet first "
-            "via POST /marketplace/author-config"
-        )),
+        AsyncMock(
+            side_effect=ValueError(
+                "Cannot publish tool to marketplace — register a settlement wallet first via POST /marketplace/author-config"
+            )
+        ),
     )
 
     body = {

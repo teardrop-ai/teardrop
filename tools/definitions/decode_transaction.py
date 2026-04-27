@@ -44,9 +44,7 @@ class DecodeTransactionInput(BaseModel):
     @classmethod
     def _validate_tx_hash(cls, v: str) -> str:
         if not _TX_HASH_RE.match(v):
-            raise ValueError(
-                "tx_hash must be a 0x-prefixed 64-character hex string (32-byte hash)"
-            )
+            raise ValueError("tx_hash must be a 0x-prefixed 64-character hex string (32-byte hash)")
         return v.lower()
 
 
@@ -102,9 +100,7 @@ def _serialize_value(val: Any) -> Any:
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def decode_transaction(
-    tx_hash: str, chain_id: int = 1, abi_json: str | None = None
-) -> dict[str, Any]:
+async def decode_transaction(tx_hash: str, chain_id: int = 1, abi_json: str | None = None) -> dict[str, Any]:
     """Decode a transaction's calldata into function name and arguments."""
     w3 = get_web3(chain_id)
 
@@ -156,9 +152,7 @@ async def decode_transaction(
     if abi_json and to_addr:
         try:
             abi = json.loads(abi_json)
-            contract = w3.eth.contract(
-                address=Web3.to_checksum_address(to_addr), abi=abi
-            )
+            contract = w3.eth.contract(address=Web3.to_checksum_address(to_addr), abi=abi)
             func, args = contract.decode_function_input(calldata)
             function_name = func.fn_name
             decoded_args = {k: _serialize_value(v) for k, v in dict(args).items()}

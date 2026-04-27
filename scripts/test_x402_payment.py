@@ -146,10 +146,7 @@ def sign_x402_payment(payment_required_body: dict, private_key: str) -> str:
         payload_dict = json.loads(payload_json)
         inner = payload_dict.get("payload", {})
         auth = inner.get("authorization", {})
-        print(
-            f"   Authorization: from={auth.get('from')} to={auth.get('to')} "
-            f"value={auth.get('value')}"
-        )
+        print(f"   Authorization: from={auth.get('from')} to={auth.get('to')} value={auth.get('value')}")
         print(f"   validAfter={auth.get('validAfter')} validBefore={auth.get('validBefore')}")
         print(f"   nonce={str(auth.get('nonce', ''))[:20]}...")
     except Exception:
@@ -195,7 +192,8 @@ def check_permit2_allowance(
 
 
 def sign_upto_payment(
-    payment_required_body: dict, private_key: str,
+    payment_required_body: dict,
+    private_key: str,
 ) -> str:
     """Sign x402 payment using Permit2 (upto scheme).
 
@@ -300,7 +298,9 @@ def main():
     parser.add_argument("private_key", help="Hex private key (0x-prefixed)")
     parser.add_argument("base_url", help="Teardrop base URL")
     parser.add_argument(
-        "--scheme", choices=["exact", "upto"], default="exact",
+        "--scheme",
+        choices=["exact", "upto"],
+        default="exact",
         help="Payment scheme to use (default: exact)",
     )
     parser.add_argument(
@@ -337,14 +337,13 @@ def main():
     if scheme == "upto":
         print("→ Pre-check: Verifying Permit2 allowance...")
         allowance = check_permit2_allowance(
-            args.rpc_url, args.usdc_address, address,
+            args.rpc_url,
+            args.usdc_address,
+            address,
         )
         if allowance == 0:
             print("✗ No Permit2 allowance for USDC.")
-            print(
-                "  You must first approve the Permit2 contract: "
-                f"USDC.approve({PERMIT2_ADDRESS}, type(uint256).max)"
-            )
+            print(f"  You must first approve the Permit2 contract: USDC.approve({PERMIT2_ADDRESS}, type(uint256).max)")
             sys.exit(1)
         print(f"✓ Permit2 allowance: {allowance} atomic USDC")
         print()

@@ -63,10 +63,7 @@ async def init_agent_wallets_db(pool: asyncpg.Pool) -> None:
     _pool = pool
     settings = get_settings()
     if settings.agent_wallet_enabled and not settings.cdp_configured:
-        logger.warning(
-            "agent_wallets: AGENT_WALLET_ENABLED=true but CDP credentials are not set — "
-            "wallet operations will fail"
-        )
+        logger.warning("agent_wallets: AGENT_WALLET_ENABLED=true but CDP credentials are not set — wallet operations will fail")
     logger.info("Agent wallets DB ready (enabled=%s)", settings.agent_wallet_enabled)
 
 
@@ -93,10 +90,7 @@ def _require_cdp_enabled() -> None:
     if not settings.agent_wallet_enabled:
         raise RuntimeError("Agent wallets are disabled (AGENT_WALLET_ENABLED=false)")
     if not settings.cdp_configured:
-        raise RuntimeError(
-            "CDP credentials are not configured — set CDP_API_KEY_ID, "
-            "CDP_API_KEY_SECRET, and CDP_WALLET_SECRET"
-        )
+        raise RuntimeError("CDP credentials are not configured — set CDP_API_KEY_ID, CDP_API_KEY_SECRET, and CDP_WALLET_SECRET")
 
 
 def _get_cdp_client():
@@ -111,9 +105,7 @@ def _chain_id_to_network(chain_id: int) -> str:
     """Convert EIP-155 chain ID to CDP network name."""
     network = _CHAIN_TO_NETWORK.get(chain_id)
     if network is None:
-        raise ValueError(
-            f"Unsupported chain_id {chain_id}. Supported: {sorted(_SUPPORTED_CHAIN_IDS)}"
-        )
+        raise ValueError(f"Unsupported chain_id {chain_id}. Supported: {sorted(_SUPPORTED_CHAIN_IDS)}")
     return network
 
 
@@ -161,9 +153,7 @@ async def create_agent_wallet(org_id: str, actor_id: str, chain_id: int | None =
         chain_id = 84532 if settings.cdp_network == "base-sepolia" else 8453
 
     if chain_id not in _SUPPORTED_CHAIN_IDS:
-        raise ValueError(
-            f"Unsupported chain_id {chain_id}. Supported: {sorted(_SUPPORTED_CHAIN_IDS)}"
-        )
+        raise ValueError(f"Unsupported chain_id {chain_id}. Supported: {sorted(_SUPPORTED_CHAIN_IDS)}")
 
     # Check for existing active wallet on this chain.
     existing = await _get_wallet_row(org_id, chain_id)
@@ -245,9 +235,7 @@ async def get_agent_wallet_balance(org_id: str, chain_id: int | None = None) -> 
     balance_usdc = 0
 
     async with _get_cdp_client() as cdp:
-        balances = await cdp.evm.list_token_balances(
-            address=wallet.address, network=network
-        )
+        balances = await cdp.evm.list_token_balances(address=wallet.address, network=network)
         for token_balance in balances:
             # CDP returns token balances with symbol and amount.
             # USDC has 6 decimals — the SDK returns a Decimal or string.
@@ -268,9 +256,7 @@ async def get_agent_wallet_balance(org_id: str, chain_id: int | None = None) -> 
     }
 
 
-async def deactivate_agent_wallet(
-    org_id: str, actor_id: str, chain_id: int | None = None
-) -> bool:
+async def deactivate_agent_wallet(org_id: str, actor_id: str, chain_id: int | None = None) -> bool:
     """Soft-deactivate the org's agent wallet. Returns True if a wallet was deactivated."""
     settings = get_settings()
     pool = _get_pool()
@@ -437,10 +423,7 @@ async def verify_usdc_transfer(
     base_rpc = settings.base_rpc_url
     rpc_url = base_rpc if base_rpc else _FALLBACK_RPC.get(chain_id, "")
     if not rpc_url:
-        raise ValueError(
-            f"No RPC URL available for chain_id={chain_id}. "
-            "Set BASE_RPC_URL for reliable transaction verification."
-        )
+        raise ValueError(f"No RPC URL available for chain_id={chain_id}. Set BASE_RPC_URL for reliable transaction verification.")
 
     payload = {
         "jsonrpc": "2.0",
@@ -469,9 +452,7 @@ async def verify_usdc_transfer(
                 logger.debug("verify_usdc_transfer: poll error tx=%s: %s", tx_hash, exc)
 
             if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Transaction {tx_hash} not mined within {timeout_seconds}s on chain {chain_id}"
-                )
+                raise TimeoutError(f"Transaction {tx_hash} not mined within {timeout_seconds}s on chain {chain_id}")
             await asyncio.sleep(_TX_POLL_INTERVAL)
 
 
@@ -492,9 +473,7 @@ async def get_settlement_wallet_balance_usdc(chain_id: int | None = None) -> int
 
     async with _get_cdp_client() as cdp:
         account = await cdp.evm.get_or_create_account(name=account_name)
-        balances = await cdp.evm.list_token_balances(
-            address=account.address, network=network
-        )
+        balances = await cdp.evm.list_token_balances(address=account.address, network=network)
         for tb in balances:
             symbol = getattr(tb, "symbol", "") or ""
             if symbol.upper() == "USDC":
