@@ -11,9 +11,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# ASGITransport is built on asyncio primitives; trio is incompatible.
-# Restrict all async tests in this package to the asyncio backend only.
-pytestmark = pytest.mark.anyio(backends=["asyncio"])
+
+# ASGITransport / httpx is built on asyncio primitives; trio is incompatible
+# (raises "RuntimeError: must be called from async context"). Override anyio's
+# default backend parameterisation so all async tests in tests/api/ run on
+# asyncio only. This fixture is auto-discovered by anyio's pytest plugin and
+# overrides the package-default that would otherwise generate [trio] variants.
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
 @pytest.fixture
