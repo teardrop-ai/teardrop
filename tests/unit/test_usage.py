@@ -130,7 +130,10 @@ class TestInitAndClose:
 
         pool = MagicMock()
         pool.execute = AsyncMock()
-        with patch.object(usage_module, "_pool", None):
+        saved = usage_module._pool
+        try:
             await init_usage_db(pool)
-        assert usage_module._pool is pool
-        assert pool.execute.call_count == 3  # CREATE TABLE + 2 CREATE INDEX
+            assert usage_module._pool is pool
+            assert pool.execute.call_count == 3  # CREATE TABLE + 2 CREATE INDEX
+        finally:
+            usage_module._pool = saved

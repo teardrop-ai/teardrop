@@ -552,9 +552,7 @@ class TestOrgInvites:
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
-        conn.fetchrow = AsyncMock(
-            return_value={"used": False, "expires_at": now + timedelta(hours=1)}
-        )
+        conn.fetchrow = AsyncMock(return_value={"used": False, "expires_at": now + timedelta(hours=1)})
         with patch.object(users_module, "_pool", pool):
             result = await consume_org_invite("tok-1")
         assert result is True
@@ -567,9 +565,7 @@ class TestOrgInvites:
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
-        conn.fetchrow = AsyncMock(
-            return_value={"used": True, "expires_at": now + timedelta(hours=1)}
-        )
+        conn.fetchrow = AsyncMock(return_value={"used": True, "expires_at": now + timedelta(hours=1)})
         with patch.object(users_module, "_pool", pool):
             result = await consume_org_invite("used-tok")
         assert result is False
