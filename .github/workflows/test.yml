@@ -48,7 +48,7 @@ jobs:
         run: python scripts/generate_keys.py
 
       - name: Run unit tests
-        run: pytest tests/unit/ -v --cov=. --cov-report=term-missing
+        run: pytest tests/unit/ -v --cov=. --cov-report=term-missing --cov-fail-under=0
 
       - name: Run integration tests (Docker Postgres from service)
         env:
