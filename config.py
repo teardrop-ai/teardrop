@@ -56,10 +56,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", description="OpenRouter API key")
 
     agent_provider: str = Field(
-        default="anthropic",
+        default="openrouter",
         description="LLM provider: anthropic, openai, google, or openrouter",
     )
-    agent_model: str = "claude-haiku-4-5-20251001"
+    agent_model: str = "deepseek/deepseek-v4-flash"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=120, description="Timeout in seconds for the planner LLM call")
@@ -448,7 +448,7 @@ class Settings(BaseSettings):
     )
     resend_api_key: str = Field(default="", description="Resend API key for transactional email")
     resend_from_email: str = Field(
-        default="hello@teardrop.dev",
+        default="noreply@teardrop.dev",
         description="Sender address for verification and invite emails",
     )
     app_base_url: str = Field(
