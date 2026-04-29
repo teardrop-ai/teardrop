@@ -26,6 +26,10 @@ WORKDIR /app
 # Create a non-root user
 RUN addgroup --system teardrop && adduser --system --ingroup teardrop teardrop
 
+# Patch OS vulnerabilities
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the venv from the builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"

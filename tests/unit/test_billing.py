@@ -952,9 +952,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
         assert cost == 4_000
 
     async def test_admin_override_takes_precedence_over_platform_price(self):
@@ -967,9 +965,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
         assert cost == 9_999
         # Lookup should be skipped when an override exists.
         platform_mock.assert_not_called()
@@ -984,9 +980,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(False)),
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
         assert cost == 1_000  # falls back to rule.tool_call_cost
         platform_mock.assert_not_called()
 
@@ -1015,9 +1009,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=None)),
         ):
-            cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["calculate"]}
-            )
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["calculate"]})
         assert cost == 1_000
 
     async def test_mixed_run_platform_and_default(self):

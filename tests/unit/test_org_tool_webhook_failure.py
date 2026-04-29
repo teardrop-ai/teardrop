@@ -12,10 +12,16 @@ import org_tools
 @pytest.mark.asyncio
 async def test_on_webhook_failure_records_audit_event_and_breaker_increment():
     """A non-tripping failure writes an audit event and increments the breaker."""
-    with patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock, \
-         patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False) as breaker_mock:
+    with (
+        patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock,
+        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False) as breaker_mock,
+    ):
         await org_tools._on_webhook_failure(
-            "tool-1", "org-1", "search", "abc123def456", "timeout",
+            "tool-1",
+            "org-1",
+            "search",
+            "abc123def456",
+            "timeout",
         )
 
     audit_mock.assert_awaited_once()
@@ -34,12 +40,18 @@ async def test_on_webhook_failure_records_audit_event_and_breaker_increment():
 @pytest.mark.asyncio
 async def test_on_webhook_failure_tripped_calls_auto_deactivate():
     """When breaker trips, auto_deactivate_tool_for_health is invoked."""
-    with patch("org_tools._record_event", new_callable=AsyncMock), \
-         patch("tool_health.record_failure", new_callable=AsyncMock, return_value=True), \
-         patch("org_tools.sentry_sdk") as sentry_mock, \
-         patch("marketplace.auto_deactivate_tool_for_health", new_callable=AsyncMock) as deact_mock:
+    with (
+        patch("org_tools._record_event", new_callable=AsyncMock),
+        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=True),
+        patch("org_tools.sentry_sdk") as sentry_mock,
+        patch("marketplace.auto_deactivate_tool_for_health", new_callable=AsyncMock) as deact_mock,
+    ):
         await org_tools._on_webhook_failure(
-            "tool-1", "org-1", "search", "abc123def456", "http_error",
+            "tool-1",
+            "org-1",
+            "search",
+            "abc123def456",
+            "http_error",
             status_code=500,
         )
 
@@ -49,10 +61,17 @@ async def test_on_webhook_failure_tripped_calls_auto_deactivate():
 
 @pytest.mark.asyncio
 async def test_on_webhook_failure_includes_status_code_in_detail():
-    with patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock, \
-         patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False):
+    with (
+        patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock,
+        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False),
+    ):
         await org_tools._on_webhook_failure(
-            "tool-1", "org-1", "search", "abc123", "http_error", status_code=502,
+            "tool-1",
+            "org-1",
+            "search",
+            "abc123",
+            "http_error",
+            status_code=502,
         )
 
     detail = audit_mock.call_args.kwargs["detail"]

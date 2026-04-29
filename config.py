@@ -196,6 +196,7 @@ class Settings(BaseSettings):
             return int(round(float(s) * 1_000_000))
         except (ValueError, TypeError):
             return 0
+
     pricing_cache_ttl_seconds: int = Field(
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",

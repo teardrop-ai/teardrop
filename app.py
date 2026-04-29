@@ -621,8 +621,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Teardrop",
-    description=("Intelligence beyond the browser. AG-UI streaming agent backed by LangGraph + Anthropic Claude."),
-    version="1.0.0",
+    description=("The native infrastructure layer for autonomous economic agents"),
+    version="1.1.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -792,7 +792,7 @@ class _A2UIStreamFilter:
         out: list[str] = []
         # Lookahead must be large enough to detect a sentinel that arrives split
         # across multiple chunks. We hold back (len(sentinel) - 1) characters.
-        open_hold = len(_A2UI_OPEN) - 1   # 6
+        open_hold = len(_A2UI_OPEN) - 1  # 6
         close_hold = len(_A2UI_CLOSE) - 1  # 2
         while True:
             if self._suppressing:
@@ -827,7 +827,7 @@ class _A2UIStreamFilter:
                 prefix = prefix[:-1]
             if prefix:
                 out.append(prefix)
-            self._buf = self._buf[idx + len(_A2UI_OPEN):]
+            self._buf = self._buf[idx + len(_A2UI_OPEN) :]
             self._suppressing = True
             # Loop again to handle text that follows the fence in the same buffer.
 
@@ -2038,8 +2038,7 @@ async def agent_run(
                     upto_ceiling = settings.x402_upto_max_amount_atomic
                     if upto_ceiling > 0 and cost_usdc > upto_ceiling:
                         logger.warning(
-                            "Run cost exceeds x402 upto ceiling; clamping run_id=%s "
-                            "org_id=%s cost_usdc=%d ceiling_usdc=%d",
+                            "Run cost exceeds x402 upto ceiling; clamping run_id=%s org_id=%s cost_usdc=%d ceiling_usdc=%d",
                             run_id,
                             org_id,
                             cost_usdc,
@@ -3919,9 +3918,7 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
             headers[auth_name] = _decrypt_header(auth_enc)
         except Exception:
             if tool_id:
-                await _on_webhook_failure(
-                    tool_id, org_id, tool_name, host_hash, "decrypt_failure"
-                )
+                await _on_webhook_failure(tool_id, org_id, tool_name, host_hash, "decrypt_failure")
             return {"error": "Failed to decrypt webhook auth header"}
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
@@ -3998,9 +3995,7 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
         return {"error": f"Webhook timed out after {timeout_sec}s"}
     except Exception as exc:
         if tool_id:
-            await _on_webhook_failure(
-                tool_id, org_id, tool_name, host_hash, type(exc).__name__
-            )
+            await _on_webhook_failure(tool_id, org_id, tool_name, host_hash, type(exc).__name__)
         return {"error": f"Webhook request failed: {type(exc).__name__}"}
 
 

@@ -62,9 +62,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # ── Post-response: settle billing ─────────────────────────────────
         if response.status_code == 200 and pending_debit is not None:
             execution_failed = await self._response_indicates_failure(response)
-            response = await self._settle_billing(
-                request, pending_debit, response, execution_failed=execution_failed
-            )
+            response = await self._settle_billing(request, pending_debit, response, execution_failed=execution_failed)
 
         return response
 
@@ -335,9 +333,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         is_x402 = getattr(request.state, "x402_billing", None) is not None
 
         if execution_failed:
-            logger.info(
-                "mcp settle skipped (execution failed) org=%s tool=%s", org_id, tool_name
-            )
+            logger.info("mcp settle skipped (execution failed) org=%s tool=%s", org_id, tool_name)
             return response
 
         if is_x402:

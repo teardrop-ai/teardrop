@@ -26,11 +26,7 @@ def test_clean_text_passes_through():
 
 
 def test_single_chunk_with_fence():
-    payload = (
-        "Here is your dashboard.\n"
-        "```a2ui\n{\"components\":[{\"type\":\"Card\"}]}\n```\n"
-        "All set!"
-    )
+    payload = 'Here is your dashboard.\n```a2ui\n{"components":[{"type":"Card"}]}\n```\nAll set!'
     out = _drain([payload])
     # Fence and its enclosed JSON are removed; surrounding prose preserved.
     assert "```" not in out
@@ -42,11 +38,11 @@ def test_single_chunk_with_fence():
 
 def test_split_open_sentinel():
     # Each character delivered separately — worst case for fence detection.
-    full = "before\n```a2ui\n{\"x\":1}\n```\nafter"
+    full = 'before\n```a2ui\n{"x":1}\n```\nafter'
     out = _drain(list(full))
     assert "```" not in out
     assert "a2ui" not in out
-    assert "{\"x\":1}" not in out
+    assert '{"x":1}' not in out
     assert "before" in out
     assert "after" in out
 
@@ -55,20 +51,22 @@ def test_split_close_sentinel():
     # Open in one chunk, JSON in another, close split into single chars.
     deltas = [
         "intro ",
-        "```a2ui\n{\"y\":2}\n",
-        "`", "`", "`",
+        '```a2ui\n{"y":2}\n',
+        "`",
+        "`",
+        "`",
         "\noutro",
     ]
     out = _drain(deltas)
     assert "```" not in out
-    assert "{\"y\":2}" not in out
+    assert '{"y":2}' not in out
     assert "intro " in out
     assert "outro" in out
 
 
 def test_flush_after_unclosed_fence():
     # Stream ends mid-fence — buffer should be discarded silently.
-    deltas = ["safe text ", "```a2ui\n{\"unfinished\":"]
+    deltas = ["safe text ", '```a2ui\n{"unfinished":']
     f = _A2UIStreamFilter()
     parts = [f.feed(d) for d in deltas]
     parts.append(f.flush())
@@ -96,23 +94,17 @@ def test_no_fence_no_buffer_growth():
 
 
 def test_fence_at_start_of_stream():
-    out = _drain(["```a2ui\n{\"a\":1}\n```\nhello"])
+    out = _drain(['```a2ui\n{"a":1}\n```\nhello'])
     assert out == "hello"
 
 
 def test_multiple_fences_in_stream():
     # Pathological: two fences back-to-back. Filter should strip both.
-    payload = (
-        "A "
-        "```a2ui\n{\"1\":1}\n``` "
-        "B "
-        "```a2ui\n{\"2\":2}\n``` "
-        "C"
-    )
+    payload = 'A ```a2ui\n{"1":1}\n``` B ```a2ui\n{"2":2}\n``` C'
     out = _drain([payload])
     assert "```" not in out
-    assert "{\"1\":1}" not in out
-    assert "{\"2\":2}" not in out
+    assert '{"1":1}' not in out
+    assert '{"2":2}' not in out
     assert "A " in out and " B " in out and " C" in out
 
 

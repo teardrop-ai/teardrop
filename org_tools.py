@@ -448,9 +448,7 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
                         )
                     )
                 except Exception:  # pragma: no cover
-                    logger.debug(
-                        "Failed to schedule subscriber notification", exc_info=True
-                    )
+                    logger.debug("Failed to schedule subscriber notification", exc_info=True)
     return deleted
 
 
@@ -649,9 +647,7 @@ def _build_langchain_tool(
             try:
                 headers[_header_name] = _decrypt_header(_header_enc)
             except (InvalidToken, Exception):
-                await _on_webhook_failure(
-                    _tool_id, _org_id, _tool_name, _host_hash, "decrypt_failure"
-                )
+                await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "decrypt_failure")
                 return {"error": "Failed to decrypt webhook auth header"}
 
         timeout = aiohttp.ClientTimeout(total=_timeout)
@@ -729,9 +725,7 @@ def _build_langchain_tool(
             await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "timeout")
             return {"error": f"Webhook timed out after {_timeout}s"}
         except aiohttp.ClientError as exc:
-            await _on_webhook_failure(
-                _tool_id, _org_id, _tool_name, _host_hash, type(exc).__name__
-            )
+            await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, type(exc).__name__)
             return {"error": f"Webhook request failed: {type(exc).__name__}"}
 
     return StructuredTool.from_function(
@@ -794,9 +788,7 @@ async def _on_webhook_failure(
 
             await auto_deactivate_tool_for_health(tool_id)
         except Exception:  # pragma: no cover
-            logger.warning(
-                "auto_deactivate_tool_for_health failed tool_id=%s", tool_id, exc_info=True
-            )
+            logger.warning("auto_deactivate_tool_for_health failed tool_id=%s", tool_id, exc_info=True)
 
 
 async def build_org_langchain_tools(

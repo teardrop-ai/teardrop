@@ -81,8 +81,10 @@ def breaker_settings():
 
 @pytest.mark.asyncio
 async def test_record_failure_trips_at_threshold(fake_redis, breaker_settings):
-    with patch("tool_health.get_redis", return_value=fake_redis), \
-         patch("tool_health.get_settings", return_value=breaker_settings):
+    with (
+        patch("tool_health.get_redis", return_value=fake_redis),
+        patch("tool_health.get_settings", return_value=breaker_settings),
+    ):
         # First two failures: not tripped.
         assert (await tool_health.record_failure("tool-1")) is False
         assert (await tool_health.record_failure("tool-1")) is False
@@ -94,8 +96,10 @@ async def test_record_failure_trips_at_threshold(fake_redis, breaker_settings):
 
 @pytest.mark.asyncio
 async def test_record_success_resets_counter(fake_redis, breaker_settings):
-    with patch("tool_health.get_redis", return_value=fake_redis), \
-         patch("tool_health.get_settings", return_value=breaker_settings):
+    with (
+        patch("tool_health.get_redis", return_value=fake_redis),
+        patch("tool_health.get_settings", return_value=breaker_settings),
+    ):
         await tool_health.record_failure("tool-1")
         await tool_health.record_failure("tool-1")
         await tool_health.record_success("tool-1")
@@ -105,15 +109,19 @@ async def test_record_success_resets_counter(fake_redis, breaker_settings):
 
 @pytest.mark.asyncio
 async def test_is_breaker_tripped_when_no_trip(fake_redis, breaker_settings):
-    with patch("tool_health.get_redis", return_value=fake_redis), \
-         patch("tool_health.get_settings", return_value=breaker_settings):
+    with (
+        patch("tool_health.get_redis", return_value=fake_redis),
+        patch("tool_health.get_settings", return_value=breaker_settings),
+    ):
         assert (await tool_health.is_breaker_tripped("tool-x")) is False
 
 
 @pytest.mark.asyncio
 async def test_clear_breaker_removes_trip_and_counter(fake_redis, breaker_settings):
-    with patch("tool_health.get_redis", return_value=fake_redis), \
-         patch("tool_health.get_settings", return_value=breaker_settings):
+    with (
+        patch("tool_health.get_redis", return_value=fake_redis),
+        patch("tool_health.get_settings", return_value=breaker_settings),
+    ):
         for _ in range(3):
             await tool_health.record_failure("tool-1")
         assert (await tool_health.is_breaker_tripped("tool-1")) is True
@@ -127,8 +135,7 @@ async def test_breaker_disabled_is_no_op(fake_redis):
     s.tool_breaker_enabled = False
     s.tool_breaker_threshold = 3
     s.tool_breaker_window_seconds = 600
-    with patch("tool_health.get_redis", return_value=fake_redis), \
-         patch("tool_health.get_settings", return_value=s):
+    with patch("tool_health.get_redis", return_value=fake_redis), patch("tool_health.get_settings", return_value=s):
         # Many failures — never trips because breaker is disabled.
         for _ in range(10):
             tripped = await tool_health.record_failure("tool-1")
@@ -138,8 +145,7 @@ async def test_breaker_disabled_is_no_op(fake_redis):
 
 @pytest.mark.asyncio
 async def test_fail_open_when_redis_unavailable(breaker_settings):
-    with patch("tool_health.get_redis", return_value=None), \
-         patch("tool_health.get_settings", return_value=breaker_settings):
+    with patch("tool_health.get_redis", return_value=None), patch("tool_health.get_settings", return_value=breaker_settings):
         assert (await tool_health.record_failure("tool-1")) is False
         assert (await tool_health.is_breaker_tripped("tool-1")) is False
         # Should not raise.

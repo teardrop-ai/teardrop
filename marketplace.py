@@ -1212,8 +1212,7 @@ async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str
     name = row["name"]
 
     result = await pool.execute(
-        "UPDATE org_tools SET is_active = FALSE, updated_at = NOW()"
-        " WHERE id = $1 AND is_active = TRUE",
+        "UPDATE org_tools SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND is_active = TRUE",
         tool_id,
     )
     # If another caller deactivated concurrently, exit cleanly.
@@ -1247,8 +1246,7 @@ async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str
         qualified_tool_name = f"{org_row['slug']}/{name}"
 
     await pool.execute(
-        "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
-        " WHERE qualified_tool_name = $1 AND is_active = TRUE",
+        "UPDATE org_marketplace_subscriptions SET is_active = FALSE WHERE qualified_tool_name = $1 AND is_active = TRUE",
         qualified_tool_name,
     )
 
@@ -1275,9 +1273,6 @@ async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str
         )
     except Exception:  # pragma: no cover
         logger.warning("Failed to schedule subscriber notification", exc_info=True)
-
-
-
 
 
 def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:

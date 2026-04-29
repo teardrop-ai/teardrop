@@ -783,9 +783,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
         marketplace_enabled = get_settings().marketplace_enabled
         named_cost = 0
         for name in tool_names:
-            named_cost += await _resolve_tool_cost(
-                name, overrides, rule.tool_call_cost, marketplace_enabled
-            )
+            named_cost += await _resolve_tool_cost(name, overrides, rule.tool_call_cost, marketplace_enabled)
         # Defensive fallback: bill any gap (e.g. tool_calls counted but name not recorded)
         unnamed_calls = max(0, tool_calls - len(tool_names))
         tool_cost = named_cost + unnamed_calls * rule.tool_call_cost

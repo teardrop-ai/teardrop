@@ -101,9 +101,7 @@ async def send_tool_deactivated_email(
     """
     settings = get_settings()
     if not settings.resend_api_key:
-        logger.warning(
-            "RESEND_API_KEY not set — skipping tool-deactivation email to %s", to_email
-        )
+        logger.warning("RESEND_API_KEY not set — skipping tool-deactivation email to %s", to_email)
         return
 
     safe_name = qualified_tool_name.replace("<", "&lt;").replace(">", "&gt;")
@@ -131,6 +129,4 @@ async def send_tool_deactivated_email(
             )
             resp.raise_for_status()
     except Exception as exc:
-        logger.warning(
-            "Failed to send tool-deactivation email to %s: %s", to_email, exc
-        )
+        logger.warning("Failed to send tool-deactivation email to %s: %s", to_email, exc)
