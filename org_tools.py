@@ -19,6 +19,7 @@ from typing import Any
 
 import aiohttp
 import asyncpg
+import sentry_sdk
 from cryptography.fernet import Fernet, InvalidToken
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
@@ -384,6 +385,16 @@ async def update_org_tool(
     if publish_as_mcp is not None or is_active is not None:
         await invalidate_marketplace_cache()
 
+    # Clear circuit breaker state on FALSE → TRUE transition so the tool
+    # starts with a clean failure window after manual re-enable.
+    if is_active is True and row["is_active"] is False:
+        try:
+            from tool_health import clear_breaker
+
+            await clear_breaker(tool_id)
+        except Exception:  # pragma: no cover
+            logger.debug("clear_breaker failed during re-enable", exc_info=True)
+
     return _row_to_org_tool(updated) if updated else None
 
 
@@ -402,11 +413,21 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
         name = row["name"] if row else tool_id
         await _record_event(org_id, tool_id, name, "deleted", actor_id)
         await invalidate_org_tools_cache(org_id)
+
+        # Clear breaker state so a future re-creation starts fresh.
+        try:
+            from tool_health import clear_breaker
+
+            await clear_breaker(tool_id)
+        except Exception:  # pragma: no cover
+            logger.debug("clear_breaker failed during delete", exc_info=True)
+
         if row and row.get("publish_as_mcp"):
             await invalidate_marketplace_cache()
             # Deactivate all marketplace subscriptions for this tool so subscribers
             # are not silently left with a dead tool reference.
             org_row = await pool.fetchrow("SELECT slug FROM orgs WHERE id = $1", org_id)
+            qualified_name: str | None = None
             if org_row:
                 qualified_name = f"{org_row['slug']}/{name}"
                 await pool.execute(
@@ -414,6 +435,22 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
                     " WHERE qualified_tool_name = $1 AND is_active = TRUE",
                     qualified_name,
                 )
+
+            # Notify subscribers (fire-and-forget).
+            if qualified_name is not None:
+                try:
+                    from marketplace import notify_subscribers_of_deactivation
+
+                    asyncio.create_task(
+                        notify_subscribers_of_deactivation(
+                            qualified_name,
+                            "manually removed by author",
+                        )
+                    )
+                except Exception:  # pragma: no cover
+                    logger.debug(
+                        "Failed to schedule subscriber notification", exc_info=True
+                    )
     return deleted
 
 
@@ -556,6 +593,22 @@ def _build_pydantic_model(
 # ─── Webhook execution & LangChain tool building ─────────────────────────────
 
 
+def _hash_webhook_host(url: str) -> str:
+    """Return a short, non-reversible host fingerprint for Sentry tagging.
+
+    Avoids leaking full URLs (which may include path tokens) while still
+    permitting cluster-level analysis of failing hosts.
+    """
+    import hashlib
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url).netloc or "unknown"
+    except Exception:
+        host = "unknown"
+    return hashlib.sha256(host.encode()).hexdigest()[:12]
+
+
 def _build_langchain_tool(
     tool: OrgTool,
     auth_header_name: str | None,
@@ -569,14 +622,24 @@ def _build_langchain_tool(
     args_model = _build_pydantic_model(tool.name, tool.input_schema)
 
     # Capture values in closure — avoid mutable state.
+    _tool_id = tool.id
+    _org_id = tool.org_id
+    _tool_name = tool.name
     _url = tool.webhook_url
     _method = tool.webhook_method
     _timeout = tool.timeout_seconds
     _header_name = auth_header_name
     _header_enc = auth_header_enc
+    _host_hash = _hash_webhook_host(_url)
 
     async def _call_webhook(**kwargs: Any) -> dict[str, Any]:
-        # SSRF re-check at call time (DNS rebinding defense) — use async validator to avoid blocking event loop
+        from tool_health import is_breaker_tripped, record_success
+
+        # Pre-execution gate: skip immediately if breaker is tripped.
+        if await is_breaker_tripped(_tool_id):
+            return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
+
+        # SSRF re-check at call time (DNS rebinding defense)
         url_error = await async_validate_url(_url)
         if url_error is not None:
             return {"error": f"Webhook URL blocked: {url_error}"}
@@ -586,9 +649,13 @@ def _build_langchain_tool(
             try:
                 headers[_header_name] = _decrypt_header(_header_enc)
             except (InvalidToken, Exception):
+                await _on_webhook_failure(
+                    _tool_id, _org_id, _tool_name, _host_hash, "decrypt_failure"
+                )
                 return {"error": "Failed to decrypt webhook auth header"}
 
         timeout = aiohttp.ClientTimeout(total=_timeout)
+        started = time.monotonic()
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 if _method == "GET":
@@ -604,19 +671,68 @@ def _build_langchain_tool(
 
                 content_type = resp.headers.get("Content-Type", "")
                 if "application/json" not in content_type:
+                    await _on_webhook_failure(
+                        _tool_id,
+                        _org_id,
+                        _tool_name,
+                        _host_hash,
+                        "non_json_response",
+                        status_code=resp.status,
+                    )
                     return {
                         "error": f"Webhook returned non-JSON Content-Type: {content_type}",
                         "status": resp.status,
                     }
 
-                return json.loads(body)
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError:
+                    await _on_webhook_failure(
+                        _tool_id,
+                        _org_id,
+                        _tool_name,
+                        _host_hash,
+                        "invalid_json",
+                        status_code=resp.status,
+                    )
+                    return {"error": "Webhook returned invalid JSON"}
+
+                # Treat 4xx/5xx as failures even if JSON-formatted.
+                if resp.status >= 400:
+                    await _on_webhook_failure(
+                        _tool_id,
+                        _org_id,
+                        _tool_name,
+                        _host_hash,
+                        "http_error",
+                        status_code=resp.status,
+                    )
+                    return {
+                        "error": f"Webhook returned HTTP {resp.status}",
+                        "status": resp.status,
+                    }
+
+                # Success path.
+                latency_ms = int((time.monotonic() - started) * 1000)
+                await record_success(_tool_id)
+                await _record_event(
+                    _org_id,
+                    _tool_id,
+                    _tool_name,
+                    "executed",
+                    actor_id="agent",
+                    detail={"latency_ms": latency_ms, "status": resp.status},
+                )
+                return payload
 
         except asyncio.TimeoutError:
+            await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "timeout")
             return {"error": f"Webhook timed out after {_timeout}s"}
         except aiohttp.ClientError as exc:
+            await _on_webhook_failure(
+                _tool_id, _org_id, _tool_name, _host_hash, type(exc).__name__
+            )
             return {"error": f"Webhook request failed: {type(exc).__name__}"}
-        except json.JSONDecodeError:
-            return {"error": "Webhook returned invalid JSON"}
 
     return StructuredTool.from_function(
         coroutine=_call_webhook,
@@ -624,6 +740,63 @@ def _build_langchain_tool(
         description=tool.description,
         args_schema=args_model,
     )
+
+
+async def _on_webhook_failure(
+    tool_id: str,
+    org_id: str,
+    tool_name: str,
+    host_hash: str,
+    error_type: str,
+    *,
+    status_code: int | None = None,
+) -> None:
+    """Centralised failure side-effects: audit, breaker, sentry, deactivation."""
+    from tool_health import record_failure
+
+    detail: dict[str, Any] = {"error_type": error_type, "host_hash": host_hash}
+    if status_code is not None:
+        detail["status"] = status_code
+    await _record_event(
+        org_id,
+        tool_id,
+        tool_name,
+        "failed",
+        actor_id="agent",
+        detail=detail,
+    )
+
+    tripped = False
+    try:
+        tripped = await record_failure(tool_id)
+    except Exception:  # pragma: no cover
+        logger.warning("tool_health.record_failure raised", exc_info=True)
+
+    # Sentry: capture only on tripped transitions to avoid quota burn from
+    # flapping tools.  Per-failure breadcrumbs are still emitted via logger.
+    if tripped:
+        try:
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("tool_id", str(tool_id))
+                scope.set_tag("org_id", str(org_id))
+                scope.set_tag("error_type", error_type)
+                scope.set_tag("webhook_host", host_hash)
+                scope.set_tag("circuit_breaker", "tripped")
+                sentry_sdk.capture_message(
+                    f"Webhook circuit breaker tripped: tool_id={tool_id}",
+                    level="warning",
+                )
+        except Exception:  # pragma: no cover
+            logger.debug("sentry capture failed in _on_webhook_failure", exc_info=True)
+
+        try:
+            from marketplace import auto_deactivate_tool_for_health
+
+            await auto_deactivate_tool_for_health(tool_id)
+        except Exception:  # pragma: no cover
+            logger.warning(
+                "auto_deactivate_tool_for_health failed tool_id=%s", tool_id, exc_info=True
+            )
 
 
 async def build_org_langchain_tools(

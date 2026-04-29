@@ -25,7 +25,11 @@ A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points 
 
 ### Platform Tool Marketplace
 
-Teardrop exposes five built-in, metered tools through the marketplace catalog. Any caller with credits can invoke them via the MCP gateway at `GET /tools/mcp`. Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
+Teardrop exposes five built-in, metered tools through the marketplace catalog. Callers can invoke them:
+- Via the **MCP gateway** at `GET /tools/mcp` (direct tool invocation, billed per call).
+- As **tools called during agent runs** (via `POST /agent/run` when the agent decides to use them; billed in the run's usage cost).
+
+Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 
 | Tool | Price/call |
 |------|------------|
@@ -35,7 +39,10 @@ Teardrop exposes five built-in, metered tools through the marketplace catalog. A
 | `http_fetch` | $0.002 (2,000 atomic) |
 | `convert_currency` | $0.002 (2,000 atomic) |
 
-Enable with `MARKETPLACE_ENABLED=true`. Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`. Per-org pricing overrides are supported via the existing `POST /admin/pricing/tools` endpoint.
+Enable with `MARKETPLACE_ENABLED=true`. When enabled:
+- Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`
+- Agent runs that call these tools incur their marketplace prices (in addition to token costs)
+- Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls
 
 ---
 
@@ -181,6 +188,10 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS` | Seconds to wait for on-chain tx receipt after CDP transfer (default: `90`). Base mainnet can experience 60–90s delays under congestion. |
 | `MARKETPLACE_AUTO_SWEEP_ENABLED` | `true` to auto-sweep org earnings on a schedule |
 | `MARKETPLACE_SWEEP_INTERVAL_SECONDS` | Sweep cadence in seconds (default: `86400` = 1 day) |
+| `MARKETPLACE_CATALOG_URL` | Public URL of the marketplace catalog used in tool-deactivation emails (optional) |
+| `TOOL_BREAKER_ENABLED` | `true` to auto-deactivate marketplace tools whose webhooks repeatedly fail (default: `true`) |
+| `TOOL_BREAKER_THRESHOLD` | Consecutive failures within the window that trip the breaker (default: `5`) |
+| `TOOL_BREAKER_WINDOW_SECONDS` | Sliding-window duration in seconds for failure counting (default: `600`) |
 | `BYOK_TIER_PRICING_ENABLED` | `true` to use per-token orchestration pricing for BYOK orgs (seeded by migration 041). When `false`, uses legacy flat `byok_platform_fee_usdc`. Default: `false` for backward compatibility. |
 | `OPENROUTER_API_KEY` | Required if `AGENT_PROVIDER=openrouter` |
 | `COINGECKO_API_KEY` | CoinGecko API key for live price data (optional; rate-limited without key) |

@@ -922,6 +922,129 @@ class TestCalculateRunCostWithOverrides:
             cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 2, "tool_names": []})
         assert cost == 2 * 1_000
 
+
+# ─── calculate_run_cost_usdc — platform marketplace pricing ──────────────────
+
+
+@pytest.mark.anyio
+class TestCalculateRunCostPlatformPricing:
+    """Verify _resolve_tool_cost precedence: override → platform price → default."""
+
+    def _usage_rule(self):
+        return _make_rule(
+            run_price_usdc=0,
+            tokens_in_cost_per_1k=0,
+            tokens_out_cost_per_1k=0,
+            tool_call_cost=1_000,
+        )
+
+    def _settings(self, marketplace_enabled: bool):
+        s = MagicMock()
+        s.marketplace_enabled = marketplace_enabled
+        return s
+
+    async def test_platform_price_used_when_marketplace_enabled(self):
+        """No override + marketplace_enabled=True → uses platform base_price_usdc."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
+            )
+        assert cost == 4_000
+
+    async def test_admin_override_takes_precedence_over_platform_price(self):
+        rule = self._usage_rule()
+        # Override should win even though platform has a price
+        platform_mock = AsyncMock(return_value=4_000)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={"web_search": 9_999})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_platform_tool_price", new=platform_mock),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
+            )
+        assert cost == 9_999
+        # Lookup should be skipped when an override exists.
+        platform_mock.assert_not_called()
+
+    async def test_marketplace_disabled_skips_platform_lookup(self):
+        """marketplace_enabled=False → platform price is never queried."""
+        rule = self._usage_rule()
+        platform_mock = AsyncMock(return_value=4_000)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("billing.get_settings", return_value=self._settings(False)),
+            patch("marketplace.get_platform_tool_price", new=platform_mock),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]}
+            )
+        assert cost == 1_000  # falls back to rule.tool_call_cost
+        platform_mock.assert_not_called()
+
+    async def test_qualified_marketplace_name_skips_platform_lookup(self):
+        """A name with '/' (e.g. 'acme/weather') is not a platform tool."""
+        rule = self._usage_rule()
+        platform_mock = AsyncMock(return_value=4_000)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_platform_tool_price", new=platform_mock),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+            )
+        assert cost == 1_000
+        platform_mock.assert_not_called()
+
+    async def test_platform_price_none_falls_back_to_default(self):
+        """Tool not in marketplace_platform_tools → rule.tool_call_cost fallback."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=None)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["calculate"]}
+            )
+        assert cost == 1_000
+
+    async def test_mixed_run_platform_and_default(self):
+        """One platform tool + one non-platform tool in same run."""
+        rule = self._usage_rule()
+
+        async def _price(name: str):
+            return {"web_search": 4_000}.get(name)
+
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_platform_tool_price", new=_price),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 2,
+                    "tool_names": ["web_search", "calculate"],
+                }
+            )
+        assert cost == 4_000 + 1_000
+
+
+class TestBuildUsdcTopupRequirementsPriceString:
     def test_price_string_for_ten_dollars(self):
         mock_server = MagicMock()
         mock_server.build_payment_requirements.return_value = []

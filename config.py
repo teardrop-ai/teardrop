@@ -184,6 +184,18 @@ class Settings(BaseSettings):
             "Client signs this as the ceiling; actual settlement is based on usage."
         ),
     )
+
+    @property
+    def x402_upto_max_amount_atomic(self) -> int:
+        """Parse `x402_upto_max_amount` (e.g. "$0.50") into atomic USDC (6-decimal int).
+
+        Returns 0 if the string cannot be parsed.
+        """
+        s = self.x402_upto_max_amount.strip().lstrip("$").strip()
+        try:
+            return int(round(float(s) * 1_000_000))
+        except (ValueError, TypeError):
+            return 0
     pricing_cache_ttl_seconds: int = Field(
         default=300,
         description="How long to cache the active pricing_rules row before re-querying (seconds)",
@@ -262,6 +274,22 @@ class Settings(BaseSettings):
         description=("Fernet key for encrypting webhook auth headers (generate via Fernet.generate_key())"),
     )
     org_tools_cache_ttl_seconds: int = Field(default=60, description="TTL for per-org tool cache in seconds")
+
+    # ── Tool Health / Circuit Breaker ────────────────────────────────────────
+    tool_breaker_enabled: bool = Field(
+        default=True,
+        description="Enable Redis-backed circuit breaker for failing webhook tools.",
+    )
+    tool_breaker_threshold: int = Field(
+        default=5,
+        ge=1,
+        description="Consecutive webhook failures within the window before auto-deactivation.",
+    )
+    tool_breaker_window_seconds: int = Field(
+        default=600,
+        ge=60,
+        description="Sliding window for the failure counter (seconds).",
+    )
 
     # ── LLM Config Encryption ─────────────────────────────────────────────────
     llm_config_encryption_key: str = Field(
@@ -363,6 +391,10 @@ class Settings(BaseSettings):
 
     # ── Marketplace (paid MCP tool hosting + author revenue share) ─────────────
     marketplace_enabled: bool = Field(default=False, description="Enable the paid MCP tool marketplace")
+    marketplace_catalog_url: str = Field(
+        default="",
+        description="Public URL of the marketplace catalog (used in subscriber notification emails).",
+    )
     marketplace_default_revenue_share_bps: int = Field(
         default=7000,
         description="Default author revenue share in basis points (7000 = 70%)",

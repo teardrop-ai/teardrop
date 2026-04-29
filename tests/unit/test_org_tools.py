@@ -538,6 +538,7 @@ class TestWebhookExecution:
 class TestCacheInvalidation:
     async def test_invalidate_clears_in_process(self):
         import time
+
         cache = org_tools_module._get_org_tool_cache("org-1")
         cache._value = [_sample_org_tool()]
         cache._expires = time.monotonic() + 9999

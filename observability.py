@@ -126,15 +126,8 @@ def init_sentry(settings: Any) -> bool:
         logger.warning("sentry_sdk not installed; observability disabled")
         return False
 
-    environment = (
-        (getattr(settings, "sentry_environment", "") or "").strip()
-        or getattr(settings, "app_env", "development")
-    )
-    release = (
-        os.environ.get("RENDER_GIT_COMMIT")
-        or os.environ.get("GIT_COMMIT")
-        or "dev"
-    )
+    environment = (getattr(settings, "sentry_environment", "") or "").strip() or getattr(settings, "app_env", "development")
+    release = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT") or "dev"
 
     sentry_sdk.init(
         dsn=dsn,

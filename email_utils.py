@@ -84,3 +84,53 @@ async def send_invite_email(to_email: str, token: str, org_id: str, base_url: st
             resp.raise_for_status()
     except Exception as exc:
         logger.warning("Failed to send invite email to %s: %s", to_email, exc)
+
+
+async def send_tool_deactivated_email(
+    to_email: str,
+    qualified_tool_name: str,
+    reason: str,
+    catalog_url: str,
+) -> None:
+    """Notify a marketplace subscriber that a tool was deactivated.
+
+    ``reason`` is a short, human-readable string (e.g. "automatic — repeated
+    failures" or "manually removed by author").  ``catalog_url`` points to the
+    public marketplace catalog so the subscriber can find a replacement.
+    Safe for ``asyncio.create_task``: never raises.
+    """
+    settings = get_settings()
+    if not settings.resend_api_key:
+        logger.warning(
+            "RESEND_API_KEY not set — skipping tool-deactivation email to %s", to_email
+        )
+        return
+
+    safe_name = qualified_tool_name.replace("<", "&lt;").replace(">", "&gt;")
+    safe_reason = reason.replace("<", "&lt;").replace(">", "&gt;")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                _RESEND_EMAILS_URL,
+                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                json={
+                    "from": settings.resend_from_email,
+                    "to": [to_email],
+                    "subject": f"Marketplace tool deactivated: {qualified_tool_name}",
+                    "html": (
+                        f"<p>The marketplace tool <strong>{safe_name}</strong> "
+                        "has been deactivated and will no longer execute for your "
+                        "organisation.</p>"
+                        f"<p><strong>Reason:</strong> {safe_reason}</p>"
+                        "<p>You will not be billed for any failed calls. "
+                        "Browse alternative tools in the catalog:</p>"
+                        f"<p><a href='{catalog_url}'>{catalog_url}</a></p>"
+                    ),
+                },
+            )
+            resp.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "Failed to send tool-deactivation email to %s: %s", to_email, exc
+        )

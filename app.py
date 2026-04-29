@@ -756,6 +756,96 @@ _EV_DONE = "DONE"
 _EV_CUSTOM = "Custom"  # ag-ui Custom event for application-defined structured payloads
 
 
+# ─── A2UI stream filter ──────────────────────────────────────────────────────
+# The planner LLM is instructed (see _PLANNER_SYSTEM in agent/nodes.py) to embed
+# a fenced ```a2ui ... ``` block in its final assistant message. That block is
+# a server-internal signal consumed by ui_generator_node and re-emitted as a
+# typed SURFACE_UPDATE event. It must NEVER appear in TEXT_MESSAGE_CONTENT
+# tokens, which are presented as human-readable prose to the client.
+#
+# This filter is a stateful, streaming-safe sentinel scrubber. It buffers a
+# small lookahead so that fence sentinels split across token boundaries are
+# detected correctly, without holding back the rest of the stream.
+
+_A2UI_OPEN = "```a2ui"
+_A2UI_CLOSE = "```"
+
+
+class _A2UIStreamFilter:
+    """Strip ```a2ui ... ``` blocks from a streaming text source.
+
+    Use ``feed(delta)`` for each incoming token chunk; the return value is the
+    text safe to forward to the client. Call ``flush()`` once the source is
+    exhausted to drain any held-back buffer (any unclosed fence is discarded).
+    """
+
+    __slots__ = ("_buf", "_suppressing")
+
+    def __init__(self) -> None:
+        self._buf: str = ""
+        self._suppressing: bool = False
+
+    def feed(self, delta: str) -> str:
+        if not delta:
+            return ""
+        self._buf += delta
+        out: list[str] = []
+        # Lookahead must be large enough to detect a sentinel that arrives split
+        # across multiple chunks. We hold back (len(sentinel) - 1) characters.
+        open_hold = len(_A2UI_OPEN) - 1   # 6
+        close_hold = len(_A2UI_CLOSE) - 1  # 2
+        while True:
+            if self._suppressing:
+                idx = self._buf.find(_A2UI_CLOSE)
+                if idx == -1:
+                    # Keep enough tail to catch a split close sentinel.
+                    if len(self._buf) > close_hold:
+                        self._buf = self._buf[-close_hold:]
+                    return "".join(out)
+                # Drop everything up to and including the close fence; also
+                # consume one trailing newline so the client doesn't see a
+                # blank gap where the block used to be.
+                tail_start = idx + len(_A2UI_CLOSE)
+                if tail_start < len(self._buf) and self._buf[tail_start] == "\n":
+                    tail_start += 1
+                self._buf = self._buf[tail_start:]
+                self._suppressing = False
+                continue
+            # Not suppressing: scan for the open sentinel.
+            idx = self._buf.find(_A2UI_OPEN)
+            if idx == -1:
+                # Emit everything except the last open_hold chars (which could
+                # still be the start of a split open sentinel).
+                if len(self._buf) > open_hold:
+                    out.append(self._buf[:-open_hold])
+                    self._buf = self._buf[-open_hold:]
+                return "".join(out)
+            # Emit text before the fence (rstrip a trailing newline that
+            # immediately precedes the fence, to avoid a dangling blank line).
+            prefix = self._buf[:idx]
+            if prefix.endswith("\n"):
+                prefix = prefix[:-1]
+            if prefix:
+                out.append(prefix)
+            self._buf = self._buf[idx + len(_A2UI_OPEN):]
+            self._suppressing = True
+            # Loop again to handle text that follows the fence in the same buffer.
+
+    def flush(self) -> str:
+        """Drain the held-back buffer at end-of-stream.
+
+        If we were inside an unclosed a2ui fence (LLM was truncated or stopped
+        early), discard the buffer silently — better to lose a partial signal
+        than to leak fence characters to the client.
+        """
+        if self._suppressing:
+            self._buf = ""
+            return ""
+        out = self._buf
+        self._buf = ""
+        return out
+
+
 # ─── Request / response models ────────────────────────────────────────────────
 
 
@@ -1698,6 +1788,12 @@ async def agent_run(
         )
         config = {"configurable": {"thread_id": scoped_thread_id}}
 
+        # Streaming a2ui-block scrubber for planner text tokens. ui_generator
+        # also calls an LLM (raw JSON output); we additionally guard by
+        # langgraph_node so its tokens never reach TEXT_MESSAGE_CONTENT.
+        _text_filter = _A2UIStreamFilter()
+        _last_msg_id: str = run_id
+
         try:
             async for event in graph.astream_events(
                 initial_state.model_dump(),
@@ -1710,6 +1806,12 @@ async def agent_run(
 
                 # --- Text streaming from the planner (LLM tokens) ---
                 if event_name == "on_chat_model_stream":
+                    # Only forward tokens originating from the planner node.
+                    # The ui_generator node also invokes an LLM whose raw JSON
+                    # output must not surface as TEXT_MESSAGE_CONTENT.
+                    if event.get("metadata", {}).get("langgraph_node") != "planner":
+                        await asyncio.sleep(0)
+                        continue
                     chunk = event_data.get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         msg_id = event.get("run_id", run_id)
@@ -1720,18 +1822,20 @@ async def agent_run(
                         raw_content = chunk.content
                         if isinstance(raw_content, list):
                             delta = "".join(
-                                block.get("text", "") if isinstance(block, dict)
-                                else getattr(block, "text", "")
+                                block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")
                                 for block in raw_content
                                 if (block.get("type") if isinstance(block, dict) else getattr(block, "type", "")) == "text"
                             )
                         else:
                             delta = raw_content
                         if delta:
-                            yield _sse_event(
-                                _EV_TEXT_MSG_CONTENT,
-                                {"message_id": msg_id, "delta": delta},
-                            )
+                            _last_msg_id = msg_id
+                            clean = _text_filter.feed(delta)
+                            if clean:
+                                yield _sse_event(
+                                    _EV_TEXT_MSG_CONTENT,
+                                    {"message_id": msg_id, "delta": clean},
+                                )
 
                 # --- Tool call start ---
                 elif event_name == "on_tool_start":
@@ -1779,6 +1883,15 @@ async def agent_run(
                             },
                         },
                     )
+
+                # --- Planner finished: drain any held-back text buffer ---
+                elif event_name == "on_chain_end" and node_name == "planner":
+                    remainder = _text_filter.flush()
+                    if remainder:
+                        yield _sse_event(
+                            _EV_TEXT_MSG_CONTENT,
+                            {"message_id": _last_msg_id, "delta": remainder},
+                        )
 
                 # --- Node outputs (state snapshots) ---
                 elif event_name == "on_chain_end" and node_name == "ui_generator":
@@ -1919,6 +2032,20 @@ async def agent_run(
                     logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
             else:
                 # x402 on-chain settlement.
+                # Clamp to the upto ceiling the client signed; otherwise settlement
+                # would fail because the signed amount cannot cover the higher cost.
+                if settings.x402_scheme == "upto":
+                    upto_ceiling = settings.x402_upto_max_amount_atomic
+                    if upto_ceiling > 0 and cost_usdc > upto_ceiling:
+                        logger.warning(
+                            "Run cost exceeds x402 upto ceiling; clamping run_id=%s "
+                            "org_id=%s cost_usdc=%d ceiling_usdc=%d",
+                            run_id,
+                            org_id,
+                            cost_usdc,
+                            upto_ceiling,
+                        )
+                        cost_usdc = upto_ceiling
                 billing_settled = await settle_payment(
                     billing,
                     actual_cost_usdc=cost_usdc,
@@ -2017,7 +2144,6 @@ async def require_admin(
             detail="Admin privileges required",
         )
     return payload
-
 
 
 def _validate_webhook_url(url: str) -> None:
@@ -3762,14 +3888,24 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
     ``tool_row`` is the raw DB row returned by ``get_marketplace_tool_by_name()``.
     Follows the same SSRF-safe webhook pattern as ``_build_langchain_tool``.
     """
+    import time as _time  # noqa: PLC0415
+
     import aiohttp  # noqa: PLC0415
 
-    from org_tools import _decrypt_header  # noqa: PLC0415
+    from org_tools import _decrypt_header, _hash_webhook_host, _on_webhook_failure, _record_event  # noqa: PLC0415
+    from tool_health import is_breaker_tripped, record_success  # noqa: PLC0415
     from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
 
+    tool_id = tool_row.get("id", "")
+    org_id = tool_row.get("org_id", "")
+    tool_name = tool_row.get("name", "")
     url = tool_row["webhook_url"]
     method = tool_row.get("webhook_method", "POST")
     timeout_sec = tool_row.get("timeout_seconds", 10)
+    host_hash = _hash_webhook_host(url)
+
+    if tool_id and await is_breaker_tripped(tool_id):
+        return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
 
     url_err = await async_validate_url(url)
     if url_err:
@@ -3782,9 +3918,14 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
         try:
             headers[auth_name] = _decrypt_header(auth_enc)
         except Exception:
+            if tool_id:
+                await _on_webhook_failure(
+                    tool_id, org_id, tool_name, host_hash, "decrypt_failure"
+                )
             return {"error": "Failed to decrypt webhook auth header"}
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
+    started = _time.monotonic()
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             if method == "GET":
@@ -3800,12 +3941,66 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
                 body = body[: 512 * 1024]
 
             content_type = resp.headers.get("Content-Type", "")
-            if "application/json" in content_type:
-                return json.loads(body)
-            return {"text": body.decode("utf-8", errors="replace")}
+            if "application/json" not in content_type:
+                if tool_id:
+                    await _on_webhook_failure(
+                        tool_id,
+                        org_id,
+                        tool_name,
+                        host_hash,
+                        "non_json_response",
+                        status_code=resp.status,
+                    )
+                return {"text": body.decode("utf-8", errors="replace")}
+
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                if tool_id:
+                    await _on_webhook_failure(
+                        tool_id,
+                        org_id,
+                        tool_name,
+                        host_hash,
+                        "invalid_json",
+                        status_code=resp.status,
+                    )
+                return {"error": "Webhook returned invalid JSON"}
+
+            if resp.status >= 400:
+                if tool_id:
+                    await _on_webhook_failure(
+                        tool_id,
+                        org_id,
+                        tool_name,
+                        host_hash,
+                        "http_error",
+                        status_code=resp.status,
+                    )
+                return {"error": f"Webhook returned HTTP {resp.status}", "status": resp.status}
+
+            # Success.
+            if tool_id:
+                latency_ms = int((_time.monotonic() - started) * 1000)
+                await record_success(tool_id)
+                await _record_event(
+                    org_id,
+                    tool_id,
+                    tool_name,
+                    "executed",
+                    actor_id="mcp",
+                    detail={"latency_ms": latency_ms, "status": resp.status},
+                )
+            return payload
     except asyncio.TimeoutError:
+        if tool_id:
+            await _on_webhook_failure(tool_id, org_id, tool_name, host_hash, "timeout")
         return {"error": f"Webhook timed out after {timeout_sec}s"}
     except Exception as exc:
+        if tool_id:
+            await _on_webhook_failure(
+                tool_id, org_id, tool_name, host_hash, type(exc).__name__
+            )
         return {"error": f"Webhook request failed: {type(exc).__name__}"}
 
 
@@ -3990,8 +4185,11 @@ async def mcp_jsonrpc_handler(
                 result = {"error": str(exc)}
 
         # ── Debit credits ─────────────────────────────────────────────
+        # Skip debit when execution failed: subscribers must not be charged
+        # for infrastructure failures, breaker trips, or auth/decryption errors.
+        execution_failed = isinstance(result, dict) and "error" in result
         debited = False
-        if billing.verified and billing.billing_method == "credit":
+        if billing.verified and billing.billing_method == "credit" and not execution_failed:
             debited = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
 
         # ── Record author earnings (fire-and-forget) ──────────────────

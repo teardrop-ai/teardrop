@@ -15,8 +15,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-
-import sentry_sdk
 import re
 import time
 import uuid
@@ -24,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
+import sentry_sdk
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
@@ -1111,7 +1110,174 @@ def _build_marketplace_langchain_tool(
     )
 
 
-# ─── Background sweep ────────────────────────────────────────────────────────
+# ─── Subscriber notification ─────────────────────────────────────────────────
+
+
+async def notify_subscribers_of_deactivation(
+    qualified_tool_name: str,
+    reason: str,
+) -> None:
+    """Email all admin/owner users of orgs subscribed to a deactivated tool.
+
+    Best-effort: SMTP failures are logged but never raised. A Redis-backed
+    1-hour dedup guard prevents notification storms if a flapping tool re-trips
+    the breaker after a manual re-enable.
+    """
+    from cache import get_redis
+    from email_utils import send_tool_deactivated_email
+
+    settings = get_settings()
+    redis = get_redis()
+    dedup_key = f"teardrop:notify:tool_deact:{qualified_tool_name}"
+
+    # Dedup: skip if we've already notified about this tool in the last hour.
+    if redis is not None:
+        try:
+            already = await redis.set(dedup_key, "1", ex=3600, nx=True)
+            if not already:
+                logger.debug(
+                    "notify_subscribers_of_deactivation: dedup skip qualified=%s",
+                    qualified_tool_name,
+                )
+                return
+        except Exception:  # pragma: no cover — fall through on Redis error
+            logger.warning("Redis dedup check failed; proceeding with notification")
+
+    try:
+        pool = _get_pool()
+    except RuntimeError:
+        return
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT u.email
+            FROM org_marketplace_subscriptions s
+            JOIN users u ON u.org_id = s.org_id
+            WHERE s.qualified_tool_name = $1
+              AND s.is_active = TRUE
+              AND u.is_active = TRUE
+              AND u.role IN ('admin', 'owner')
+            """,
+            qualified_tool_name,
+        )
+    except Exception:
+        logger.warning(
+            "notify_subscribers_of_deactivation: query failed qualified=%s",
+            qualified_tool_name,
+            exc_info=True,
+        )
+        return
+
+    if not rows:
+        return
+
+    catalog_url = settings.marketplace_catalog_url or ""
+    coros = [
+        send_tool_deactivated_email(
+            to_email=row["email"],
+            qualified_tool_name=qualified_tool_name,
+            reason=reason,
+            catalog_url=catalog_url,
+        )
+        for row in rows
+    ]
+    await asyncio.gather(*coros, return_exceptions=True)
+
+
+async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str | None = None) -> None:
+    """Mark a tool ``is_active=FALSE`` after the circuit breaker trips.
+
+    Mirrors the side-effects of ``delete_org_tool`` for a published tool:
+    - Soft-deactivate the tool row.
+    - Deactivate all marketplace subscriptions for the tool.
+    - Invalidate per-org and marketplace caches.
+    - Emit an audit event with reason="circuit_breaker_tripped".
+    - Notify subscribers via email (best-effort).
+
+    Idempotent: if the tool is already inactive, no further work is performed.
+    """
+    import sentry_sdk
+
+    pool = _get_pool()
+
+    row = await pool.fetchrow(
+        "SELECT id, org_id, name, publish_as_mcp, is_active FROM org_tools WHERE id = $1",
+        tool_id,
+    )
+    if row is None or not row["is_active"]:
+        return
+
+    org_id = row["org_id"]
+    name = row["name"]
+
+    result = await pool.execute(
+        "UPDATE org_tools SET is_active = FALSE, updated_at = NOW()"
+        " WHERE id = $1 AND is_active = TRUE",
+        tool_id,
+    )
+    # If another caller deactivated concurrently, exit cleanly.
+    if result.split()[-1] == "0":
+        return
+
+    # Audit event.
+    from org_tools import _record_event, invalidate_marketplace_cache, invalidate_org_tools_cache
+
+    await _record_event(
+        org_id,
+        tool_id,
+        name,
+        "failed",
+        actor_id="system:circuit_breaker",
+        detail={"reason": "circuit_breaker_tripped"},
+    )
+
+    await invalidate_org_tools_cache(org_id)
+
+    if not row["publish_as_mcp"]:
+        return  # Not a published tool — nothing more to do.
+
+    await invalidate_marketplace_cache()
+
+    # Resolve qualified name if not supplied.
+    if qualified_tool_name is None:
+        org_row = await pool.fetchrow("SELECT slug FROM orgs WHERE id = $1", org_id)
+        if org_row is None:
+            return
+        qualified_tool_name = f"{org_row['slug']}/{name}"
+
+    await pool.execute(
+        "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
+        " WHERE qualified_tool_name = $1 AND is_active = TRUE",
+        qualified_tool_name,
+    )
+
+    # Sentry event tagged so ops can find every breaker trip.
+    try:
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("tool_id", str(tool_id))
+            scope.set_tag("org_id", str(org_id))
+            scope.set_tag("circuit_breaker", "tripped")
+            sentry_sdk.capture_message(
+                f"Circuit breaker tripped: {qualified_tool_name}",
+                level="warning",
+            )
+    except Exception:  # pragma: no cover
+        logger.debug("sentry capture failed in auto_deactivate", exc_info=True)
+
+    # Fire-and-forget notification.
+    try:
+        asyncio.create_task(
+            notify_subscribers_of_deactivation(
+                qualified_tool_name,
+                "automatic — repeated webhook failures",
+            )
+        )
+    except Exception:  # pragma: no cover
+        logger.warning("Failed to schedule subscriber notification", exc_info=True)
+
+
+
 
 
 def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:

@@ -129,6 +129,36 @@ Your tool now appears in the public catalog at `GET /marketplace/catalog`.
 > deactivates all subscriber subscriptions so callers are not left with
 > a broken reference.
 
+### Webhook Health & Auto-Deactivation
+
+Teardrop monitors the health of every published tool's webhook and protects
+both you and your subscribers from misbehaving endpoints:
+
+- **Failed calls are not billed.** When a webhook times out, returns
+  non-JSON content, returns HTTP 4xx/5xx, or fails auth-header decryption,
+  the calling org is **not** debited and you do **not** earn revenue for
+  that call.
+- **Automatic deactivation (circuit breaker).** If a webhook fails 5 or
+  more times within a 10-minute window, the tool is automatically
+  deactivated and removed from the marketplace catalog. All active
+  subscriptions are cancelled and an email notification is sent to each
+  subscriber org's admins/owners.
+- **Manual re-enable required.** Auto-deactivated tools do **not** recover
+  on their own. After fixing your webhook, re-enable the tool by sending
+  `PATCH /tools/<tool-id>` with `{"is_active": true}`. The failure counter
+  resets on the false→true transition so you start with a clean window.
+- **Audit trail.** Every webhook call (success or failure) is recorded in
+  `org_tool_events` with latency, status code, and a hashed (non-PII)
+  representation of the webhook host. Query your tool's history via the
+  audit-events endpoints.
+
+To minimise nuisance deactivations, ensure your webhook:
+
+1. Returns valid JSON with `Content-Type: application/json`.
+2. Responds within the configured `timeout_seconds` (default 10s).
+3. Uses HTTP 2xx for success — non-2xx responses count as failures even
+   if the body is parseable JSON.
+
 ### Catalog Discovery & Filtering
 
 Callers can discover your tools via `GET /marketplace/catalog` with optional filtering:

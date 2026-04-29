@@ -61,9 +61,49 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         # ── Post-response: settle billing ─────────────────────────────────
         if response.status_code == 200 and pending_debit is not None:
-            await self._settle_billing(request, pending_debit)
+            execution_failed = await self._response_indicates_failure(response)
+            response = await self._settle_billing(
+                request, pending_debit, response, execution_failed=execution_failed
+            )
 
         return response
+
+    @staticmethod
+    async def _response_indicates_failure(response: Response) -> bool:
+        """Buffer the response body and check for JSON-RPC ``isError: true``.
+
+        Returns True if the body is parseable JSON-RPC with an error result so
+        the caller can skip the credit debit.  On any parse failure the
+        function returns False (defaults to billing — preserves original
+        behaviour for unfamiliar response shapes).
+
+        Side-effect: drains and replaces ``response.body_iterator`` with a
+        replay iterator so the caller can still stream the body to the
+        client.  Safe for both ``Response`` and ``StreamingResponse``.
+        """
+        try:
+            chunks: list[bytes] = []
+            async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8")
+                chunks.append(chunk)
+            body = b"".join(chunks)
+
+            async def _replay():
+                yield body
+
+            response.body_iterator = _replay()  # type: ignore[attr-defined]
+
+            if not body:
+                return False
+            data = json.loads(body)
+            # JSON-RPC tools/call result is {"result": {"isError": true|false, ...}}
+            result = data.get("result") if isinstance(data, dict) else None
+            if isinstance(result, dict) and result.get("isError") is True:
+                return True
+        except Exception:
+            return False
+        return False
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -279,11 +319,26 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         self,
         request: Request,
         pending: tuple,
-    ) -> None:
-        """Post-response: debit credits or settle x402."""
+        response: Response,
+        *,
+        execution_failed: bool = False,
+    ) -> Response:
+        """Post-response: debit credits or settle x402.
+
+        Returns the (potentially body-replayed) response.  When
+        ``execution_failed`` is True we skip both the credit debit and the
+        on-chain settlement — subscribers must not be charged for failed
+        tool executions.
+        """
         org_id, tool_cost, tool_name, _req_id = pending
 
         is_x402 = getattr(request.state, "x402_billing", None) is not None
+
+        if execution_failed:
+            logger.info(
+                "mcp settle skipped (execution failed) org=%s tool=%s", org_id, tool_name
+            )
+            return response
 
         if is_x402:
             # Phase 3: on-chain settlement.
@@ -294,7 +349,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 await settle_payment(billing, actual_cost_usdc=tool_cost)
             except Exception:
                 logger.warning("x402 MCP settlement failed", exc_info=True)
-                return  # Settlement failed — do not record phantom earnings
+                return response  # Settlement failed — do not record phantom earnings
         else:
             # Phase 2: credit debit.
             from billing import debit_credit
@@ -302,7 +357,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             debited = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
             if not debited:
                 logger.warning("MCP debit failed org=%s tool=%s", org_id, tool_name)
-                return
+                return response
 
         # Record marketplace earnings (fire-and-forget).
         if "/" in tool_name and tool_cost > 0:
@@ -324,3 +379,5 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                         )
             except Exception:
                 logger.debug("Failed to record MCP author earnings", exc_info=True)
+
+        return response

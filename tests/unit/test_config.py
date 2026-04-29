@@ -68,3 +68,28 @@ def test_jwt_key_paths_readable(test_settings):
     pub = test_settings.jwt_public_key
     assert "BEGIN PRIVATE KEY" in priv
     assert "BEGIN PUBLIC KEY" in pub
+
+
+def test_x402_upto_max_amount_atomic_default():
+    s = Settings(x402_upto_max_amount="$0.50")
+    assert s.x402_upto_max_amount_atomic == 500_000
+
+
+def test_x402_upto_max_amount_atomic_one_dollar():
+    s = Settings(x402_upto_max_amount="$1.00")
+    assert s.x402_upto_max_amount_atomic == 1_000_000
+
+
+def test_x402_upto_max_amount_atomic_one_cent():
+    s = Settings(x402_upto_max_amount="$0.01")
+    assert s.x402_upto_max_amount_atomic == 10_000
+
+
+def test_x402_upto_max_amount_atomic_no_dollar_sign():
+    s = Settings(x402_upto_max_amount="0.25")
+    assert s.x402_upto_max_amount_atomic == 250_000
+
+
+def test_x402_upto_max_amount_atomic_unparseable_returns_zero():
+    s = Settings(x402_upto_max_amount="invalid")
+    assert s.x402_upto_max_amount_atomic == 0

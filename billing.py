@@ -708,6 +708,32 @@ async def delete_tool_pricing_override(tool_name: str) -> bool:
     return deleted
 
 
+async def _resolve_tool_cost(
+    tool_name: str,
+    overrides: dict[str, int],
+    default_cost: int,
+    marketplace_enabled: bool,
+) -> int:
+    """Resolve the per-call cost for a tool.
+
+    Precedence (matches mcp_gateway._billing_gate):
+      1. Admin override in `tool_pricing_overrides`
+      2. Marketplace platform price in `marketplace_platform_tools`
+         (only when marketplace is enabled and the name is unqualified)
+      3. Global `rule.tool_call_cost` fallback
+    """
+    if tool_name in overrides:
+        return overrides[tool_name]
+    if marketplace_enabled and "/" not in tool_name:
+        # Lazy import: marketplace.py imports from billing at module init.
+        from marketplace import get_platform_tool_price
+
+        platform_price = await get_platform_tool_price(tool_name)
+        if platform_price is not None:
+            return platform_price
+    return default_cost
+
+
 async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: str = "") -> int:
     """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
 
@@ -719,16 +745,16 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
     pricing rule first, falling back to the global default.
 
     When tool_names is provided in usage_data, each tool is billed at its
-    individual override cost (from tool_pricing_overrides table) with the
-    global tool_call_cost as the fallback.  If tool_names is absent or shorter
-    than tool_calls, the remaining calls are billed at the global default.
+    resolved cost using `_resolve_tool_cost` (admin override → platform
+    marketplace price → `rule.tool_call_cost`).  Calls without a recorded
+    name fall back to the global default.
 
     Returns 0 if no pricing rule is available (e.g. DB not yet seeded).
 
     Formula (usage-based):
         cost = (tokens_in // 1000) * tokens_in_cost_per_1k
              + (tokens_out // 1000) * tokens_out_cost_per_1k
-             + sum(override.get(name, tool_call_cost) for name in tool_names)
+             + sum(_resolve_tool_cost(name, ...) for name in tool_names)
              + remaining_unnamed_calls * tool_call_cost
     """
 
@@ -754,7 +780,12 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
 
     if tool_names:
         overrides = await get_tool_pricing_overrides()
-        named_cost = sum(overrides.get(name, rule.tool_call_cost) for name in tool_names)
+        marketplace_enabled = get_settings().marketplace_enabled
+        named_cost = 0
+        for name in tool_names:
+            named_cost += await _resolve_tool_cost(
+                name, overrides, rule.tool_call_cost, marketplace_enabled
+            )
         # Defensive fallback: bill any gap (e.g. tool_calls counted but name not recorded)
         unnamed_calls = max(0, tool_calls - len(tool_names))
         tool_cost = named_cost + unnamed_calls * rule.tool_call_cost
