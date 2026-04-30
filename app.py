@@ -1717,62 +1717,92 @@ async def agent_run(
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
 
-        graph = await get_graph()
-        org_lc_tools, org_tools_by_name = await build_org_langchain_tools(org_id)
-
-        # ── Merge MCP server tools ────────────────────────────────────────
-        try:
-            mcp_tools, mcp_by_name = await build_mcp_langchain_tools(org_id)
-            org_lc_tools = list(org_lc_tools) + mcp_tools
-            org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
-        except Exception:
-            logger.debug("MCP tool discovery failed for org_id=%s", org_id, exc_info=True)
-
-        # ── Merge subscribed marketplace tools ────────────────────────────
-        mp_by_name: dict[str, Any] = {}
-        try:
-            from marketplace import build_subscribed_marketplace_tools
-
-            mp_tools, mp_by_name = await build_subscribed_marketplace_tools(org_id)
-            org_lc_tools = list(org_lc_tools) + mp_tools
-            org_tools_by_name = {**org_tools_by_name, **mp_by_name}
-        except Exception:
-            logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
-
-        # ── Recall relevant memories for this org ─────────────────────────
-        recalled: list[str] = []
+        # ── Pre-graph init: run all 8 independent calls concurrently ──────
+        # Each helper swallows its own exceptions and returns a safe fallback,
+        # mirroring the pre-existing per-call try/except behaviour. This cuts
+        # the gap between RUN_STARTED and the first LLM token from the sum of
+        # all latencies down to the slowest single call.
         mem_settings = get_settings()
-        if mem_settings.memory_enabled:
+
+        async def _safe_mcp_tools() -> tuple[list, dict[str, Any]]:
+            try:
+                return await build_mcp_langchain_tools(org_id)
+            except Exception:
+                logger.debug("MCP tool discovery failed for org_id=%s", org_id, exc_info=True)
+                return [], {}
+
+        async def _safe_marketplace_tools() -> tuple[list, dict[str, Any]]:
+            try:
+                from marketplace import build_subscribed_marketplace_tools
+
+                return await build_subscribed_marketplace_tools(org_id)
+            except Exception:
+                logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
+                return [], {}
+
+        async def _safe_recall() -> list[str]:
+            if not mem_settings.memory_enabled:
+                return []
             try:
                 entries = await recall_memories(org_id, body.message, mem_settings.memory_top_k)
-                recalled = [e.content for e in entries]
+                return [e.content for e in entries]
             except Exception:
                 logger.debug("Memory recall failed for org_id=%s", org_id, exc_info=True)
+                return []
 
-        # ── Resolve per-org LLM config (smart routing aware) ────────────
-        llm_config: dict | None = None
-        try:
-            llm_config = await resolve_llm_config(org_id)
-        except Exception:
-            logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
+        async def _safe_llm_config() -> dict | None:
+            try:
+                return await resolve_llm_config(org_id)
+            except Exception:
+                logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
+                return None
 
-        # ── Fetch org name for context injection ──────────────────────────
-        _org_name: str = ""
-        if org_id:
+        async def _safe_org_name() -> str:
+            if not org_id:
+                return ""
             try:
                 _org = await get_org_by_id(org_id)
-                if _org is not None:
-                    _org_name = _org.name
+                return _org.name if _org is not None else ""
             except Exception:
                 logger.debug("Org name fetch failed for org_id=%s", org_id, exc_info=True)
+                return ""
 
-        # ── Fetch credit balance for context injection (credit billing only) ─
-        _credit_balance_usdc: int | None = None
-        if settings.billing_enabled and billing.verified and billing.billing_method == "credit":
+        async def _safe_credit_balance() -> int | None:
+            if not (settings.billing_enabled and billing.verified and billing.billing_method == "credit"):
+                return None
             try:
-                _credit_balance_usdc = await get_credit_balance(org_id)
+                return await get_credit_balance(org_id)
             except Exception:
                 logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
+                return None
+
+        (
+            graph,
+            (org_lc_tools, org_tools_by_name),
+            (mcp_tools, mcp_by_name),
+            (mp_tools, mp_by_name),
+            recalled,
+            llm_config,
+            _org_name,
+            _credit_balance_usdc,
+        ) = await asyncio.gather(
+            get_graph(),
+            build_org_langchain_tools(org_id),
+            _safe_mcp_tools(),
+            _safe_marketplace_tools(),
+            _safe_recall(),
+            _safe_llm_config(),
+            _safe_org_name(),
+            _safe_credit_balance(),
+        )
+
+        # Merge MCP + marketplace tools after gather (cheap dict/list ops).
+        if mcp_tools:
+            org_lc_tools = list(org_lc_tools) + mcp_tools
+            org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
+        if mp_tools:
+            org_lc_tools = list(org_lc_tools) + mp_tools
+            org_tools_by_name = {**org_tools_by_name, **mp_by_name}
 
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
@@ -1949,9 +1979,21 @@ async def agent_run(
         # ── Usage accounting (log-only, never blocks) ─────────────────────
         duration_ms = int((time.monotonic() - start_time) * 1000)
         usage_data: dict[str, Any] = {}
+        # state_snapshot is also read later by the memory-extraction kickoff;
+        # initialise to None so a timeout/exception leaves it well-defined.
+        state_snapshot = None
         try:
-            state_snapshot = await graph.aget_state(config)
+            state_snapshot = await asyncio.wait_for(
+                graph.aget_state(config),
+                timeout=settings.agent_state_snapshot_timeout_seconds,
+            )
             usage_data = (state_snapshot.values or {}).get("metadata", {}).get("_usage", {})
+        except asyncio.TimeoutError:
+            logger.warning(
+                "agent_run aget_state timed out after %.1fs run_id=%s; skipping usage data",
+                settings.agent_state_snapshot_timeout_seconds,
+                run_id,
+            )
         except Exception:
             logger.debug("Could not retrieve final state for usage", exc_info=True)
 
@@ -1982,7 +2024,7 @@ async def agent_run(
         await record_usage_event(usage_event)
 
         # ── Extract and store memories (fire-and-forget) ─────────────────
-        if mem_settings.memory_enabled:
+        if mem_settings.memory_enabled and state_snapshot is not None:
             try:
                 state_msgs = (state_snapshot.values or {}).get("messages", [])
                 if state_msgs:
@@ -2053,11 +2095,27 @@ async def agent_run(
                             upto_ceiling,
                         )
                         cost_usdc = upto_ceiling
-                billing_settled = await settle_payment(
-                    billing,
-                    actual_cost_usdc=cost_usdc,
-                )
-                if billing_settled.settled:
+                # Hard timeout on the facilitator HTTP call so a slow/unreachable
+                # facilitator can never hold the SSE stream open indefinitely.
+                # On timeout we route to the same failure path used when the
+                # facilitator returns a non-success response: enqueue for retry
+                # by the background worker (see process_pending_settlements).
+                settlement_timed_out = False
+                try:
+                    billing_settled = await asyncio.wait_for(
+                        settle_payment(billing, actual_cost_usdc=cost_usdc),
+                        timeout=settings.x402_settlement_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    settlement_timed_out = True
+                    billing_settled = billing  # placeholder; settled=False by default
+                    logger.warning(
+                        "Settlement timed out after %ds run_id=%s org_id=%s; enqueued for retry",
+                        settings.x402_settlement_timeout_seconds,
+                        run_id,
+                        org_id,
+                    )
+                if not settlement_timed_out and billing_settled.settled:
                     await record_settlement(
                         usage_event.id,
                         billing_settled.amount_usdc,

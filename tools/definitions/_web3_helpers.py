@@ -4,12 +4,52 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
 from config import get_settings
 
+logger = logging.getLogger(__name__)
+
 _CHAIN_MAP: dict[int, str] = {}
+
+# ─── Retry-capable provider ───────────────────────────────────────────────────
+# Public and free-tier RPC endpoints (Alchemy, Infura, QuickNode free plans)
+# enforce per-second call budgets. When multiple tools fan out parallel eth_call
+# requests to the same chain simultaneously, a 429 is common. This subclass
+# retries up to _RETRY_MAX times with exponential backoff before propagating,
+# giving the RPC time to recover without wasting an agent iteration.
+
+_RETRY_MAX = 2
+_RETRY_BASE_DELAY = 0.75  # seconds; doubles each attempt → 0.75 s, 1.5 s
+_RATE_LIMIT_MARKERS = ("429", "rate limit", "too many requests", "exceeded", "throttl")
+
+
+class _RetryAsyncHTTPProvider(AsyncHTTPProvider):
+    """AsyncHTTPProvider with transparent exponential-backoff retry on 429s."""
+
+    async def make_request(self, method: str, params: list) -> dict:  # type: ignore[override]
+        for attempt in range(_RETRY_MAX + 1):
+            try:
+                return await super().make_request(method, params)  # type: ignore[return-value]
+            except Exception as exc:
+                err_lower = str(exc).lower()
+                if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
+                    delay = _RETRY_BASE_DELAY * (2**attempt)
+                    logger.debug(
+                        "RPC 429 on attempt %d/%d for %s; retrying in %.2fs",
+                        attempt + 1,
+                        _RETRY_MAX,
+                        method,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        raise RuntimeError("unreachable")  # pragma: no cover
 
 
 def _get_rpc_url(chain_id: int) -> str:
@@ -28,4 +68,4 @@ def _get_rpc_url(chain_id: int) -> str:
 def get_web3(chain_id: int = 1) -> AsyncWeb3:
     """Return an AsyncWeb3 instance for the given chain."""
     rpc_url = _get_rpc_url(chain_id)
-    return AsyncWeb3(AsyncHTTPProvider(rpc_url))
+    return AsyncWeb3(_RetryAsyncHTTPProvider(rpc_url))

@@ -257,6 +257,21 @@ class Settings(BaseSettings):
         default=10, description="Background worker poll interval for retrying failed settlements"
     )
     settlement_max_retries: int = Field(default=5, description="Max retry attempts before marking a settlement as exhausted")
+    x402_settlement_timeout_seconds: int = Field(
+        default=30,
+        description=(
+            "Hard timeout for the in-stream x402 settle_payment() call. On timeout the "
+            "settlement is enqueued via enqueue_failed_settlement() and retried by the "
+            "background worker, so the SSE stream is never held hostage by a slow facilitator."
+        ),
+    )
+    agent_state_snapshot_timeout_seconds: float = Field(
+        default=10.0,
+        description=(
+            "Hard timeout for graph.aget_state() after astream_events completes. On timeout "
+            "usage_data falls back to {} and the stream proceeds to emit DONE."
+        ),
+    )
 
     # ── Persistent Memory (per-org RAG) ─────────────────────────────────────
     memory_enabled: bool = Field(
