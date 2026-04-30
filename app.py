@@ -2995,6 +2995,38 @@ class OrgToolResponse(BaseModel):
     updated_at: str
 
 
+class TestWebhookRequest(BaseModel):
+    """Pre-publish webhook diagnostic probe.
+
+    Used by the dashboard wizard to validate a webhook URL is reachable and
+    returns valid JSON before the tool is created. Plaintext auth header values
+    are accepted because the encrypted-at-rest header does not yet exist
+    (the tool row has not been created).
+    """
+
+    webhook_url: str = Field(..., max_length=2048)
+    webhook_method: str = Field(default="POST", pattern=r"^(GET|POST|PUT)$")
+    payload: dict = Field(default_factory=dict)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+    auth_header_name: str | None = Field(default=None, max_length=64)
+    auth_header_value: str | None = Field(default=None, max_length=4096)
+
+
+class TestWebhookResponse(BaseModel):
+    """Diagnostic result of a test webhook invocation.
+
+    The HTTP status of this endpoint is always 200 on a successful proxy
+    attempt; the webhook's own status is reported in ``status_code``.
+    ``success=True`` requires HTTP 2xx + valid JSON body from the webhook.
+    """
+
+    success: bool
+    status_code: int | None
+    latency_ms: int
+    response_body: dict | None
+    error: str | None
+
+
 def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
     """Convert an OrgTool model to a JSON-serialisable dict."""
     return {
@@ -3162,6 +3194,146 @@ async def remove_tool(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
     await invalidate_org_tools_cache(org_id)
     return JSONResponse(content={"status": "deleted"})
+
+
+@app.post("/tools/test-webhook", tags=["Tools"])
+async def test_webhook(
+    body: TestWebhookRequest,
+    payload: dict = Depends(require_auth),
+) -> TestWebhookResponse:
+    """Fire a single diagnostic call against an author's webhook URL.
+
+    Used by the dashboard publishing wizard to verify a webhook is reachable
+    and returns valid JSON before the tool is created. Does not write to the
+    audit trail and does not interact with the circuit breaker — this is a
+    developer probe, not a financial event.
+
+    Always returns HTTP 200 on a successful proxy attempt; the webhook's own
+    HTTP status is reported in the response body's ``status_code`` field.
+    """
+    import aiohttp  # noqa: PLC0415
+
+    from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
+
+    org_id = _require_org_id(payload)
+
+    # Per-org rate limit — defends against proxy abuse via a stolen JWT.
+    s = get_settings()
+    await _enforce_rate_limit(
+        f"test_webhook:{org_id}",
+        s.rate_limit_test_webhook_rpm,
+        detail="Rate limit exceeded for /tools/test-webhook.",
+    )
+
+    # Sync SSRF + HTTPS-in-prod validation (raises 422 on fail).
+    _validate_webhook_url(body.webhook_url)
+
+    # Async DNS re-check (anti-rebinding) — same defence as live execution.
+    url_err = await async_validate_url(body.webhook_url)
+    if url_err is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsafe webhook URL: {url_err}",
+        )
+
+    # Auth header consistency check (mirrors create_tool).
+    if body.auth_header_value and not body.auth_header_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="auth_header_name is required when auth_header_value is provided.",
+        )
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if body.auth_header_name and body.auth_header_value:
+        headers[body.auth_header_name] = body.auth_header_value
+
+    timeout = aiohttp.ClientTimeout(total=body.timeout_seconds)
+    started = time.monotonic()
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            if body.webhook_method == "GET":
+                resp = await session.get(body.webhook_url, headers=headers, params=body.payload)
+            elif body.webhook_method == "PUT":
+                resp = await session.put(body.webhook_url, headers=headers, json=body.payload)
+            else:
+                resp = await session.post(body.webhook_url, headers=headers, json=body.payload)
+
+            raw = await resp.read()
+            latency_ms = int((time.monotonic() - started) * 1000)
+
+            # Truncate at 4096 bytes for diagnostic display.
+            body_bytes = raw[:4096]
+            content_type = resp.headers.get("Content-Type", "")
+            status_code = resp.status
+
+            if "application/json" not in content_type:
+                return TestWebhookResponse(
+                    success=False,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    response_body=None,
+                    error=f"Webhook returned non-JSON Content-Type: {content_type or 'unset'}",
+                )
+
+            try:
+                parsed = json.loads(body_bytes)
+            except json.JSONDecodeError:
+                return TestWebhookResponse(
+                    success=False,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    response_body=None,
+                    error="Webhook returned invalid or truncated JSON",
+                )
+
+            # Ensure the parsed body fits the dict schema; wrap non-dict values.
+            response_body = parsed if isinstance(parsed, dict) else {"value": parsed}
+
+            if status_code >= 400:
+                return TestWebhookResponse(
+                    success=False,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    response_body=response_body,
+                    error=f"Webhook returned HTTP {status_code}",
+                )
+
+            return TestWebhookResponse(
+                success=True,
+                status_code=status_code,
+                latency_ms=latency_ms,
+                response_body=response_body,
+                error=None,
+            )
+
+    except asyncio.TimeoutError:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return TestWebhookResponse(
+            success=False,
+            status_code=None,
+            latency_ms=latency_ms,
+            response_body=None,
+            error=f"Webhook timed out after {body.timeout_seconds}s",
+        )
+    except aiohttp.ClientConnectorError as exc:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return TestWebhookResponse(
+            success=False,
+            status_code=None,
+            latency_ms=latency_ms,
+            response_body=None,
+            error=f"Connection failed: {exc.__class__.__name__}",
+        )
+    except aiohttp.ClientError as exc:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        return TestWebhookResponse(
+            success=False,
+            status_code=None,
+            latency_ms=latency_ms,
+            response_body=None,
+            error=f"HTTP client error: {exc.__class__.__name__}",
+        )
 
 
 @app.get("/admin/tools/{org_id}", tags=["Admin"])

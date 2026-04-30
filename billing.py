@@ -23,14 +23,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-
-import sentry_sdk
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import asyncpg
+import sentry_sdk
 from pydantic import BaseModel, Field
 
 from cache import TTLCache, get_redis
