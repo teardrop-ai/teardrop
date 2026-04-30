@@ -258,3 +258,141 @@ class TestMCPBillingGatePlatformTools:
         if resp.status_code == 200:
             # Should use default cost (1000), not a platform price
             mock_debit.assert_called_once_with("test-org-id", 1000, reason="mcp:calculate")
+
+
+# ─── Migration 046: web3 primitive tools ────────────────────────────────────
+
+
+class TestWeb3MarketplaceToolsMigration046:
+    """Verify pricing and catalog visibility for the four tools seeded in migration 046."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        _invalidate_platform_tool_cache()
+        yield
+        _invalidate_platform_tool_cache()
+
+    # ── get_platform_tool_price — per-tool price resolution ──────────────
+
+    @pytest.mark.anyio
+    async def test_get_eth_balance_price(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 1000})
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_eth_balance") == 1000
+
+    @pytest.mark.anyio
+    async def test_get_erc20_balance_price(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 2000})
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_erc20_balance") == 2000
+
+    @pytest.mark.anyio
+    async def test_get_block_price(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 1000})
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_block") == 1000
+
+    @pytest.mark.anyio
+    async def test_get_transaction_price(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 2000})
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_transaction") == 2000
+
+    # ── Catalog visibility ────────────────────────────────────────────────
+
+    @pytest.mark.anyio
+    async def test_catalog_includes_all_four_web3_tools(self, monkeypatch):
+        """All four tools appear in get_marketplace_catalog with correct qualified names."""
+        platform_rows = [
+            {"tool_name": "get_eth_balance", "display_name": "ETH Balance", "description": "...", "base_price_usdc": 1000},
+            {"tool_name": "get_erc20_balance", "display_name": "ERC-20 Balance", "description": "...", "base_price_usdc": 2000},
+            {"tool_name": "get_block", "display_name": "Block Details", "description": "...", "base_price_usdc": 1000},
+            {"tool_name": "get_transaction", "display_name": "Transaction", "description": "...", "base_price_usdc": 2000},
+        ]
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(side_effect=[[], platform_rows])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        catalog = await get_marketplace_catalog()
+
+        by_name = {t.qualified_name: t for t in catalog}
+        assert "platform/get_eth_balance" in by_name
+        assert "platform/get_erc20_balance" in by_name
+        assert "platform/get_block" in by_name
+        assert "platform/get_transaction" in by_name
+        assert by_name["platform/get_eth_balance"].cost_usdc == 1000
+        assert by_name["platform/get_erc20_balance"].cost_usdc == 2000
+        assert by_name["platform/get_block"].cost_usdc == 1000
+        assert by_name["platform/get_transaction"].cost_usdc == 2000
+        assert all(t.author_org_slug == "platform" for t in catalog)
+
+    # ── Billing integration: _resolve_tool_cost ───────────────────────────
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_eth_balance(self, monkeypatch):
+        """Billing resolves get_eth_balance at its marketplace price."""
+        from billing import _resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=1000))
+        cost = await _resolve_tool_cost("get_eth_balance", {}, default_cost=0, marketplace_enabled=True)
+        assert cost == 1000
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_get_transaction(self, monkeypatch):
+        """Billing resolves get_transaction at its marketplace price."""
+        from billing import _resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=2000))
+        cost = await _resolve_tool_cost("get_transaction", {}, default_cost=0, marketplace_enabled=True)
+        assert cost == 2000
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_marketplace_disabled_returns_default(self, monkeypatch):
+        """When marketplace is disabled, platform price is ignored and default is returned."""
+        from billing import _resolve_tool_cost
+
+        mock_price = AsyncMock(return_value=1000)
+        monkeypatch.setattr("marketplace.get_platform_tool_price", mock_price)
+        cost = await _resolve_tool_cost("get_eth_balance", {}, default_cost=0, marketplace_enabled=False)
+        assert cost == 0
+        mock_price.assert_not_called()
+
+    # ── Regression: excluded tools remain free ────────────────────────────
+
+    @pytest.mark.anyio
+    async def test_calculate_not_in_marketplace(self, monkeypatch):
+        """calculate has no marketplace row and resolves to None."""
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("calculate") is None
+
+    @pytest.mark.anyio
+    async def test_get_datetime_not_in_marketplace(self, monkeypatch):
+        """get_datetime has no marketplace row and resolves to None."""
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_datetime") is None
+
+    # ── is_active soft-delete ─────────────────────────────────────────────
+
+    @pytest.mark.anyio
+    async def test_inactive_tool_returns_none(self, monkeypatch):
+        """A tool with is_active=FALSE is excluded from pricing (DB returns no row)."""
+        mock_pool = MagicMock()
+        # DB query includes WHERE is_active = TRUE, so inactive rows return None
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_platform_tool_price("get_eth_balance") is None

@@ -57,8 +57,16 @@ def _route_after_planner(state: AgentState) -> Literal["tool_executor", "ui_gene
 
 
 def _route_after_tools(state: AgentState) -> Literal["planner", "ui_generator"]:
-    """After executing tools, loop back to planner for further reasoning."""
+    """After executing tools, loop back to planner — unless the iteration cap is reached."""
     if state.task_status == TaskStatus.PLANNING:
+        iterations = state.metadata.get("_usage", {}).get("tool_iterations", 0)
+        if iterations >= get_settings().agent_max_tool_iterations:
+            logger.warning(
+                "agent iteration cap hit (%d/%d), routing to ui_generator",
+                iterations,
+                get_settings().agent_max_tool_iterations,
+            )
+            return "ui_generator"
         return "planner"
     return "ui_generator"
 

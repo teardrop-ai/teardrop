@@ -52,21 +52,57 @@ class TestRouteAfterPlanner:
 
 
 class TestRouteAfterTools:
-    def test_planning_routes_back_to_planner(self):
+    def test_planning_routes_back_to_planner(self, test_settings):
         state = _state(TaskStatus.PLANNING)
         assert _route_after_tools(state) == "planner"
 
-    def test_generating_ui_routes_to_ui_generator(self):
+    def test_generating_ui_routes_to_ui_generator(self, test_settings):
         state = _state(TaskStatus.GENERATING_UI)
         assert _route_after_tools(state) == "ui_generator"
 
-    def test_completed_routes_to_ui_generator(self):
+    def test_completed_routes_to_ui_generator(self, test_settings):
         state = _state(TaskStatus.COMPLETED)
         assert _route_after_tools(state) == "ui_generator"
 
-    def test_failed_routes_to_ui_generator(self):
+    def test_failed_routes_to_ui_generator(self, test_settings):
         state = _state(TaskStatus.FAILED)
         assert _route_after_tools(state) == "ui_generator"
+
+    def test_planning_routes_to_planner_when_below_limit(self, test_settings):
+        """Below the cap (3 of 8) the agent should keep planning."""
+        state = AgentState(
+            messages=[HumanMessage(content="test")],
+            task_status=TaskStatus.PLANNING,
+            metadata={"_usage": {"tool_iterations": 3}},
+        )
+        assert _route_after_tools(state) == "planner"
+
+    def test_planning_routes_to_ui_generator_when_limit_reached(self, test_settings):
+        """Exactly at the default cap (8) the agent must stop looping."""
+        state = AgentState(
+            messages=[HumanMessage(content="test")],
+            task_status=TaskStatus.PLANNING,
+            metadata={"_usage": {"tool_iterations": 8}},
+        )
+        assert _route_after_tools(state) == "ui_generator"
+
+    def test_planning_routes_to_ui_generator_when_limit_exceeded(self, test_settings):
+        """Beyond the cap (off-by-one guard) must also stop."""
+        state = AgentState(
+            messages=[HumanMessage(content="test")],
+            task_status=TaskStatus.PLANNING,
+            metadata={"_usage": {"tool_iterations": 9}},
+        )
+        assert _route_after_tools(state) == "ui_generator"
+
+    def test_planning_routes_to_planner_with_no_usage_key(self, test_settings):
+        """Missing _usage key should default to 0 iterations and not raise."""
+        state = AgentState(
+            messages=[HumanMessage(content="test")],
+            task_status=TaskStatus.PLANNING,
+            metadata={},
+        )
+        assert _route_after_tools(state) == "planner"
 
 
 # ─── close_checkpointer ───────────────────────────────────────────────────────

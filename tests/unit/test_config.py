@@ -58,6 +58,17 @@ def test_get_settings_is_cached():
     config.get_settings.cache_clear()
 
 
+def test_agent_max_tool_iterations_default():
+    s = Settings()
+    assert s.agent_max_tool_iterations == 8
+
+
+def test_agent_max_tool_iterations_env_override(monkeypatch):
+    monkeypatch.setenv("AGENT_MAX_TOOL_ITERATIONS", "5")
+    s = Settings()
+    assert s.agent_max_tool_iterations == 5
+
+
 def test_test_settings_fixture_uses_test_env(test_settings):
     assert test_settings.app_env == "test"
 

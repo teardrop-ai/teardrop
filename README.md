@@ -21,11 +21,12 @@ A2A_DELEGATION_MAX_PER_RUN=3                     # Max delegations per run (defa
 A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
 A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
 A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
+AGENT_MAX_TOOL_ITERATIONS=8                      # Max planner→tool cycles before forced synthesis (default: 8)
 ```
 
 ### Platform Tool Marketplace
 
-Teardrop exposes five built-in, metered tools through the marketplace catalog. Callers can invoke them:
+Teardrop exposes built-in, metered tools through the marketplace catalog. Callers can invoke them:
 - Via the **MCP gateway** at `GET /tools/mcp` (direct tool invocation, billed per call).
 - As **tools called during agent runs** (via `POST /agent/run` when the agent decides to use them; billed in the run's usage cost).
 
@@ -36,8 +37,13 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_wallet_portfolio` | $0.004 (4,000 atomic) |
 | `web_search` | $0.010 (10,000 atomic) |
 | `get_token_price` | $0.002 (2,000 atomic) |
+| `get_token_price_historical` | $0.004 (4,000 atomic) |
 | `http_fetch` | $0.002 (2,000 atomic) |
 | `convert_currency` | $0.002 (2,000 atomic) |
+| `get_eth_balance` | $0.001 (1,000 atomic) |
+| `get_erc20_balance` | $0.002 (2,000 atomic) |
+| `get_block` | $0.001 (1,000 atomic) |
+| `get_transaction` | $0.002 (2,000 atomic) |
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`
@@ -522,6 +528,7 @@ Local Agent                     Teardrop                          Remote Agent
 A2A_DELEGATION_ENABLED=true
 A2A_DELEGATION_TIMEOUT_SECONDS=120
 A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
+AGENT_MAX_TOOL_ITERATIONS=8          # Max planner→tool cycles before forced synthesis
 
 # Enable billing for delegations
 A2A_DELEGATION_BILLING_ENABLED=true

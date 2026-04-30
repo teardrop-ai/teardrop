@@ -82,6 +82,13 @@ Formatting rules:
   - Separate distinct narrative paragraphs or sections with a blank line (\n\n).
   - Never emit raw ```json fenced blocks in your response. All structured data
     must be expressed in a ```a2ui block so the client can render it properly.
+
+Tool use economy:
+  - Prefer structured tools over web_search when the question can be answered
+    with on-chain or pricing data.
+  - Use the minimum number of tool calls needed to satisfy the request.
+  - If a web search has already returned partial data, synthesise from it rather
+    than issuing another search on the same topic.
 """
 
 _UI_GENERATOR_SYSTEM = """\
@@ -363,6 +370,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     tool_names_acc.extend(name for _, name in results)
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
+    usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
     usage["tool_names"] = tool_names_acc
 
     # ── Accumulate delegation spend from delegate_to_agent results ────────

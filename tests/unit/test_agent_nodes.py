@@ -273,6 +273,32 @@ class TestToolExecutorNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         assert "messages" not in result
 
+    async def test_tool_iterations_incremented(self, test_settings):
+        """Each tool_executor_node call increments tool_iterations by exactly 1."""
+        tool_call = {"id": "c1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert result["metadata"]["_usage"]["tool_iterations"] == 1
+
+    async def test_tool_iterations_accumulates_across_calls(self, test_settings):
+        """tool_iterations adds on top of the existing value from prior cycles."""
+        tool_call = {"id": "c1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {"tool_iterations": 2}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert result["metadata"]["_usage"]["tool_iterations"] == 3
+
 
 # ─── ui_generator_node ────────────────────────────────────────────────────────
 
