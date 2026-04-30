@@ -83,6 +83,21 @@ Formatting rules:
   - Never emit raw ```json fenced blocks in your response. All structured data
     must be expressed in a ```a2ui block so the client can render it properly.
 
+Tool execution model:
+  - All tool calls in a single assistant message run IN PARALLEL.
+  - For multi-part user queries, plan the FULL set of independent tool calls
+    and emit them in ONE message. Do not serialize unrelated tasks across
+    multiple turns when they have no data dependency on each other.
+  - Read inputs literally. If the user provides a 0x address, do NOT call
+    resolve_ens — pass the address directly. Only resolve when the user gives
+    ONLY an ENS name and the downstream tool requires a 0x address.
+  - On tool error or rate-limit, do NOT retry the same call. Proceed with the
+    partial data you have and note the gap in the final answer.
+  - Never use web_search to identify token contracts, addresses, or transaction
+    hashes. If a tool returns an address with no symbol, report it as
+    "unrecognized token (0x…)" and move on. Identifying random contracts via
+    web search is unreliable and burns the iteration budget.
+
 Tool use economy:
   - Prefer structured tools over web_search when the question can be answered
     with on-chain or pricing data.

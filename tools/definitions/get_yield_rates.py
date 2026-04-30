@@ -280,7 +280,11 @@ TOOL = ToolDefinition(
         "Filter by protocol (e.g. 'aave-v3', 'compound-v3'), chain (e.g. 'Ethereum', "
         "'Base'), minimum TVL, and minimum APY. Use this to answer questions like "
         "'Where can I get the best USDC yield?', 'What is Aave's current APY on Ethereum?', "
-        "or 'Compare Aave vs Compound yields'. Returns up to 50 pools."
+        "or 'Compare Aave vs Compound yields'. Returns up to 50 pools. "
+        "IMPORTANT: Call ONCE per query. The returned `symbol` field contains the "
+        "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
+        "by inspecting `symbol` rather than re-calling with different arguments. "
+        "Use `min_apy` and `min_tvl_usd` to prune noise in a single call."
     ),
     tags=["defi", "yield", "apy", "finance", "defillama"],
     input_schema=GetYieldRatesInput,
