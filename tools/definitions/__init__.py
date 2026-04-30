@@ -18,8 +18,10 @@ from tools.definitions.get_gas_price import TOOL as get_gas_price_tool
 from tools.definitions.get_liquidation_risk import TOOL as get_liquidation_risk_tool
 from tools.definitions.get_token_approvals import TOOL as get_token_approvals_tool
 from tools.definitions.get_token_price import TOOL as get_token_price_tool
+from tools.definitions.get_protocol_tvl import TOOL as get_protocol_tvl_tool
 from tools.definitions.get_token_price_historical import TOOL as get_token_price_historical_tool
 from tools.definitions.get_transaction import TOOL as get_transaction_tool
+from tools.definitions.get_yield_rates import TOOL as get_yield_rates_tool
 from tools.definitions.get_wallet_portfolio import TOOL as get_wallet_portfolio_tool
 from tools.definitions.http_fetch import TOOL as http_fetch_tool
 from tools.definitions.read_contract import TOOL as read_contract_tool
@@ -41,7 +43,9 @@ _ALL_TOOLS = [
     get_liquidation_risk_tool,
     get_token_approvals_tool,
     get_token_price_tool,
+    get_protocol_tvl_tool,
     get_token_price_historical_tool,
+    get_yield_rates_tool,
     web_search_tool,
     count_text_stats_tool,
     http_fetch_tool,

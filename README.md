@@ -38,6 +38,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `web_search` | $0.010 (10,000 atomic) |
 | `get_token_price` | $0.002 (2,000 atomic) |
 | `get_token_price_historical` | $0.004 (4,000 atomic) |
+| `get_protocol_tvl` | $0.003 (3,000 atomic) |
+| `get_yield_rates` | $0.004 (4,000 atomic) |
 | `http_fetch` | $0.002 (2,000 atomic) |
 | `convert_currency` | $0.002 (2,000 atomic) |
 | `get_eth_balance` | $0.001 (1,000 atomic) |
