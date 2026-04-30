@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 _CALLDATA_MAX_CHARS = 8_192
 _ABI_MAX_LEN = 65_536
 
+_DECODE_NOTE = (
+    "decoded_args values are raw ABI-decoded types; uint256 amounts have not been "
+    "decimals-formatted \u2014 do not call read_contract or get_erc20_balance to interpret them "
+    "unless the user explicitly asks. Addresses (from_address, to_address, decoded_args) are "
+    "plain hex \u2014 do not call resolve_ens to label them unless the user explicitly asks."
+)
+
 _TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -62,6 +69,7 @@ class DecodeTransactionOutput(BaseModel):
     raw_calldata: str
     decode_source: str | None
     chain_id: int
+    note: str = _DECODE_NOTE
 
 
 # ─── 4byte.directory fallback ─────────────────────────────────────────────────
@@ -141,6 +149,7 @@ async def decode_transaction(tx_hash: str, chain_id: int = 1, abi_json: str | No
             "raw_calldata": truncated_calldata,
             "decode_source": None,
             "chain_id": chain_id,
+            "note": _DECODE_NOTE,
         }
 
     selector = calldata[:10]  # "0x" + 4 bytes = 10 chars
@@ -181,6 +190,7 @@ async def decode_transaction(tx_hash: str, chain_id: int = 1, abi_json: str | No
         "raw_calldata": truncated_calldata,
         "decode_source": decode_source,
         "chain_id": chain_id,
+        "note": _DECODE_NOTE,
     }
 
 

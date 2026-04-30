@@ -375,6 +375,72 @@ class TestUniswapV3:
         assert p["tokens_owed_1"] == "200"
         assert p["status"] == "active"
 
+    async def test_known_token_symbol_resolved(self, test_settings, monkeypatch):
+        """token0/token1 addresses that are in _KNOWN_SYMBOLS should have symbols set."""
+        from tools.definitions.get_defi_positions import get_defi_positions
+
+        # WETH (chain 1) and USDC (chain 1) are both in _AAVE_V3_TRACKED_RESERVES
+        weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+        usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        active_position = (
+            0,
+            "0x0000000000000000000000000000000000000000",
+            weth,
+            usdc,
+            3000,
+            -887220,
+            887220,
+            10**15,  # liquidity
+            0,
+            0,
+            0,
+            0,
+        )
+        mock_w3 = _build_mock_w3(
+            uniswap_balance=1,
+            uniswap_token_ids=[99],
+            uniswap_position=active_position,
+        )
+        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+        p = result["uniswap_v3"][0]
+        assert p["token0_symbol"] == "WETH"
+        assert p["token1_symbol"] == "USDC"
+
+    async def test_unknown_token_symbol_is_none(self, test_settings, monkeypatch):
+        """Addresses not in _KNOWN_SYMBOLS should yield None symbols (not trigger read_contract)."""
+        from tools.definitions.get_defi_positions import get_defi_positions
+
+        unlisted = "0x1111111111111111111111111111111111111111"
+        active_position = (
+            0,
+            "0x0000000000000000000000000000000000000000",
+            unlisted,
+            unlisted,
+            500,
+            -10,
+            10,
+            10**12,
+            0,
+            0,
+            0,
+            0,
+        )
+        mock_w3 = _build_mock_w3(
+            uniswap_balance=1,
+            uniswap_token_ids=[77],
+            uniswap_position=active_position,
+        )
+        mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+        p = result["uniswap_v3"][0]
+        assert p["token0_symbol"] is None
+        assert p["token1_symbol"] is None
+
 
 # ─── Partial-success / error isolation ───────────────────────────────────────
 

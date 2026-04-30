@@ -15,6 +15,7 @@ from a2a_client import (
     A2ATaskStatus,
     _agent_card_cache,
     _is_ip_blocked,
+    async_validate_url,
     check_delegation_allowed,
     discover_agent_card,
     extract_result_text,
@@ -108,6 +109,56 @@ class TestValidateUrl:
             result = validate_url("https://nonexistent.invalid")
             assert result is not None
             assert "DNS" in result
+
+
+class TestAsyncValidateUrl:
+    """async_validate_url must off-load the blocking DNS lookup so the event
+    loop remains responsive while validation is in flight."""
+
+    async def test_returns_same_result_as_sync(self):
+        with patch("a2a_client.socket") as mock_socket:
+            mock_socket.getaddrinfo.return_value = [
+                (2, 1, 6, "", ("93.184.216.34", 0)),
+            ]
+            mock_socket.AF_UNSPEC = 0
+            mock_socket.SOCK_STREAM = 1
+            assert await async_validate_url("https://agent.example.com") is None
+
+    async def test_does_not_block_event_loop(self):
+        """While async_validate_url awaits a slow getaddrinfo, sibling tasks
+        must continue making progress on the event loop.
+        """
+        import asyncio
+        import time
+
+        def slow_getaddrinfo(*_args, **_kwargs):
+            time.sleep(0.5)  # simulate a 500 ms DNS hang
+            return [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+        sibling_ticks: list[float] = []
+
+        async def sibling() -> None:
+            for _ in range(10):
+                sibling_ticks.append(asyncio.get_running_loop().time())
+                await asyncio.sleep(0.05)
+
+        with patch("a2a_client.socket") as mock_socket:
+            mock_socket.getaddrinfo.side_effect = slow_getaddrinfo
+            mock_socket.AF_UNSPEC = 0
+            mock_socket.SOCK_STREAM = 1
+            sibling_task = asyncio.create_task(sibling())
+            result = await async_validate_url("https://agent.example.com")
+            await sibling_task
+
+        assert result is None
+        # If async_validate_url had blocked the loop for 0.5 s, the sibling
+        # would have produced fewer than ~3 ticks. Off-loaded DNS lets the
+        # full 10 ticks run.
+        assert len(sibling_ticks) == 10
+        # Spread between first and last tick should reflect the sleep cadence,
+        # not be compressed into a tail burst after the DNS call returned.
+        spread = sibling_ticks[-1] - sibling_ticks[0]
+        assert spread >= 0.4, f"sibling appears to have been blocked (spread={spread:.3f}s)"
 
 
 # ─── Agent Card Discovery ────────────────────────────────────────────────────

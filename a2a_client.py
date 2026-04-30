@@ -9,6 +9,7 @@ Implements the HTTP+JSON/REST binding of the A2A v1.0 specification:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import socket
@@ -79,6 +80,17 @@ def validate_url(url: str) -> str | None:
         return f"DNS resolution failed for: {hostname}"
 
     return None
+
+
+async def async_validate_url(url: str) -> str | None:
+    """Async wrapper around :func:`validate_url`.
+
+    ``validate_url`` calls :func:`socket.getaddrinfo`, which blocks the event
+    loop while the OS resolver runs (potentially seconds on cold/slow DNS).
+    Off-load it to a worker thread so the calling coroutine — and any
+    sibling tasks (e.g. LLM token streaming) — stay responsive.
+    """
+    return await asyncio.to_thread(validate_url, url)
 
 
 # ─── A2A Data Models (subset of v1.0 spec) ───────────────────────────────────
@@ -217,7 +229,7 @@ async def discover_agent_card(
         return cached
 
     # SSRF check
-    ssrf_err = validate_url(base_url)
+    ssrf_err = await async_validate_url(base_url)
     if ssrf_err:
         raise ValueError(f"SSRF blocked: {ssrf_err}")
 
@@ -260,7 +272,7 @@ async def send_message(
     """
     base_url = base_url.rstrip("/")
 
-    ssrf_err = validate_url(base_url)
+    ssrf_err = await async_validate_url(base_url)
     if ssrf_err:
         raise ValueError(f"SSRF blocked: {ssrf_err}")
 
@@ -382,7 +394,7 @@ async def send_message_with_payment(
     """
     base_url = base_url.rstrip("/")
 
-    ssrf_err = validate_url(base_url)
+    ssrf_err = await async_validate_url(base_url)
     if ssrf_err:
         raise ValueError(f"SSRF blocked: {ssrf_err}")
 

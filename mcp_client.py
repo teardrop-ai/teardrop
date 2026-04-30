@@ -147,9 +147,9 @@ async def create_org_mcp_server(
     settings = get_settings()
 
     # URL validation (SSRF prevention)
-    from tools.definitions.http_fetch import validate_url
+    from tools.definitions.http_fetch import async_validate_url
 
-    url_error = validate_url(url)
+    url_error = await async_validate_url(url)
     if url_error is not None:
         raise ValueError(f"URL blocked: {url_error}")
 
@@ -285,9 +285,9 @@ async def update_org_mcp_server(
     if name is not None:
         _add("name", name)
     if url is not None:
-        from tools.definitions.http_fetch import validate_url
+        from tools.definitions.http_fetch import async_validate_url
 
-        url_error = validate_url(url)
+        url_error = await async_validate_url(url)
         if url_error is not None:
             raise ValueError(f"URL blocked: {url_error}")
         settings = get_settings()

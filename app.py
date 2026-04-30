@@ -618,6 +618,14 @@ async def lifespan(app: FastAPI):
     await pool.close()
     app.state.pool = None
 
+    # Close shared aiohttp sessions used by tool definitions.
+    try:
+        from tools.definitions._http_session import close_http_sessions  # noqa: PLC0415
+
+        await close_http_sessions()
+    except Exception:
+        logger.warning("Failed to close shared aiohttp sessions", exc_info=True)
+
 
 app = FastAPI(
     title="Teardrop",

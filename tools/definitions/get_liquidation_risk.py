@@ -181,8 +181,9 @@ class GetLiquidationRiskOutput(BaseModel):
         "On-chain liquidation-risk snapshot at data_block_number. "
         "Aave risk_tier is derived from the numeric health factor: "
         "liquidatable (<1.0), critical (<1.05), warning (<1.15), caution (<1.5), healthy (≥1.5). "
-        "Compound v3 exposes only a boolean isLiquidatable — numeric health factors are not "
-        "derived in v1 (requires per-asset oracle calls). overall_tier is the worst tier across "
+        "Compound v3 exposes only a boolean isLiquidatable — a numeric health factor is not "
+        "available from this tool; do not attempt to compute it via additional tool calls. "
+        "overall_tier is the worst tier across "
         "protocols for each wallet. Aave USD values are base-currency 8-decimal from the "
         "Aave oracle. Duplicate wallet addresses in the request are deduplicated silently."
     )

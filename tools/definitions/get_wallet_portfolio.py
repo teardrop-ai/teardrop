@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from web3 import Web3
 
 from config import get_settings
+from tools.definitions._http_session import get_coingecko_session
 from tools.definitions._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
@@ -83,6 +84,21 @@ _portfolio_price_cache: dict[str, float] = {}
 _portfolio_price_ts: float = 0.0
 _PORTFOLIO_PRICE_TTL = 60  # seconds
 
+# ─── Bounded concurrency for ERC-20 fan-out ──────────────────────────────────
+# Most public RPC providers (Alchemy, Infura, public endpoints) cap concurrent
+# eth_call streams around 5–10. Unbounded asyncio.gather over 15+ tokens
+# triggers 429s and tail-latency spikes that look like "hangs" to callers.
+_ERC20_FANOUT_LIMIT = 5
+_erc20_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_erc20_semaphore() -> asyncio.Semaphore:
+    """Lazy-init the ERC-20 fan-out semaphore for the running loop."""
+    global _erc20_semaphore
+    if _erc20_semaphore is None:
+        _erc20_semaphore = asyncio.Semaphore(_ERC20_FANOUT_LIMIT)
+    return _erc20_semaphore
+
 
 async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
     """Fetch USD prices from CoinGecko, with caching."""
@@ -104,14 +120,14 @@ async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
         pass
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for cid in cg_ids:
-                        price = (data.get(cid) or {}).get("usd", 0.0)
-                        _portfolio_price_cache[cid] = price
-                    _portfolio_price_ts = now
+        session = await get_coingecko_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                for cid in cg_ids:
+                    price = (data.get(cid) or {}).get("usd", 0.0)
+                    _portfolio_price_cache[cid] = price
+                _portfolio_price_ts = now
     except Exception as exc:
         logger.warning("CoinGecko price fetch failed: %s", exc)
 
@@ -173,27 +189,30 @@ async def get_wallet_portfolio(
         }
     ]
 
-    # Fetch ERC-20 balances concurrently
+    # Fetch ERC-20 balances concurrently (bounded fan-out — see semaphore above)
+    sem = _get_erc20_semaphore()
+
     async def _get_erc20(token_info: dict[str, str]) -> dict[str, Any] | None:
-        try:
-            addr = Web3.to_checksum_address(token_info["address"])
-            contract = w3.eth.contract(address=addr, abi=_ERC20_BALANCE_ABI)
-            raw = await contract.functions.balanceOf(wallet).call()
-            decimals = int(token_info["decimals"])
-            balance = raw / (10**decimals) if decimals > 0 else float(raw)
-            if balance == 0:
+        async with sem:
+            try:
+                addr = Web3.to_checksum_address(token_info["address"])
+                contract = w3.eth.contract(address=addr, abi=_ERC20_BALANCE_ABI)
+                raw = await contract.functions.balanceOf(wallet).call()
+                decimals = int(token_info["decimals"])
+                balance = raw / (10**decimals) if decimals > 0 else float(raw)
+                if balance == 0:
+                    return None
+                price = prices.get(token_info["cg_id"], 0.0)
+                return {
+                    "symbol": token_info["symbol"],
+                    "token_address": addr,
+                    "balance_formatted": f"{balance:.6f}",
+                    "price_usd": price,
+                    "value_usd": round(balance * price, 2),
+                }
+            except Exception as exc:
+                logger.debug("Error fetching %s balance: %s", token_info["symbol"], exc)
                 return None
-            price = prices.get(token_info["cg_id"], 0.0)
-            return {
-                "symbol": token_info["symbol"],
-                "token_address": addr,
-                "balance_formatted": f"{balance:.6f}",
-                "price_usd": price,
-                "value_usd": round(balance * price, 2),
-            }
-        except Exception as exc:
-            logger.debug("Error fetching %s balance: %s", token_info["symbol"], exc)
-            return None
 
     erc20_results = await asyncio.gather(*[_get_erc20(t) for t in tokens])
     for entry in erc20_results:

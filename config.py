@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     agent_llm_timeout_seconds: int = Field(default=120, description="Timeout in seconds for the planner LLM call")
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
-        default=8,
+        default=12,
         description=(
             "Maximum planner→tool cycles per agent run. "
             "When exceeded the agent synthesises from partial data rather than looping further."

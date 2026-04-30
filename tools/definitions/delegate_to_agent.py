@@ -66,9 +66,9 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
         }
 
     # ── SSRF check ────────────────────────────────────────────────────────
-    from a2a_client import validate_url
+    from a2a_client import async_validate_url
 
-    ssrf_err = validate_url(agent_url)
+    ssrf_err = await async_validate_url(agent_url)
     if ssrf_err:
         return {
             "agent_name": "unknown",

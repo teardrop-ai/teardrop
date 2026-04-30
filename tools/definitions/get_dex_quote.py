@@ -149,7 +149,9 @@ class GetDexQuoteInput(BaseModel):
     amount_in: str = Field(
         ...,
         description="Input amount in RAW uint256 units (e.g. '1000000' for 1 USDC, "
-        "'1000000000000000000' for 1 WETH). Must be > 0 and < 2^128.",
+        "'1000000000000000000' for 1 WETH). Must be > 0 and < 2^128. "
+        "Common token decimals: WETH/ETH/DAI/wstETH/cbETH/weETH 18, WBTC/cbBTC 8, USDC/USDT 6. "
+        "Do not call read_contract to look up decimals — use these values directly.",
     )
     chain_id: int = Field(
         default=1,

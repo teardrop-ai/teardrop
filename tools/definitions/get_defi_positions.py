@@ -70,6 +70,12 @@ _AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
     ],
 }
 
+# ─── Token symbol lookup (derived from tracked reserves) ─────────────────────
+_KNOWN_SYMBOLS: dict[int, dict[str, str]] = {
+    chain_id: {r["address"]: r["symbol"] for r in reserves}
+    for chain_id, reserves in _AAVE_V3_TRACKED_RESERVES.items()
+}
+
 # Compound v3 (Comet) per-market metadata. ``collaterals`` is empty —
 # we fetch the list dynamically via numAssets() + getAssetInfo(i) so the
 # tool stays correct as Compound adds collaterals.
@@ -302,7 +308,9 @@ class CompoundMarketPosition(BaseModel):
 class UniswapV3Position(BaseModel):
     token_id: str
     token0_address: str
+    token0_symbol: str | None = None
     token1_address: str
+    token1_symbol: str | None = None
     fee_tier_raw: int
     tick_lower: int
     tick_upper: int
@@ -328,8 +336,8 @@ class GetDefiPositionsOutput(BaseModel):
     note: str = (
         "On-chain position snapshot at data_block_number. "
         "Aave USD values are from the Aave oracle (base currency = USD, 8 decimals on Ethereum/Base). "
-        "Compound collateral and Uniswap v3 amounts are raw integer units — "
-        "fetch ERC-20 decimals() to format. "
+        "Compound collateral and Uniswap v3 amounts are raw integer units — divide by 10**decimals to format. "
+        "Token symbols are resolved for well-known tokens; None means unrecognised — do not call read_contract to look up symbols or decimals unless the user explicitly asks. "
         "Uniswap v3 liquidity is returned raw (no underlying token valuation in v1); "
         "tokensOwed0/1 are uncollected fees only. "
         "Does not include staking rewards, COMP accruals, or unlisted protocols."
@@ -513,10 +521,15 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
             is_closed = int(liquidity) == 0 and int(tokens_owed_0) == 0 and int(tokens_owed_1) == 0
             if is_closed:
                 return None
+            t0 = Web3.to_checksum_address(token0)
+            t1 = Web3.to_checksum_address(token1)
+            sym = _KNOWN_SYMBOLS.get(chain_id, {})
             return UniswapV3Position(
                 token_id=str(token_id),
-                token0_address=Web3.to_checksum_address(token0),
-                token1_address=Web3.to_checksum_address(token1),
+                token0_address=t0,
+                token0_symbol=sym.get(t0),
+                token1_address=t1,
+                token1_symbol=sym.get(t1),
                 fee_tier_raw=int(fee),
                 tick_lower=int(tick_lower),
                 tick_upper=int(tick_upper),

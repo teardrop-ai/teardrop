@@ -60,7 +60,7 @@ def test_get_settings_is_cached():
 
 def test_agent_max_tool_iterations_default():
     s = Settings()
-    assert s.agent_max_tool_iterations == 8
+    assert s.agent_max_tool_iterations == 12
 
 
 def test_agent_max_tool_iterations_env_override(monkeypatch):

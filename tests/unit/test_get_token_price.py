@@ -44,6 +44,7 @@ class TestLoadCoinsListIndex:
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_index", {})
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_expires", 0.0)
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_lock", None)
+        monkeypatch.setattr("tools.definitions.get_token_price._coins_list_cooldown_until", 0.0)
 
         coins_data = [{"id": "liquity", "symbol": "lqty", "name": "Liquity"}]
         mock_session = MagicMock()
@@ -56,7 +57,7 @@ class TestLoadCoinsListIndex:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await _load_coins_list_index()
 
         assert result["lqty"] == "liquity"  # symbol lookup
@@ -66,6 +67,7 @@ class TestLoadCoinsListIndex:
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_index", {})
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_expires", 0.0)
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_lock", None)
+        monkeypatch.setattr("tools.definitions.get_token_price._coins_list_cooldown_until", 0.0)
 
         coins_data = [{"id": "liquity", "symbol": "lqty", "name": "Liquity"}]
         mock_session = MagicMock()
@@ -78,7 +80,7 @@ class TestLoadCoinsListIndex:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             first = await _load_coins_list_index()
             second = await _load_coins_list_index()  # should hit fast path
 
@@ -89,6 +91,7 @@ class TestLoadCoinsListIndex:
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_index", {})
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_expires", 0.0)
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_lock", None)
+        monkeypatch.setattr("tools.definitions.get_token_price._coins_list_cooldown_until", 0.0)
 
         mock_session = MagicMock()
         mock_resp = AsyncMock()
@@ -99,7 +102,7 @@ class TestLoadCoinsListIndex:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await _load_coins_list_index()
 
         assert result == {}  # graceful degradation, no exception
@@ -108,6 +111,7 @@ class TestLoadCoinsListIndex:
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_index", {})
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_expires", 0.0)
         monkeypatch.setattr("tools.definitions.get_token_price._coins_list_lock", None)
+        monkeypatch.setattr("tools.definitions.get_token_price._coins_list_cooldown_until", 0.0)
 
         coins_data = [
             {"id": "token-a", "symbol": "dup", "name": "Token A"},
@@ -123,7 +127,7 @@ class TestLoadCoinsListIndex:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await _load_coins_list_index()
 
         assert result["dup"] == "token-a"  # first entry wins
@@ -153,7 +157,7 @@ class TestGetTokenPrice:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await get_token_price(tokens=["BTC"])
 
         assert result["vs_currency"] == "usd"
@@ -173,7 +177,7 @@ class TestGetTokenPrice:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await get_token_price(tokens=["ETH"])
 
         assert result["prices"][0]["price"] is None
@@ -202,7 +206,7 @@ class TestGetTokenPrice:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch("tools.definitions.get_token_price._load_coins_list_index", new=AsyncMock(return_value=coin_map)):  # noqa: E501
-            with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+            with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
                 result = await get_token_price(tokens=["LQTY"])
 
         assert result["prices"][0]["price"] == 2.45
@@ -233,7 +237,7 @@ class TestGetTokenPrice:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch("tools.definitions.get_token_price._load_coins_list_index", new=AsyncMock(return_value=coin_map)):  # noqa: E501
-            with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+            with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
                 result = await get_token_price(tokens=["Liquity"])
 
         assert result["prices"][0]["price"] == 2.45
@@ -264,7 +268,7 @@ class TestGetTokenPrice:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch("tools.definitions.get_token_price._load_coins_list_index", mock_load):
-            with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+            with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
                 result = await get_token_price(tokens=["BTC"])
 
         mock_load.assert_not_called()  # static map resolved it; coins list never fetched
@@ -302,7 +306,7 @@ class TestGetTokenPrice:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with patch("tools.definitions.get_token_price._load_coins_list_index", mock_load):
-            with patch("tools.definitions.get_token_price.aiohttp.ClientSession", return_value=mock_session):  # noqa: E501
+            with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
                 result = await get_token_price(tokens=["BTC", "LQTY"])
 
         mock_load.assert_called_once()  # coins list fetched exactly once for LQTY

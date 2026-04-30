@@ -13,6 +13,7 @@ import aiohttp
 from pydantic import BaseModel, Field
 
 from config import get_settings
+from tools.definitions._http_session import get_coingecko_session
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,9 @@ _PRICE_CACHE_TTL = 120  # seconds
 # Keyed by lowercase symbol and lowercase name; value is the canonical CoinGecko ID.
 _coins_list_index: dict[str, str] = {}
 _coins_list_expires: float = 0.0
+_coins_list_cooldown_until: float = 0.0  # throttle retries after upstream failure
 _COINS_LIST_TTL = 86400  # 24 hours — the coin list changes infrequently
+_COINS_LIST_FAILURE_COOLDOWN = 60  # seconds
 _coins_list_lock: asyncio.Lock | None = None
 
 
@@ -89,11 +92,16 @@ async def _load_coins_list_index() -> dict[str, str]:
     immediately with no I/O.  On failure it returns the existing (possibly
     empty) index so callers degrade gracefully to passthrough behaviour.
     """
-    global _coins_list_index, _coins_list_expires
+    global _coins_list_index, _coins_list_expires, _coins_list_cooldown_until
 
     # Fast path — read without the lock; worst case is a single harmless
     # double-fetch across concurrent cold-start coroutines.
     if time.monotonic() < _coins_list_expires and _coins_list_index:
+        return _coins_list_index
+
+    # Failure cooldown — if a recent fetch failed, return whatever we have
+    # (possibly empty) without re-hitting the upstream API.
+    if time.monotonic() < _coins_list_cooldown_until:
         return _coins_list_index
 
     lock = _get_coins_list_lock()
@@ -101,6 +109,8 @@ async def _load_coins_list_index() -> dict[str, str]:
         # Double-check: another coroutine may have populated the cache while
         # we were waiting for the lock.
         if time.monotonic() < _coins_list_expires and _coins_list_index:
+            return _coins_list_index
+        if time.monotonic() < _coins_list_cooldown_until:
             return _coins_list_index
 
         headers: dict[str, str] = {}
@@ -112,30 +122,36 @@ async def _load_coins_list_index() -> dict[str, str]:
             pass
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "https://api.coingecko.com/api/v3/coins/list?include_platform=false",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        coins: list[dict[str, Any]] = await resp.json()
-                        index: dict[str, str] = {}
-                        for coin in coins:
-                            sym = coin.get("symbol", "").lower()
-                            name = coin.get("name", "").lower()
-                            cg_id: str = coin.get("id", "")
-                            if sym and sym not in index:
-                                index[sym] = cg_id
-                            if name and name not in index:
-                                index[name] = cg_id
-                        _coins_list_index = index
-                        _coins_list_expires = time.monotonic() + _COINS_LIST_TTL
-                        logger.debug("CoinGecko coins list indexed: %d entries", len(index))
-                    else:
-                        logger.warning("CoinGecko coins/list returned status %d", resp.status)
+            session = await get_coingecko_session()
+            async with session.get(
+                "https://api.coingecko.com/api/v3/coins/list?include_platform=false",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=5, connect=2),
+            ) as resp:
+                if resp.status == 200:
+                    coins: list[dict[str, Any]] = await resp.json()
+                    index: dict[str, str] = {}
+                    for coin in coins:
+                        sym = coin.get("symbol", "").lower()
+                        name = coin.get("name", "").lower()
+                        cg_id: str = coin.get("id", "")
+                        if sym and sym not in index:
+                            index[sym] = cg_id
+                        if name and name not in index:
+                            index[name] = cg_id
+                    _coins_list_index = index
+                    _coins_list_expires = time.monotonic() + _COINS_LIST_TTL
+                    logger.debug("CoinGecko coins list indexed: %d entries", len(index))
+                else:
+                    logger.warning("CoinGecko coins/list returned status %d", resp.status)
+                    # Throttle retries on upstream errors so every caller
+                    # doesn't re-hit the API for the next minute.
+                    _coins_list_cooldown_until = time.monotonic() + _COINS_LIST_FAILURE_COOLDOWN
         except Exception as exc:
             logger.warning("CoinGecko coins/list request failed: %s", exc)
+            # Failure cooldown — prevents retry storms when CoinGecko is slow
+            # or unreachable. Callers degrade gracefully to passthrough IDs.
+            _coins_list_cooldown_until = time.monotonic() + _COINS_LIST_FAILURE_COOLDOWN
 
     return _coins_list_index
 
@@ -186,11 +202,11 @@ async def _fetch_from_coingecko(ids: list[str], vs: str) -> dict[str, dict[str, 
         pass
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                logger.warning("CoinGecko returned status %d", resp.status)
+        session = await get_coingecko_session()
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            logger.warning("CoinGecko returned status %d", resp.status)
     except Exception as exc:
         logger.warning("CoinGecko request failed: %s", exc)
     return {}
