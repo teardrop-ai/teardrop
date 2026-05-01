@@ -252,3 +252,27 @@ async def test_build_mcp_langchain_tools_no_servers(setup_mcp_client, monkeypatc
     tools, by_name = await build_mcp_langchain_tools("org-1")
     assert tools == []
     assert by_name == {}
+
+
+@pytest.mark.anyio
+async def test_wrap_mcp_tool_marks_truncated_responses(monkeypatch):
+    import mcp_client
+
+    server = _make_server()
+
+    class _Part:
+        def __init__(self, text: str):
+            self.text = text
+
+    class _Result:
+        def __init__(self, content):
+            self.content = content
+
+    class _Session:
+        async def call_tool(self, tool_name, kwargs):
+            return _Result([_Part("x" * (mcp_client._MAX_RESPONSE_BYTES + 1))])
+
+    tool = mcp_client._wrap_mcp_tool(server, _Session(), "list_files", "List files", {"type": "object"})
+    result = await tool.ainvoke({})
+
+    assert "TRUNCATED" in result["result"]

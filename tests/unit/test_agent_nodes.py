@@ -244,8 +244,8 @@ class TestToolExecutorNode:
 
     async def test_tool_call_count_accumulated_in_usage(self, test_settings):
         calls = [
-            {"id": "c1", "name": "get_datetime", "args": {}},
-            {"id": "c2", "name": "get_datetime", "args": {}},
+            {"id": "c1", "name": "get_datetime", "args": {"tz": "UTC"}},
+            {"id": "c2", "name": "get_datetime", "args": {"tz": "PST"}},
         ]
         last_msg = _make_ai_message(tool_calls=calls)
 
@@ -262,6 +262,45 @@ class TestToolExecutorNode:
         usage = result["metadata"]["_usage"]
         assert usage["tool_calls"] == 3  # 1 existing + 2 new
         assert "get_datetime" in usage["tool_names"]
+
+    async def test_duplicate_platform_call_is_not_counted(self, test_settings):
+        calls = [
+            {"id": "c1", "name": "get_datetime", "args": {}},
+            {"id": "c2", "name": "get_datetime", "args": {}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        usage = result["metadata"]["_usage"]
+        assert usage["tool_calls"] == 1
+        assert mock_tool.ainvoke.call_count == 1
+
+    async def test_org_tool_is_not_deduplicated(self, test_settings):
+        calls = [
+            {"id": "c1", "name": "org__send_invoice", "args": {"invoice_id": "inv-1"}},
+            {"id": "c2", "name": "org__send_invoice", "args": {"invoice_id": "inv-1"}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"status": "sent"})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {}, "_org_tools_by_name": {"org__send_invoice": mock_tool}},
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state)
+
+        usage = result["metadata"]["_usage"]
+        assert usage["tool_calls"] == 2
+        assert mock_tool.ainvoke.call_count == 2
 
     async def test_no_tool_calls_returns_generating_ui(self, test_settings):
         """If the last message has no tool_calls the node skips to ui_generator."""

@@ -395,10 +395,12 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {"task_status": TaskStatus.GENERATING_UI}
 
+    platform_tools_by_name = _get_cached_tools_by_name()
     tools_by_name = {
-        **_get_cached_tools_by_name(),
+        **platform_tools_by_name,
         **state.metadata.get("_org_tools_by_name", {}),
     }
+    platform_tool_names = set(platform_tools_by_name.keys())
 
     # ── Accumulate tool usage ─────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
@@ -412,6 +414,9 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     skipped_messages: list[ToolMessage] = []
     seen_this_batch: set[str] = set()
     for call in last_msg.tool_calls:
+        if call["name"] not in platform_tool_names:
+            dedup_calls.append(call)
+            continue
         sig = _call_signature(call["name"], call["args"])
         if sig in completed_sigs or sig in seen_this_batch:
             logger.debug("dedup: suppressing duplicate call '%s'", call["name"])
@@ -446,10 +451,14 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     tool_names_acc.extend(name for _, name in results)
 
     # Record newly executed signatures so future iterations can dedup them.
-    completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls)
+    completed_sigs.extend(
+        _call_signature(c["name"], c["args"])
+        for c in dedup_calls
+        if c["name"] in platform_tool_names
+    )
     usage["_completed_calls"] = completed_sigs
 
-    usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
+    usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
     usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
     usage["tool_names"] = tool_names_acc
 

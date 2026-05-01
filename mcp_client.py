@@ -554,7 +554,7 @@ def _wrap_mcp_tool(
                         parts.append(part.text)
                 combined = "\n".join(parts)
                 if len(combined) > _MAX_RESPONSE_BYTES:
-                    combined = combined[:_MAX_RESPONSE_BYTES]
+                    combined = combined[:_MAX_RESPONSE_BYTES] + "\n[TRUNCATED: MCP response exceeded 50 KB - content clipped]"
                 # Try to parse as JSON for structured output
                 try:
                     return json.loads(combined)
