@@ -4,8 +4,33 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from eth_abi import encode as abi_encode
+
 
 class TestGetWalletPortfolio:
+    def _make_mock_w3(self, eth_balance: int = 0) -> MagicMock:
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_balance = AsyncMock(return_value=eth_balance)
+        return mock_w3
+
+    def _patch_erc20_batch(self, monkeypatch, balance_values):
+        """Patch multicall3_batch to return specific per-token balances.
+
+        ``balance_values`` may be a single int (same for all) or a list of ints
+        matching the order of _TRACKED_TOKENS for the chain.
+        """
+
+        async def _mock_batch(w3, calls, *, allow_failure=True):
+            if isinstance(balance_values, int):
+                return [(True, abi_encode(["uint256"], [balance_values])) for _ in calls]
+            results = []
+            for i, _ in enumerate(calls):
+                v = balance_values[i] if i < len(balance_values) else 0
+                results.append((True, abi_encode(["uint256"], [v])))
+            return results
+
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.multicall3_batch", _mock_batch)
+
     async def test_returns_portfolio_with_eth(self, test_settings, monkeypatch):
         from tools.definitions.get_wallet_portfolio import get_wallet_portfolio
 
@@ -13,17 +38,12 @@ class TestGetWalletPortfolio:
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_cache", {})
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_ts", 0.0)
 
-        mock_w3 = MagicMock()
-        mock_w3.eth.get_balance = AsyncMock(return_value=2_000_000_000_000_000_000)  # 2 ETH
+        monkeypatch.setattr(
+            "tools.definitions.get_wallet_portfolio.get_web3",
+            lambda chain_id=1: self._make_mock_w3(2_000_000_000_000_000_000),  # 2 ETH
+        )
+        self._patch_erc20_batch(monkeypatch, 0)  # all ERC-20 balances = 0
 
-        # Mock ERC-20 balanceOf: all return 0 (only ETH holds value)
-        mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(return_value=0)
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
-
-        # Mock price fetch
         async def mock_fetch_prices(cg_ids):
             return {cid: 3000.0 if cid == "ethereum" else 1.0 for cid in cg_ids}
 
@@ -45,24 +65,12 @@ class TestGetWalletPortfolio:
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_cache", {})
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_ts", 0.0)
 
-        mock_w3 = MagicMock()
-        mock_w3.eth.get_balance = AsyncMock(return_value=0)
-
-        # First ERC-20 (USDC) has balance, rest return 0
-        call_count = 0
-
-        async def balance_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return 5_000_000_000  # 5000 USDC (6 decimals)
-            return 0
-
-        mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
+        monkeypatch.setattr(
+            "tools.definitions.get_wallet_portfolio.get_web3",
+            lambda chain_id=1: self._make_mock_w3(0),
+        )
+        # First token in _TRACKED_TOKENS[1] is USDC — give it a non-zero balance.
+        self._patch_erc20_batch(monkeypatch, [5_000_000_000] + [0] * 50)
 
         async def mock_fetch_prices(cg_ids):
             return {cid: 1.0 for cid in cg_ids}
@@ -84,18 +92,11 @@ class TestGetWalletPortfolio:
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_cache", {})
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_ts", 0.0)
 
-        mock_w3 = MagicMock()
-        mock_w3.eth.get_balance = AsyncMock(return_value=100_000_000_000_000_000)  # 0.1 ETH
-
-        # All ERC-20s return a large USDC balance
-        async def balance_side_effect(*a, **kw):
-            return 10_000_000_000  # 10000 USDC
-
-        mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(side_effect=balance_side_effect)
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
+        monkeypatch.setattr(
+            "tools.definitions.get_wallet_portfolio.get_web3",
+            lambda chain_id=1: self._make_mock_w3(100_000_000_000_000_000),  # 0.1 ETH
+        )
+        self._patch_erc20_batch(monkeypatch, 10_000_000_000)  # 10000 USDC for all tokens
 
         async def mock_fetch_prices(cg_ids):
             prices = {
@@ -126,12 +127,8 @@ class TestGetWalletPortfolio:
 
         mock_w3 = MagicMock()
         mock_w3.eth.get_balance = AsyncMock(side_effect=Exception("429 rate limit"))
-
-        mock_contract = MagicMock()
-        mock_contract.functions.balanceOf.return_value.call = AsyncMock(return_value=0)
-        mock_w3.eth.contract.return_value = mock_contract
-
         monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
+        self._patch_erc20_batch(monkeypatch, 0)
 
         async def mock_fetch_prices(cg_ids):
             return {cid: 1.0 for cid in cg_ids}

@@ -15,10 +15,13 @@ import asyncio
 import logging
 from typing import Any
 
+from eth_abi import decode as abi_decode
+from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field
 from web3 import Web3
 
 from config import get_settings
+from tools.definitions._multicall3 import multicall3_batch
 from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
@@ -71,6 +74,9 @@ _AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
         {"symbol": "weETH", "address": "0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A", "decimals": "18"},
     ],
 }
+
+# Function selector for getUserReserveData(address,address) — keccak256(sig)[0:4].
+_GET_USER_RESERVE_DATA_SELECTOR: bytes = bytes(Web3.keccak(text="getUserReserveData(address,address)"))[:4]
 
 # ─── Token symbol lookup (derived from tracked reserves) ─────────────────────
 _KNOWN_SYMBOLS: dict[int, dict[str, str]] = {
@@ -374,34 +380,60 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
 
     hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
 
-    # Per-reserve breakdown (tracked shortlist only)
+    # Per-reserve breakdown via Multicall3 — one RPC call for all tracked reserves.
+    # Note: multicall3_batch acquires its own semaphore permit. The outer
+    # get_defi_positions holds one permit already; momentarily 2 of 25 are held.
     tracked = _AAVE_V3_TRACKED_RESERVES.get(chain_id, [])
+    reserves: list[AaveReservePosition] = []
 
-    async def _fetch_reserve(reserve: dict[str, str]) -> AaveReservePosition | None:
-        try:
-            asset_addr = Web3.to_checksum_address(reserve["address"])
-            result = await rpc_call(data_provider.functions.getUserReserveData(asset_addr, wallet).call())
-            a_token_balance, stable_debt, variable_debt = result[0], result[1], result[2]
-            usage_as_collateral = result[8]
-            # Skip reserves with no activity
-            if a_token_balance == 0 and stable_debt == 0 and variable_debt == 0:
-                return None
-            decimals = int(reserve["decimals"])
-            divisor = 10**decimals
-            return AaveReservePosition(
-                symbol=reserve["symbol"],
-                asset_address=asset_addr,
-                supplied_amount=f"{a_token_balance / divisor:.6f}",
-                variable_debt_amount=f"{variable_debt / divisor:.6f}",
-                stable_debt_amount=f"{stable_debt / divisor:.6f}",
-                usage_as_collateral=bool(usage_as_collateral),
+    if tracked:
+        reserve_calls = [
+            (
+                data_provider_addr,
+                _GET_USER_RESERVE_DATA_SELECTOR
+                + abi_encode(["address", "address"], [Web3.to_checksum_address(r["address"]), wallet]),
             )
-        except Exception as exc:
-            logger.debug("Aave reserve %s fetch failed: %s", reserve.get("symbol"), exc)
-            return None
+            for r in tracked
+        ]
+        batch_results = await multicall3_batch(w3, reserve_calls)
 
-    reserve_results = await asyncio.gather(*[_fetch_reserve(r) for r in tracked])
-    reserves = [r for r in reserve_results if r is not None]
+        for reserve, (success, return_data) in zip(tracked, batch_results):
+            if not success or not return_data:
+                logger.debug("Aave reserve %s getUserReserveData reverted", reserve.get("symbol"))
+                continue
+            try:
+                result = abi_decode(
+                    [
+                        "uint256",
+                        "uint256",
+                        "uint256",
+                        "uint256",
+                        "uint256",
+                        "uint256",
+                        "uint256",
+                        "uint40",
+                        "bool",
+                    ],
+                    return_data,
+                )
+                a_token_balance, stable_debt, variable_debt = result[0], result[1], result[2]
+                usage_as_collateral = result[8]
+                if a_token_balance == 0 and stable_debt == 0 and variable_debt == 0:
+                    continue
+                decimals = int(reserve["decimals"])
+                divisor = 10**decimals
+                reserves.append(
+                    AaveReservePosition(
+                        symbol=reserve["symbol"],
+                        asset_address=Web3.to_checksum_address(reserve["address"]),
+                        supplied_amount=f"{a_token_balance / divisor:.6f}",
+                        variable_debt_amount=f"{variable_debt / divisor:.6f}",
+                        stable_debt_amount=f"{stable_debt / divisor:.6f}",
+                        usage_as_collateral=bool(usage_as_collateral),
+                    )
+                )
+            except Exception as exc:
+                logger.debug("Aave reserve %s decode failed: %s", reserve.get("symbol"), exc)
 
     return AavePosition(
         total_collateral_usd=round(total_collateral_base / 1e8, 2),

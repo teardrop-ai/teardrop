@@ -210,7 +210,33 @@ class TestPlannerNode:
         state = _make_state()
         with (
             patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
-            patch("agent.nodes._get_fallback_llm", return_value=fallback_llm),
+            patch("agent.nodes._get_fallback_llm", return_value=(fallback_llm, "anthropic", "claude-sonnet-4-6")),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert fallback_llm.ainvoke.call_count == 1
+
+    async def test_preemptive_cooldown_uses_fallback_without_lc_kwargs(self, test_settings):
+        """Regression: planner_node must not access lc_kwargs on the fallback LLM.
+
+        Previously crashed with AttributeError when the primary provider was in
+        cooldown and the selected fallback was a ChatAnthropic instance (which
+        has no lc_kwargs attribute).
+        """
+        fallback_response = _make_ai_message("Fallback answer.", tool_calls=[])
+        # Use spec=object so that accessing any attribute not on object raises
+        # AttributeError — this would have caught the original lc_kwargs bug.
+        fallback_llm = MagicMock(spec=object)
+        fallback_llm.bind_tools = MagicMock(return_value=fallback_llm)
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state()
+        with (
+            patch("agent.nodes.is_provider_cooled_down", return_value=True),
+            patch("agent.nodes._get_fallback_llm", return_value=(fallback_llm, "anthropic", "claude-sonnet-4-6")),
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):

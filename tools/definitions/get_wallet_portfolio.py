@@ -4,17 +4,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
 
 import aiohttp
+from eth_abi import decode as abi_decode
+from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field
 from web3 import Web3
 
 from config import get_settings
 from tools.definitions._http_session import get_coingecko_session
+from tools.definitions._multicall3 import multicall3_batch
 from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
@@ -69,15 +71,8 @@ _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
     ],
 }
 
-_ERC20_BALANCE_ABI = [
-    {
-        "constant": True,
-        "inputs": [{"name": "_owner", "type": "address"}],
-        "name": "balanceOf",
-        "outputs": [{"name": "balance", "type": "uint256"}],
-        "type": "function",
-    },
-]
+# Function selector for balanceOf(address) — keccak256(sig)[0:4].
+_BALANCE_OF_SELECTOR: bytes = bytes(Web3.keccak(text="balanceOf(address)"))[:4]
 
 # ─── Price cache (shared lightweight TTL cache) ──────────────────────────────
 
@@ -188,33 +183,39 @@ async def get_wallet_portfolio(
         }
     ]
 
-    # Fetch ERC-20 balances concurrently (protected by global RPC semaphore)
-    async def _get_erc20(token_info: dict[str, str]) -> dict[str, Any] | None:
-        async with acquire_rpc_semaphore():
-            try:
-                addr = Web3.to_checksum_address(token_info["address"])
-                contract = w3.eth.contract(address=addr, abi=_ERC20_BALANCE_ABI)
-                raw = await rpc_call(contract.functions.balanceOf(wallet).call())
-                decimals = int(token_info["decimals"])
-                balance = raw / (10**decimals) if decimals > 0 else float(raw)
-                if balance == 0:
-                    return None
-                price = prices.get(token_info["cg_id"], 0.0)
-                return {
-                    "symbol": token_info["symbol"],
-                    "token_address": addr,
-                    "balance_formatted": f"{balance:.6f}",
-                    "price_usd": price,
-                    "value_usd": round(balance * price, 2),
-                }
-            except Exception as exc:
-                logger.debug("Error fetching %s balance: %s", token_info["symbol"], exc)
-                return None
+    # Fetch ERC-20 balances in a single Multicall3 batch (one RPC call for all tokens).
+    erc20_calls = [
+        (
+            Web3.to_checksum_address(t["address"]),
+            _BALANCE_OF_SELECTOR + abi_encode(["address"], [wallet]),
+        )
+        for t in tokens
+    ]
+    batch_results = await multicall3_batch(w3, erc20_calls)
 
-    erc20_results = await asyncio.gather(*[_get_erc20(t) for t in tokens])
-    for entry in erc20_results:
-        if entry is not None:
-            holdings.append(entry)
+    for token_info, (success, return_data) in zip(tokens, batch_results):
+        if not success or not return_data:
+            logger.debug("balanceOf failed for %s", token_info["symbol"])
+            continue
+        try:
+            raw = abi_decode(["uint256"], return_data)[0]
+        except Exception as exc:
+            logger.debug("balanceOf decode failed for %s: %s", token_info["symbol"], exc)
+            continue
+        decimals = int(token_info["decimals"])
+        balance = raw / (10**decimals) if decimals > 0 else float(raw)
+        if balance == 0:
+            continue
+        price = prices.get(token_info["cg_id"], 0.0)
+        holdings.append(
+            {
+                "symbol": token_info["symbol"],
+                "token_address": Web3.to_checksum_address(token_info["address"]),
+                "balance_formatted": f"{balance:.6f}",
+                "price_usd": price,
+                "value_usd": round(balance * price, 2),
+            }
+        )
 
     # Sort by value descending
     holdings.sort(key=lambda h: h["value_usd"], reverse=True)

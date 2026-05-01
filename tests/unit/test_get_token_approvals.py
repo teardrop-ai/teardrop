@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from eth_abi import encode as abi_encode
 from pydantic import ValidationError
 
 # Well-known addresses used across tests (checksummed).
@@ -89,21 +90,21 @@ class TestRiskLevel:
 
 
 class TestGetTokenApprovals:
-    def _make_mock_w3(self, allowance_value: int) -> MagicMock:
-        """Build a mock Web3 instance returning a fixed allowance() value."""
-        mock_w3 = MagicMock()
-        mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(return_value=allowance_value)
-        mock_w3.eth.contract.return_value = mock_contract
-        return mock_w3
+    def _patch_batch(self, monkeypatch, allowance_value: int, *, fail: bool = False):
+        """Patch multicall3_batch to return a fixed allowance for every call."""
+
+        async def _mock_batch(w3, calls, *, allow_failure=True):
+            if fail:
+                return [(False, b"")] * len(calls)
+            return [(True, abi_encode(["uint256"], [allowance_value])) for _ in calls]
+
+        monkeypatch.setattr("tools.definitions.get_token_approvals.multicall3_batch", _mock_batch)
+        monkeypatch.setattr("tools.definitions.get_token_approvals.get_web3", MagicMock())
 
     async def test_zero_allowance_returns_empty(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(0),
-        )
+        self._patch_batch(monkeypatch, 0)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -117,10 +118,7 @@ class TestGetTokenApprovals:
     async def test_nonzero_bounded_allowance_returned(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_BOUNDED),
-        )
+        self._patch_batch(monkeypatch, _BOUNDED)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -137,10 +135,7 @@ class TestGetTokenApprovals:
     async def test_unlimited_approval_detected(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_UINT256_MAX),
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -158,10 +153,7 @@ class TestGetTokenApprovals:
     async def test_unlimited_unknown_spender_is_high_risk(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_UINT256_MAX),
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -179,10 +171,7 @@ class TestGetTokenApprovals:
     async def test_permit2_spender_flagged(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_UINT256_MAX),
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -200,15 +189,7 @@ class TestGetTokenApprovals:
     async def test_reverted_allowance_gracefully_skipped(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        mock_w3 = MagicMock()
-        mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(side_effect=Exception("revert"))
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: mock_w3,
-        )
+        self._patch_batch(monkeypatch, 0, fail=True)
 
         # Should not raise — silently skips the failed entry.
         result = await get_token_approvals(
@@ -219,25 +200,19 @@ class TestGetTokenApprovals:
         assert result["approvals"] == []
         assert result["risk_summary"]["total_approvals"] == 0
 
-    async def test_uses_global_rpc_semaphore(self, test_settings, monkeypatch):
+    async def test_multicall3_batch_called_once(self, test_settings, monkeypatch):
+        """multicall3_batch should be invoked exactly once per get_token_approvals call."""
         from tools.definitions.get_token_approvals import get_token_approvals
 
         call_count = 0
 
-        class _DummySem:
-            async def __aenter__(self):
-                nonlocal call_count
-                call_count += 1
-                return self
+        async def _counting_batch(w3, calls, *, allow_failure=True):
+            nonlocal call_count
+            call_count += 1
+            return [(True, abi_encode(["uint256"], [_BOUNDED])) for _ in calls]
 
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_BOUNDED),
-        )
-        monkeypatch.setattr("tools.definitions.get_token_approvals.acquire_rpc_semaphore", lambda: _DummySem())
+        monkeypatch.setattr("tools.definitions.get_token_approvals.multicall3_batch", _counting_batch)
+        monkeypatch.setattr("tools.definitions.get_token_approvals.get_web3", MagicMock())
 
         await get_token_approvals(
             wallet_address=_WALLET,
@@ -250,18 +225,10 @@ class TestGetTokenApprovals:
         from tools.definitions.get_token_approvals import get_token_approvals
 
         # Two tokens, two spenders: 4 pairs.
-        # Mock side_effect: returns _UINT256_MAX for all pairs.
+        # Mock returns _UINT256_MAX for all pairs.
         TOKEN_2 = "0xdAC17F958D2ee523a2206206994597C13D831ec7"  # USDT (checksummed)
 
-        mock_w3 = MagicMock()
-        mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(return_value=_UINT256_MAX)
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: mock_w3,
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -280,22 +247,7 @@ class TestGetTokenApprovals:
     async def test_high_risk_sorted_first(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        call_count = 0
-
-        async def _side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            return _UINT256_MAX
-
-        mock_w3 = MagicMock()
-        mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(side_effect=_side_effect)
-        mock_w3.eth.contract.return_value = mock_contract
-
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: mock_w3,
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,
@@ -310,15 +262,14 @@ class TestGetTokenApprovals:
     async def test_custom_token_list_respected(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        mock_w3 = MagicMock()
-        mock_contract = MagicMock()
-        mock_contract.functions.allowance.return_value.call = AsyncMock(return_value=0)
-        mock_w3.eth.contract.return_value = mock_contract
+        captured_calls: list = []
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: mock_w3,
-        )
+        async def _capture_batch(w3, calls, *, allow_failure=True):
+            captured_calls.extend(calls)
+            return [(True, abi_encode(["uint256"], [0])) for _ in calls]
+
+        monkeypatch.setattr("tools.definitions.get_token_approvals.multicall3_batch", _capture_batch)
+        monkeypatch.setattr("tools.definitions.get_token_approvals.get_web3", MagicMock())
 
         CUSTOM_TOKEN = "0x6B175474E89094C44Da98b954EedeAC495271d0F"  # DAI
 
@@ -328,10 +279,9 @@ class TestGetTokenApprovals:
             spenders=[_SPENDER_UNISWAP],
         )
 
-        # eth.contract should have been called with the custom token address.
-        call_args = mock_w3.eth.contract.call_args_list
-        used_addresses = {c.kwargs.get("address") or c.args[0] for c in call_args}
-        assert CUSTOM_TOKEN in used_addresses
+        # The Multicall3 call should have targeted the custom token address.
+        used_targets = {call[0] for call in captured_calls}
+        assert CUSTOM_TOKEN in used_targets
 
     async def test_empty_result_for_unsupported_chain(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
@@ -348,10 +298,7 @@ class TestGetTokenApprovals:
     async def test_token_symbol_resolved_from_tracked_list(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
-        monkeypatch.setattr(
-            "tools.definitions.get_token_approvals.get_web3",
-            lambda chain_id=1: self._make_mock_w3(_UINT256_MAX),
-        )
+        self._patch_batch(monkeypatch, _UINT256_MAX)
 
         result = await get_token_approvals(
             wallet_address=_WALLET,

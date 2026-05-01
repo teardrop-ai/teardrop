@@ -247,8 +247,13 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return any(marker in str(exc).lower() for marker in _RATE_LIMIT_MARKERS)
 
 
-def _get_fallback_llm(*, failed_provider: str, failed_model: str):
-    """Return a fallback LLM from default_model_pool, or None if unavailable."""
+def _get_fallback_llm(*, failed_provider: str, failed_model: str) -> "tuple[Any, str, str] | None":
+    """Return ``(llm, provider, model)`` for the first usable fallback in the pool, or ``None``.
+
+    Returning the provider and model explicitly avoids relying on internal
+    LangChain attributes (e.g. ``lc_kwargs``) that differ across provider
+    classes and are not part of the public API.
+    """
     settings = get_settings()
     for entry in settings.default_model_pool:
         provider = entry.get("provider", "")
@@ -273,7 +278,7 @@ def _get_fallback_llm(*, failed_provider: str, failed_model: str):
         if not api_key:
             continue
 
-        return create_llm_from_config(
+        llm = create_llm_from_config(
             {
                 "provider": provider,
                 "model": model,
@@ -283,6 +288,7 @@ def _get_fallback_llm(*, failed_provider: str, failed_model: str):
                 "timeout_seconds": settings.agent_llm_timeout_seconds,
             }
         )
+        return llm, provider, model
 
     return None
 
@@ -365,12 +371,10 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     # skip to fallback.
     if not llm_config and is_provider_cooled_down(_provider, _model):
         logger.warning("Primary provider %s:%s is in cooldown; attempting fallback", _provider, _model)
-        fallback_llm = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
-        if fallback_llm:
+        fallback_result = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
+        if fallback_result is not None:
+            fallback_llm, _provider, _model = fallback_result
             llm = fallback_llm.bind_tools(all_tools)
-            # Update local track variables for _invoke_planner_llm
-            _provider = fallback_llm.lc_kwargs.get("provider_name", _provider)  # type: ignore
-            _model = fallback_llm.model_name if hasattr(fallback_llm, "model_name") else _model
         else:
             llm = get_llm_for_request(llm_config).bind_tools(all_tools)
     else:
@@ -408,14 +412,17 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             state.metadata["_usage"] = _accumulate_usage(state, result["messages"][0])
             usage_already_recorded = True
 
-        fallback_llm = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
-        if fallback_llm is not None:
+        fallback_result = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
+        if fallback_result is not None:
+            fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = fallback_llm.bind_tools(all_tools)  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
                 messages,
                 settings.agent_llm_timeout_seconds,
+                provider=fallback_provider,
+                model=fallback_model,
             )
     if isinstance(result, dict):
         return result

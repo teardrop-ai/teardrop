@@ -4,15 +4,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Literal
 
+from eth_abi import decode as abi_decode
+from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
-from tools.definitions._web3_helpers import get_web3, rpc_call
+from tools.definitions._multicall3 import multicall3_batch
+from tools.definitions._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -78,21 +79,8 @@ _TRUSTED_SPENDERS: dict[int, dict[str, str]] = {
     },
 }
 
-# ─── Minimal allowance() ABI ──────────────────────────────────────────────────
-
-_ALLOWANCE_ABI = [
-    {
-        "constant": True,
-        "inputs": [
-            {"name": "_owner", "type": "address"},
-            {"name": "_spender", "type": "address"},
-        ],
-        "name": "allowance",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    }
-]
+# Function selector for allowance(address,address) — keccak256(sig)[0:4].
+_ALLOWANCE_SELECTOR: bytes = bytes(Web3.keccak(text="allowance(address,address)"))[:4]
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -217,48 +205,52 @@ async def get_token_approvals(
     w3 = get_web3(chain_id)
     trusted = _TRUSTED_SPENDERS.get(chain_id, {})
 
-    # P2: Limit local concurrency to avoid saturation during massive fanout.
-    # While acquire_rpc_semaphore() handles global limits, this prevents one
-    # tool instance from queueing up hundreds of tasks and blocking others.
-    _local_sem = asyncio.Semaphore(10)
-
     # Symbol lookup from tracked list (best-effort; None for unknown tokens).
     symbol_lookup: dict[str, str] = {t["address"]: t["symbol"] for t in _TRACKED_TOKENS.get(chain_id, [])}
 
-    async def _check(token_addr: str, spender_addr: str) -> dict[str, Any] | None:
-        async with _local_sem:
-            async with acquire_rpc_semaphore():
-                try:
-                    contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
-                    raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())
-                    if raw == 0:
-                        return None
-                    is_unlimited = raw >= _UNLIMITED_THRESHOLD
-                    spender_name = trusted.get(spender_addr)
-                    return {
-                        "token_symbol": symbol_lookup.get(token_addr),
-                        "token_address": token_addr,
-                        "spender_name": spender_name,
-                        "spender_address": spender_addr,
-                        "allowance_raw": str(raw),
-                        "allowance_formatted": "unlimited" if is_unlimited else str(raw),
-                        "is_unlimited": is_unlimited,
-                        "is_permit2": spender_addr == _PERMIT2_ADDRESS,
-                        "risk_level": _risk_level(is_unlimited, spender_name),
-                    }
-                except Exception as exc:
-                    logger.debug(
-                        "allowance(%s, owner=%s, spender=%s): %s",
-                        token_addr,
-                        wallet,
-                        spender_addr,
-                        exc,
-                    )
-                    return None
-
+    # Build all (token, spender) pairs and encode each as Multicall3 input.
+    # allowance(address owner, address spender) → single uint256.
     pairs = [(t, s) for t in token_list for s in spender_list]
-    results: list[dict[str, Any] | None] = await asyncio.gather(*[_check(t, s) for t, s in pairs])
-    approvals = [r for r in results if r is not None]
+    calls = [
+        (token_addr, _ALLOWANCE_SELECTOR + abi_encode(["address", "address"], [wallet, spender_addr]))
+        for token_addr, spender_addr in pairs
+    ]
+
+    # Submit entire fan-out as a single Multicall3 batch — one RPC call total.
+    batch_results = await multicall3_batch(w3, calls)
+
+    approvals: list[dict[str, Any]] = []
+    for (token_addr, spender_addr), (success, return_data) in zip(pairs, batch_results):
+        if not success or not return_data:
+            logger.debug(
+                "allowance(%s, owner=%s, spender=%s): call reverted or empty",
+                token_addr,
+                wallet,
+                spender_addr,
+            )
+            continue
+        try:
+            raw: int = abi_decode(["uint256"], return_data)[0]
+        except Exception as exc:
+            logger.debug("allowance decode failed for %s/%s: %s", token_addr, spender_addr, exc)
+            continue
+        if raw == 0:
+            continue
+        is_unlimited = raw >= _UNLIMITED_THRESHOLD
+        spender_name = trusted.get(spender_addr)
+        approvals.append(
+            {
+                "token_symbol": symbol_lookup.get(token_addr),
+                "token_address": token_addr,
+                "spender_name": spender_name,
+                "spender_address": spender_addr,
+                "allowance_raw": str(raw),
+                "allowance_formatted": "unlimited" if is_unlimited else str(raw),
+                "is_unlimited": is_unlimited,
+                "is_permit2": spender_addr == _PERMIT2_ADDRESS,
+                "risk_level": _risk_level(is_unlimited, spender_name),
+            }
+        )
 
     # Sort by risk descending so high-risk entries appear first.
     _order = {"high": 0, "medium": 1, "low": 2}

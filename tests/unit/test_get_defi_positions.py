@@ -6,10 +6,52 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from eth_abi import encode as abi_encode
 
 from tools.definitions.get_defi_positions import get_defi_positions
 
 _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+
+# ─── Default multicall3_batch stub ─────────────────────────────────────────
+# All tests in this module patch `get_web3` to return a mock w3 whose contract
+# functions are pre-configured. After the Multicall3 refactor, _fetch_aave_v3
+# calls `multicall3_batch` instead of per-call contract functions for reserve
+# data. We auto-patch it here to return the same `reserve_data` tuple that
+# `_build_mock_w3` was given, ABI-encoded as if returned by the on-chain call.
+# Individual tests that need different behaviour can override it further.
+
+_DEFAULT_RESERVE_DATA = (0, 0, 0, 0, 0, 0, 0, 0, False)
+
+
+def _encode_reserve_data(rd: tuple) -> bytes:
+    return abi_encode(
+        ["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"],
+        list(rd),
+    )
+
+
+@pytest.fixture(autouse=True)
+def patch_multicall3(monkeypatch):
+    """Patch multicall3_batch in get_defi_positions to avoid real RPC calls.
+
+    The stub returns the reserve_data tuple from ``_current_reserve_data`` (a
+    module-level variable that individual tests can override via
+    ``set_reserve_data()``).
+    """
+    _current = {"reserve_data": _DEFAULT_RESERVE_DATA}
+
+    async def _stub(w3, calls, *, allow_failure=True):
+        encoded = _encode_reserve_data(_current["reserve_data"])
+        return [(True, encoded)] * len(calls)
+
+    monkeypatch.setattr("tools.definitions.get_defi_positions.multicall3_batch", _stub)
+    # Expose a setter so tests can customise reserve_data.
+    monkeypatch._multicall3_current = _current
+
+
+def set_reserve_data(monkeypatch, rd: tuple):
+    """Helper: override the reserve_data returned by the patched multicall3_batch."""
+    monkeypatch._multicall3_current["reserve_data"] = rd
 
 
 def _make_block_awaitable(value: int = 12345):
@@ -195,19 +237,20 @@ class TestAaveV3:
         from tools.definitions.get_defi_positions import get_defi_positions
 
         # Every tracked reserve returns 1.0 unit supplied (decimals-scaled), no debt
+        reserve = (
+            10**18,  # currentATokenBalance = 1 token (18dec)
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            True,
+        )
+        set_reserve_data(monkeypatch, reserve)
         mock_w3 = _build_mock_w3(
             account_data=(1 * 10**8, 0, 0, 8500, 8000, 2**256 - 1),
-            reserve_data=(
-                10**18,  # currentATokenBalance = 1 token (18dec) — will show for 18dec assets only; for 6dec this is huge
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                True,
-            ),
         )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
