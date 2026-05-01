@@ -2127,6 +2127,17 @@ async def agent_run(
         except Exception:
             logger.debug("Could not calculate run cost", exc_info=True)
 
+        logger.info(
+            "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc=%.6f",
+            run_id,
+            org_id,
+            duration_ms,
+            usage_data.get("tokens_in", 0),
+            usage_data.get("tokens_out", 0),
+            usage_data.get("tool_calls", 0),
+            cost_usdc,
+        )
+
         usage_event = UsageEvent(
             user_id=user_id,
             org_id=org_id,

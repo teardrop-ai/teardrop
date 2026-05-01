@@ -300,29 +300,36 @@ async def _invoke_planner_llm(
     Returns the raw ``AIMessage`` on success, or a node-result ``dict`` on
     failure (so callers can return it directly).
     """
+    import time
+    start_mono = time.monotonic()
     try:
-        return await asyncio.wait_for(  # type: ignore[return-value]
+        response = await asyncio.wait_for(  # type: ignore[return-value]
             llm.ainvoke(messages),
             timeout=timeout_seconds,
         )
+        elapsed = int((time.monotonic() - start_mono) * 1000)
+        logger.info("planner_node: LLM call completed in %dms (provider=%s, model=%s)", elapsed, provider, model)
+        return response
     except asyncio.TimeoutError:
-        logger.error("planner_node: LLM call timed out after %ss", timeout_seconds)
+        elapsed = int((time.monotonic() - start_mono) * 1000)
+        logger.error("planner_node: LLM call timed out after %dms (timeout=%ss, provider=%s, model=%s)", elapsed, timeout_seconds, provider, model)
         return {
             "messages": [AIMessage(content="The AI model timed out. Please try again.")],
             "task_status": TaskStatus.FAILED,
             "error": "LLM timeout",
         }
     except Exception as exc:
+        elapsed = int((time.monotonic() - start_mono) * 1000)
         if provider and model and _is_rate_limit_error(exc):
             record_provider_failure(provider, model)
-            logger.warning("planner_node: provider rate limited for %s/%s", provider, model)
+            logger.warning("planner_node: provider rate limited after %dms for %s/%s", elapsed, provider, model)
             return {
                 "messages": [AIMessage(content=f"I encountered an error: {exc}")],
                 "task_status": TaskStatus.FAILED,
                 "error": str(exc),
                 "error_type": "rate_limit",
             }
-        logger.error("planner_node error: %s", exc)
+        logger.error("planner_node error after %dms: %s", elapsed, exc)
         return {
             "messages": [AIMessage(content=f"I encountered an error: {exc}")],
             "task_status": TaskStatus.FAILED,
@@ -411,16 +418,18 @@ def _call_signature(tool_name: str, tool_args: dict) -> str:
 
 async def _execute_single_tool(
     call: dict[str, Any], tools_by_name: dict, metadata: dict[str, Any] | None = None
-) -> tuple[ToolMessage, str]:
-    """Execute one tool call; returns (ToolMessage, tool_name).
+) -> dict[str, Any]:
+    """Execute one tool call; returns result dict with metadata and ToolMessage.
 
     Errors are caught per-tool so a single failure does not abort sibling calls.
     For ``delegate_to_agent``, injects org context from *metadata* so billing
     and allowlist enforcement can operate.
     """
+    import time
     tool_name: str = call["name"]
     tool_args: dict[str, Any] = call["args"]
     call_id: str = call["id"]
+    start_mono = time.monotonic()
 
     tool = tools_by_name.get(tool_name)
     if tool is None:
@@ -446,7 +455,11 @@ async def _execute_single_tool(
                             "cost_usdc": 0,
                         }
                     )
-                    return ToolMessage(content=content, tool_call_id=call_id), tool_name
+                    return {
+                        "message": ToolMessage(content=content, tool_call_id=call_id),
+                        "name": tool_name,
+                        "elapsed_ms": 0,
+                    }
 
                 from billing import _get_pool as _get_billing_pool
                 from tools.definitions.delegate_to_agent import delegate_to_agent
@@ -467,7 +480,14 @@ async def _execute_single_tool(
             logger.warning("tool %s failed: %s", tool_name, exc)
             content = f"Tool error: {exc}"
 
-    return ToolMessage(content=content, tool_call_id=call_id), tool_name
+    elapsed = int((time.monotonic() - start_mono) * 1000)
+    logger.info("tool_executor: %s completed in %dms (result_len=%d)", tool_name, elapsed, len(content))
+    return {
+        "message": ToolMessage(content=content, tool_call_id=call_id),
+        "name": tool_name,
+        "elapsed_ms": elapsed,
+        "content": content,
+    }
 
 
 async def tool_executor_node(state: AgentState) -> dict[str, Any]:
@@ -517,9 +537,20 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             dedup_calls.append(call)
 
     try:
+        import time
+        batch_start_mono = time.monotonic()
         results = await asyncio.wait_for(
             asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in dedup_calls]),
             timeout=get_settings().agent_tool_executor_timeout_seconds,
+        )
+        batch_elapsed = int((time.monotonic() - batch_start_mono) * 1000)
+        durations = [r["elapsed_ms"] for r in results]
+        slowest = max(durations) if durations else 0
+        logger.info(
+            "tool_executor: batch completed in %dms (num_tools=%d, slowest_tool=%dms)",
+            batch_elapsed,
+            len(results),
+            slowest,
         )
     except asyncio.TimeoutError:
         logger.error("tool_executor_node timeout after %ss", get_settings().agent_tool_executor_timeout_seconds)
@@ -529,8 +560,8 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             "metadata": {**state.metadata, "_usage": usage},
         }
 
-    tool_messages = skipped_messages + [msg for msg, _ in results]
-    tool_names_acc.extend(name for _, name in results)
+    tool_messages = skipped_messages + [r["message"] for r in results]
+    tool_names_acc.extend(r["name"] for r in results)
 
     # Record newly executed signatures so future iterations can dedup them.
     completed_sigs.extend(
@@ -547,7 +578,9 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     # ── Accumulate delegation spend from delegate_to_agent results ────────
     delegation_spend = usage.get("delegation_spend_usdc", 0)
     delegation_count = usage.get("delegation_count", 0)
-    for msg, name in results:
+    for res in results:
+        msg = res["message"]
+        name = res["name"]
         if name == "delegate_to_agent":
             delegation_count += 1
             try:
