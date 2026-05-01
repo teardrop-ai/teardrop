@@ -122,6 +122,8 @@ Minimum required contents:
 # Global LLM provider fallback: anthropic | openai | google | openrouter (default: openrouter)
 # Note: Each org can override via PUT /llm-config
 AGENT_PROVIDER=openrouter
+# Default model is deepseek/deepseek-v4-flash.
+# For OpenRouter DeepSeek models, Teardrop pins provider routing to NovitaAI/DeepInfra.
 OPENROUTER_API_KEY=sk-or-...      # required if AGENT_PROVIDER=openrouter
 # ANTHROPIC_API_KEY=sk-ant-...     # required if AGENT_PROVIDER=anthropic
 # OPENAI_API_KEY=sk-...           # required if AGENT_PROVIDER=openai
@@ -174,6 +176,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | Variable | Description |
 |----------|-------------|
 | `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
+| `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |

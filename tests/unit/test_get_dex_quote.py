@@ -95,20 +95,16 @@ class TestGetDexQuoteInput:
 
 class TestResolveDecimals:
     async def test_static_map_hit_no_rpc(self, test_settings):
-        import asyncio
-
         from tools.definitions.get_dex_quote import _resolve_decimals
 
         mock_w3 = MagicMock()
         # Raise if eth.contract is touched — static hit must not use RPC.
         mock_w3.eth.contract.side_effect = AssertionError("RPC used despite static hit")
 
-        result = await _resolve_decimals(mock_w3, 1, _USDC_ETH, asyncio.Semaphore(1))
+        result = await _resolve_decimals(mock_w3, 1, _USDC_ETH)
         assert result == 6
 
     async def test_fallback_rpc_call(self, test_settings, monkeypatch):
-        import asyncio
-
         import tools.definitions.get_dex_quote as mod
 
         # Ensure unknown token has no cache entry from another test.
@@ -119,12 +115,10 @@ class TestResolveDecimals:
         mock_contract.functions.decimals.return_value.call = AsyncMock(return_value=18)
         mock_w3.eth.contract.return_value = mock_contract
 
-        result = await mod._resolve_decimals(mock_w3, 1, _UNKNOWN_TOKEN, asyncio.Semaphore(1))
+        result = await mod._resolve_decimals(mock_w3, 1, _UNKNOWN_TOKEN)
         assert result == 18
 
     async def test_fallback_on_rpc_failure_defaults_to_18(self, test_settings):
-        import asyncio
-
         import tools.definitions.get_dex_quote as mod
 
         mod._decimals_cache.clear()
@@ -134,7 +128,7 @@ class TestResolveDecimals:
         mock_contract.functions.decimals.return_value.call = AsyncMock(side_effect=Exception("rpc timeout"))
         mock_w3.eth.contract.return_value = mock_contract
 
-        result = await mod._resolve_decimals(mock_w3, 1, _UNKNOWN_TOKEN, asyncio.Semaphore(1))
+        result = await mod._resolve_decimals(mock_w3, 1, _UNKNOWN_TOKEN)
         assert result == 18
 
 
@@ -273,6 +267,34 @@ class TestGetDexQuote:
         contract_calls = mock_w3.eth.contract.call_args_list
         addresses_used = [call.kwargs.get("address") or (call.args[0] if call.args else None) for call in contract_calls]
         assert _QUOTER_V2[8453] in addresses_used
+
+    async def test_uses_global_rpc_semaphore_for_quote_calls(self, test_settings, monkeypatch):
+        import tools.definitions.get_dex_quote as mod
+
+        mod._decimals_cache.clear()
+
+        mock_w3 = self._make_mock_w3({500: (3_200_000_000, 79228162514264337593543950336, 2, 120_000)})
+        monkeypatch.setattr("tools.definitions.get_dex_quote.get_web3", lambda chain_id=1: mock_w3)
+
+        class _DummySem:
+            async def __aenter__(self):
+                sem_enters["count"] += 1
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        sem_enters = {"count": 0}
+        monkeypatch.setattr("tools.definitions.get_dex_quote.acquire_rpc_semaphore", lambda: _DummySem())
+
+        await mod.get_dex_quote(
+            token_in=_UNKNOWN_TOKEN,  # unknown token forces decimals() RPC path
+            token_out=_USDC_ETH,
+            amount_in="1000000000000000000",
+            chain_id=1,
+        )
+
+        # 1 decimals() + 4 fee-tier quote calls + 1 block_number call.
+        assert sem_enters["count"] >= 6
 
 
 # ─── ToolDefinition registration ──────────────────────────────────────────────

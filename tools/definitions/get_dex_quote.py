@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
@@ -78,8 +79,7 @@ _KNOWN_DECIMALS: dict[int, dict[str, int]] = {
     },
 }
 
-# Concurrency gate: 2 decimals() + 4 tier quotes = 6 eth_calls worst case.
-_SEM_LIMIT = 6
+# RPC concurrency is governed by the global semaphore shared across tools.
 
 # Amount cap: real token supplies don't exceed 2^96; 2^128 is a generous
 # safety cap that prevents overflow edge cases while accommodating tokens
@@ -214,7 +214,7 @@ class GetDexQuoteOutput(BaseModel):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _resolve_decimals(w3: Any, chain_id: int, address: str, sem: asyncio.Semaphore) -> int:
+async def _resolve_decimals(w3: Any, chain_id: int, address: str) -> int:
     """Return the ERC-20 decimals for ``address`` on ``chain_id``.
 
     Static map → TTL cache → on-chain ``decimals()`` fallback. On failure,
@@ -231,7 +231,7 @@ async def _resolve_decimals(w3: Any, chain_id: int, address: str, sem: asyncio.S
     if cached and now < cached[0]:
         return cached[1]
 
-    async with sem:
+    async with acquire_rpc_semaphore():
         try:
             contract = w3.eth.contract(address=address, abi=_ERC20_DECIMALS_ABI)
             value: int = await rpc_call(contract.functions.decimals().call())
@@ -254,7 +254,6 @@ async def _quote_one_tier(
     token_out: str,
     amount_in: int,
     fee: int,
-    sem: asyncio.Semaphore,
 ) -> TierQuote:
     """Run QuoterV2.quoteExactInputSingle for a single fee tier.
 
@@ -262,7 +261,7 @@ async def _quote_one_tier(
     successful quote returns ``success=True``.
     """
     params = (token_in, token_out, amount_in, fee, 0)
-    async with sem:
+    async with acquire_rpc_semaphore():
         try:
             result = await rpc_call(quoter.functions.quoteExactInputSingle(params).call())
         except ContractLogicError as exc:
@@ -299,6 +298,12 @@ def _format_human(raw: int, decimals: int) -> str:
     return s
 
 
+async def _fetch_block_number(w3: Any) -> int:
+    """Fetch latest block number under the shared RPC semaphore."""
+    async with acquire_rpc_semaphore():
+        return int(await w3.eth.block_number)
+
+
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
@@ -318,24 +323,21 @@ async def get_dex_quote(
         raise ValueError("token_in and token_out must differ")
 
     w3 = get_web3(chain_id)
-    sem = asyncio.Semaphore(_SEM_LIMIT)
     quoter_address = _QUOTER_V2[chain_id]
     quoter = w3.eth.contract(address=quoter_address, abi=_QUOTER_V2_ABI)
 
     amount_in_int = int(amount_in)
 
     # Resolve decimals and block number in parallel with the tier quotes.
-    decimals_in_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_in, sem))
-    decimals_out_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_out, sem))
-    block_task = asyncio.create_task(w3.eth.block_number)
-    tier_tasks = [
-        asyncio.create_task(_quote_one_tier(quoter, token_in, token_out, amount_in_int, fee, sem)) for fee in _FEE_TIERS
-    ]
+    decimals_in_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_in))
+    decimals_out_task = asyncio.create_task(_resolve_decimals(w3, chain_id, token_out))
+    block_task = asyncio.create_task(_fetch_block_number(w3))
+    tier_tasks = [asyncio.create_task(_quote_one_tier(quoter, token_in, token_out, amount_in_int, fee)) for fee in _FEE_TIERS]
 
     decimals_in = await decimals_in_task
     decimals_out = await decimals_out_task
     try:
-        block_number = int(await block_task)
+        block_number = await block_task
     except Exception as exc:
         logger.warning("block_number fetch failed: %s", exc)
         block_number = 0
