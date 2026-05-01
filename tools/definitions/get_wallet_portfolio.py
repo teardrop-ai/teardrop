@@ -146,6 +146,7 @@ class GetWalletPortfolioOutput(BaseModel):
     chain_id: int
     total_value_usd: float
     holdings: list[PortfolioEntry]
+    fetch_errors: list[str] = Field(default_factory=list)
     note: str = "Only tracked tokens shown. Untracked tokens not included."
 
 
@@ -164,11 +165,17 @@ async def get_wallet_portfolio(
     # Collect CoinGecko IDs (ETH + tracked tokens)
     cg_ids = ["ethereum"] + [t["cg_id"] for t in tokens]
     prices = await _fetch_prices(cg_ids)
+    fetch_errors: list[str] = []
 
     # Fetch native ETH balance (protected by global RPC semaphore)
     async with acquire_rpc_semaphore():
-        eth_balance_wei = await w3.eth.get_balance(wallet)
-    eth_balance = float(Web3.from_wei(eth_balance_wei, "ether"))
+        try:
+            eth_balance_wei = await w3.eth.get_balance(wallet)
+        except Exception as exc:
+            logger.warning("ETH balance fetch failed for %s: %s", wallet, exc)
+            eth_balance_wei = None
+            fetch_errors.append("ETH balance unavailable (RPC error)")
+    eth_balance = float(Web3.from_wei(eth_balance_wei, "ether")) if eth_balance_wei is not None else 0.0
     eth_price = prices.get("ethereum", 0.0)
 
     holdings: list[dict[str, Any]] = [
@@ -218,6 +225,7 @@ async def get_wallet_portfolio(
         "chain_id": chain_id,
         "total_value_usd": total_value,
         "holdings": holdings[:20],
+        "fetch_errors": fetch_errors,
         "note": "Only tracked tokens shown. Untracked tokens not included.",
     }
 

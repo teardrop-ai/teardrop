@@ -16,13 +16,16 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
-from agent.llm import extract_usage, get_llm_for_request
+from agent.llm import create_llm_from_config, extract_usage, get_llm_for_request
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from benchmarks import get_model_context_specs
 from config import get_settings
+from llm_config import is_provider_cooled_down, record_provider_failure
 from tools import registry
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_MARKERS = ("429", "rate limit", "too many requests", "exceeded", "throttl")
 
 # ─── Tool caches ──────────────────────────────────────────────────────────────
 
@@ -111,6 +114,9 @@ Tool use economy:
   - get_wallet_portfolio already returns the native ETH balance inside its
     holdings list. If you have called or are about to call get_wallet_portfolio,
     do NOT also call get_eth_balance — it is redundant.
+    - Use get_liquidation_risk ONLY for multi-wallet batch assessments (2+ wallets).
+        For a single wallet DeFi analysis, get_defi_positions already includes risk
+        metrics. Do not call both tools for the same wallet unless explicitly asked.
   - The executor blocks duplicate calls: if you issue a tool call with the same
     name and arguments as a prior call this session, it will be suppressed and
     you will receive a DUPLICATE_CALL_BLOCKED notice. Use the prior result
@@ -237,7 +243,58 @@ def _build_planner_system_messages(
     return system_messages
 
 
-async def _invoke_planner_llm(llm, messages: list, timeout_seconds: int) -> AIMessage | dict[str, Any]:
+def _is_rate_limit_error(exc: Exception) -> bool:
+    return any(marker in str(exc).lower() for marker in _RATE_LIMIT_MARKERS)
+
+
+def _get_fallback_llm(*, failed_provider: str, failed_model: str):
+    """Return a fallback LLM from default_model_pool, or None if unavailable."""
+    settings = get_settings()
+    for entry in settings.default_model_pool:
+        provider = entry.get("provider", "")
+        model = entry.get("model", "")
+        if not provider or not model:
+            continue
+        if provider == failed_provider and model == failed_model:
+            continue
+        if is_provider_cooled_down(provider, model):
+            continue
+
+        api_key = ""
+        if provider == "anthropic":
+            api_key = settings.anthropic_api_key
+        elif provider == "openai":
+            api_key = settings.openai_api_key
+        elif provider == "google":
+            api_key = settings.google_api_key
+        elif provider == "openrouter":
+            api_key = settings.openrouter_api_key
+
+        if not api_key:
+            continue
+
+        return create_llm_from_config(
+            {
+                "provider": provider,
+                "model": model,
+                "api_key": api_key,
+                "max_tokens": settings.agent_max_tokens,
+                "temperature": settings.agent_temperature,
+                "timeout_seconds": settings.agent_llm_timeout_seconds,
+            }
+        )
+
+    return None
+
+
+async def _invoke_planner_llm(
+    llm,
+    messages: list,
+    timeout_seconds: int,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> AIMessage | dict[str, Any]:
     """Call the bound LLM with timeout + exception handling.
 
     Returns the raw ``AIMessage`` on success, or a node-result ``dict`` on
@@ -256,6 +313,15 @@ async def _invoke_planner_llm(llm, messages: list, timeout_seconds: int) -> AIMe
             "error": "LLM timeout",
         }
     except Exception as exc:
+        if provider and model and _is_rate_limit_error(exc):
+            record_provider_failure(provider, model)
+            logger.warning("planner_node: provider rate limited for %s/%s", provider, model)
+            return {
+                "messages": [AIMessage(content=f"I encountered an error: {exc}")],
+                "task_status": TaskStatus.FAILED,
+                "error": str(exc),
+                "error_type": "rate_limit",
+            }
         logger.error("planner_node error: %s", exc)
         return {
             "messages": [AIMessage(content=f"I encountered an error: {exc}")],
@@ -300,7 +366,23 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     )
     messages = [*system_messages, *state.messages]
 
-    result = await _invoke_planner_llm(llm, messages, settings.agent_llm_timeout_seconds)
+    result = await _invoke_planner_llm(
+        llm,
+        messages,
+        settings.agent_llm_timeout_seconds,
+        provider=_provider,
+        model=_model,
+    )
+    if isinstance(result, dict) and result.get("error_type") == "rate_limit" and not llm_config:
+        fallback_llm = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
+        if fallback_llm is not None:
+            logger.warning("planner_node: retrying with fallback LLM after rate limit")
+            fallback_bound = fallback_llm.bind_tools(all_tools)  # type: ignore[arg-type]
+            result = await _invoke_planner_llm(
+                fallback_bound,
+                messages,
+                settings.agent_llm_timeout_seconds,
+            )
     if isinstance(result, dict):
         return result
     response: AIMessage = result

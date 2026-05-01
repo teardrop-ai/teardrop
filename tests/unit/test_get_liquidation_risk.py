@@ -146,6 +146,27 @@ class TestInputValidation:
         with pytest.raises(ValueError):
             GetLiquidationRiskInput(wallet_addresses=wallets)
 
+    async def test_uses_global_rpc_semaphore(self, test_settings, monkeypatch):
+        from tools.definitions.get_liquidation_risk import get_liquidation_risk
+
+        call_count = 0
+
+        class _DummySem:
+            async def __aenter__(self):
+                nonlocal call_count
+                call_count += 1
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        mock_w3 = _build_mock_w3()
+        _patch(monkeypatch, mock_w3)
+        monkeypatch.setattr("tools.definitions.get_liquidation_risk.acquire_rpc_semaphore", lambda: _DummySem())
+
+        await get_liquidation_risk(wallet_addresses=[_WALLET_A], chain_id=1)
+        assert call_count == 1
+
 
 # ─── Aave tier classification ────────────────────────────────────────────────
 

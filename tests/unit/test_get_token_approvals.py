@@ -219,6 +219,33 @@ class TestGetTokenApprovals:
         assert result["approvals"] == []
         assert result["risk_summary"]["total_approvals"] == 0
 
+    async def test_uses_global_rpc_semaphore(self, test_settings, monkeypatch):
+        from tools.definitions.get_token_approvals import get_token_approvals
+
+        call_count = 0
+
+        class _DummySem:
+            async def __aenter__(self):
+                nonlocal call_count
+                call_count += 1
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(
+            "tools.definitions.get_token_approvals.get_web3",
+            lambda chain_id=1: self._make_mock_w3(_BOUNDED),
+        )
+        monkeypatch.setattr("tools.definitions.get_token_approvals.acquire_rpc_semaphore", lambda: _DummySem())
+
+        await get_token_approvals(
+            wallet_address=_WALLET,
+            tokens=[_TOKEN_USDC],
+            spenders=[_SPENDER_UNISWAP],
+        )
+        assert call_count == 1
+
     async def test_risk_summary_counts_correct(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 

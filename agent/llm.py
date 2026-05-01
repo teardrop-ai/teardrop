@@ -100,7 +100,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
             "base_url": "https://openrouter.ai/api/v1",
         }
         if settings.agent_model.startswith("deepseek/"):
-            kwargs["model_kwargs"] = {"extra_body": {"provider": {"only": ["NovitaAI", "DeepInfra"]}}}
+            kwargs["extra_body"] = {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
     raise ValueError(f"Unknown agent_provider '{provider}'. Supported: anthropic, openai, google, openrouter.")
@@ -197,7 +197,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             "base_url": api_base or "https://openrouter.ai/api/v1",
         }
         if model.startswith("deepseek/"):
-            kwargs["model_kwargs"] = {"extra_body": {"provider": {"only": ["NovitaAI", "DeepInfra"]}}}
+            kwargs["extra_body"] = {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
     # Should be unreachable due to ALLOWED_PROVIDERS check above.

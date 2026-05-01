@@ -197,6 +197,55 @@ class TestPlannerNode:
         assert usage["tokens_in"] == 60  # 10 + 50
         assert usage["tokens_out"] == 30  # 5 + 25
 
+    async def test_rate_limit_retries_with_fallback(self, test_settings):
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=Exception("429 rate limit"))
+
+        fallback_response = _make_ai_message("Recovered answer.", tool_calls=[])
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state()
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
+            patch("agent.nodes._get_fallback_llm", return_value=fallback_llm),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert fallback_llm.ainvoke.call_count == 1
+
+    async def test_rate_limit_with_org_llm_config_does_not_fallback(self, test_settings):
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=Exception("429 too many requests"))
+
+        state = _make_state(
+            metadata={
+                "_usage": {},
+                "_llm_config": {
+                    "provider": "openrouter",
+                    "model": "deepseek/deepseek-v4-flash",
+                    "is_byok": True,
+                },
+            }
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
+            patch("agent.nodes._get_fallback_llm") as mock_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.FAILED
+        assert result["error_type"] == "rate_limit"
+        mock_fallback.assert_not_called()
+
 
 # ─── tool_executor_node ───────────────────────────────────────────────────────
 

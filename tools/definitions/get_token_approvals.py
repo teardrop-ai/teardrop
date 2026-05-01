@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
@@ -26,10 +27,6 @@ _UNLIMITED_THRESHOLD: int = 2**128
 # Approval to this address enables off-chain signed permits that are NOT
 # visible via standard allowance() queries — flagged separately.
 _PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
-
-# Semaphore for concurrent eth_call requests.
-# Public RPC nodes typically handle 30–50 parallel calls comfortably.
-_SEM_LIMIT = 25
 
 # ─── Curated spender maps ─────────────────────────────────────────────────────
 #
@@ -223,10 +220,8 @@ async def get_token_approvals(
     # Symbol lookup from tracked list (best-effort; None for unknown tokens).
     symbol_lookup: dict[str, str] = {t["address"]: t["symbol"] for t in _TRACKED_TOKENS.get(chain_id, [])}
 
-    sem = asyncio.Semaphore(_SEM_LIMIT)
-
     async def _check(token_addr: str, spender_addr: str) -> dict[str, Any] | None:
-        async with sem:
+        async with acquire_rpc_semaphore():
             try:
                 contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
                 raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())

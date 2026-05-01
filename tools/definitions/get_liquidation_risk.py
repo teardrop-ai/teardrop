@@ -24,6 +24,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.definitions.get_defi_positions import (
     _AAVE_V3_POOL,
@@ -40,7 +41,6 @@ logger = logging.getLogger(__name__)
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 _MAX_WALLETS = 50
-_SEM_LIMIT = 25
 _SUPPORTED_CHAINS = (1, 8453)
 
 # ─── Risk tiers ──────────────────────────────────────────────────────────────
@@ -259,13 +259,13 @@ async def _fetch_compound_risk(w3: Any, wallet: str, chain_id: int) -> list[Comp
     return [r for r in results if r is not None]
 
 
-async def _assess_wallet(w3: Any, wallet: str, chain_id: int, sem: asyncio.Semaphore) -> WalletRiskResult:
+async def _assess_wallet(w3: Any, wallet: str, chain_id: int) -> WalletRiskResult:
     """Assess risk for a single wallet across Aave + Compound. Failures are isolated per protocol."""
     errors: list[ProtocolErrorInfo] = []
     aave_result: AaveRisk | None = None
     compound_result: list[CompoundRisk] = []
 
-    async with sem:
+    async with acquire_rpc_semaphore():
         aave_task = asyncio.create_task(_fetch_aave_risk(w3, wallet, chain_id))
         compound_task = asyncio.create_task(_fetch_compound_risk(w3, wallet, chain_id))
 
@@ -324,10 +324,8 @@ async def get_liquidation_risk(
         wallets.append(checksummed)
 
     w3 = get_web3(chain_id)
-    sem = asyncio.Semaphore(_SEM_LIMIT)
-
     block_task = asyncio.create_task(w3.eth.block_number)
-    wallet_tasks = [asyncio.create_task(_assess_wallet(w3, wallet, chain_id, sem)) for wallet in wallets]
+    wallet_tasks = [asyncio.create_task(_assess_wallet(w3, wallet, chain_id)) for wallet in wallets]
 
     results = await asyncio.gather(*wallet_tasks)
 

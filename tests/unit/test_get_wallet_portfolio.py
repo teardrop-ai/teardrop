@@ -117,3 +117,32 @@ class TestGetWalletPortfolio:
 
         values = [h["value_usd"] for h in result["holdings"]]
         assert values == sorted(values, reverse=True)
+
+    async def test_eth_balance_rpc_error_returns_fetch_error(self, test_settings, monkeypatch):
+        from tools.definitions.get_wallet_portfolio import get_wallet_portfolio
+
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_cache", {})
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._portfolio_price_ts", 0.0)
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_balance = AsyncMock(side_effect=Exception("429 rate limit"))
+
+        mock_contract = MagicMock()
+        mock_contract.functions.balanceOf.return_value.call = AsyncMock(return_value=0)
+        mock_w3.eth.contract.return_value = mock_contract
+
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio.get_web3", lambda chain_id=1: mock_w3)
+
+        async def mock_fetch_prices(cg_ids):
+            return {cid: 1.0 for cid in cg_ids}
+
+        monkeypatch.setattr("tools.definitions.get_wallet_portfolio._fetch_prices", mock_fetch_prices)
+
+        result = await get_wallet_portfolio(
+            wallet_address="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            chain_id=1,
+        )
+
+        assert result["holdings"][0]["symbol"] == "ETH"
+        assert result["holdings"][0]["balance_formatted"] == "0.000000"
+        assert result["fetch_errors"] == ["ETH balance unavailable (RPC error)"]

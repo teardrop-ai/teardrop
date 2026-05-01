@@ -119,10 +119,11 @@ Copy-Item .env.example .env
 
 Minimum required contents:
 ```
-# Global LLM provider fallback: anthropic | openai | google (default: anthropic)
+# Global LLM provider fallback: anthropic | openai | google | openrouter (default: openrouter)
 # Note: Each org can override via PUT /llm-config
-AGENT_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...      # required if AGENT_PROVIDER=anthropic
+AGENT_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-...      # required if AGENT_PROVIDER=openrouter
+# ANTHROPIC_API_KEY=sk-ant-...     # required if AGENT_PROVIDER=anthropic
 # OPENAI_API_KEY=sk-...           # required if AGENT_PROVIDER=openai
 # GOOGLE_API_KEY=...              # required if AGENT_PROVIDER=google
 
@@ -172,7 +173,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `anthropic`) |
+| `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
