@@ -380,7 +380,19 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
-    results = await asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls])
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls]),
+            timeout=get_settings().agent_tool_executor_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        logger.error("tool_executor_node timeout after %ss", get_settings().agent_tool_executor_timeout_seconds)
+        return {
+            "messages": [AIMessage(content="Tool execution timed out. Some tools took too long to respond.")],
+            "task_status": TaskStatus.FAILED,
+            "metadata": {**state.metadata, "_usage": usage},
+        }
+    
     tool_messages = [msg for msg, _ in results]
     tool_names_acc.extend(name for _, name in results)
 

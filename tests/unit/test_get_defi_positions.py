@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from tools.definitions.get_defi_positions import get_defi_positions
 
 _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
@@ -503,3 +506,52 @@ class TestOutputSchema:
         assert "aave" in TOOL.tags
         assert "compound" in TOOL.tags
         assert "uniswap" in TOOL.tags
+
+    async def test_get_defi_positions_timeout_handling(self, monkeypatch):
+        """Test that get_defi_positions handles slow protocol branches with 45s timeouts."""
+        # protocol_task timeouts are 45s in code.
+        # We'll mock one task to be slow and verify it returns a ProtocolErrorInfo instead of crashing.
+        
+        async def slow_fetch(*args, **kwargs):
+            await asyncio.sleep(0.5) # Simulated delay
+            return MagicMock()
+
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+        
+        # Patch asyncio.wait_for to trigger TimeoutError quickly for Aave
+        original_wait_for = asyncio.wait_for
+        
+        async def mock_wait_for(fut, timeout):
+            if timeout == 45: # This identifies our protocol-level timeouts
+                # For this test, Force Aave to time out
+                # We can't easily distinguish which task is which here without more complex mocking,
+                # but we can mock the specific fetcher function instead.
+                raise asyncio.TimeoutError()
+            return await original_wait_for(fut, timeout)
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        # Should have errors for all three protocols because our mock_wait_for timed out all 45s tasks
+        assert len(result["errors"]) >= 1
+        protocols_with_errors = [e["protocol"] for e in result["errors"]]
+        assert "aave_v3" in protocols_with_errors
+        assert "compound_v3" in protocols_with_errors
+        # The protocol key in get_defi_positions.py for Uniswap task timeout is "uniswap_v3"
+        assert "uniswap_v3" in protocols_with_errors
+        assert "timeout" in result["errors"][0]["error"].lower()
+
+    async def test_get_defi_positions_rpc_timeout_handling(self, monkeypatch):
+        """Test that get_defi_positions handles individual RPC call timeouts."""
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+        
+        # Mock rpc_call to raise TimeoutError
+        with patch("tools.definitions.get_defi_positions.rpc_call", side_effect=asyncio.TimeoutError()):
+            result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+            
+        # Individual RPC timeouts should bubble up to protocol error handling
+        assert len(result["errors"]) >= 1
+        assert any("timeout" in e["error"].lower() for e in result["errors"])
+

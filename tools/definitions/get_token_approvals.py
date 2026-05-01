@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._web3_helpers import get_web3
+from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -229,7 +229,7 @@ async def get_token_approvals(
         async with sem:
             try:
                 contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
-                raw: int = await contract.functions.allowance(wallet, spender_addr).call()
+                raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())
                 if raw == 0:
                     return None
                 is_unlimited = raw >= _UNLIMITED_THRESHOLD

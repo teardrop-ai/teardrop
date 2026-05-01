@@ -15,7 +15,8 @@ from web3 import Web3
 
 from config import get_settings
 from tools.definitions._http_session import get_coingecko_session
-from tools.definitions._web3_helpers import get_web3
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
+from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -84,20 +85,10 @@ _portfolio_price_cache: dict[str, float] = {}
 _portfolio_price_ts: float = 0.0
 _PORTFOLIO_PRICE_TTL = 60  # seconds
 
-# ─── Bounded concurrency for ERC-20 fan-out ──────────────────────────────────
-# Most public RPC providers (Alchemy, Infura, public endpoints) cap concurrent
-# eth_call streams around 5–10. Unbounded asyncio.gather over 15+ tokens
-# triggers 429s and tail-latency spikes that look like "hangs" to callers.
-_ERC20_FANOUT_LIMIT = 5
-_erc20_semaphore: asyncio.Semaphore | None = None
-
-
-def _get_erc20_semaphore() -> asyncio.Semaphore:
-    """Lazy-init the ERC-20 fan-out semaphore for the running loop."""
-    global _erc20_semaphore
-    if _erc20_semaphore is None:
-        _erc20_semaphore = asyncio.Semaphore(_ERC20_FANOUT_LIMIT)
-    return _erc20_semaphore
+# ─── Note on RPC concurrency ──────────────────────────────────────────────────
+# RPC call concurrency is managed globally via acquire_rpc_semaphore() to prevent
+# org-level saturation across all concurrent agent runs. Public RPC providers
+# (Alchemy, Infura, etc.) enforce 5–10 concurrent call limits.
 
 
 async def _fetch_prices(cg_ids: list[str]) -> dict[str, float]:
@@ -174,8 +165,9 @@ async def get_wallet_portfolio(
     cg_ids = ["ethereum"] + [t["cg_id"] for t in tokens]
     prices = await _fetch_prices(cg_ids)
 
-    # Fetch native ETH balance
-    eth_balance_wei = await w3.eth.get_balance(wallet)
+    # Fetch native ETH balance (protected by global RPC semaphore)
+    async with acquire_rpc_semaphore():
+        eth_balance_wei = await w3.eth.get_balance(wallet)
     eth_balance = float(Web3.from_wei(eth_balance_wei, "ether"))
     eth_price = prices.get("ethereum", 0.0)
 
@@ -189,15 +181,13 @@ async def get_wallet_portfolio(
         }
     ]
 
-    # Fetch ERC-20 balances concurrently (bounded fan-out — see semaphore above)
-    sem = _get_erc20_semaphore()
-
+    # Fetch ERC-20 balances concurrently (protected by global RPC semaphore)
     async def _get_erc20(token_info: dict[str, str]) -> dict[str, Any] | None:
-        async with sem:
+        async with acquire_rpc_semaphore():
             try:
                 addr = Web3.to_checksum_address(token_info["address"])
                 contract = w3.eth.contract(address=addr, abi=_ERC20_BALANCE_ABI)
-                raw = await contract.functions.balanceOf(wallet).call()
+                raw = await rpc_call(contract.functions.balanceOf(wallet).call())
                 decimals = int(token_info["decimals"])
                 balance = raw / (10**decimals) if decimals > 0 else float(raw)
                 if balance == 0:

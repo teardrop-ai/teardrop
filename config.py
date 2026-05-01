@@ -71,6 +71,28 @@ class Settings(BaseSettings):
             "When exceeded the agent synthesises from partial data rather than looping further."
         ),
     )
+    agent_tool_executor_timeout_seconds: int = Field(
+        default=120,
+        description=(
+            "Timeout in seconds for tool_executor_node. Aborts all tool execution if any tool hangs. "
+            "Prevents runaway RPC calls or webhook timeouts from blocking the agent."
+        ),
+    )
+    agent_rpc_call_timeout_seconds: int = Field(
+        default=15,
+        description=(
+            "Timeout in seconds for individual RPC calls (eth_call, eth_getBalance, etc.). "
+            "Prevents hanging on single slow RPC requests from public providers."
+        ),
+    )
+    agent_rpc_semaphore_limit: int = Field(
+        default=50,
+        description=(
+            "Global limit on concurrent RPC calls across all agent runs. "
+            "Prevents organizational RPC saturation. Typical public provider limit: 5–10 concurrent calls; "
+            "we use 50 as org-level burst buffer."
+        ),
+    )
 
     # ── LangSmith ──────────────────────────────────────────────────────────────
     langsmith_tracing: bool = False

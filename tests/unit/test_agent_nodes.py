@@ -299,6 +299,36 @@ class TestToolExecutorNode:
 
         assert result["metadata"]["_usage"]["tool_iterations"] == 3
 
+    async def test_tool_executor_timeout_returns_failed_status(self, test_settings):
+        """If tools hang, tool_executor_node returns TaskStatus.FAILED with timeout message."""
+        tool_call = {"id": "c1", "name": "slow_tool", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+
+        # A tool that sleeps forever
+        async def slow_invoke(*args, **kwargs):
+            try:
+                import asyncio as _asyncio
+                await _asyncio.sleep(10)
+            except ImportError:
+                import asyncio
+                await asyncio.sleep(10)
+            return {"result": "finally done"}
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = slow_invoke
+
+        state = _make_state(messages=[last_msg])
+
+        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value={"slow_tool": mock_tool}):
+            # Short timeout for testing
+            with patch.object(test_settings, "agent_tool_executor_timeout_seconds", 0.1):
+                result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.FAILED
+        assert "timed out" in result["messages"][0].content
+        assert len(result["messages"]) == 1
+
+
 
 # ─── ui_generator_node ────────────────────────────────────────────────────────
 

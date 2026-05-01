@@ -180,6 +180,7 @@ from org_tools import (
 )
 from scripts.generate_keys import generate_keypair
 from tools import registry
+from tools.definitions._rpc_semaphore import init_rpc_semaphore
 from tools.mcp_server import mcp as _mcp_server
 from usage import (
     UsageEvent,
@@ -574,6 +575,9 @@ async def lifespan(app: FastAPI):
     await init_llm_config_db(pool)
     await init_benchmarks_db(pool)
     await init_agent_wallets_db(pool)
+
+    # Initialize global RPC semaphore to limit concurrent eth_calls across all agent runs.
+    init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
 
     # Launch background workers.
     bg_tasks: list[asyncio.Task] = []

@@ -42,6 +42,26 @@ def _serialize_value(val: Any) -> Any:
     return val
 
 
+def _get_function_mutability(fn_abi: dict) -> str:
+    """Determine function mutability from ABI, supporting both old and new formats.
+
+    Solidity 0.5.0+ uses explicit stateMutability: 'view', 'pure', 'payable', 'nonpayable'.
+    Pre-0.5.0 contracts (including Vyper) use constant: true to indicate read-only functions.
+    This helper maps both formats to modern mutability states.
+
+    Args:
+        fn_abi: Function ABI entry dict.
+
+    Returns:
+        Mutability state: 'view', 'pure', 'payable', or 'nonpayable'.
+    """
+    # Legacy format: constant: true means read-only (equivalent to 'view' in modern Solidity)
+    if fn_abi.get("constant") is True:
+        return "view"
+    # Modern format: explicit stateMutability field (default: 'nonpayable')
+    return fn_abi.get("stateMutability", "nonpayable")
+
+
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 
@@ -49,7 +69,11 @@ class ReadContractInput(BaseModel):
     contract_address: str = Field(..., description="Contract address (0x…)")
     abi_fragment: str = Field(
         ...,
-        description=("JSON array containing the ABI for the function to call. Only view/pure functions are allowed."),
+        description=(
+            "JSON array containing the ABI for the function to call. "
+            "Supports both modern (stateMutability: view/pure) and legacy (constant: true) formats. "
+            "Only read-only functions are allowed."
+        ),
         max_length=_ABI_MAX_LEN,
     )
     function_name: str = Field(
@@ -111,7 +135,7 @@ async def read_contract(
     if fn_abi is None:
         raise ValueError(f"Function '{function_name}' not found in provided ABI fragment")
 
-    mutability = fn_abi.get("stateMutability", "nonpayable")
+    mutability = _get_function_mutability(fn_abi)
     if mutability not in _ALLOWED_MUTABILITY:
         raise ValueError(
             f"Function '{function_name}' has stateMutability='{mutability}'. Only view/pure functions are allowed for safety."

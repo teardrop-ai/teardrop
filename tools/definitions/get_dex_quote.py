@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
-from tools.definitions._web3_helpers import get_web3
+from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ async def _resolve_decimals(w3: Any, chain_id: int, address: str, sem: asyncio.S
     async with sem:
         try:
             contract = w3.eth.contract(address=address, abi=_ERC20_DECIMALS_ABI)
-            value: int = await contract.functions.decimals().call()
+            value: int = await rpc_call(contract.functions.decimals().call())
         except Exception as exc:
             logger.warning(
                 "decimals() fallback to 18 for %s on chain %d: %s",
@@ -264,7 +264,7 @@ async def _quote_one_tier(
     params = (token_in, token_out, amount_in, fee, 0)
     async with sem:
         try:
-            result = await quoter.functions.quoteExactInputSingle(params).call()
+            result = await rpc_call(quoter.functions.quoteExactInputSingle(params).call())
         except ContractLogicError as exc:
             msg = str(exc) or "unknown_revert"
             # 'Unexpected error' is the QuoterV2 signal for a non-existent pool.

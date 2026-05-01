@@ -69,3 +69,27 @@ def get_web3(chain_id: int = 1) -> AsyncWeb3:
     """Return an AsyncWeb3 instance for the given chain."""
     rpc_url = _get_rpc_url(chain_id)
     return AsyncWeb3(_RetryAsyncHTTPProvider(rpc_url))
+
+
+async def rpc_call(coro, timeout_seconds: int | None = None):
+    """Wrap a Web3 contract call with timeout to prevent hanging on slow RPC requests.
+
+    Args:
+        coro: The coroutine to execute (e.g., contract.functions.method().call())
+        timeout_seconds: Timeout in seconds (defaults to config agent_rpc_call_timeout_seconds)
+
+    Returns:
+        The result of the coroutine.
+
+    Raises:
+        asyncio.TimeoutError: If the call exceeds the timeout.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = get_settings().agent_rpc_call_timeout_seconds
+
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        logger.debug("RPC call timed out after %ds", timeout_seconds)
+        raise
+

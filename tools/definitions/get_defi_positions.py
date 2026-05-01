@@ -18,7 +18,9 @@ from typing import Any
 from pydantic import BaseModel, Field
 from web3 import Web3
 
-from tools.definitions._web3_helpers import get_web3
+from config import get_settings
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
+from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -367,7 +369,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     data_provider = w3.eth.contract(address=data_provider_addr, abi=_AAVE_V3_DATA_PROVIDER_ABI)
 
     # Aggregate account snapshot
-    account_data = await pool.functions.getUserAccountData(wallet).call()
+    account_data = await rpc_call(pool.functions.getUserAccountData(wallet).call())
     (total_collateral_base, total_debt_base, available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
@@ -378,7 +380,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     async def _fetch_reserve(reserve: dict[str, str]) -> AaveReservePosition | None:
         try:
             asset_addr = Web3.to_checksum_address(reserve["address"])
-            result = await data_provider.functions.getUserReserveData(asset_addr, wallet).call()
+            result = await rpc_call(data_provider.functions.getUserReserveData(asset_addr, wallet).call())
             a_token_balance, stable_debt, variable_debt = result[0], result[1], result[2]
             usage_as_collateral = result[8]
             # Skip reserves with no activity
@@ -420,20 +422,20 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
 
     # Parallel: supply, borrow, is_liquidatable, numAssets
     supplied, borrowed, is_liq, num_assets = await asyncio.gather(
-        comet.functions.balanceOf(wallet).call(),
-        comet.functions.borrowBalanceOf(wallet).call(),
-        comet.functions.isLiquidatable(wallet).call(),
-        comet.functions.numAssets().call(),
+        rpc_call(comet.functions.balanceOf(wallet).call()),
+        rpc_call(comet.functions.borrowBalanceOf(wallet).call()),
+        rpc_call(comet.functions.isLiquidatable(wallet).call()),
+        rpc_call(comet.functions.numAssets().call()),
     )
 
     # Discover collateral asset list, then fetch userCollateral per asset in parallel
-    asset_infos = await asyncio.gather(*[comet.functions.getAssetInfo(i).call() for i in range(int(num_assets))])
+    asset_infos = await asyncio.gather(*[rpc_call(comet.functions.getAssetInfo(i).call()) for i in range(int(num_assets))])
 
     async def _collateral(asset_info: Any) -> CompoundCollateral | None:
         try:
             # asset_info is a tuple matching the struct; asset is at index 1
             asset_addr = Web3.to_checksum_address(asset_info[1])
-            result = await comet.functions.userCollateral(wallet, asset_addr).call()
+            result = await rpc_call(comet.functions.userCollateral(wallet, asset_addr).call())
             balance = int(result[0])
             if balance == 0:
                 return None
@@ -485,7 +487,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     nfpm_addr = Web3.to_checksum_address(_UNISWAP_V3_NFPM[chain_id])
     nfpm = w3.eth.contract(address=nfpm_addr, abi=_UNISWAP_V3_NFPM_ABI)
 
-    balance = int(await nfpm.functions.balanceOf(wallet).call())
+    balance = int(await rpc_call(nfpm.functions.balanceOf(wallet).call()))
     if balance == 0:
         return []
 
@@ -494,7 +496,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     # Enumerate token IDs in parallel
     async def _get_token_id(idx: int) -> int | None:
         try:
-            return int(await nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call())
+            return int(await rpc_call(nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call()))
         except Exception as exc:
             logger.debug("Uniswap tokenOfOwnerByIndex(%d) failed: %s", idx, exc)
             return None
@@ -505,7 +507,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
         if token_id is None:
             return None
         try:
-            result = await nfpm.functions.positions(token_id).call()
+            result = await rpc_call(nfpm.functions.positions(token_id).call())
             (
                 _nonce,
                 _operator,
@@ -555,58 +557,73 @@ async def get_defi_positions(
     wallet_address: str,
     chain_id: int = 1,
 ) -> dict[str, Any]:
-    """Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP."""
+    """Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP on Ethereum or Base.
+
+    Respects global RPC semaphore to prevent org-level saturation. Per-protocol timeouts (45s)
+    prevent hung tasks from blocking others. Per-RPC-call timeouts (15s) prevent individual
+    slow RPC requests from hanging.
+    """
     if chain_id not in _AAVE_V3_POOL:
         raise ValueError(f"Unsupported chain_id={chain_id}. Supported: 1 (Ethereum), 8453 (Base).")
 
-    wallet = Web3.to_checksum_address(wallet_address)
-    w3 = get_web3(chain_id)
+    async with acquire_rpc_semaphore():
+        wallet = Web3.to_checksum_address(wallet_address)
+        w3 = get_web3(chain_id)
 
-    # Launch all three protocol pipelines + block number in parallel
-    aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
-    compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
-    uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
-    block_task = asyncio.create_task(w3.eth.block_number)
+        # Launch all three protocol pipelines + block number in parallel
+        aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
+        compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
+        uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
+        block_task = asyncio.create_task(w3.eth.block_number)
 
-    errors: list[ProtocolErrorInfo] = []
-    aave_result: AavePosition | None = None
-    compound_result: list[CompoundMarketPosition] = []
-    uniswap_result: list[UniswapV3Position] = []
+        errors: list[ProtocolErrorInfo] = []
+        aave_result: AavePosition | None = None
+        compound_result: list[CompoundMarketPosition] = []
+        uniswap_result: list[UniswapV3Position] = []
 
-    try:
-        aave_result = await aave_task
-    except Exception as exc:
-        logger.warning("Aave v3 fetch failed: %s", exc)
-        errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
+        try:
+            aave_result = await asyncio.wait_for(aave_task, timeout=45)
+        except asyncio.TimeoutError:
+            logger.warning("Aave v3 fetch timed out after 45s")
+            errors.append(ProtocolErrorInfo(protocol="aave_v3", error="Request timeout (45s)"))
+        except Exception as exc:
+            logger.warning("Aave v3 fetch failed: %s", exc)
+            errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
 
-    try:
-        compound_result = await compound_task
-    except Exception as exc:
-        logger.warning("Compound v3 fetch failed: %s", exc)
-        errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
+        try:
+            compound_result = await asyncio.wait_for(compound_task, timeout=45)
+        except asyncio.TimeoutError:
+            logger.warning("Compound v3 fetch timed out after 45s")
+            errors.append(ProtocolErrorInfo(protocol="compound_v3", error="Request timeout (45s)"))
+        except Exception as exc:
+            logger.warning("Compound v3 fetch failed: %s", exc)
+            errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
 
-    try:
-        uniswap_result = await uniswap_task
-    except Exception as exc:
-        logger.warning("Uniswap v3 fetch failed: %s", exc)
-        errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
+        try:
+            uniswap_result = await asyncio.wait_for(uniswap_task, timeout=45)
+        except asyncio.TimeoutError:
+            logger.warning("Uniswap v3 fetch timed out after 45s")
+            errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error="Request timeout (45s)"))
+        except Exception as exc:
+            logger.warning("Uniswap v3 fetch failed: %s", exc)
+            errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
 
-    try:
-        block_number = int(await block_task)
-    except Exception as exc:
-        logger.warning("block_number fetch failed: %s", exc)
-        block_number = 0
+        try:
+            block_number = int(await block_task)
+        except Exception as exc:
+            logger.warning("block_number fetch failed: %s", exc)
+            block_number = 0
 
-    output = GetDefiPositionsOutput(
-        wallet_address=wallet,
-        chain_id=chain_id,
-        data_block_number=block_number,
-        aave_v3=aave_result,
-        compound_v3=compound_result,
-        uniswap_v3=uniswap_result,
-        errors=errors,
-    )
-    return output.model_dump()
+        output = GetDefiPositionsOutput(
+            wallet_address=wallet,
+            chain_id=chain_id,
+            data_block_number=block_number,
+            aave_v3=aave_result,
+            compound_v3=compound_result,
+            uniswap_v3=uniswap_result,
+            errors=errors,
+        )
+        return output.model_dump()
 
 
 # ─── Tool definition ─────────────────────────────────────────────────────────
