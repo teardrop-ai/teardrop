@@ -367,3 +367,145 @@ class TestUiGeneratorNode:
         # task_status should still be COMPLETED; ui_components absent or empty
         assert result["task_status"] == TaskStatus.COMPLETED
         assert result.get("ui_components", []) == []
+
+
+# ─── _call_signature ─────────────────────────────────────────────────────────
+
+
+class TestCallSignature:
+    def test_same_name_same_args_produces_same_sig(self):
+        from agent.nodes import _call_signature
+
+        a = _call_signature("get_wallet_portfolio", {"wallet_address": "0xabc", "chain_id": 1})
+        b = _call_signature("get_wallet_portfolio", {"wallet_address": "0xabc", "chain_id": 1})
+        assert a == b
+
+    def test_different_tool_name_produces_different_sig(self):
+        from agent.nodes import _call_signature
+
+        a = _call_signature("get_wallet_portfolio", {"chain_id": 1})
+        b = _call_signature("get_defi_positions", {"chain_id": 1})
+        assert a != b
+
+    def test_different_args_produces_different_sig(self):
+        from agent.nodes import _call_signature
+
+        a = _call_signature("get_defi_positions", {"chain_id": 1})
+        b = _call_signature("get_defi_positions", {"chain_id": 8453})
+        assert a != b
+
+    def test_arg_key_order_does_not_affect_sig(self):
+        from agent.nodes import _call_signature
+
+        a = _call_signature("tool", {"a": 1, "b": 2})
+        b = _call_signature("tool", {"b": 2, "a": 1})
+        assert a == b
+
+    def test_sig_has_expected_format(self):
+        from agent.nodes import _call_signature
+
+        sig = _call_signature("my_tool", {"x": 1})
+        assert sig.startswith("my_tool:")
+        assert len(sig) == len("my_tool:") + 16
+
+
+# ─── tool_executor_node — deduplication ──────────────────────────────────────
+
+
+class TestToolExecutorDedup:
+    async def test_duplicate_call_same_args_is_blocked(self, test_settings):
+        """Second identical call returns DUPLICATE_CALL_BLOCKED without invoking the tool."""
+        tool_call = {"id": "call-1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        from agent.nodes import _call_signature
+
+        prior_sig = _call_signature("get_datetime", {})
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {"_completed_calls": [prior_sig]}},
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        # Tool should NOT have been invoked
+        mock_tool.ainvoke.assert_not_called()
+        assert len(result["messages"]) == 1
+        assert "DUPLICATE_CALL_BLOCKED" in result["messages"][0].content
+
+    async def test_same_tool_different_args_not_blocked(self, test_settings):
+        """get_defi_positions(chain_id=1) and (chain_id=8453) are distinct — both must run."""
+        calls = [
+            {"id": "c1", "name": "get_defi_positions", "args": {"chain_id": 1}},
+            {"id": "c2", "name": "get_defi_positions", "args": {"chain_id": 8453}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"positions": []})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_defi_positions": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert mock_tool.ainvoke.call_count == 2
+        assert len(result["messages"]) == 2
+        assert not any("DUPLICATE_CALL_BLOCKED" in m.content for m in result["messages"])
+
+    async def test_dedup_sigs_persisted_in_state(self, test_settings):
+        """After execution, _completed_calls contains the new signature."""
+        tool_call = {"id": "c1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        from agent.nodes import _call_signature
+
+        expected_sig = _call_signature("get_datetime", {})
+        assert expected_sig in result["metadata"]["_usage"]["_completed_calls"]
+
+    async def test_completed_calls_absent_does_not_raise(self, test_settings):
+        """No _completed_calls key in state must not raise — initialises empty."""
+        tool_call = {"id": "c1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "now"})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert "_completed_calls" in result["metadata"]["_usage"]
+
+    async def test_duplicate_within_same_batch_blocked(self, test_settings):
+        """Two identical calls in the same AI message — only the first executes."""
+        identical_args = {"wallet_address": "0xabc", "chain_id": 1}
+        calls = [
+            {"id": "c1", "name": "get_wallet_portfolio", "args": identical_args},
+            {"id": "c2", "name": "get_wallet_portfolio", "args": identical_args},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"holdings": []})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_wallet_portfolio": mock_tool}):
+            result = await tool_executor_node(state)
+
+        # Only one real invocation
+        assert mock_tool.ainvoke.call_count == 1
+        # Two messages returned: one real + one DUPLICATE_CALL_BLOCKED
+        assert len(result["messages"]) == 2
+        blocked = [m for m in result["messages"] if "DUPLICATE_CALL_BLOCKED" in m.content]
+        assert len(blocked) == 1

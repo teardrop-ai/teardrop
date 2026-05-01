@@ -231,7 +231,9 @@ TOOL = ToolDefinition(
         "Get aggregated token holdings with USD values for a wallet address. "
         "Tracks 15+ major tokens on Ethereum "
         "(USDC, USDT, DAI, WETH, WBTC, LINK, UNI, AAVE, ARB, OP, LDO, stETH, CRV, SUSHI, MKR) "
-        "and 9+ on Base. Sorted by USD value. Returns up to 20 holdings."
+        "and 9+ on Base. Sorted by USD value. Returns up to 20 holdings. "
+        "Includes native ETH balance in the holdings list — calling get_eth_balance "
+        "separately after this is redundant."
     ),
     tags=["web3", "ethereum", "portfolio", "balance", "defi"],
     input_schema=GetWalletPortfolioInput,

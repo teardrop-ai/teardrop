@@ -53,7 +53,12 @@ async def get_eth_balance(address: str, chain_id: int = 1) -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="get_eth_balance",
     version="1.0.0",
-    description="Get the native ETH balance of an Ethereum or Base address.",
+    description=(
+        "Get the native ETH balance of an Ethereum or Base address. "
+        "NOTE: get_wallet_portfolio already includes the native ETH balance in its "
+        "holdings list — only call get_eth_balance when you need a standalone ETH "
+        "balance without a full portfolio scan."
+    ),
     tags=["web3", "ethereum", "balance"],
     input_schema=GetEthBalanceInput,
     output_schema=GetEthBalanceOutput,

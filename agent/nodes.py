@@ -88,15 +88,19 @@ Tool execution model:
   - For multi-part user queries, plan the FULL set of independent tool calls
     and emit them in ONE message. Do not serialize unrelated tasks across
     multiple turns when they have no data dependency on each other.
-  - Read inputs literally. If the user provides a 0x address, do NOT call
-    resolve_ens — pass the address directly. Only resolve when the user gives
-    ONLY an ENS name and the downstream tool requires a 0x address.
+  - Read inputs literally. If the user provides a 0x address anywhere in their
+    message, NEVER call resolve_ens — even if an ENS name is also mentioned.
+    Pass the 0x address directly to all tools. Only call resolve_ens when the
+    user supplies ONLY an ENS name and no 0x address is present.
   - On tool error or rate-limit, do NOT retry the same call. Proceed with the
     partial data you have and note the gap in the final answer.
   - Never use web_search to identify token contracts, addresses, or transaction
     hashes. If a tool returns an address with no symbol, report it as
     "unrecognized token (0x…)" and move on. Identifying random contracts via
     web search is unreliable and burns the iteration budget.
+  - On re-entry (when ToolMessages are already present in the conversation):
+    do NOT restate the original plan. Directly state what the new data shows
+    and what action you are taking next.
 
 Tool use economy:
   - Prefer structured tools over web_search when the question can be answered
@@ -104,6 +108,13 @@ Tool use economy:
   - Use the minimum number of tool calls needed to satisfy the request.
   - If a web search has already returned partial data, synthesise from it rather
     than issuing another search on the same topic.
+  - get_wallet_portfolio already returns the native ETH balance inside its
+    holdings list. If you have called or are about to call get_wallet_portfolio,
+    do NOT also call get_eth_balance — it is redundant.
+  - The executor blocks duplicate calls: if you issue a tool call with the same
+    name and arguments as a prior call this session, it will be suppressed and
+    you will receive a DUPLICATE_CALL_BLOCKED notice. Use the prior result
+    already present in the conversation instead of re-requesting it.
 """
 
 _UI_GENERATOR_SYSTEM = """\
@@ -303,6 +314,19 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _call_signature(tool_name: str, tool_args: dict) -> str:
+    """Stable hash for a (tool_name, args) pair — used for within-run dedup.
+
+    sort_keys ensures key-ordering differences never produce a false miss.
+    The 16-char prefix is sufficient for dedup at this scale and avoids
+    storing full SHA-256 digests in state metadata.
+    """
+    import hashlib
+
+    args_hash = hashlib.sha256(json.dumps(tool_args, sort_keys=True).encode()).hexdigest()[:16]
+    return f"{tool_name}:{args_hash}"
+
+
 async def _execute_single_tool(
     call: dict[str, Any], tools_by_name: dict, metadata: dict[str, Any] | None = None
 ) -> tuple[ToolMessage, str]:
@@ -380,9 +404,34 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
 
+    # ── Within-run deduplication ──────────────────────────────────────────
+    # Calls with identical (tool_name, args) are suppressed so a re-entering
+    # planner cannot re-fetch data that is already in the conversation.
+    completed_sigs: list[str] = list(usage.get("_completed_calls", []))
+    dedup_calls: list[dict] = []
+    skipped_messages: list[ToolMessage] = []
+    seen_this_batch: set[str] = set()
+    for call in last_msg.tool_calls:
+        sig = _call_signature(call["name"], call["args"])
+        if sig in completed_sigs or sig in seen_this_batch:
+            logger.debug("dedup: suppressing duplicate call '%s'", call["name"])
+            skipped_messages.append(
+                ToolMessage(
+                    content=(
+                        f"[DUPLICATE_CALL_BLOCKED] '{call['name']}' was already called "
+                        "with identical arguments this session. "
+                        "Use the prior result already present in the conversation."
+                    ),
+                    tool_call_id=call["id"],
+                )
+            )
+        else:
+            seen_this_batch.add(sig)
+            dedup_calls.append(call)
+
     try:
         results = await asyncio.wait_for(
-            asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in last_msg.tool_calls]),
+            asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in dedup_calls]),
             timeout=get_settings().agent_tool_executor_timeout_seconds,
         )
     except asyncio.TimeoutError:
@@ -392,9 +441,13 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             "task_status": TaskStatus.FAILED,
             "metadata": {**state.metadata, "_usage": usage},
         }
-    
-    tool_messages = [msg for msg, _ in results]
+
+    tool_messages = skipped_messages + [msg for msg, _ in results]
     tool_names_acc.extend(name for _, name in results)
+
+    # Record newly executed signatures so future iterations can dedup them.
+    completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls)
+    usage["_completed_calls"] = completed_sigs
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(last_msg.tool_calls)
     usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1

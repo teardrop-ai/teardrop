@@ -437,3 +437,109 @@ class TestGetModelContextSpecs:
         specs1["knowledge_cutoff"] = "mutated"
         specs2 = get_model_context_specs("openai", "gpt-99-does-not-exist")
         assert specs2["knowledge_cutoff"] == "Unknown"
+
+
+# ─── Behavioral rule injection ────────────────────────────────────────────────
+
+
+def _run_planner_and_capture_prompt(state) -> str:
+    """Helper: invoke planner_node with a no-op LLM and return the system prompt."""
+    import asyncio
+
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    async def _run():
+        with patch("agent.nodes.get_llm_for_request") as mock_factory:
+            with patch("agent.nodes.get_settings") as mock_settings:
+                with patch("agent.nodes._get_cached_tools", return_value=[]):
+                    mock_settings.return_value = _default_settings()
+                    mock_factory.return_value = mock_llm
+                    await planner_node(state)
+        return _captured_system_prompt(mock_llm.ainvoke)
+
+    return asyncio.get_event_loop().run_until_complete(_run())
+
+
+@pytest.mark.anyio
+async def test_system_prompt_contains_ens_0x_rule():
+    """Prompt must forbid resolve_ens when a 0x address is present."""
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "NEVER call resolve_ens" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_system_prompt_contains_eth_balance_cross_reference():
+    """Prompt must document that get_wallet_portfolio makes get_eth_balance redundant."""
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "get_wallet_portfolio" in system_prompt
+    assert "get_eth_balance" in system_prompt
+    assert "redundant" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_system_prompt_contains_reentry_instruction():
+    """Prompt must instruct the agent not to restate the plan on re-entry."""
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "re-entry" in system_prompt.lower() or "On re-entry" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_system_prompt_contains_dedup_executor_notice():
+    """Prompt must inform the agent that the executor suppresses duplicate calls."""
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "DUPLICATE_CALL_BLOCKED" in system_prompt
