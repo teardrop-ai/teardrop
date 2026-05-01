@@ -252,6 +252,14 @@ def _validate_production_config(s: "Settings") -> None:
     is_prod = s.app_env == "production"
     prefix = "config"
 
+    def _guard(condition: bool, msg: str) -> None:
+        """Raise in production, warn elsewhere, when *condition* indicates a misconfig."""
+        if not condition:
+            return
+        if is_prod:
+            raise RuntimeError(msg)
+        logger.warning("%s ⚠  %s", prefix, msg)
+
     # jwt_client_secret — Render auto-generates this; other deployments must set it.
     if not s.jwt_client_secret:
         if is_prod:
@@ -280,38 +288,29 @@ def _validate_production_config(s: "Settings") -> None:
     # Stripe — if STRIPE_SECRET_KEY is configured, STRIPE_WEBHOOK_SECRET must also be set.
     # Without it, every inbound webhook fails signature verification and Stripe stops
     # retrying after 3 days, silently dropping payment confirmations.
-    if s.stripe_secret_key and not s.stripe_webhook_secret:
-        msg = (
-            "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing. "
-            "Webhook signature verification will fail and Stripe stops retrying after 3 days. "
-            "Get the secret from Stripe Dashboard → Workbench → Webhooks → Click to reveal."
-        )
-        if is_prod:
-            raise RuntimeError(msg)
-        logger.warning("%s ⚠  %s", prefix, msg)
+    _guard(
+        bool(s.stripe_secret_key and not s.stripe_webhook_secret),
+        "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing. "
+        "Webhook signature verification will fail and Stripe stops retrying after 3 days. "
+        "Get the secret from Stripe Dashboard → Workbench → Webhooks → Click to reveal.",
+    )
 
     # Marketplace requires billing to be enabled — without billing, tool calls are
     # free but earnings are still recorded, creating uncollectable phantom entries.
-    if s.marketplace_enabled and not s.billing_enabled:
-        msg = (
-            "MARKETPLACE_ENABLED=true requires BILLING_ENABLED=true. "
-            "Without billing, callers are not charged but author earnings are recorded, "
-            "creating phantom ledger entries that can never be collected."
-        )
-        if is_prod:
-            raise RuntimeError(msg)
-        logger.warning("%s ⚠  %s", prefix, msg)
+    _guard(
+        bool(s.marketplace_enabled and not s.billing_enabled),
+        "MARKETPLACE_ENABLED=true requires BILLING_ENABLED=true. "
+        "Without billing, callers are not charged but author earnings are recorded, "
+        "creating phantom ledger entries that can never be collected.",
+    )
 
     # Marketplace requires the org tool encryption key for webhook auth decryption.
-    if s.marketplace_enabled and not s.org_tool_encryption_key:
-        msg = (
-            "MARKETPLACE_ENABLED=true requires ORG_TOOL_ENCRYPTION_KEY to be set. "
-            "Generate one with: "
-            'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
-        )
-        if is_prod:
-            raise RuntimeError(msg)
-        logger.warning("%s ⚠  %s", prefix, msg)
+    _guard(
+        bool(s.marketplace_enabled and not s.org_tool_encryption_key),
+        "MARKETPLACE_ENABLED=true requires ORG_TOOL_ENCRYPTION_KEY to be set. "
+        "Generate one with: "
+        'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"',
+    )
 
     # LLM pool key coverage — warn per missing provider, hard-fail if all are absent
     # in production.  The pool router tolerates single-tier gaps but cannot function
@@ -349,15 +348,12 @@ def _validate_production_config(s: "Settings") -> None:
 
     # CDP / Marketplace production guards ────────────────────────────────────
     # Guard 1: CDP credentials must be present when marketplace + agent wallets are both on.
-    if s.marketplace_enabled and s.agent_wallet_enabled and not s.cdp_configured:
-        msg = (
-            "MARKETPLACE_ENABLED=true + AGENT_WALLET_ENABLED=true requires all three "
-            "CDP credentials: CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET. "
-            "Withdrawals will fail for every request until these are set."
-        )
-        if is_prod:
-            raise RuntimeError(msg)
-        logger.warning("%s ⚠  %s", prefix, msg)
+    _guard(
+        bool(s.marketplace_enabled and s.agent_wallet_enabled and not s.cdp_configured),
+        "MARKETPLACE_ENABLED=true + AGENT_WALLET_ENABLED=true requires all three "
+        "CDP credentials: CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET. "
+        "Withdrawals will fail for every request until these are set.",
+    )
 
     # Guard 2: Testnet network must not be used in production.
     if is_prod and s.marketplace_enabled and s.cdp_network == "base-sepolia":
@@ -1181,6 +1177,197 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     )
 
 
+# ─── /agent/run helpers ───────────────────────────────────────────────────────
+
+
+class _RunContext:
+    """Pre-graph context gathered concurrently for ``/agent/run``.
+
+    Plain attribute container; no behavior. Holds the merged tool set
+    (org + MCP + marketplace), recalled memories, resolved LLM config, org
+    display name, prepaid credit balance, and the marketplace tool name map
+    needed downstream for earnings recording.
+    """
+
+    __slots__ = (
+        "graph",
+        "org_lc_tools",
+        "org_tools_by_name",
+        "mp_by_name",
+        "recalled",
+        "llm_config",
+        "org_name",
+        "credit_balance_usdc",
+    )
+
+    def __init__(
+        self,
+        *,
+        graph: Any,
+        org_lc_tools: list,
+        org_tools_by_name: dict[str, Any],
+        mp_by_name: dict[str, Any],
+        recalled: list[str],
+        llm_config: dict | None,
+        org_name: str,
+        credit_balance_usdc: int | None,
+    ) -> None:
+        self.graph = graph
+        self.org_lc_tools = org_lc_tools
+        self.org_tools_by_name = org_tools_by_name
+        self.mp_by_name = mp_by_name
+        self.recalled = recalled
+        self.llm_config = llm_config
+        self.org_name = org_name
+        self.credit_balance_usdc = credit_balance_usdc
+
+
+async def _prepare_run_context(
+    *,
+    org_id: str,
+    user_message: str,
+    billing: BillingResult,
+    mem_settings: Settings,
+) -> _RunContext:
+    """Gather pre-graph context concurrently for ``/agent/run``.
+
+    Each helper swallows its own exceptions and returns a safe fallback,
+    mirroring the per-call try/except behaviour previously inlined in
+    ``_stream()``. This cuts the gap between RUN_STARTED and the first LLM
+    token from the sum of all latencies down to the slowest single call.
+    """
+
+    async def _safe_mcp_tools() -> tuple[list, dict[str, Any]]:
+        try:
+            return await build_mcp_langchain_tools(org_id)
+        except Exception:
+            logger.debug("MCP tool discovery failed for org_id=%s", org_id, exc_info=True)
+            return [], {}
+
+    async def _safe_marketplace_tools() -> tuple[list, dict[str, Any]]:
+        try:
+            from marketplace import build_subscribed_marketplace_tools
+
+            return await build_subscribed_marketplace_tools(org_id)
+        except Exception:
+            logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
+            return [], {}
+
+    async def _safe_recall() -> list[str]:
+        if not mem_settings.memory_enabled:
+            return []
+        try:
+            entries = await recall_memories(org_id, user_message, mem_settings.memory_top_k)
+            return [e.content for e in entries]
+        except Exception:
+            logger.debug("Memory recall failed for org_id=%s", org_id, exc_info=True)
+            return []
+
+    async def _safe_llm_config() -> dict | None:
+        try:
+            return await resolve_llm_config(org_id)
+        except Exception:
+            logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
+            return None
+
+    async def _safe_org_name() -> str:
+        if not org_id:
+            return ""
+        try:
+            _org = await get_org_by_id(org_id)
+            return _org.name if _org is not None else ""
+        except Exception:
+            logger.debug("Org name fetch failed for org_id=%s", org_id, exc_info=True)
+            return ""
+
+    async def _safe_credit_balance() -> int | None:
+        if not (settings.billing_enabled and billing.verified and billing.billing_method == "credit"):
+            return None
+        try:
+            return await get_credit_balance(org_id)
+        except Exception:
+            logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
+            return None
+
+    (
+        graph,
+        (org_lc_tools, org_tools_by_name),
+        (mcp_tools, mcp_by_name),
+        (mp_tools, mp_by_name),
+        recalled,
+        llm_config,
+        org_name,
+        credit_balance_usdc,
+    ) = await asyncio.gather(
+        get_graph(),
+        build_org_langchain_tools(org_id),
+        _safe_mcp_tools(),
+        _safe_marketplace_tools(),
+        _safe_recall(),
+        _safe_llm_config(),
+        _safe_org_name(),
+        _safe_credit_balance(),
+    )
+
+    # Merge MCP + marketplace tools after gather (cheap dict/list ops).
+    if mcp_tools:
+        org_lc_tools = list(org_lc_tools) + mcp_tools
+        org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
+    if mp_tools:
+        org_lc_tools = list(org_lc_tools) + mp_tools
+        org_tools_by_name = {**org_tools_by_name, **mp_by_name}
+
+    return _RunContext(
+        graph=graph,
+        org_lc_tools=org_lc_tools,
+        org_tools_by_name=org_tools_by_name,
+        mp_by_name=mp_by_name,
+        recalled=recalled,
+        llm_config=llm_config,
+        org_name=org_name,
+        credit_balance_usdc=credit_balance_usdc,
+    )
+
+
+async def _record_marketplace_earnings(
+    *,
+    mp_by_name: dict[str, Any],
+    tool_names_used: list[str],
+    caller_org_id: str,
+) -> None:
+    """Fire off background tasks recording author earnings for marketplace tool calls.
+
+    Mirrors the inline logic previously embedded in ``_stream()``; failures are
+    logged at debug level and never propagate.
+    """
+    if not (mp_by_name and tool_names_used):
+        return
+    try:
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_cost if pricing else 0
+
+        for tname in tool_names_used:
+            if tname in mp_by_name and "/" in tname:
+                t_slug, t_bare = tname.split("/", 1)
+                t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
+                if t_row:
+                    author_price = t_row.get("base_price_usdc", 0)
+                    t_cost = overrides.get(tname, overrides.get(t_bare, author_price or default_cost))
+                    author_oid = t_row.get("org_id")
+                    if author_oid and t_cost > 0:
+                        asyncio.create_task(
+                            record_tool_call_earnings(
+                                author_org_id=author_oid,
+                                caller_org_id=caller_org_id,
+                                tool_name=t_bare,
+                                total_cost_usdc=t_cost,
+                            )
+                        )
+    except Exception:
+        logger.debug("Marketplace earnings recording failed", exc_info=True)
+
+
 async def _run_billing_gate(
     request: Request,
     payload: dict,
@@ -1717,92 +1904,22 @@ async def agent_run(
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
 
-        # ── Pre-graph init: run all 8 independent calls concurrently ──────
-        # Each helper swallows its own exceptions and returns a safe fallback,
-        # mirroring the pre-existing per-call try/except behaviour. This cuts
-        # the gap between RUN_STARTED and the first LLM token from the sum of
-        # all latencies down to the slowest single call.
+        # ── Pre-graph init: gather all independent calls concurrently ─────
         mem_settings = get_settings()
-
-        async def _safe_mcp_tools() -> tuple[list, dict[str, Any]]:
-            try:
-                return await build_mcp_langchain_tools(org_id)
-            except Exception:
-                logger.debug("MCP tool discovery failed for org_id=%s", org_id, exc_info=True)
-                return [], {}
-
-        async def _safe_marketplace_tools() -> tuple[list, dict[str, Any]]:
-            try:
-                from marketplace import build_subscribed_marketplace_tools
-
-                return await build_subscribed_marketplace_tools(org_id)
-            except Exception:
-                logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
-                return [], {}
-
-        async def _safe_recall() -> list[str]:
-            if not mem_settings.memory_enabled:
-                return []
-            try:
-                entries = await recall_memories(org_id, body.message, mem_settings.memory_top_k)
-                return [e.content for e in entries]
-            except Exception:
-                logger.debug("Memory recall failed for org_id=%s", org_id, exc_info=True)
-                return []
-
-        async def _safe_llm_config() -> dict | None:
-            try:
-                return await resolve_llm_config(org_id)
-            except Exception:
-                logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
-                return None
-
-        async def _safe_org_name() -> str:
-            if not org_id:
-                return ""
-            try:
-                _org = await get_org_by_id(org_id)
-                return _org.name if _org is not None else ""
-            except Exception:
-                logger.debug("Org name fetch failed for org_id=%s", org_id, exc_info=True)
-                return ""
-
-        async def _safe_credit_balance() -> int | None:
-            if not (settings.billing_enabled and billing.verified and billing.billing_method == "credit"):
-                return None
-            try:
-                return await get_credit_balance(org_id)
-            except Exception:
-                logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
-                return None
-
-        (
-            graph,
-            (org_lc_tools, org_tools_by_name),
-            (mcp_tools, mcp_by_name),
-            (mp_tools, mp_by_name),
-            recalled,
-            llm_config,
-            _org_name,
-            _credit_balance_usdc,
-        ) = await asyncio.gather(
-            get_graph(),
-            build_org_langchain_tools(org_id),
-            _safe_mcp_tools(),
-            _safe_marketplace_tools(),
-            _safe_recall(),
-            _safe_llm_config(),
-            _safe_org_name(),
-            _safe_credit_balance(),
+        ctx = await _prepare_run_context(
+            org_id=org_id,
+            user_message=body.message,
+            billing=billing,
+            mem_settings=mem_settings,
         )
-
-        # Merge MCP + marketplace tools after gather (cheap dict/list ops).
-        if mcp_tools:
-            org_lc_tools = list(org_lc_tools) + mcp_tools
-            org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
-        if mp_tools:
-            org_lc_tools = list(org_lc_tools) + mp_tools
-            org_tools_by_name = {**org_tools_by_name, **mp_by_name}
+        graph = ctx.graph
+        org_lc_tools = ctx.org_lc_tools
+        org_tools_by_name = ctx.org_tools_by_name
+        mp_by_name = ctx.mp_by_name
+        recalled = ctx.recalled
+        llm_config = ctx.llm_config
+        _org_name = ctx.org_name
+        _credit_balance_usdc = ctx.credit_balance_usdc
 
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
@@ -2150,32 +2267,11 @@ async def agent_run(
                     )
 
         # ── Record marketplace tool earnings for subscribed tools ────────
-        try:
-            tool_names_used = usage_data.get("tool_names", [])
-            if mp_by_name and tool_names_used:
-                overrides = await get_tool_pricing_overrides()
-                pricing = await get_current_pricing()
-                default_cost = pricing.tool_call_cost if pricing else 0
-
-                for tname in tool_names_used:
-                    if tname in mp_by_name and "/" in tname:
-                        t_slug, t_bare = tname.split("/", 1)
-                        t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
-                        if t_row:
-                            author_price = t_row.get("base_price_usdc", 0)
-                            t_cost = overrides.get(tname, overrides.get(t_bare, author_price or default_cost))
-                            author_oid = t_row.get("org_id")
-                            if author_oid and t_cost > 0:
-                                asyncio.create_task(
-                                    record_tool_call_earnings(
-                                        author_org_id=author_oid,
-                                        caller_org_id=org_id,
-                                        tool_name=t_bare,
-                                        total_cost_usdc=t_cost,
-                                    )
-                                )
-        except Exception:
-            logger.debug("Marketplace earnings recording failed", exc_info=True)
+        await _record_marketplace_earnings(
+            mp_by_name=mp_by_name,
+            tool_names_used=usage_data.get("tool_names", []),
+            caller_org_id=org_id,
+        )
 
         yield _sse_event(
             _EV_USAGE_SUMMARY,
@@ -2688,9 +2784,9 @@ async def billing_invoices(
     cursor: str | None = None,
 ) -> JSONResponse:
     """Return per-run invoice records for the authenticated user (cursor paginated)."""
-    from datetime import datetime
+    from pagination import parse_cursor
 
-    cursor_dt = datetime.fromisoformat(cursor) if cursor else None
+    cursor_dt = parse_cursor(cursor)
     invoices = await get_invoices(payload["sub"], min(limit, 200), cursor_dt)
     serialized = [{**row, "created_at": row["created_at"].isoformat()} for row in invoices]
     next_cursor = serialized[-1]["created_at"] if serialized else None
@@ -2803,7 +2899,7 @@ async def billing_credit_history(
     cursor: str | None = None,
 ) -> JSONResponse:
     """Return credit ledger entries for the authenticated org (cursor paginated)."""
-    from datetime import datetime
+    from pagination import parse_cursor
 
     org_id = _require_org_id(payload, "No org_id in token — credit history requires an org-scoped credential.")
     if operation is not None and operation not in ("debit", "topup"):
@@ -2811,7 +2907,7 @@ async def billing_credit_history(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="operation must be 'debit' or 'topup'",
         )
-    cursor_dt = datetime.fromisoformat(cursor) if cursor else None
+    cursor_dt = parse_cursor(cursor)
     entries = await get_credit_history(org_id, operation, min(limit, 200), cursor_dt)
     serialized = [{**row, "created_at": row["created_at"].isoformat()} for row in entries]
     next_cursor = serialized[-1]["created_at"] if serialized else None
@@ -3610,9 +3706,9 @@ async def list_memories_endpoint(
     """List memories for the authenticated org (newest first, cursor-paginated)."""
     org_id = _require_org_id(payload, "No org_id in token — memory requires an org-scoped credential.")
 
-    from datetime import datetime as _dt
+    from pagination import parse_cursor
 
-    cursor_dt = _dt.fromisoformat(cursor) if cursor else None
+    cursor_dt = parse_cursor(cursor)
     entries = await list_memories(org_id, limit, cursor_dt)
     serialized = [
         {
@@ -4559,17 +4655,10 @@ async def get_marketplace_earnings(
 
     Optionally filter by ``tool_name`` to see earnings for a specific tool.
     """
-    org_id = _require_org_id(payload)
+    from pagination import parse_cursor
 
-    cursor_dt: datetime | None = None
-    if cursor is not None:
-        try:
-            cursor_dt = datetime.fromisoformat(cursor)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid cursor format — must be an ISO 8601 timestamp.",
-            )
+    org_id = _require_org_id(payload)
+    cursor_dt = parse_cursor(cursor)
 
     earnings, next_cursor = await get_author_earnings_history(org_id, cursor=cursor_dt, limit=limit, tool_name=tool_name)
     return JSONResponse(
@@ -4630,18 +4719,10 @@ async def get_marketplace_withdrawals(
 ) -> JSONResponse:
     """Get paginated withdrawal history (all statuses) for the authenticated org."""
     from marketplace import list_org_withdrawals
+    from pagination import parse_cursor
 
     org_id = _require_org_id(payload)
-
-    cursor_dt: datetime | None = None
-    if cursor is not None:
-        try:
-            cursor_dt = datetime.fromisoformat(cursor)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid cursor format — must be an ISO 8601 timestamp.",
-            )
+    cursor_dt = parse_cursor(cursor)
 
     withdrawals, next_cursor = await list_org_withdrawals(org_id, limit=limit, cursor=cursor_dt)
     return JSONResponse(
