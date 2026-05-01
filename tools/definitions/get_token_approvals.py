@@ -230,31 +230,31 @@ async def get_token_approvals(
             async with acquire_rpc_semaphore():
                 try:
                     contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
-                raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())
-                if raw == 0:
+                    raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())
+                    if raw == 0:
+                        return None
+                    is_unlimited = raw >= _UNLIMITED_THRESHOLD
+                    spender_name = trusted.get(spender_addr)
+                    return {
+                        "token_symbol": symbol_lookup.get(token_addr),
+                        "token_address": token_addr,
+                        "spender_name": spender_name,
+                        "spender_address": spender_addr,
+                        "allowance_raw": str(raw),
+                        "allowance_formatted": "unlimited" if is_unlimited else str(raw),
+                        "is_unlimited": is_unlimited,
+                        "is_permit2": spender_addr == _PERMIT2_ADDRESS,
+                        "risk_level": _risk_level(is_unlimited, spender_name),
+                    }
+                except Exception as exc:
+                    logger.debug(
+                        "allowance(%s, owner=%s, spender=%s): %s",
+                        token_addr,
+                        wallet,
+                        spender_addr,
+                        exc,
+                    )
                     return None
-                is_unlimited = raw >= _UNLIMITED_THRESHOLD
-                spender_name = trusted.get(spender_addr)
-                return {
-                    "token_symbol": symbol_lookup.get(token_addr),
-                    "token_address": token_addr,
-                    "spender_name": spender_name,
-                    "spender_address": spender_addr,
-                    "allowance_raw": str(raw),
-                    "allowance_formatted": "unlimited" if is_unlimited else str(raw),
-                    "is_unlimited": is_unlimited,
-                    "is_permit2": spender_addr == _PERMIT2_ADDRESS,
-                    "risk_level": _risk_level(is_unlimited, spender_name),
-                }
-            except Exception as exc:
-                logger.debug(
-                    "allowance(%s, owner=%s, spender=%s): %s",
-                    token_addr,
-                    wallet,
-                    spender_addr,
-                    exc,
-                )
-                return None
 
     pairs = [(t, s) for t in token_list for s in spender_list]
     results: list[dict[str, Any] | None] = await asyncio.gather(*[_check(t, s) for t, s in pairs])
