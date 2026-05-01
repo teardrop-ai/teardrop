@@ -2053,6 +2053,29 @@ async def agent_run(
                         )
 
                 # --- Node outputs (state snapshots) ---
+                elif event_name == "on_chain_end" and node_name in ("planner", "tool_executor"):
+                    output = event_data.get("output", {})
+                    # P1: Explicitly signal timeouts or rate-limits to the client.
+                    # This prevents the client from assuming the run finished normally
+                    # when the LLM timed out or failed.
+                    _err_type = output.get("error_type")
+                    if _err_type in ("timeout", "rate_limit"):
+                        _msg = "The model is currently unresponsive. Please try your request again in a moment."
+                        if _err_type == "timeout":
+                            _msg = f"The model timed out after {settings.agent_llm_timeout_seconds}s. Your request may be too complex, or the provider is overloaded."
+
+                        yield _sse_event(
+                            _EV_CUSTOM,
+                            {
+                                "name": "AGENT_WARNING",
+                                "value": {
+                                    "type": _err_type,
+                                    "message": _msg,
+                                },
+                            },
+                        )
+
+                # --- Node outputs (state snapshots) ---
                 elif event_name == "on_chain_end" and node_name == "ui_generator":
                     output = event_data.get("output", {})
                     ui_components = output.get("ui_components", [])

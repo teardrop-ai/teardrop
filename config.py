@@ -86,11 +86,11 @@ class Settings(BaseSettings):
         ),
     )
     agent_rpc_semaphore_limit: int = Field(
-        default=50,
+        default=25,
         description=(
             "Global limit on concurrent RPC calls across all agent runs. "
             "Prevents organizational RPC saturation. Typical public provider limit: 5–10 concurrent calls; "
-            "we use 50 as org-level burst buffer."
+            "we reduced from 50 to 25 to mitigate 429 rate-limiting on shared RPC nodes."
         ),
     )
 

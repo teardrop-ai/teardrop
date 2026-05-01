@@ -217,13 +217,19 @@ async def get_token_approvals(
     w3 = get_web3(chain_id)
     trusted = _TRUSTED_SPENDERS.get(chain_id, {})
 
+    # P2: Limit local concurrency to avoid saturation during massive fanout.
+    # While acquire_rpc_semaphore() handles global limits, this prevents one
+    # tool instance from queueing up hundreds of tasks and blocking others.
+    _local_sem = asyncio.Semaphore(10)
+
     # Symbol lookup from tracked list (best-effort; None for unknown tokens).
     symbol_lookup: dict[str, str] = {t["address"]: t["symbol"] for t in _TRACKED_TOKENS.get(chain_id, [])}
 
     async def _check(token_addr: str, spender_addr: str) -> dict[str, Any] | None:
-        async with acquire_rpc_semaphore():
-            try:
-                contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
+        async with _local_sem:
+            async with acquire_rpc_semaphore():
+                try:
+                    contract = w3.eth.contract(address=token_addr, abi=_ALLOWANCE_ABI)
                 raw: int = await rpc_call(contract.functions.allowance(wallet, spender_addr).call())
                 if raw == 0:
                     return None

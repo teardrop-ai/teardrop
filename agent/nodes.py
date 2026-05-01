@@ -317,6 +317,7 @@ async def _invoke_planner_llm(
             "messages": [AIMessage(content="The AI model timed out. Please try again.")],
             "task_status": TaskStatus.FAILED,
             "error": "LLM timeout",
+            "error_type": "timeout",
         }
     except Exception as exc:
         elapsed = int((time.monotonic() - start_mono) * 1000)
@@ -354,11 +355,27 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     org_tools = state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
     llm_config = state.metadata.get("_llm_config")
-    llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
 
     _cfg = llm_config or {}
     _provider = _cfg.get("provider", settings.agent_provider)
     _model = _cfg.get("model", settings.agent_model)
+
+    # P0 FIX: Check if the primary provider is cooled down. If so, and we aren't
+    # using a custom BYOK config (where we must respect the user's choice),
+    # skip to fallback.
+    if not llm_config and is_provider_cooled_down(_provider, _model):
+        logger.warning("Primary provider %s:%s is in cooldown; attempting fallback", _provider, _model)
+        fallback_llm = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
+        if fallback_llm:
+            llm = fallback_llm.bind_tools(all_tools)
+            # Update local track variables for _invoke_planner_llm
+            _provider = fallback_llm.lc_kwargs.get("provider_name", _provider)  # type: ignore
+            _model = fallback_llm.model_name if hasattr(fallback_llm, "model_name") else _model
+        else:
+            llm = get_llm_for_request(llm_config).bind_tools(all_tools)
+    else:
+        llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
+
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
 
@@ -380,7 +397,17 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         provider=_provider,
         model=_model,
     )
+
+    # Track if we already recorded usage for 'result' to avoid double-counting if we retry
+    usage_already_recorded = False
+
     if isinstance(result, dict) and result.get("error_type") == "rate_limit" and not llm_config:
+        # Record usage for the failed turn BEFORE retrying, so we don't lose the tokens
+        # if the failure was partial or provided usage metadata.
+        if "messages" in result and isinstance(result["messages"][0], AIMessage):
+            state.metadata["_usage"] = _accumulate_usage(state, result["messages"][0])
+            usage_already_recorded = True
+
         fallback_llm = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
         if fallback_llm is not None:
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
@@ -394,7 +421,10 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         return result
     response: AIMessage = result
 
-    usage = _accumulate_usage(state, response)
+    if not usage_already_recorded:
+        usage = _accumulate_usage(state, response)
+    else:
+        usage = state.metadata.get("_usage", {})
 
     return {
         "messages": [response],
