@@ -162,14 +162,14 @@ async def get_wallet_portfolio(
     prices = await _fetch_prices(cg_ids)
     fetch_errors: list[str] = []
 
-    # Fetch native ETH balance (protected by global RPC semaphore)
+    # Fetch native ETH balance (protected by global RPC semaphore and retry wrapper)
     async with acquire_rpc_semaphore():
         try:
-            eth_balance_wei = await w3.eth.get_balance(wallet)
+            eth_balance_wei = await rpc_call(lambda: w3.eth.get_balance(wallet))
         except Exception as exc:
             logger.warning("ETH balance fetch failed for %s: %s", wallet, exc)
             eth_balance_wei = None
-            fetch_errors.append("ETH balance unavailable (RPC error)")
+            fetch_errors.append("ETH balance unavailable (RPC/Rate-limit error)")
     eth_balance = float(Web3.from_wei(eth_balance_wei, "ether")) if eth_balance_wei is not None else 0.0
     eth_price = prices.get("ethereum", 0.0)
 

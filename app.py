@@ -2062,7 +2062,10 @@ async def agent_run(
                     if _err_type in ("timeout", "rate_limit"):
                         _msg = "The model is currently unresponsive. Please try your request again in a moment."
                         if _err_type == "timeout":
-                            _msg = f"The model timed out after {settings.agent_llm_timeout_seconds}s. Your request may be too complex, or the provider is overloaded."
+                            _msg = (
+                                f"The model timed out after {settings.agent_llm_timeout_seconds}s. "
+                                "Your request may be too complex, or the provider is overloaded."
+                            )
 
                         yield _sse_event(
                             _EV_CUSTOM,
@@ -2151,7 +2154,8 @@ async def agent_run(
             logger.debug("Could not calculate run cost", exc_info=True)
 
         logger.info(
-            "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc=%.6f",
+            "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d "
+            "tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc=%.6f",
             run_id,
             org_id,
             duration_ms,
@@ -2652,7 +2656,6 @@ async def usage_me(
     end: str | None = None,
 ) -> JSONResponse:
     """Return aggregated usage for the authenticated user."""
-    from datetime import datetime
 
     start_dt = datetime.fromisoformat(start) if start else None
     end_dt = datetime.fromisoformat(end) if end else None
@@ -2668,7 +2671,6 @@ async def admin_usage_user(
     end: str | None = None,
 ) -> JSONResponse:
     """Return aggregated usage for a specific user (admin only)."""
-    from datetime import datetime
 
     start_dt = datetime.fromisoformat(start) if start else None
     end_dt = datetime.fromisoformat(end) if end else None
@@ -2684,7 +2686,6 @@ async def admin_usage_org(
     end: str | None = None,
 ) -> JSONResponse:
     """Return aggregated usage for an entire org (admin only)."""
-    from datetime import datetime
 
     start_dt = datetime.fromisoformat(start) if start else None
     end_dt = datetime.fromisoformat(end) if end else None
@@ -2788,7 +2789,6 @@ async def admin_billing_revenue(
     end: str | None = None,
 ) -> JSONResponse:
     """Aggregate settled revenue by period (admin only)."""
-    from datetime import datetime
 
     start_dt = datetime.fromisoformat(start) if start else None
     end_dt = datetime.fromisoformat(end) if end else None

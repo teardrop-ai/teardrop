@@ -128,17 +128,12 @@ class TestExtractChainBreakdown:
         assert entries[1].chain == "Ethereum"
 
     def test_caps_at_10_entries(self):
-        chains = {
-            f"Chain{i}": {"tvl": [{"date": 1700000000, "totalLiquidityUSD": float(i * 100)}]}
-            for i in range(1, 20)
-        }
+        chains = {f"Chain{i}": {"tvl": [{"date": 1700000000, "totalLiquidityUSD": float(i * 100)}]} for i in range(1, 20)}
         entries = _extract_chain_breakdown({"chainTvls": chains})
         assert len(entries) == 10
 
     def test_zero_tvl_chains_excluded(self):
-        detail = self._make_detail(
-            {"Ethereum": {"tvl": [{"date": 1700000000, "totalLiquidityUSD": 0}]}}
-        )
+        detail = self._make_detail({"Ethereum": {"tvl": [{"date": 1700000000, "totalLiquidityUSD": 0}]}})
         entries = _extract_chain_breakdown(detail)
         assert entries == []
 
@@ -258,17 +253,10 @@ class TestGetProtocolTvl:
         base_ts = 1_704_067_200
         payload = {
             "chainTvls": {
-                "Ethereum": {
-                    "tvl": [{"date": base_ts, "totalLiquidityUSD": 5_000_000_000}]
-                },
-                "Base": {
-                    "tvl": [{"date": base_ts, "totalLiquidityUSD": 1_000_000_000}]
-                },
+                "Ethereum": {"tvl": [{"date": base_ts, "totalLiquidityUSD": 5_000_000_000}]},
+                "Base": {"tvl": [{"date": base_ts, "totalLiquidityUSD": 1_000_000_000}]},
             },
-            "tvl": [
-                {"date": base_ts + i * 86400, "totalLiquidityUSD": float(6_000_000_000 + i * 1_000_000)}
-                for i in range(35)
-            ],
+            "tvl": [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(6_000_000_000 + i * 1_000_000)} for i in range(35)],
         }
         session = _mock_session_json(200, payload)
         with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
@@ -325,10 +313,7 @@ class TestGetProtocolTvl:
         # 60 daily entries; TVL grows linearly by $10k/day from $1M.
         # current (day 59) = $1,590,000; 30 days ago (day 29) = $1,290,000 → ~23.3% 30d change.
         # Using the 7-entry trimmed series would give only ~4% (same window as 7d).
-        tvl_entries = [
-            {"date": base_ts + i * 86400, "totalLiquidityUSD": float(1_000_000 + i * 10_000)}
-            for i in range(60)
-        ]
+        tvl_entries = [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(1_000_000 + i * 10_000)} for i in range(60)]
         payload = {"chainTvls": {}, "tvl": tvl_entries}
         session = _mock_session_json(200, payload)
         with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
@@ -556,9 +541,7 @@ class TestGetYieldRates:
         assert result["total_matching"] == 4
 
     async def test_filters_applied_echoed_in_output(self, test_settings, monkeypatch):
-        result = await self._call_with_pools(
-            monkeypatch, _SAMPLE_POOLS, protocols=["aave-v3"], chain="Ethereum"
-        )
+        result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, protocols=["aave-v3"], chain="Ethereum")
         assert result["filters_applied"]["protocols"] == ["aave-v3"]
         assert result["filters_applied"]["chain"] == "Ethereum"
 
@@ -602,11 +585,13 @@ class TestGetYieldRates:
         with patch("tools.definitions.get_yield_rates.aiohttp.ClientSession", return_value=session):
             result = await get_yield_rates()
         assert result["pools"] == []
+
     async def test_empty_protocols_list_returns_all_protocols(self, test_settings, monkeypatch):
         """protocols=[] must behave identically to protocols=None — no protocol filter applied."""
         result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, protocols=[])
         # 4 of the 5 sample pools are above the default 1M TVL threshold
         assert result["total_matching"] == 4
+
 
 # ─── Tool registration sanity check ───────────────────────────────────────────
 

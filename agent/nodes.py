@@ -25,7 +25,15 @@ from tools import registry
 
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT_MARKERS = ("429", "rate limit", "too many requests", "exceeded", "throttl")
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate-limited",
+    "too many requests",
+    "exceeded",
+    "throttl",
+    "quanta",
+)
 
 # ─── Tool caches ──────────────────────────────────────────────────────────────
 
@@ -87,23 +95,22 @@ Formatting rules:
     must be expressed in a ```a2ui block so the client can render it properly.
 
 Tool execution model:
-  - All tool calls in a single assistant message run IN PARALLEL.
-  - For multi-part user queries, plan the FULL set of independent tool calls
-    and emit them in ONE message. Do not serialize unrelated tasks across
-    multiple turns when they have no data dependency on each other.
-  - Read inputs literally. If the user provides a 0x address anywhere in their
-    message, NEVER call resolve_ens — even if an ENS name is also mentioned.
-    Pass the 0x address directly to all tools. Only call resolve_ens when the
-    user supplies ONLY an ENS name and no 0x address is present.
-  - On tool error or rate-limit, do NOT retry the same call. Proceed with the
-    partial data you have and note the gap in the final answer.
-  - Never use web_search to identify token contracts, addresses, or transaction
-    hashes. If a tool returns an address with no symbol, report it as
-    "unrecognized token (0x…)" and move on. Identifying random contracts via
-    web search is unreliable and burns the iteration budget.
-  - On re-entry (when ToolMessages are already present in the conversation):
-    do NOT restate the original plan. Directly state what the new data shows
-    and what action you are taking next.
+  - All tool calls in a single assistant message run IN PARALLEL. High-concurrency
+    batching is encouraged.
+  - Multi-part queries: Identify ALL required data points (balances, prices,
+    allowances, APRs) upfront. Group all independent tool calls into a single
+    message. Do NOT serialize calls that have no data dependencies.
+  - Turn reduction: Aim to resolve the user's intent in 1-2 turns. If you have
+    enough data to answer or generate the UI, do so immediately. Do not ask
+    clarifying questions for missing optional data; provide the best possible
+    answer with what is available.
+  - Address handling: If a 0x address is provided, pass it directly to tools.
+    NEVER call resolve_ens if a 0x address is already present. Only resolve
+    names if NO address is provided.
+  - Resilience: Teardrop handles lower-level RPC retries. If a tool fails with
+    a rate-limit error after retries, synthesize an answer with remaining data.
+  - Synthesize: On re-entry with tool results, do not repeat yourself. Directly
+    analyze the results and conclude the task.
 
 Tool use economy:
   - Prefer structured tools over web_search when the question can be answered
@@ -307,6 +314,7 @@ async def _invoke_planner_llm(
     failure (so callers can return it directly).
     """
     import time
+
     start_mono = time.monotonic()
     try:
         response = await asyncio.wait_for(  # type: ignore[return-value]
@@ -318,7 +326,13 @@ async def _invoke_planner_llm(
         return response
     except asyncio.TimeoutError:
         elapsed = int((time.monotonic() - start_mono) * 1000)
-        logger.error("planner_node: LLM call timed out after %dms (timeout=%ss, provider=%s, model=%s)", elapsed, timeout_seconds, provider, model)
+        logger.error(
+            "planner_node: LLM call timed out after %dms (timeout=%ss, provider=%s, model=%s)",
+            elapsed,
+            timeout_seconds,
+            provider,
+            model,
+        )
         return {
             "messages": [AIMessage(content="The AI model timed out. Please try again.")],
             "task_status": TaskStatus.FAILED,
@@ -463,6 +477,7 @@ async def _execute_single_tool(
     and allowlist enforcement can operate.
     """
     import time
+
     tool_name: str = call["name"]
     tool_args: dict[str, Any] = call["args"]
     call_id: str = call["id"]
@@ -575,6 +590,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
 
     try:
         import time
+
         batch_start_mono = time.monotonic()
         results = await asyncio.wait_for(
             asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in dedup_calls]),
@@ -601,11 +617,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     tool_names_acc.extend(r["name"] for r in results)
 
     # Record newly executed signatures so future iterations can dedup them.
-    completed_sigs.extend(
-        _call_signature(c["name"], c["args"])
-        for c in dedup_calls
-        if c["name"] in platform_tool_names
-    )
+    completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls if c["name"] in platform_tool_names)
     usage["_completed_calls"] = completed_sigs
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)

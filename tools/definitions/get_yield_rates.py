@@ -39,16 +39,12 @@ class GetYieldRatesInput(BaseModel):
     protocols: list[str] | None = Field(
         default=None,
         description=(
-            "Filter by DeFiLlama project slugs (e.g. ['aave-v3', 'compound-v3']). "
-            "None or empty list = include all protocols."
+            "Filter by DeFiLlama project slugs (e.g. ['aave-v3', 'compound-v3']). None or empty list = include all protocols."
         ),
     )
     chain: str | None = Field(
         default=None,
-        description=(
-            "Filter by chain name (e.g. 'Ethereum', 'Base', 'Arbitrum'). "
-            "Case-insensitive. None = all chains."
-        ),
+        description=("Filter by chain name (e.g. 'Ethereum', 'Base', 'Arbitrum'). Case-insensitive. None = all chains."),
     )
     min_tvl_usd: float = Field(
         default=1_000_000.0,
@@ -91,8 +87,7 @@ class GetYieldRatesInput(BaseModel):
 
         if not re.match(_CHAIN_PATTERN, v):
             raise ValueError(
-                f"Invalid chain name '{v}': must contain only letters, digits, hyphens, "
-                "or spaces; max 32 characters."
+                f"Invalid chain name '{v}': must contain only letters, digits, hyphens, or spaces; max 32 characters."
             )
         return v
 
@@ -224,9 +219,7 @@ async def get_yield_rates(
         ).model_dump()
 
     # Apply filters.
-    protocol_set: set[str] | None = (
-        {p.lower() for p in protocols} if protocols else None
-    )
+    protocol_set: set[str] | None = {p.lower() for p in protocols} if protocols else None
     chain_lower: str | None = chain.lower() if chain else None
 
     filtered: list[dict[str, Any]] = []

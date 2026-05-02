@@ -554,19 +554,19 @@ class TestOutputSchema:
         """Test that get_defi_positions handles slow protocol branches with 45s timeouts."""
         # protocol_task timeouts are 45s in code.
         # We'll mock one task to be slow and verify it returns a ProtocolErrorInfo instead of crashing.
-        
+
         async def slow_fetch(*args, **kwargs):
-            await asyncio.sleep(0.5) # Simulated delay
+            await asyncio.sleep(0.5)  # Simulated delay
             return MagicMock()
 
         mock_w3 = _build_mock_w3()
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
-        
+
         # Patch asyncio.wait_for to trigger TimeoutError quickly for Aave
         original_wait_for = asyncio.wait_for
-        
+
         async def mock_wait_for(fut, timeout):
-            if timeout == 45: # This identifies our protocol-level timeouts
+            if timeout == 45:  # This identifies our protocol-level timeouts
                 # For this test, Force Aave to time out
                 # We can't easily distinguish which task is which here without more complex mocking,
                 # but we can mock the specific fetcher function instead.
@@ -589,12 +589,11 @@ class TestOutputSchema:
         """Test that get_defi_positions handles individual RPC call timeouts."""
         mock_w3 = _build_mock_w3()
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
-        
+
         # Mock rpc_call to raise TimeoutError
         with patch("tools.definitions.get_defi_positions.rpc_call", side_effect=asyncio.TimeoutError()):
             result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
-            
+
         # Individual RPC timeouts should bubble up to protocol error handling
         assert len(result["errors"]) >= 1
         assert any("timeout" in e["error"].lower() for e in result["errors"])
-

@@ -20,7 +20,6 @@ from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field
 from web3 import Web3
 
-from config import get_settings
 from tools.definitions._multicall3 import multicall3_batch
 from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
@@ -80,8 +79,7 @@ _GET_USER_RESERVE_DATA_SELECTOR: bytes = bytes(Web3.keccak(text="getUserReserveD
 
 # ─── Token symbol lookup (derived from tracked reserves) ─────────────────────
 _KNOWN_SYMBOLS: dict[int, dict[str, str]] = {
-    chain_id: {r["address"]: r["symbol"] for r in reserves}
-    for chain_id, reserves in _AAVE_V3_TRACKED_RESERVES.items()
+    chain_id: {r["address"]: r["symbol"] for r in reserves} for chain_id, reserves in _AAVE_V3_TRACKED_RESERVES.items()
 }
 
 # Compound v3 (Comet) per-market metadata. ``collaterals`` is empty —
@@ -372,10 +370,9 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     data_provider_addr = Web3.to_checksum_address(_AAVE_V3_DATA_PROVIDER[chain_id])
 
     pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
-    data_provider = w3.eth.contract(address=data_provider_addr, abi=_AAVE_V3_DATA_PROVIDER_ABI)
 
     # Aggregate account snapshot
-    account_data = await rpc_call(pool.functions.getUserAccountData(wallet).call())
+    account_data = await rpc_call(lambda: pool.functions.getUserAccountData(wallet).call())
     (total_collateral_base, total_debt_base, available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
@@ -454,20 +451,22 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
 
     # Parallel: supply, borrow, is_liquidatable, numAssets
     supplied, borrowed, is_liq, num_assets = await asyncio.gather(
-        rpc_call(comet.functions.balanceOf(wallet).call()),
-        rpc_call(comet.functions.borrowBalanceOf(wallet).call()),
-        rpc_call(comet.functions.isLiquidatable(wallet).call()),
-        rpc_call(comet.functions.numAssets().call()),
+        rpc_call(lambda: comet.functions.balanceOf(wallet).call()),
+        rpc_call(lambda: comet.functions.borrowBalanceOf(wallet).call()),
+        rpc_call(lambda: comet.functions.isLiquidatable(wallet).call()),
+        rpc_call(lambda: comet.functions.numAssets().call()),
     )
 
     # Discover collateral asset list, then fetch userCollateral per asset in parallel
-    asset_infos = await asyncio.gather(*[rpc_call(comet.functions.getAssetInfo(i).call()) for i in range(int(num_assets))])
+    asset_infos = await asyncio.gather(
+        *[rpc_call(lambda i=i: comet.functions.getAssetInfo(i).call()) for i in range(int(num_assets))]
+    )
 
     async def _collateral(asset_info: Any) -> CompoundCollateral | None:
         try:
             # asset_info is a tuple matching the struct; asset is at index 1
             asset_addr = Web3.to_checksum_address(asset_info[1])
-            result = await rpc_call(comet.functions.userCollateral(wallet, asset_addr).call())
+            result = await rpc_call(lambda: comet.functions.userCollateral(wallet, asset_addr).call())
             balance = int(result[0])
             if balance == 0:
                 return None
@@ -519,7 +518,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     nfpm_addr = Web3.to_checksum_address(_UNISWAP_V3_NFPM[chain_id])
     nfpm = w3.eth.contract(address=nfpm_addr, abi=_UNISWAP_V3_NFPM_ABI)
 
-    balance = int(await rpc_call(nfpm.functions.balanceOf(wallet).call()))
+    balance = int(await rpc_call(lambda: nfpm.functions.balanceOf(wallet).call()))
     if balance == 0:
         return []
 
@@ -528,7 +527,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     # Enumerate token IDs in parallel
     async def _get_token_id(idx: int) -> int | None:
         try:
-            return int(await rpc_call(nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call()))
+            return int(await rpc_call(lambda: nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call()))
         except Exception as exc:
             logger.debug("Uniswap tokenOfOwnerByIndex(%d) failed: %s", idx, exc)
             return None
@@ -539,7 +538,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
         if token_id is None:
             return None
         try:
-            result = await rpc_call(nfpm.functions.positions(token_id).call())
+            result = await rpc_call(lambda: nfpm.functions.positions(token_id).call())
             (
                 _nonce,
                 _operator,

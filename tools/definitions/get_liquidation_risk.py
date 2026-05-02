@@ -197,7 +197,7 @@ async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     pool_addr = Web3.to_checksum_address(_AAVE_V3_POOL[chain_id])
     pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
 
-    account_data = await rpc_call(pool.functions.getUserAccountData(wallet).call())
+    account_data = await rpc_call(lambda: pool.functions.getUserAccountData(wallet).call())
     (total_collateral_base, total_debt_base, _available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, tier = _classify_aave_tier(int(health_factor_raw), int(total_debt_base))
@@ -218,8 +218,8 @@ async def _fetch_compound_market_risk(w3: Any, wallet: str, market: dict[str, st
     comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
 
     borrowed, is_liq = await asyncio.gather(
-        rpc_call(comet.functions.borrowBalanceOf(wallet).call()),
-        rpc_call(comet.functions.isLiquidatable(wallet).call()),
+        rpc_call(lambda: comet.functions.borrowBalanceOf(wallet).call()),
+        rpc_call(lambda: comet.functions.isLiquidatable(wallet).call()),
     )
     borrowed_int = int(borrowed)
 

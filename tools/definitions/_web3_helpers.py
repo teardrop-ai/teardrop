@@ -24,8 +24,16 @@ _CHAIN_MAP: dict[int, str] = {}
 # giving the RPC time to recover without wasting an agent iteration.
 
 _RETRY_MAX = 2
-_RETRY_BASE_DELAY = 0.75  # seconds; doubles each attempt → 0.75 s, 1.5 s
-_RATE_LIMIT_MARKERS = ("429", "rate limit", "too many requests", "exceeded", "throttl")
+_RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt → 1.0 s, 2.0 s
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "rate limit",
+    "rate-limited",
+    "too many requests",
+    "exceeded",
+    "throttl",
+    "quanta",
+)
 
 
 class _RetryAsyncHTTPProvider(AsyncHTTPProvider):
@@ -71,25 +79,48 @@ def get_web3(chain_id: int = 1) -> AsyncWeb3:
     return AsyncWeb3(_RetryAsyncHTTPProvider(rpc_url))
 
 
-async def rpc_call(coro, timeout_seconds: int | None = None):
-    """Wrap a Web3 contract call with timeout to prevent hanging on slow RPC requests.
+async def rpc_call(coro_fn, timeout_seconds: int | None = None):
+    """Wrap a Web3 contract/RPC call with timeout and rate-limit resilience.
+
+    Accepts a *callable* (zero-argument function or lambda) that returns a fresh
+    coroutine on each invocation.  Python coroutines are one-shot objects —
+    they cannot be re-awaited after raising an exception (RuntimeError).
+    Requiring a callable ensures a fresh coroutine is created for every retry
+    attempt.
 
     Args:
-        coro: The coroutine to execute (e.g., contract.functions.method().call())
-        timeout_seconds: Timeout in seconds (defaults to config agent_rpc_call_timeout_seconds)
+        coro_fn: Callable returning a coroutine.
+            e.g. ``lambda: contract.functions.method().call()``
+        timeout_seconds: Per-attempt timeout in seconds (defaults to
+            config.agent_rpc_call_timeout_seconds).
 
     Returns:
         The result of the coroutine.
 
     Raises:
-        asyncio.TimeoutError: If the call exceeds the timeout.
+        asyncio.TimeoutError: If an attempt exceeds the timeout.
+        Exception: The underlying RPC exception if all retries fail.
     """
     if timeout_seconds is None:
         timeout_seconds = get_settings().agent_rpc_call_timeout_seconds
 
-    try:
-        return await asyncio.wait_for(coro, timeout=timeout_seconds)
-    except asyncio.TimeoutError:
-        logger.debug("RPC call timed out after %ds", timeout_seconds)
-        raise
-
+    for attempt in range(_RETRY_MAX + 1):
+        try:
+            return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.debug("RPC call timed out after %ds", timeout_seconds)
+            raise
+        except Exception as exc:
+            err_lower = str(exc).lower()
+            if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
+                delay = _RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "JSON-RPC rate limit on attempt %d/%d; retrying in %.2fs. Error: %s",
+                    attempt + 1,
+                    _RETRY_MAX,
+                    delay,
+                    err_lower,
+                )
+                await asyncio.sleep(delay)
+                continue
+            raise

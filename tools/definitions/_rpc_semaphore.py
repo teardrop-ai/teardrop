@@ -55,9 +55,7 @@ async def acquire_rpc_semaphore():
     global _total_acquisitions, _total_wait_ms, _max_wait_ms
 
     if _semaphore is None:
-        raise RuntimeError(
-            "RPC semaphore not initialized. Call init_rpc_semaphore(limit) at app startup."
-        )
+        raise RuntimeError("RPC semaphore not initialized. Call init_rpc_semaphore(limit) at app startup.")
 
     start_mono = time.monotonic()
     logger.debug("Acquiring RPC semaphore (current permits: %d)", _semaphore._value)
@@ -92,7 +90,5 @@ async def acquire_rpc_semaphore():
 def get_rpc_semaphore() -> asyncio.Semaphore:
     """Get the global RPC semaphore. Raises RuntimeError if not initialized."""
     if _semaphore is None:
-        raise RuntimeError(
-            "RPC semaphore not initialized. Call init_rpc_semaphore(limit) at app startup."
-        )
+        raise RuntimeError("RPC semaphore not initialized. Call init_rpc_semaphore(limit) at app startup.")
     return _semaphore

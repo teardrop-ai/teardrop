@@ -422,9 +422,11 @@ class TestToolExecutorNode:
         async def slow_invoke(*args, **kwargs):
             try:
                 import asyncio as _asyncio
+
                 await _asyncio.sleep(10)
             except ImportError:
                 import asyncio
+
                 await asyncio.sleep(10)
             return {"result": "finally done"}
 
@@ -441,7 +443,6 @@ class TestToolExecutorNode:
         assert result["task_status"] == TaskStatus.FAILED
         assert "timed out" in result["messages"][0].content
         assert len(result["messages"]) == 1
-
 
 
 # ─── ui_generator_node ────────────────────────────────────────────────────────

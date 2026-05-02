@@ -94,7 +94,7 @@ async def multicall3_batch(
         async with acquire_rpc_semaphore():
             try:
                 raw: bytes = await rpc_call(
-                    w3.eth.call(
+                    lambda: w3.eth.call(
                         {
                             "to": MULTICALL3_ADDRESS,
                             "data": calldata,
@@ -104,8 +104,7 @@ async def multicall3_batch(
                 output.extend(_decode_aggregate3(raw))
             except Exception as exc:
                 logger.warning(
-                    "Multicall3 batch (calls %d–%d of %d) failed: %s; "
-                    "returning all-failed results for this chunk",
+                    "Multicall3 batch (calls %d–%d of %d) failed: %s; returning all-failed results for this chunk",
                     chunk_start,
                     chunk_start + len(chunk) - 1,
                     len(call_list),

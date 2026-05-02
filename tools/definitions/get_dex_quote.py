@@ -234,7 +234,7 @@ async def _resolve_decimals(w3: Any, chain_id: int, address: str) -> int:
     async with acquire_rpc_semaphore():
         try:
             contract = w3.eth.contract(address=address, abi=_ERC20_DECIMALS_ABI)
-            value: int = await rpc_call(contract.functions.decimals().call())
+            value: int = await rpc_call(lambda: contract.functions.decimals().call())
         except Exception as exc:
             logger.warning(
                 "decimals() fallback to 18 for %s on chain %d: %s",
@@ -263,7 +263,7 @@ async def _quote_one_tier(
     params = (token_in, token_out, amount_in, fee, 0)
     async with acquire_rpc_semaphore():
         try:
-            result = await rpc_call(quoter.functions.quoteExactInputSingle(params).call())
+            result = await rpc_call(lambda: quoter.functions.quoteExactInputSingle(params).call())
         except ContractLogicError as exc:
             msg = str(exc) or "unknown_revert"
             # 'Unexpected error' is the QuoterV2 signal for a non-existent pool.

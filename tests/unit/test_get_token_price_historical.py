@@ -107,9 +107,7 @@ class TestSummarize:
 
 class TestGetTokenPriceHistorical:
     async def test_returns_price_stats(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         payload = {
             "prices": [
                 [1_704_067_200_000, 2000.0],
@@ -138,9 +136,7 @@ class TestGetTokenPriceHistorical:
         assert len(entry["daily_prices"]) == 3
 
     async def test_api_failure_returns_none_stats(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         session = _make_mock_session(429)
         with patch(
             "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
@@ -155,9 +151,7 @@ class TestGetTokenPriceHistorical:
         assert entry["daily_prices"] == []
 
     async def test_caches_result(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         payload = {"prices": [[1_704_067_200_000, 1.0], [1_704_153_600_000, 2.0]]}
         session = _make_mock_session(200, payload)
         with patch(
@@ -170,9 +164,7 @@ class TestGetTokenPriceHistorical:
         assert session.get.call_count == 1
 
     async def test_concurrent_multi_token(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         payload = {"prices": [[1_704_067_200_000, 50.0], [1_704_153_600_000, 55.0]]}
         session = _make_mock_session(200, payload)
         with patch(
@@ -187,9 +179,7 @@ class TestGetTokenPriceHistorical:
         assert {t["symbol"] for t in result["tokens"]} == {"BTC", "ETH"}
 
     async def test_resolves_unknown_symbol(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         coin_map = {"lqty": "liquity", "liquity": "liquity"}
         payload = {"prices": [[1_704_067_200_000, 2.45]]}
         session = _make_mock_session(200, payload)
@@ -197,12 +187,15 @@ class TestGetTokenPriceHistorical:
         async def _mock_load() -> dict[str, str]:
             return coin_map
 
-        with patch(
-            "tools.definitions.get_token_price_historical._load_coins_list_index",
-            new=_mock_load,
-        ), patch(
-            "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
-            return_value=session,
+        with (
+            patch(
+                "tools.definitions.get_token_price_historical._load_coins_list_index",
+                new=_mock_load,
+            ),
+            patch(
+                "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
+                return_value=session,
+            ),
         ):
             result = await get_token_price_historical(tokens=["LQTY"], days=30)
 
@@ -210,19 +203,20 @@ class TestGetTokenPriceHistorical:
         assert result["tokens"][0]["symbol"] == "LQTY"
 
     async def test_known_symbol_skips_coins_list(self, test_settings, monkeypatch):
-        monkeypatch.setattr(
-            "tools.definitions.get_token_price_historical._historical_cache", {}
-        )
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
         payload = {"prices": [[1_704_067_200_000, 65000.0]]}
         session = _make_mock_session(200, payload)
 
         load_mock = AsyncMock(return_value={})
-        with patch(
-            "tools.definitions.get_token_price_historical._load_coins_list_index",
-            new=load_mock,
-        ), patch(
-            "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
-            return_value=session,
+        with (
+            patch(
+                "tools.definitions.get_token_price_historical._load_coins_list_index",
+                new=load_mock,
+            ),
+            patch(
+                "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
+                return_value=session,
+            ),
         ):
             await get_token_price_historical(tokens=["BTC"], days=30)
 
