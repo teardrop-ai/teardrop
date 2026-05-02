@@ -129,5 +129,21 @@ def test_should_flush_planner_buffer_non_success_statuses():
     assert _should_flush_planner_buffer("timeout") is False
 
 
+def test_planner_status_enum_normalization():
+    """Regression: TaskStatus(str, Enum) instances must normalise to their value.
+
+    In Python 3.12, ``str(TaskStatus.GENERATING_UI)`` returns
+    ``"TaskStatus.GENERATING_UI"`` (not ``"generating_ui"``), which would cause
+    the planner buffer flush check to silently skip emitting text. The streaming
+    handler in ``agent_run`` reads ``.value`` first to avoid this.
+    """
+    from agent.state import TaskStatus
+
+    ts = TaskStatus.GENERATING_UI
+    status = (getattr(ts, "value", None) or str(ts)).strip().lower()
+    assert status == "generating_ui"
+    assert _should_flush_planner_buffer(status) is True
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

@@ -626,6 +626,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Failed to close shared aiohttp sessions", exc_info=True)
 
+    # Close cached AsyncWeb3 client sessions to avoid "Unclosed client session"
+    # warnings on shutdown.
+    try:
+        from tools.definitions._web3_helpers import close_web3_clients  # noqa: PLC0415
+
+        await close_web3_clients()
+    except Exception:
+        logger.warning("Failed to close web3 client sessions", exc_info=True)
+
 
 app = FastAPI(
     title="Teardrop",
@@ -2060,7 +2069,12 @@ async def agent_run(
                 # --- Planner finished: conditionally flush buffered text ---
                 elif event_name == "on_chain_end" and node_name == "planner":
                     output = event_data.get("output", {})
-                    status = str(output.get("task_status", "")).lower()
+                    # task_status may be a TaskStatus(str, Enum) instance.
+                    # In Python 3.12, str(TaskStatus.GENERATING_UI) returns
+                    # "TaskStatus.GENERATING_UI", not the value "generating_ui",
+                    # so prefer the enum's `.value` when present.
+                    _ts = output.get("task_status", "")
+                    status = (getattr(_ts, "value", None) or str(_ts)).strip().lower()
 
                     if _should_flush_planner_buffer(status):
                         emitted_chunks: list[tuple[str, str]] = []

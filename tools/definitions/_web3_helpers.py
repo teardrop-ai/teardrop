@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 _CHAIN_MAP: dict[int, str] = {}
 
+# Cache of AsyncWeb3 instances keyed by (event_loop_id, chain_id). Reused
+# across calls to avoid leaking the underlying aiohttp ClientSession that
+# AsyncHTTPProvider creates lazily on first request.
+_web3_cache: dict[tuple[int, int], AsyncWeb3] = {}
+
 # ─── Retry-capable provider ───────────────────────────────────────────────────
 # Public and free-tier RPC endpoints (Alchemy, Infura, QuickNode free plans)
 # enforce per-second call budgets. When multiple tools fan out parallel eth_call
@@ -75,9 +80,64 @@ def _get_rpc_url(chain_id: int) -> str:
 
 
 def get_web3(chain_id: int = 1) -> AsyncWeb3:
-    """Return an AsyncWeb3 instance for the given chain."""
+    """Return a cached AsyncWeb3 instance for the given chain.
+
+    Instances are cached per (event-loop, chain_id) tuple. Each
+    ``_RetryAsyncHTTPProvider`` creates an internal ``aiohttp.ClientSession``
+    that lives for the lifetime of the provider; reusing the same provider
+    object preserves the connection pool, keeps DNS warm, and — critically —
+    avoids the "Unclosed client session" warnings emitted when transient
+    AsyncWeb3 objects get garbage-collected.
+
+    The cache is keyed by the running event loop because aiohttp sessions are
+    bound to the loop they were created on; under pytest's per-test loops we
+    must not reuse a session across loops.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+    except RuntimeError:
+        loop_id = 0
+
+    key = (loop_id, chain_id)
+    cached = _web3_cache.get(key)
+    if cached is not None:
+        return cached
+
     rpc_url = _get_rpc_url(chain_id)
-    return AsyncWeb3(_RetryAsyncHTTPProvider(rpc_url))
+    w3 = AsyncWeb3(_RetryAsyncHTTPProvider(rpc_url))
+    _web3_cache[key] = w3
+    return w3
+
+
+async def close_web3_clients() -> None:
+    """Close all cached AsyncWeb3 client sessions. Safe to call multiple times.
+
+    Intended for FastAPI lifespan shutdown. Best-effort: a single failure
+    will not prevent other sessions from closing.
+    """
+    global _web3_cache
+    pending = list(_web3_cache.values())
+    _web3_cache = {}
+    for w3 in pending:
+        provider = getattr(w3, "provider", None)
+        # web3.py's AsyncHTTPProvider exposes the aiohttp session as
+        # ``cached_session`` (private but stable) once the first request has
+        # initialised it. ``disconnect`` is the public coroutine on newer
+        # versions; fall back to closing the session directly otherwise.
+        try:
+            if hasattr(provider, "disconnect"):
+                await provider.disconnect()
+                continue
+        except Exception as exc:  # pragma: no cover — best-effort shutdown
+            logger.warning("Error disconnecting web3 provider: %s", exc)
+        session = getattr(provider, "cached_session", None)
+        if session is not None and not getattr(session, "closed", True):
+            try:
+                await session.close()
+            except Exception as exc:  # pragma: no cover — best-effort shutdown
+                logger.warning("Error closing web3 aiohttp session: %s", exc)
+
 
 
 async def rpc_call(coro_fn, timeout_seconds: int | None = None):
