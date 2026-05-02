@@ -66,6 +66,7 @@ async def multicall3_batch(
     calls: Sequence[tuple[str, bytes]],
     *,
     allow_failure: bool = True,
+    chain_id: int | None = None,
 ) -> list[tuple[bool, bytes]]:
     """Execute *calls* via Multicall3, consuming one RPC semaphore permit per chunk.
 
@@ -76,6 +77,7 @@ async def multicall3_batch(
             ``(False, b"")`` instead of reverting the whole batch. Always
             leave this True for read-only fan-outs where partial results
             are acceptable (e.g., some tokens not implementing ERC-20).
+        chain_id: Optional chain id for per-chain RPC throttling.
 
     Returns:
         List of ``(success: bool, return_data: bytes)`` tuples in the same
@@ -97,7 +99,8 @@ async def multicall3_batch(
                         "to": MULTICALL3_ADDRESS,
                         "data": calldata,
                     }
-                )
+                ),
+                chain_id=chain_id,
             )
             output.extend(_decode_aggregate3(raw))
         except Exception as exc:

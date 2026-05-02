@@ -67,7 +67,7 @@ def patch_multicall3(monkeypatch):
         "uniswap_default_position": _DEFAULT_POSITION,
     }
 
-    async def _stub(w3, calls, *, allow_failure=True):
+    async def _stub(w3, calls, *, allow_failure=True, chain_id=None):
         out: list[tuple[bool, bytes]] = []
         for _target, call_data in calls:
             selector = call_data[:4]

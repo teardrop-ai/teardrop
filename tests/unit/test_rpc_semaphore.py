@@ -2,7 +2,14 @@ import asyncio
 
 import pytest
 
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore, get_rpc_semaphore, init_rpc_semaphore
+from tools.definitions._rpc_semaphore import (
+    acquire_chain_semaphore,
+    acquire_rpc_semaphore,
+    get_chain_semaphore,
+    get_rpc_semaphore,
+    init_chain_semaphore,
+    init_rpc_semaphore,
+)
 
 
 @pytest.mark.asyncio
@@ -46,3 +53,23 @@ async def test_rpc_semaphore_reinit():
 
     init_rpc_semaphore(5)
     assert get_rpc_semaphore()._value == 5
+
+
+@pytest.mark.asyncio
+async def test_chain_semaphore_limit():
+    init_chain_semaphore(1, 1)
+    sem = get_chain_semaphore(1)
+    assert sem._value == 1
+
+    async with acquire_chain_semaphore(1):
+        assert sem._value == 0
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(acquire_chain_semaphore(1).__aenter__(), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_chain_semaphore_none_or_unregistered_is_noop():
+    async with acquire_chain_semaphore(None):
+        pass
+    async with acquire_chain_semaphore(999_999):
+        pass

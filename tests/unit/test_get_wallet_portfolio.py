@@ -20,7 +20,7 @@ class TestGetWalletPortfolio:
         matching the order of _TRACKED_TOKENS for the chain.
         """
 
-        async def _mock_batch(w3, calls, *, allow_failure=True):
+        async def _mock_batch(w3, calls, *, allow_failure=True, chain_id=None):
             if isinstance(balance_values, int):
                 return [(True, abi_encode(["uint256"], [balance_values])) for _ in calls]
             results = []

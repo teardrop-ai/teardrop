@@ -855,6 +855,7 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
     """Parse or generate A2UI components from the agent's final message."""
     logger.debug("ui_generator_node: entry")
     last_msg = state.messages[-1] if state.messages else None
+    emit_ui = bool(state.metadata.get("emit_ui", True))
 
     # --- Try to extract inline ```a2ui``` block first ---
     if isinstance(last_msg, AIMessage) and last_msg.content:
@@ -867,15 +868,30 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
             }
 
     # --- If no inline block and we have a data-rich response, ask LLM to generate ---
-    if isinstance(last_msg, AIMessage) and last_msg.content:
+    if emit_ui and isinstance(last_msg, AIMessage) and last_msg.content:
         text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
         if _contains_structured_data(text):
             settings = get_settings()
             prompt = f"{_UI_GENERATOR_SYSTEM}\n\nAssistant message:\n{text}"
             try:
                 llm_config = state.metadata.get("_llm_config")
+                if llm_config:
+                    ui_llm = get_llm_for_request(llm_config)
+                else:
+                    ui_provider = settings.agent_ui_generator_provider
+                    ui_model = settings.agent_ui_generator_model
+                    ui_llm = create_llm_from_config(
+                        {
+                            "provider": ui_provider,
+                            "model": ui_model,
+                            "api_key": _provider_api_key(settings, ui_provider),
+                            "max_tokens": settings.agent_synthesis_max_tokens,
+                            "temperature": settings.agent_temperature,
+                            "timeout_seconds": settings.agent_ui_generator_timeout_seconds,
+                        }
+                    )
                 result: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
-                    get_llm_for_request(llm_config).ainvoke(prompt),
+                    ui_llm.ainvoke(prompt),
                     timeout=settings.agent_ui_generator_timeout_seconds,
                 )
                 raw = result.content if isinstance(result.content, str) else str(result.content)

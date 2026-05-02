@@ -12,7 +12,7 @@ from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
 from config import get_settings
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
+from tools.definitions._rpc_semaphore import acquire_chain_semaphore, acquire_rpc_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -45,29 +45,14 @@ _RATE_LIMIT_MARKERS = (
 
 
 class _RetryAsyncHTTPProvider(AsyncHTTPProvider):
-    """AsyncHTTPProvider with transparent exponential-backoff retry on 429s."""
+    """AsyncHTTPProvider placeholder.
+
+    Retries are intentionally centralized in ``rpc_call`` so backoff sleeps
+    happen outside semaphore acquisition and do not block other RPC work.
+    """
 
     async def make_request(self, method: str, params: list) -> dict:  # type: ignore[override]
-        for attempt in range(_RETRY_MAX + 1):
-            try:
-                return await super().make_request(method, params)  # type: ignore[return-value]
-            except Exception as exc:
-                err_lower = str(exc).lower()
-                if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
-                    delay = _RETRY_BASE_DELAY * (2**attempt)
-                    jitter = delay * random.uniform(-_RETRY_JITTER_RATIO, _RETRY_JITTER_RATIO)
-                    sleep_for = max(0.0, delay + jitter)
-                    logger.debug(
-                        "RPC 429 on attempt %d/%d for %s; retrying in %.2fs",
-                        attempt + 1,
-                        _RETRY_MAX,
-                        method,
-                        sleep_for,
-                    )
-                    await asyncio.sleep(sleep_for)
-                    continue
-                raise
-        raise RuntimeError("unreachable")  # pragma: no cover
+        return await super().make_request(method, params)  # type: ignore[return-value]
 
 
 def _get_rpc_url(chain_id: int) -> str:
@@ -143,7 +128,7 @@ async def close_web3_clients() -> None:
                 logger.warning("Error closing web3 aiohttp session: %s", exc)
 
 
-async def rpc_call(coro_fn, timeout_seconds: int | None = None):
+async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | None = None):
     """Wrap a Web3 contract/RPC call with timeout and rate-limit resilience.
 
     Accepts a *callable* (zero-argument function or lambda) that returns a fresh
@@ -157,6 +142,7 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None):
             e.g. ``lambda: contract.functions.method().call()``
         timeout_seconds: Per-attempt timeout in seconds (defaults to
             config.agent_rpc_call_timeout_seconds).
+        chain_id: Optional chain id for per-chain throttling.
 
     Returns:
         The result of the coroutine.
@@ -176,7 +162,8 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None):
             await asyncio.sleep(max(0.0, delay + jitter))
         try:
             async with acquire_rpc_semaphore():
-                return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
+                async with acquire_chain_semaphore(chain_id):
+                    return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
         except asyncio.TimeoutError:
             logger.debug("RPC call timed out after %ds", timeout_seconds)
             raise

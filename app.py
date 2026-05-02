@@ -183,7 +183,7 @@ from org_tools import (
 )
 from scripts.generate_keys import generate_keypair
 from tools import registry
-from tools.definitions._rpc_semaphore import init_rpc_semaphore
+from tools.definitions._rpc_semaphore import init_chain_semaphore, init_rpc_semaphore
 from tools.executor import execute_tool
 from tools.mcp_server import mcp as _mcp_server
 from usage import (
@@ -582,6 +582,8 @@ async def lifespan(app: FastAPI):
 
     # Initialize global RPC semaphore to limit concurrent eth_calls across all agent runs.
     init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
+    init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
+    init_chain_semaphore(8453, settings.agent_rpc_chain_semaphore_limit)
 
     # Launch background workers.
     bg_tasks: list[asyncio.Task] = []
@@ -885,6 +887,10 @@ class AgentRunRequest(BaseModel):
     context: dict[str, Any] = Field(
         default_factory=dict,
         description="Optional extra context passed to the agent state metadata",
+    )
+    emit_ui: bool = Field(
+        default=True,
+        description="Whether to generate structured UI components in the final output.",
     )
 
 
@@ -1971,6 +1977,7 @@ async def agent_run(
                 "_user_wallet_address": payload.get("address") or None,
                 "_credit_balance_usdc": _credit_balance_usdc,
                 "_jwt_token": (request.headers.get("authorization", "").removeprefix("Bearer ").strip() or None),
+                "emit_ui": body.emit_ui,
             },
         )
         config = {"configurable": {"thread_id": scoped_thread_id}}

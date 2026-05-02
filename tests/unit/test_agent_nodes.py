@@ -523,6 +523,60 @@ class TestUiGeneratorNode:
 
         assert result["task_status"] == TaskStatus.COMPLETED
 
+    async def test_emit_ui_false_skips_llm_generation(self, test_settings):
+        last_msg = _make_ai_message(content="Portfolio value is 123.45 USD")
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}, "emit_ui": False})
+
+        with patch("agent.nodes.get_llm_for_request") as mock_get_llm:
+            result = await ui_generator_node(state)
+
+        assert result["task_status"] == TaskStatus.COMPLETED
+        assert result.get("ui_components", []) == []
+        mock_get_llm.assert_not_called()
+
+    async def test_emit_ui_true_uses_speed_tier_when_no_org_config(self, test_settings):
+        last_msg = _make_ai_message(content="APR is 3.14%")
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}, "emit_ui": True})
+
+        mock_ui_llm = MagicMock()
+        mock_ui_llm.ainvoke = AsyncMock(return_value=_make_ai_message(content='{"components": []}'))
+
+        with (
+            patch("agent.nodes.create_llm_from_config", return_value=mock_ui_llm) as mock_create,
+            patch("agent.nodes._contains_structured_data", return_value=True),
+        ):
+            result = await ui_generator_node(state)
+
+        assert result["task_status"] == TaskStatus.COMPLETED
+        cfg = mock_create.call_args.args[0]
+        assert cfg["provider"] == test_settings.agent_ui_generator_provider
+        assert cfg["model"] == test_settings.agent_ui_generator_model
+
+    async def test_emit_ui_true_uses_org_llm_config_when_present(self, test_settings):
+        last_msg = _make_ai_message(content="TVL is 1.23B")
+        state = _make_state(
+            messages=[last_msg],
+            metadata={
+                "_usage": {},
+                "emit_ui": True,
+                "_llm_config": {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},
+            },
+        )
+
+        mock_byok_llm = MagicMock()
+        mock_byok_llm.ainvoke = AsyncMock(return_value=_make_ai_message(content='{"components": []}'))
+
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_byok_llm) as mock_get,
+            patch("agent.nodes.create_llm_from_config") as mock_create,
+            patch("agent.nodes._contains_structured_data", return_value=True),
+        ):
+            result = await ui_generator_node(state)
+
+        assert result["task_status"] == TaskStatus.COMPLETED
+        mock_get.assert_called_once()
+        mock_create.assert_not_called()
+
     async def test_malformed_a2ui_json_returns_no_components(self, test_settings):
         text = "```a2ui\n{bad json}\n```"
         last_msg = _make_ai_message(content=text)

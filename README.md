@@ -816,7 +816,7 @@ $token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
     -Method Post -ContentType "application/json" `
     -Body '{"client_id":"teardrop-client","client_secret":"<secret>"}').access_token
 
-$body = '{"message": "What is 42 * 7?", "thread_id": "my-session-1"}'
+$body = '{"message": "What is 42 * 7?", "thread_id": "my-session-1", "emit_ui": false}'
 Invoke-RestMethod -Uri "http://localhost:8000/agent/run" `
     -Method Post -ContentType "application/json" `
     -Headers @{ Authorization = "Bearer $token" } `
@@ -824,6 +824,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/agent/run" `
 ```
 
 For multi-turn conversation, reuse the same `thread_id` across requests.
+Set `emit_ui` to `false` for CLI and machine-to-machine callers to skip the UI generation pass and reduce latency.
 
 ### Pagination
 
@@ -912,7 +913,7 @@ Twenty-one tools are available to the agent and served via MCP:
 | `get_defi_positions` | Aggregate DeFi positions (Aave v3, Compound v3, Uniswap v3 LP) for a wallet on Ethereum or Base. |
 | `get_dex_quote` | Best Uniswap v3 swap quote across all fee tiers on Ethereum or Base via on-chain QuoterV2. |
 | `get_liquidation_risk` | Assess DeFi liquidation risk for up to 50 wallets across Aave v3 and Compound v3. |
-| `get_token_approvals` | Audit ERC-20 token allowances and flag risky unlimited approvals across major DeFi spenders. |
+| `get_token_approvals` | Audit ERC-20 token allowances and flag risky unlimited approvals across major DeFi spenders. Returns an `error` field when the full RPC approval batch fails so consumers can treat results as incomplete instead of "clean". |
 
 ### A2UI components (`agent/state.py`)
 

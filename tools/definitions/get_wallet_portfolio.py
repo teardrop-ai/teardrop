@@ -163,7 +163,7 @@ async def get_wallet_portfolio(
 
     # Fetch native ETH balance (global RPC semaphore is acquired in rpc_call).
     try:
-        eth_balance_wei = await rpc_call(lambda: w3.eth.get_balance(wallet))
+        eth_balance_wei = await rpc_call(lambda: w3.eth.get_balance(wallet), chain_id=chain_id)
     except Exception as exc:
         logger.warning("ETH balance fetch failed for %s: %s", wallet, exc)
         eth_balance_wei = None
@@ -189,7 +189,7 @@ async def get_wallet_portfolio(
         )
         for t in tokens
     ]
-    batch_results = await multicall3_batch(w3, erc20_calls)
+    batch_results = await multicall3_batch(w3, erc20_calls, chain_id=chain_id)
 
     for token_info, (success, return_data) in zip(tokens, batch_results):
         if not success or not return_data:

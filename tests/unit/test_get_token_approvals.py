@@ -90,13 +90,19 @@ class TestRiskLevel:
 
 
 class TestGetTokenApprovals:
-    def _patch_batch(self, monkeypatch, allowance_value: int, *, fail: bool = False):
-        """Patch multicall3_batch to return a fixed allowance for every call."""
+    def _patch_batch(self, monkeypatch, allowance_value: int, *, fail: bool = False, fail_index: int | None = None):
+        """Patch multicall3_batch to return controlled allowance/failure outputs."""
 
-        async def _mock_batch(w3, calls, *, allow_failure=True):
+        async def _mock_batch(w3, calls, *, allow_failure=True, chain_id=None):
             if fail:
                 return [(False, b"")] * len(calls)
-            return [(True, abi_encode(["uint256"], [allowance_value])) for _ in calls]
+            out = []
+            for idx, _ in enumerate(calls):
+                if fail_index is not None and idx == fail_index:
+                    out.append((False, b""))
+                else:
+                    out.append((True, abi_encode(["uint256"], [allowance_value])))
+            return out
 
         monkeypatch.setattr("tools.definitions.get_token_approvals.multicall3_batch", _mock_batch)
         monkeypatch.setattr("tools.definitions.get_token_approvals.get_web3", MagicMock())
@@ -189,16 +195,31 @@ class TestGetTokenApprovals:
     async def test_reverted_allowance_gracefully_skipped(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 
+        self._patch_batch(monkeypatch, _BOUNDED, fail_index=0)
+
+        # Should not raise — single reverted entry is skipped without global error.
+        result = await get_token_approvals(
+            wallet_address=_WALLET,
+            tokens=[_TOKEN_USDC, "0xdAC17F958D2ee523a2206206994597C13D831ec7"],
+            spenders=[_SPENDER_UNISWAP],
+        )
+        assert result["risk_summary"]["total_approvals"] == 1
+        assert result["error"] is None
+
+    async def test_full_batch_failure_surfaces_error(self, test_settings, monkeypatch):
+        from tools.definitions.get_token_approvals import get_token_approvals
+
         self._patch_batch(monkeypatch, 0, fail=True)
 
-        # Should not raise — silently skips the failed entry.
         result = await get_token_approvals(
             wallet_address=_WALLET,
             tokens=[_TOKEN_USDC],
             spenders=[_SPENDER_UNISWAP],
         )
+
         assert result["approvals"] == []
         assert result["risk_summary"]["total_approvals"] == 0
+        assert "RPC batch failed" in (result["error"] or "")
 
     async def test_multicall3_batch_called_once(self, test_settings, monkeypatch):
         """multicall3_batch should be invoked exactly once per get_token_approvals call."""
@@ -206,7 +227,7 @@ class TestGetTokenApprovals:
 
         call_count = 0
 
-        async def _counting_batch(w3, calls, *, allow_failure=True):
+        async def _counting_batch(w3, calls, *, allow_failure=True, chain_id=None):
             nonlocal call_count
             call_count += 1
             return [(True, abi_encode(["uint256"], [_BOUNDED])) for _ in calls]
@@ -264,7 +285,7 @@ class TestGetTokenApprovals:
 
         captured_calls: list = []
 
-        async def _capture_batch(w3, calls, *, allow_failure=True):
+        async def _capture_batch(w3, calls, *, allow_failure=True, chain_id=None):
             captured_calls.extend(calls)
             return [(True, abi_encode(["uint256"], [0])) for _ in calls]
 

@@ -428,7 +428,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
 
     # Aggregate account snapshot
-    account_data = await rpc_call(lambda: pool.functions.getUserAccountData(wallet).call())
+    account_data = await rpc_call(lambda: pool.functions.getUserAccountData(wallet).call(), chain_id=chain_id)
     (total_collateral_base, total_debt_base, available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, hf_status = _classify_health_factor(health_factor_raw, total_debt_base)
@@ -448,7 +448,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
             )
             for r in tracked
         ]
-        batch_results = await multicall3_batch(w3, reserve_calls)
+        batch_results = await multicall3_batch(w3, reserve_calls, chain_id=chain_id)
 
         for reserve, (success, return_data) in zip(tracked, batch_results):
             if not success or not return_data:
@@ -500,7 +500,9 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     )
 
 
-async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -> CompoundMarketPosition | None:
+async def _fetch_compound_market(
+    w3: Any, wallet: str, market: dict[str, str], chain_id: int
+) -> CompoundMarketPosition | None:
     """Fetch a single Compound v3 Comet market position. Returns None if no position."""
     market_addr = Web3.to_checksum_address(market["address"])
     collateral_assets = market.get("collateral_assets", [])
@@ -520,7 +522,7 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
         ]
     )
 
-    results = await multicall3_batch(w3, calls)
+    results = await multicall3_batch(w3, calls, chain_id=chain_id)
 
     supplied = 0
     borrowed = 0
@@ -572,13 +574,15 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
 async def _fetch_compound_v3(w3: Any, wallet: str, chain_id: int) -> list[CompoundMarketPosition]:
     """Fetch all Compound v3 market positions for a wallet on the given chain."""
     markets = _COMPOUND_V3_MARKETS.get(chain_id, [])
+    market_sem = asyncio.Semaphore(3)
 
     async def _safe(market: dict[str, str]) -> CompoundMarketPosition | None:
-        try:
-            return await _fetch_compound_market(w3, wallet, market)
-        except Exception as exc:
-            logger.debug("Compound market %s fetch failed: %s", market.get("name"), exc)
-            return None
+        async with market_sem:
+            try:
+                return await _fetch_compound_market(w3, wallet, market, chain_id)
+            except Exception as exc:
+                logger.debug("Compound market %s fetch failed: %s", market.get("name"), exc)
+                return None
 
     results = await asyncio.gather(*[_safe(m) for m in markets])
     return [r for r in results if r is not None]
@@ -589,7 +593,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     nfpm_addr = Web3.to_checksum_address(_UNISWAP_V3_NFPM[chain_id])
     nfpm = w3.eth.contract(address=nfpm_addr, abi=_UNISWAP_V3_NFPM_ABI)
 
-    balance = int(await rpc_call(lambda: nfpm.functions.balanceOf(wallet).call()))
+    balance = int(await rpc_call(lambda: nfpm.functions.balanceOf(wallet).call(), chain_id=chain_id))
     if balance == 0:
         return []
 
@@ -604,7 +608,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
         )
         for i in range(limit)
     ]
-    token_id_results = await multicall3_batch(w3, token_id_calls)
+    token_id_results = await multicall3_batch(w3, token_id_calls, chain_id=chain_id)
 
     token_ids: list[int] = []
     for idx, (success, return_data) in enumerate(token_id_results):
@@ -626,7 +630,7 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
         )
         for token_id in token_ids
     ]
-    position_results = await multicall3_batch(w3, position_calls)
+    position_results = await multicall3_batch(w3, position_calls, chain_id=chain_id)
 
     positions: list[UniswapV3Position] = []
     for token_id, (success, return_data) in zip(token_ids, position_results):

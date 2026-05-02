@@ -107,6 +107,21 @@ class Settings(BaseSettings):
             "default is tuned to stay within that range on shared RPC nodes."
         ),
     )
+    agent_rpc_chain_semaphore_limit: int = Field(
+        default=4,
+        description=(
+            "Per-chain limit on concurrent RPC calls. Applied in addition to the global semaphore "
+            "to prevent same-chain bursts from monopolizing RPC capacity."
+        ),
+    )
+    agent_ui_generator_provider: str = Field(
+        default="google",
+        description="Provider for UI generation turns when no org-level BYOK config is set.",
+    )
+    agent_ui_generator_model: str = Field(
+        default="gemini-3-flash-preview",
+        description="Model for UI generation turns when no org-level BYOK config is set.",
+    )
 
     # ── LangSmith ──────────────────────────────────────────────────────────────
     langsmith_tracing: bool = False

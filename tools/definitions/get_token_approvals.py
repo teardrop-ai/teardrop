@@ -137,6 +137,7 @@ class GetTokenApprovalsOutput(BaseModel):
     approvals: list[ApprovalEntry]
     risk_summary: RiskSummary
     note: str
+    error: str | None = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -217,9 +218,22 @@ async def get_token_approvals(
     ]
 
     # Submit entire fan-out as a single Multicall3 batch — one RPC call total.
-    batch_results = await multicall3_batch(w3, calls)
+    batch_results = await multicall3_batch(w3, calls, chain_id=chain_id)
 
     approvals: list[dict[str, Any]] = []
+    batch_failed_count = sum(1 for success, return_data in batch_results if not success or not return_data)
+    is_total_batch_failure = len(batch_results) > 0 and batch_failed_count == len(batch_results)
+    response_error: str | None = None
+    if is_total_batch_failure:
+        response_error = "Approval data unavailable (RPC batch failed; results may be incomplete)."
+        logger.warning(
+            "get_token_approvals: multicall batch returned all-failed results "
+            "(chain_id=%s, wallet=%s, pairs=%d)",
+            chain_id,
+            wallet,
+            len(pairs),
+        )
+
     for (token_addr, spender_addr), (success, return_data) in zip(pairs, batch_results):
         if not success or not return_data:
             logger.debug(
@@ -275,6 +289,7 @@ async def get_token_approvals(
             "unknown_spenders": unknown_count,
         },
         "note": note,
+        "error": response_error,
     }
 
 
