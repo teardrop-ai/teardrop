@@ -176,11 +176,14 @@ from org_tools import (
     invalidate_org_tools_cache,
     list_marketplace_tools,
     list_org_tools,
+    normalize_webhook_response,
     update_org_tool,
+    validate_safe_schema_subset,
 )
 from scripts.generate_keys import generate_keypair
 from tools import registry
 from tools.definitions._rpc_semaphore import init_rpc_semaphore
+from tools.executor import execute_tool
 from tools.mcp_server import mcp as _mcp_server
 from usage import (
     UsageEvent,
@@ -1948,7 +1951,16 @@ async def agent_run(
                 "run_id": run_id,
                 "user_id": user_id,
                 "org_id": org_id,
-                "_usage": {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_names": []},
+                "_usage": {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 0,
+                    "tool_names": [],
+                    "billable_tool_calls": 0,
+                    "billable_tool_names": [],
+                    "failed_tool_calls": 0,
+                    "failed_tool_names": [],
+                },
                 "_org_tools": org_lc_tools,
                 "_org_tools_by_name": org_tools_by_name,
                 "_memories": recalled,
@@ -2262,6 +2274,10 @@ async def agent_run(
             tokens_out=usage_data.get("tokens_out", 0),
             tool_calls=usage_data.get("tool_calls", 0),
             tool_names=usage_data.get("tool_names", []),
+            billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
+            billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
+            failed_tool_calls=usage_data.get("failed_tool_calls", 0),
+            failed_tool_names=usage_data.get("failed_tool_names", []),
             duration_ms=duration_ms,
             cost_usdc=cost_usdc,
             platform_fee_usdc=platform_fee,
@@ -2399,7 +2415,7 @@ async def agent_run(
         # ── Record marketplace tool earnings for subscribed tools ────────
         await _record_marketplace_earnings(
             mp_by_name=mp_by_name,
-            tool_names_used=usage_data.get("tool_names", []),
+            tool_names_used=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
             caller_org_id=org_id,
         )
 
@@ -3242,6 +3258,7 @@ class CreateOrgToolRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(..., min_length=1, max_length=500)
     input_schema: dict = Field(..., description="JSON Schema for tool input parameters")
+    output_schema: dict | None = Field(default=None, description="Optional JSON Schema for tool output")
     webhook_url: str = Field(..., max_length=2048)
     webhook_method: str = Field(default="POST", pattern=r"^(GET|POST|PUT)$")
     auth_header_name: str | None = Field(default=None, max_length=64)
@@ -3254,6 +3271,8 @@ class CreateOrgToolRequest(BaseModel):
 
 class UpdateOrgToolRequest(BaseModel):
     description: str | None = Field(default=None, max_length=500)
+    input_schema: dict | None = None
+    output_schema: dict | None = None
     webhook_url: str | None = Field(default=None, max_length=2048)
     webhook_method: str | None = Field(default=None, pattern=r"^(GET|POST|PUT)$")
     auth_header_name: str | None = None
@@ -3271,6 +3290,7 @@ class OrgToolResponse(BaseModel):
     name: str
     description: str
     input_schema: dict
+    output_schema: dict | None
     webhook_url: str
     webhook_method: str
     has_auth: bool
@@ -3323,6 +3343,7 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "name": tool.name,
         "description": tool.description,
         "input_schema": tool.input_schema,
+        "output_schema": tool.output_schema,
         "webhook_url": tool.webhook_url,
         "webhook_method": tool.webhook_method,
         "has_auth": tool.has_auth,
@@ -3356,6 +3377,34 @@ async def create_tool(
             detail=f"Invalid input_schema: {exc.message}",
         )
 
+    subset_errors = validate_safe_schema_subset(body.input_schema)
+    if subset_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported input_schema features: {'; '.join(subset_errors[:5])}",
+        )
+
+    if body.output_schema is not None:
+        try:
+            Draft7Validator.check_schema(body.output_schema)
+        except SchemaError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid output_schema: {exc.message}",
+            )
+        out_subset_errors = validate_safe_schema_subset(body.output_schema)
+        if out_subset_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported output_schema features: {'; '.join(out_subset_errors[:5])}",
+            )
+
+    if body.publish_as_mcp and body.output_schema is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="output_schema is required when publish_as_mcp is true.",
+        )
+
     _validate_webhook_url(body.webhook_url)
 
     # Global name collision check
@@ -3378,6 +3427,7 @@ async def create_tool(
             name=body.name,
             description=body.description,
             input_schema=body.input_schema,
+            output_schema=body.output_schema,
             webhook_url=body.webhook_url,
             webhook_method=body.webhook_method,
             auth_header_name=body.auth_header_name,
@@ -3430,6 +3480,8 @@ async def patch_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Update a custom tool (partial update)."""
+    from jsonschema import Draft7Validator, SchemaError  # noqa: PLC0415
+
     org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
@@ -3437,9 +3489,49 @@ async def patch_tool(
     if body.webhook_url is not None:
         _validate_webhook_url(body.webhook_url)
 
+    if body.input_schema is not None:
+        try:
+            Draft7Validator.check_schema(body.input_schema)
+        except SchemaError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid input_schema: {exc.message}",
+            )
+        subset_errors = validate_safe_schema_subset(body.input_schema)
+        if subset_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported input_schema features: {'; '.join(subset_errors[:5])}",
+            )
+
+    if body.output_schema is not None:
+        try:
+            Draft7Validator.check_schema(body.output_schema)
+        except SchemaError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid output_schema: {exc.message}",
+            )
+        out_subset_errors = validate_safe_schema_subset(body.output_schema)
+        if out_subset_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Unsupported output_schema features: {'; '.join(out_subset_errors[:5])}",
+            )
+
+    if body.publish_as_mcp is True and body.output_schema is None:
+        current_tool = await get_org_tool(tool_id, org_id)
+        if current_tool is not None and current_tool.output_schema is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="output_schema is required when publish_as_mcp is true.",
+            )
+
     kwargs: dict[str, Any] = {}
     _updatable = (
         "description",
+        "input_schema",
+        "output_schema",
         "webhook_url",
         "webhook_method",
         "auth_header_name",
@@ -3549,49 +3641,28 @@ async def test_webhook(
 
             raw = await resp.read()
             latency_ms = int((time.monotonic() - started) * 1000)
-
-            # Truncate at 4096 bytes for diagnostic display.
-            body_bytes = raw[:4096]
             content_type = resp.headers.get("Content-Type", "")
-            status_code = resp.status
+            normalized = normalize_webhook_response(
+                raw,
+                content_type=content_type,
+                status_code=resp.status,
+                max_bytes=4096,
+            )
 
-            if "application/json" not in content_type:
+            if not normalized["success"]:
                 return TestWebhookResponse(
                     success=False,
-                    status_code=status_code,
+                    status_code=normalized["status_code"],
                     latency_ms=latency_ms,
-                    response_body=None,
-                    error=f"Webhook returned non-JSON Content-Type: {content_type or 'unset'}",
-                )
-
-            try:
-                parsed = json.loads(body_bytes)
-            except json.JSONDecodeError:
-                return TestWebhookResponse(
-                    success=False,
-                    status_code=status_code,
-                    latency_ms=latency_ms,
-                    response_body=None,
-                    error="Webhook returned invalid or truncated JSON",
-                )
-
-            # Ensure the parsed body fits the dict schema; wrap non-dict values.
-            response_body = parsed if isinstance(parsed, dict) else {"value": parsed}
-
-            if status_code >= 400:
-                return TestWebhookResponse(
-                    success=False,
-                    status_code=status_code,
-                    latency_ms=latency_ms,
-                    response_body=response_body,
-                    error=f"Webhook returned HTTP {status_code}",
+                    response_body=normalized["response_body"],
+                    error=normalized["error"],
                 )
 
             return TestWebhookResponse(
                 success=True,
-                status_code=status_code,
+                status_code=normalized["status_code"],
                 latency_ms=latency_ms,
-                response_body=response_body,
+                response_body=normalized["response_body"],
                 error=None,
             )
 
@@ -4624,20 +4695,24 @@ async def mcp_jsonrpc_handler(
                 return JSONResponse(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
                 )
-            try:
-                result = await tool_def.implementation(**arguments)
-            except Exception as exc:
-                logger.error("MCP tool execution error: %s", exc, exc_info=True)
+            exec_result = await execute_tool(
+                tool_name=tool_name,
+                tool_call_id=str(req_id),
+                tool_args=arguments,
+                invoke=tool_def.implementation,
+                timeout_seconds=tool_def.timeout_seconds,
+                output_schema=tool_def.output_schema,
+            )
+            if exec_result.success:
                 try:
-                    import sentry_sdk
-
-                    with sentry_sdk.new_scope() as scope:
-                        scope.set_tag("tool_name", str(tool_name))
-                        scope.set_tag("org_id", str(org_id))
-                        sentry_sdk.capture_exception(exc)
-                except Exception:  # pragma: no cover
-                    pass
-                result = {"error": str(exc)}
+                    result = json.loads(exec_result.content)
+                except Exception:
+                    result = exec_result.content
+            else:
+                try:
+                    result = {"error": json.loads(exec_result.content).get("message", "Tool execution failed")}
+                except Exception:
+                    result = {"error": "Tool execution failed"}
 
         # ── Debit credits ─────────────────────────────────────────────
         # Skip debit when execution failed: subscribers must not be charged

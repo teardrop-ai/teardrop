@@ -337,7 +337,7 @@ class TestSettlePayment:
         assert "Cannot settle unverified" in result.error
 
     async def test_settlement_success_sets_tx_hash(self):
-        mock_settle = MagicMock(success=True, tx_hash="0xdeadbeef", transaction_hash=None)
+        mock_settle = MagicMock(success=True, transaction="0xdeadbeef")
         mock_server = MagicMock()
         mock_server.settle_payment = AsyncMock(return_value=mock_settle)
         verified = BillingResult(
@@ -1061,7 +1061,7 @@ class TestBuildUsdcTopupRequirementsPriceString:
 class TestVerifyAndSettleUsdcTopup:
     """Mocks _get_server, build_usdc_topup_requirements, and parse_payment_payload."""
 
-    def _make_server(self, is_valid=True, settle_success=True, tx_hash="0xabc"):
+    def _make_server(self, is_valid=True, settle_success=True, transaction="0xabc"):
         server = MagicMock()
         verify_result = MagicMock()
         verify_result.is_valid = is_valid
@@ -1072,7 +1072,7 @@ class TestVerifyAndSettleUsdcTopup:
 
         settle_result = MagicMock()
         settle_result.success = settle_success
-        settle_result.tx_hash = tx_hash
+        settle_result.transaction = transaction
         server.settle_payment = AsyncMock(return_value=settle_result)
 
         server.build_payment_requirements.return_value = [MagicMock()]
@@ -1126,7 +1126,7 @@ class TestVerifyAndSettleUsdcTopup:
         assert "rejected" in result.error.lower()
 
     async def test_success_returns_tx_hash_and_amount(self):
-        mock_server = self._make_server(tx_hash="0xdeadbeef")
+        mock_server = self._make_server(transaction="0xdeadbeef")
         mock_x402 = MagicMock()
         with (
             patch.object(billing_module, "_server", mock_server),
@@ -1436,7 +1436,7 @@ class TestGetRevenueSummary:
         pattern is model_copy(update={"amount": str(actual_cost_usdc)}) then pass the
         cloned requirements as a positional argument.
         """
-        mock_settle = MagicMock(success=True, tx_hash="0xuptotx", transaction_hash=None)
+        mock_settle = MagicMock(success=True, transaction="0xuptotx")
         mock_server = MagicMock()
         mock_server.settle_payment = AsyncMock(return_value=mock_settle)
         mock_req = MagicMock(amount="500000")

@@ -514,8 +514,7 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
         [
             (
                 market_addr,
-                _USER_COLLATERAL_SELECTOR
-                + abi_encode(["address", "address"], [wallet, Web3.to_checksum_address(a["address"])]),
+                _USER_COLLATERAL_SELECTOR + abi_encode(["address", "address"], [wallet, Web3.to_checksum_address(a["address"])]),
             )
             for a in collateral_assets
         ]

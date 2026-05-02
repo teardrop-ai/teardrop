@@ -22,6 +22,7 @@ A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
 A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
 A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
 AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner→tool cycles before forced synthesis (default: 4)
+AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
 AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
 ```
 
@@ -535,7 +536,8 @@ Local Agent                     Teardrop                          Remote Agent
 A2A_DELEGATION_ENABLED=true
 A2A_DELEGATION_TIMEOUT_SECONDS=120
 A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
-AGENT_MAX_TOOL_ITERATIONS=4           # Max planner→tool cycles before forced synthesis
+AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner?tool cycles before forced synthesis (default: 4)
+AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
 AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
 
 # Enable billing for delegations
@@ -1068,3 +1070,4 @@ the contact address in the LICENSE file.
 
 Contributions are welcome under the same license — see [CONTRIBUTING.md](CONTRIBUTING.md).
 To report a security vulnerability, see [SECURITY.md](SECURITY.md).
+

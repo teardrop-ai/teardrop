@@ -143,7 +143,6 @@ async def close_web3_clients() -> None:
                 logger.warning("Error closing web3 aiohttp session: %s", exc)
 
 
-
 async def rpc_call(coro_fn, timeout_seconds: int | None = None):
     """Wrap a Web3 contract/RPC call with timeout and rate-limit resilience.
 

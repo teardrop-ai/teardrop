@@ -246,11 +246,7 @@ async def get_yield_rates(
     if symbols_any:
         symbol_terms = [s.strip().lower() for s in symbols_any if isinstance(s, str) and s.strip()]
         if symbol_terms:
-            filtered = [
-                pool
-                for pool in filtered
-                if any(term in str(pool.get("symbol", "")).lower() for term in symbol_terms)
-            ]
+            filtered = [pool for pool in filtered if any(term in str(pool.get("symbol", "")).lower() for term in symbol_terms)]
 
     total_matching = len(filtered)
 

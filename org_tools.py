@@ -21,6 +21,7 @@ import aiohttp
 import asyncpg
 import sentry_sdk
 from cryptography.fernet import Fernet, InvalidToken
+from jsonschema import Draft7Validator
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
@@ -45,6 +46,7 @@ class OrgTool(BaseModel):
     name: str
     description: str
     input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
     webhook_url: str
     webhook_method: str
     has_auth: bool
@@ -162,6 +164,7 @@ async def create_org_tool(
     auth_header_value: str | None,
     timeout_seconds: int,
     actor_id: str,
+    output_schema: dict[str, Any] | None = None,
     publish_as_mcp: bool = False,
     marketplace_description: str = "",
     base_price_usdc: int = 0,
@@ -198,18 +201,19 @@ async def create_org_tool(
     try:
         await pool.execute(
             "INSERT INTO org_tools"
-            " (id, org_id, name, description, input_schema,"
+            " (id, org_id, name, description, input_schema, output_schema,"
             "  webhook_url, webhook_method,"
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
             "  publish_as_mcp, marketplace_description, base_price_usdc,"
             "  created_at, updated_at, last_schema_changed_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13, $14, $14, $14)",
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12, $13, $14, $15, $15, $15)",
             tool_id,
             org_id,
             name,
             description,
             json.dumps(input_schema),
+            json.dumps(output_schema) if output_schema is not None else None,
             webhook_url,
             webhook_method,
             auth_header_name,
@@ -234,6 +238,7 @@ async def create_org_tool(
         name=name,
         description=description,
         input_schema=input_schema,
+        output_schema=output_schema,
         webhook_url=webhook_url,
         webhook_method=webhook_method,
         has_auth=auth_header_name is not None,
@@ -253,12 +258,16 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
     schema_raw = row["input_schema"]
     if isinstance(schema_raw, str):
         schema_raw = json.loads(schema_raw)
+    output_schema_raw = row.get("output_schema")
+    if isinstance(output_schema_raw, str):
+        output_schema_raw = json.loads(output_schema_raw)
     return OrgTool(
         id=row["id"],
         org_id=row["org_id"],
         name=row["name"],
         description=row["description"],
         input_schema=schema_raw,
+        output_schema=output_schema_raw,
         webhook_url=row["webhook_url"],
         webhook_method=row["webhook_method"],
         has_auth=row["auth_header_name"] is not None,
@@ -304,6 +313,8 @@ async def update_org_tool(
     *,
     actor_id: str,
     description: str | None = None,
+    input_schema: dict[str, Any] | None = None,
+    output_schema: dict[str, Any] | None = None,
     webhook_url: str | None = None,
     webhook_method: str | None = None,
     auth_header_name: str | None = ...,  # type: ignore[assignment]
@@ -338,6 +349,11 @@ async def update_org_tool(
 
     if description is not None:
         _add("description", description)
+    if input_schema is not None:
+        _add("input_schema", json.dumps(input_schema))
+        _add("last_schema_changed_at", datetime.now(timezone.utc))
+    if output_schema is not None:
+        _add("output_schema", json.dumps(output_schema))
     if webhook_url is not None:
         _add("webhook_url", webhook_url)
     if webhook_method is not None:
@@ -549,11 +565,119 @@ async def invalidate_marketplace_cache() -> None:
 # ─── Dynamic Pydantic model from JSON Schema ─────────────────────────────────
 
 _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
+    "object": dict,
     "string": str,
     "integer": int,
     "number": float,
     "boolean": bool,
+    "array": list,
 }
+
+_SAFE_SCHEMA_KEYS: set[str] = {
+    "type",
+    "properties",
+    "required",
+    "description",
+    "title",
+    "default",
+    "enum",
+    "minimum",
+    "maximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "items",
+}
+
+_SAFE_SCHEMA_TYPES: set[str] = {"object", "string", "integer", "number", "boolean", "array"}
+
+
+def normalize_webhook_response(
+    raw: bytes,
+    *,
+    content_type: str,
+    status_code: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Normalize webhook HTTP response payload into a consistent shape."""
+    body_bytes = raw[:max_bytes]
+
+    if "application/json" not in content_type:
+        return {
+            "success": False,
+            "status_code": status_code,
+            "response_body": None,
+            "error": f"Webhook returned non-JSON Content-Type: {content_type or 'unset'}",
+            "error_type": "non_json_response",
+        }
+
+    try:
+        parsed = json.loads(body_bytes)
+    except json.JSONDecodeError:
+        return {
+            "success": False,
+            "status_code": status_code,
+            "response_body": None,
+            "error": "Webhook returned invalid or truncated JSON",
+            "error_type": "invalid_json",
+        }
+
+    response_body = parsed if isinstance(parsed, dict) else {"value": parsed}
+
+    if status_code >= 400:
+        return {
+            "success": False,
+            "status_code": status_code,
+            "response_body": response_body,
+            "error": f"Webhook returned HTTP {status_code}",
+            "error_type": "http_error",
+        }
+
+    return {
+        "success": True,
+        "status_code": status_code,
+        "response_body": response_body,
+        "error": None,
+        "error_type": None,
+    }
+
+
+def validate_safe_schema_subset(schema: dict[str, Any]) -> list[str]:
+    """Return unsupported schema keywords/types that runtime tooling cannot enforce."""
+    errors: list[str] = []
+
+    def _walk(node: Any, path: str, *, in_properties_map: bool = False) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if in_properties_map:
+                    # Property names are user-defined keys that each hold a schema node.
+                    _walk(value, f"{path}.{key}")
+                    continue
+                if key not in _SAFE_SCHEMA_KEYS:
+                    errors.append(f"{path}.{key}: keyword not supported")
+                if key == "type":
+                    if isinstance(value, str):
+                        if value not in _SAFE_SCHEMA_TYPES:
+                            errors.append(f"{path}.type={value}: type not supported")
+                    elif isinstance(value, list):
+                        bad = [t for t in value if t not in _SAFE_SCHEMA_TYPES]
+                        if bad:
+                            errors.append(f"{path}.type={bad}: type not supported")
+                    else:
+                        errors.append(f"{path}.type: invalid type declaration")
+                _walk(value, f"{path}.{key}", in_properties_map=(key == "properties"))
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                _walk(item, f"{path}[{i}]", in_properties_map=False)
+
+    try:
+        Draft7Validator.check_schema(schema)
+    except Exception:
+        # Schema syntax errors are validated at API layer.
+        return ["$.schema: invalid JSON Schema"]
+
+    _walk(schema, "$")
+    return errors
 
 
 def _build_pydantic_model(
@@ -662,51 +786,24 @@ def _build_langchain_tool(
                     resp = await session.post(_url, headers=headers, json=kwargs)
 
                 body = await resp.read()
-                if len(body) > _MAX_RESPONSE_BYTES:
-                    body = body[:_MAX_RESPONSE_BYTES]
-
                 content_type = resp.headers.get("Content-Type", "")
-                if "application/json" not in content_type:
-                    await _on_webhook_failure(
-                        _tool_id,
-                        _org_id,
-                        _tool_name,
-                        _host_hash,
-                        "non_json_response",
-                        status_code=resp.status,
-                    )
-                    return {
-                        "error": f"Webhook returned non-JSON Content-Type: {content_type}",
-                        "status": resp.status,
-                    }
+                normalized = normalize_webhook_response(
+                    body,
+                    content_type=content_type,
+                    status_code=resp.status,
+                    max_bytes=_MAX_RESPONSE_BYTES,
+                )
 
-                try:
-                    payload = json.loads(body)
-                except json.JSONDecodeError:
+                if not normalized["success"]:
                     await _on_webhook_failure(
                         _tool_id,
                         _org_id,
                         _tool_name,
                         _host_hash,
-                        "invalid_json",
+                        normalized["error_type"] or "upstream_error",
                         status_code=resp.status,
                     )
-                    return {"error": "Webhook returned invalid JSON"}
-
-                # Treat 4xx/5xx as failures even if JSON-formatted.
-                if resp.status >= 400:
-                    await _on_webhook_failure(
-                        _tool_id,
-                        _org_id,
-                        _tool_name,
-                        _host_hash,
-                        "http_error",
-                        status_code=resp.status,
-                    )
-                    return {
-                        "error": f"Webhook returned HTTP {resp.status}",
-                        "status": resp.status,
-                    }
+                    return {"error": normalized["error"], "status": resp.status}
 
                 # Success path.
                 latency_ms = int((time.monotonic() - started) * 1000)
@@ -719,7 +816,7 @@ def _build_langchain_tool(
                     actor_id="agent",
                     detail={"latency_ms": latency_ms, "status": resp.status},
                 )
-                return payload
+                return normalized["response_body"]
 
         except asyncio.TimeoutError:
             await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "timeout")
@@ -733,6 +830,10 @@ def _build_langchain_tool(
         name=tool.name,
         description=tool.description,
         args_schema=args_model,
+        metadata={
+            "timeout_seconds": tool.timeout_seconds,
+            "output_schema": tool.output_schema,
+        },
     )
 
 

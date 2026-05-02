@@ -22,6 +22,7 @@ from benchmarks import get_model_context_specs
 from config import get_settings
 from llm_config import is_provider_cooled_down, record_provider_failure
 from tools import registry
+from tools.executor import execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -423,11 +424,7 @@ def _covered_defi_keys_from_result(content: str) -> set[str]:
         return set()
 
     errors = payload.get("errors") or []
-    failed_protocols = {
-        str(err.get("protocol", "")).lower()
-        for err in errors
-        if isinstance(err, dict) and err.get("protocol")
-    }
+    failed_protocols = {str(err.get("protocol", "")).lower() for err in errors if isinstance(err, dict) and err.get("protocol")}
     # get_defi_positions risk coverage requires both Aave and Compound fetches.
     if "aave_v3" in failed_protocols or "compound_v3" in failed_protocols:
         return set()
@@ -604,61 +601,70 @@ async def _execute_single_tool(
     start_mono = time.monotonic()
 
     tool = tools_by_name.get(tool_name)
-    if tool is None:
-        content = f"Tool '{tool_name}' not found."
-    else:
-        try:
-            # delegate_to_agent needs org context for billing — call the raw
-            # implementation directly so we can pass the config dict.
-            if tool_name == "delegate_to_agent" and metadata:
-                # Enforce per-run delegation quota
-                from config import get_settings as _get_settings
 
-                _s = _get_settings()
-                usage = metadata.get("_usage", {})
-                delegation_count = usage.get("delegation_count", 0)
-                if delegation_count >= _s.a2a_delegation_max_per_run:
-                    content = json.dumps(
-                        {
-                            "agent_name": "unknown",
-                            "status": "failed",
-                            "result": "",
-                            "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
-                            "cost_usdc": 0,
-                        }
-                    )
-                    return {
-                        "message": ToolMessage(content=content, tool_call_id=call_id),
-                        "name": tool_name,
-                        "elapsed_ms": 0,
-                    }
+    async def _delegate_invoke(**kwargs: Any) -> Any:
+        from billing import _get_pool as _get_billing_pool
+        from tools.definitions.delegate_to_agent import delegate_to_agent
 
-                from billing import _get_pool as _get_billing_pool
-                from tools.definitions.delegate_to_agent import delegate_to_agent
+        config = {
+            "configurable": {
+                "org_id": metadata.get("org_id", "") if metadata else "",
+                "run_id": metadata.get("run_id", "") if metadata else "",
+                "db_pool": _get_billing_pool(),
+                "jwt_token": metadata.get("_jwt_token") if metadata else None,
+            }
+        }
+        return await delegate_to_agent(config=config, **kwargs)
 
-                config = {
-                    "configurable": {
-                        "org_id": metadata.get("org_id", ""),
-                        "run_id": metadata.get("run_id", ""),
-                        "db_pool": _get_billing_pool(),
-                        "jwt_token": metadata.get("_jwt_token"),
-                    }
+    if tool_name == "delegate_to_agent" and metadata:
+        # Enforce per-run delegation quota.
+        from config import get_settings as _get_settings
+
+        _s = _get_settings()
+        usage = metadata.get("_usage", {})
+        delegation_count = usage.get("delegation_count", 0)
+        if delegation_count >= _s.a2a_delegation_max_per_run:
+            content = json.dumps(
+                {
+                    "agent_name": "unknown",
+                    "status": "failed",
+                    "result": "",
+                    "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
+                    "cost_usdc": 0,
                 }
-                result = await delegate_to_agent(config=config, **tool_args)
-            else:
-                result = await tool.ainvoke(tool_args)
-            content = json.dumps(result) if not isinstance(result, str) else result
-        except Exception as exc:
-            logger.warning("tool %s failed: %s", tool_name, exc)
-            content = f"Tool error: {exc}"
+            )
+            return {
+                "message": ToolMessage(content=content, tool_call_id=call_id),
+                "name": tool_name,
+                "elapsed_ms": 0,
+                "content": content,
+                "billable": False,
+            }
+
+        result = await execute_tool(
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            tool_args=tool_args,
+            invoke=_delegate_invoke,
+        )
+    else:
+        result = await execute_tool(
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            tool_args=tool_args,
+            tool=tool,
+        )
 
     elapsed = int((time.monotonic() - start_mono) * 1000)
+    content = result.content
     logger.info("tool_executor: %s completed in %dms (result_len=%d)", tool_name, elapsed, len(content))
     return {
         "message": ToolMessage(content=content, tool_call_id=call_id),
         "name": tool_name,
         "elapsed_ms": elapsed,
         "content": content,
+        "billable": result.billable,
+        "error_class": result.error_class,
     }
 
 
@@ -679,6 +685,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     # ── Accumulate tool usage ─────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
+    failed_tool_names_acc: list[str] = list(usage.get("failed_tool_names", []))
     tool_call_counts: dict[str, int] = dict(usage.get("_tool_call_counts", {}))
     defi_positions_covered: set[str] = set(usage.get("_defi_positions_covered", []))
     tool_max_calls = dict(get_settings().agent_tool_max_calls_per_run)
@@ -696,6 +703,11 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             continue
 
         max_calls = tool_max_calls.get(call["name"])
+        tool_meta = getattr(tools_by_name.get(call["name"]), "metadata", None)
+        if isinstance(tool_meta, dict):
+            meta_cap = tool_meta.get("max_calls_per_run")
+            if isinstance(meta_cap, int) and meta_cap > 0:
+                max_calls = meta_cap
         current_calls = int(tool_call_counts.get(call["name"], 0))
         # Account for same-tool calls already accepted in this batch.
         accepted_in_batch = sum(1 for c in dedup_calls if c["name"] == call["name"])
@@ -789,7 +801,11 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         }
 
     tool_messages = skipped_messages + [r["message"] for r in results]
-    tool_names_acc.extend(r["name"] for r in results)
+
+    billable_results = [r for r in results if bool(r.get("billable", True))]
+    failed_results = [r for r in results if not bool(r.get("billable", True))]
+    tool_names_acc.extend(r["name"] for r in billable_results)
+    failed_tool_names_acc.extend(r["name"] for r in failed_results)
 
     # Record newly executed signatures so future iterations can dedup them.
     completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls if c["name"] in platform_tool_names)
@@ -805,8 +821,12 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage["_defi_positions_covered"] = sorted(defi_positions_covered)
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
+    usage["billable_tool_calls"] = usage.get("billable_tool_calls", 0) + len(billable_results)
+    usage["failed_tool_calls"] = usage.get("failed_tool_calls", 0) + len(failed_results)
     usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
     usage["tool_names"] = tool_names_acc
+    usage["billable_tool_names"] = tool_names_acc
+    usage["failed_tool_names"] = failed_tool_names_acc
 
     # ── Accumulate delegation spend from delegate_to_agent results ────────
     delegation_spend = usage.get("delegation_spend_usdc", 0)

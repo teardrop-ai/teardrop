@@ -30,6 +30,8 @@ class ToolDefinition(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
     input_schema: Any = Field(..., description="Pydantic BaseModel class for input validation")
     output_schema: Any = Field(default=None, description="Optional Pydantic BaseModel class for output validation")
+    timeout_seconds: float | None = Field(default=None, description="Optional per-call timeout override")
+    max_calls_per_run: int | None = Field(default=None, description="Optional per-run call cap")
     implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
 
     # Deprecation lifecycle
@@ -53,6 +55,11 @@ class ToolDefinition(BaseModel):
             name=self.name,
             description=self.description,
             args_schema=self.input_schema,
+            metadata={
+                "timeout_seconds": self.timeout_seconds,
+                "output_schema": self.output_schema,
+                "max_calls_per_run": self.max_calls_per_run,
+            },
         )
 
 

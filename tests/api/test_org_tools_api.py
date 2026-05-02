@@ -240,6 +240,11 @@ async def test_create_tool_publish_requires_author_config(api_client, monkeypatc
     body = {
         **_CREATE_BODY,
         "publish_as_mcp": True,
+        "output_schema": {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        },
         "marketplace_description": "A published tool",
         "base_price_usdc": 1_000_000,
     }

@@ -1107,6 +1107,10 @@ def _build_marketplace_langchain_tool(
         name=qualified_name,
         description=tool_row.get("marketplace_description") or tool_row.get("description", ""),
         args_schema=args_model,
+        metadata={
+            "timeout_seconds": _timeout_sec,
+            "output_schema": tool_row.get("output_schema"),
+        },
     )
 
 
