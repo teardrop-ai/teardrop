@@ -48,8 +48,9 @@ async def get_coingecko_session() -> aiohttp.ClientSession:
     async with _get_session_lock():
         if _coingecko_session is not None and not _coingecko_session.closed:
             return _coingecko_session
-        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300)
-        _coingecko_session = aiohttp.ClientSession(connector=connector)
+        # force_close avoids reusing half-closed pooled sockets after task cancellation.
+        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300, force_close=True)
+        _coingecko_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared CoinGecko aiohttp session")
         return _coingecko_session
 

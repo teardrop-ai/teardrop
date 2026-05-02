@@ -272,6 +272,31 @@ class TestPlannerNode:
         assert result["error_type"] == "rate_limit"
         mock_fallback.assert_not_called()
 
+    async def test_synthesis_turn_uses_synthesis_max_tokens(self, test_settings):
+        mock_response = _make_ai_message("Final concise synthesis", tool_calls=[])
+
+        normal_llm = MagicMock()
+        normal_llm.bind_tools.return_value = normal_llm
+
+        synthesis_llm = MagicMock()
+        synthesis_llm.bind_tools.return_value = synthesis_llm
+        synthesis_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_wallet_portfolio"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=normal_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes.create_llm_from_config", return_value=synthesis_llm) as mock_create_from_config,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert mock_create_from_config.call_count == 1
+        cfg = mock_create_from_config.call_args.args[0]
+        assert cfg["max_tokens"] == test_settings.agent_synthesis_max_tokens
+
 
 # ─── tool_executor_node ───────────────────────────────────────────────────────
 
@@ -443,6 +468,32 @@ class TestToolExecutorNode:
         assert result["task_status"] == TaskStatus.FAILED
         assert "timed out" in result["messages"][0].content
         assert len(result["messages"]) == 1
+
+    async def test_get_token_price_all_address_tokens_blocked(self, test_settings):
+        call = {"id": "c1", "name": "get_token_price", "args": {"tokens": ["0xabc123", "0xdef456"]}}
+        last_msg = _make_ai_message(tool_calls=[call])
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"prices": []})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_token_price": mock_tool}):
+            result = await tool_executor_node(state)
+
+        mock_tool.ainvoke.assert_not_called()
+        assert "GET_TOKEN_PRICE_BLOCKED" in result["messages"][0].content
+
+    async def test_get_token_price_mixed_tokens_not_blocked(self, test_settings):
+        call = {"id": "c1", "name": "get_token_price", "args": {"tokens": ["ETH", "0xabc123"]}}
+        last_msg = _make_ai_message(tool_calls=[call])
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"prices": [{"symbol": "ETH", "price": 3000}]})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_token_price": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.PLANNING
+        mock_tool.ainvoke.assert_called_once()
 
 
 # ─── ui_generator_node ────────────────────────────────────────────────────────

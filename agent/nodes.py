@@ -55,6 +55,20 @@ def _get_cached_tools_by_name() -> dict:
     return _cached_tools_by_name
 
 
+def _provider_api_key(settings, provider: str) -> str:
+    """Resolve provider API key from global settings for per-turn overrides."""
+    p = provider.lower()
+    if p == "anthropic":
+        return settings.anthropic_api_key or ""
+    if p == "openai":
+        return settings.openai_api_key or ""
+    if p == "google":
+        return settings.google_api_key or ""
+    if p == "openrouter":
+        return settings.openrouter_api_key or ""
+    return ""
+
+
 # ─── System prompts ───────────────────────────────────────────────────────────
 
 _PLANNER_SYSTEM = """\
@@ -132,10 +146,26 @@ Tool use economy:
   - get_wallet_portfolio already returns the native ETH balance inside its
     holdings list. If you have called or are about to call get_wallet_portfolio,
     do NOT also call get_eth_balance — it is redundant.
+    - get_wallet_portfolio already returns price_usd and value_usd for held
+        assets. Do not call get_token_price for tokens already present in holdings.
+    - If get_defi_positions reports an unknown token as a 0x address fallback,
+        do NOT call get_token_price with that address. Report it as
+        "unrecognized (address-only)".
+    - Token approvals indicate spend permission, not current ownership. Yield
+        recommendations must be grounded in positive balances from
+        get_wallet_portfolio holdings.
+    - When calling get_yield_rates for wallet-specific recommendations, pass
+        symbols_any using held token symbols to pre-filter irrelevant pools.
   - The executor blocks duplicate calls: if you issue a tool call with the same
     name and arguments as a prior call this session, it will be suppressed and
     you will receive a DUPLICATE_CALL_BLOCKED notice. Use the prior result
     already present in the conversation instead of re-requesting it.
+
+Final synthesis style:
+    - Keep synthesis concise and focused; avoid decorative markdown tables unless
+        the user explicitly asks for tables.
+    - Prefer short bullet sections and omit empty sections.
+    - Cap yield recommendations to the top 5 relevant pools.
 """
 
 _UI_GENERATOR_SYSTEM = """\
@@ -422,6 +452,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     org_tools = state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
     llm_config = state.metadata.get("_llm_config")
+    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
 
     _cfg = llm_config or {}
     _provider = _cfg.get("provider", settings.agent_provider)
@@ -443,6 +474,18 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
+    if tool_iterations > 0 and not llm_config:
+        _max_tokens = settings.agent_synthesis_max_tokens
+        llm = create_llm_from_config(
+            {
+                "provider": _provider,
+                "model": _model,
+                "api_key": _provider_api_key(settings, _provider),
+                "max_tokens": _max_tokens,
+                "temperature": settings.agent_temperature,
+                "timeout_seconds": _timeout,
+            }
+        ).bind_tools(all_tools)
 
     system_messages = _build_planner_system_messages(
         state,
@@ -453,7 +496,6 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         platform_tools=tools,
         org_tools=org_tools,
     )
-    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
     if tool_iterations > 0:
         completed_names = state.metadata.get("_usage", {}).get("tool_names", [])
         unique_names = list(dict.fromkeys(str(name) for name in completed_names))
@@ -469,11 +511,27 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             )
         )
     messages = [*system_messages, *state.messages]
+    recent_tool_messages = [m for m in state.messages if isinstance(m, ToolMessage)][-8:]
+    recent_tool_chars = sum(len(str(m.content)) for m in recent_tool_messages)
+    logger.info(
+        (
+            "planner_node: invoking planner (tool_iterations=%d, "
+            "recent_tool_messages=%d, recent_tool_chars=%d, provider=%s, "
+            "model=%s, max_tokens=%s, timeout=%ss)"
+        ),
+        tool_iterations,
+        len(recent_tool_messages),
+        recent_tool_chars,
+        _provider,
+        _model,
+        _max_tokens,
+        _timeout,
+    )
 
     result = await _invoke_planner_llm(
         llm,
         messages,
-        settings.agent_llm_timeout_seconds,
+        _timeout,
         provider=_provider,
         model=_model,
     )
@@ -496,7 +554,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             result = await _invoke_planner_llm(
                 fallback_bound,
                 messages,
-                settings.agent_llm_timeout_seconds,
+                _timeout,
                 provider=fallback_provider,
                 model=fallback_model,
             )
@@ -669,6 +727,24 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
                     )
                 )
                 continue
+
+        if call["name"] == "get_token_price":
+            tokens = (call.get("args") or {}).get("tokens") or []
+            if isinstance(tokens, list) and tokens:
+                normalized = [t.strip().lower() for t in tokens if isinstance(t, str) and t.strip()]
+                if normalized and all(t.startswith("0x") for t in normalized):
+                    logger.debug("semantic: suppressing unsupported get_token_price address-only call")
+                    skipped_messages.append(
+                        ToolMessage(
+                            content=(
+                                "[GET_TOKEN_PRICE_BLOCKED] All requested tokens are bare 0x addresses. "
+                                "CoinGecko cannot resolve address-only identifiers. "
+                                "Report these as unrecognized (address-only) and continue synthesis."
+                            ),
+                            tool_call_id=call["id"],
+                        )
+                    )
+                    continue
 
         sig = _call_signature(call["name"], call["args"])
         if sig in completed_sigs or sig in seen_this_batch:

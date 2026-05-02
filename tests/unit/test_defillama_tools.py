@@ -445,6 +445,10 @@ class TestGetYieldRatesInput:
         inp = GetYieldRatesInput(protocols=[])
         assert inp.protocols == []
 
+    def test_symbols_any_accepted(self):
+        inp = GetYieldRatesInput(symbols_any=["USDC", "ETH"])
+        assert inp.symbols_any == ["USDC", "ETH"]
+
 
 class TestResolveApy:
     def test_uses_spot_apy_when_available(self):
@@ -590,6 +594,22 @@ class TestGetYieldRates:
         """protocols=[] must behave identically to protocols=None — no protocol filter applied."""
         result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, protocols=[])
         # 4 of the 5 sample pools are above the default 1M TVL threshold
+        assert result["total_matching"] == 4
+
+    async def test_symbols_any_filters_to_matching_symbols(self, test_settings, monkeypatch):
+        result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=["USDC"])
+        assert result["total_matching"] == 3
+        assert all("usdc" in p["symbol"].lower() for p in result["pools"])
+
+    async def test_symbols_any_case_insensitive(self, test_settings, monkeypatch):
+        result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=["eth"])
+        assert result["total_matching"] == 0
+        result2 = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, min_tvl_usd=0, symbols_any=["eth"])
+        assert result2["total_matching"] == 1
+        assert result2["pools"][0]["symbol"] == "ETH-USDC"
+
+    async def test_symbols_any_empty_behaves_as_no_filter(self, test_settings, monkeypatch):
+        result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=[])
         assert result["total_matching"] == 4
 
 

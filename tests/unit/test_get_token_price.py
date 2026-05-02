@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from tools.definitions.get_token_price import (
+    TOOL,
     GetTokenPriceInput,
     _load_coins_list_index,
     _resolve_id,
@@ -37,6 +38,13 @@ class TestResolveId:
 
     def test_unknown_passes_through(self):
         assert _resolve_id("somecoin") == "somecoin"
+
+    def test_address_like_token_passes_through(self):
+        assert _resolve_id("0xabc123") == "0xabc123"
+
+
+def test_tool_description_mentions_address_limitations():
+    assert "Bare 0x contract addresses" in TOOL.description
 
 
 class TestLoadCoinsListIndex:

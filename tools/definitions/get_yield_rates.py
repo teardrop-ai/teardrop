@@ -62,6 +62,14 @@ class GetYieldRatesInput(BaseModel):
         le=50,
         description="Maximum number of pools to return, sorted by APY descending.",
     )
+    symbols_any: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional symbol filter. If provided, include pools whose symbol field "
+            "contains at least one token from this list (case-insensitive). "
+            "Use held token symbols from get_wallet_portfolio to focus results."
+        ),
+    )
 
     @field_validator("protocols")
     @classmethod
@@ -194,6 +202,7 @@ async def get_yield_rates(
     min_tvl_usd: float = 1_000_000.0,
     min_apy: float = 0.0,
     limit: int = 20,
+    symbols_any: list[str] | None = None,
 ) -> dict[str, Any]:
     """Get DeFi yield pool rates filtered and sorted by APY."""
     now = time.monotonic()
@@ -234,6 +243,15 @@ async def get_yield_rates(
             continue
         filtered.append(pool)
 
+    if symbols_any:
+        symbol_terms = [s.strip().lower() for s in symbols_any if isinstance(s, str) and s.strip()]
+        if symbol_terms:
+            filtered = [
+                pool
+                for pool in filtered
+                if any(term in str(pool.get("symbol", "")).lower() for term in symbol_terms)
+            ]
+
     total_matching = len(filtered)
 
     # Sort by APY descending, then slice.
@@ -248,6 +266,7 @@ async def get_yield_rates(
         "min_tvl_usd": min_tvl_usd,
         "min_apy": min_apy,
         "limit": limit,
+        "symbols_any": symbols_any,
     }
 
     return GetYieldRatesOutput(
@@ -277,7 +296,7 @@ TOOL = ToolDefinition(
         "IMPORTANT: Call ONCE per query. The returned `symbol` field contains the "
         "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
         "by inspecting `symbol` rather than re-calling with different arguments. "
-        "Use `min_apy` and `min_tvl_usd` to prune noise in a single call."
+        "Use `min_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call."
     ),
     tags=["defi", "yield", "apy", "finance", "defillama"],
     input_schema=GetYieldRatesInput,

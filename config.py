@@ -62,7 +62,14 @@ class Settings(BaseSettings):
     agent_model: str = "deepseek/deepseek-v4-flash"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
-    agent_llm_timeout_seconds: int = Field(default=120, description="Timeout in seconds for the planner LLM call")
+    agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
+    agent_synthesis_max_tokens: int = Field(
+        default=2048,
+        description=(
+            "Maximum output tokens for planner synthesis turns after at least one "
+            "tool iteration. Keeps final synthesis concise and reduces timeout risk."
+        ),
+    )
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
         default=4,

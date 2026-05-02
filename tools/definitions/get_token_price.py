@@ -274,7 +274,10 @@ TOOL = ToolDefinition(
         "crypto tokens. Accepts ticker symbols (BTC, ETH, LQTY), full token names "
         "(Bitcoin, Liquity, Chainlink), or CoinGecko IDs. Unknown symbols are "
         "resolved automatically against the full CoinGecko coin list. "
-        "Supports batch queries up to 50 tokens."
+        "Supports batch queries up to 50 tokens. Bare 0x contract addresses are "
+        "not resolvable by CoinGecko and should be treated as unknown. "
+        "If get_wallet_portfolio already returned price_usd/value_usd for a held "
+        "token, reuse that value instead of calling get_token_price again."
     ),
     tags=["finance", "crypto", "price", "market"],
     input_schema=GetTokenPriceInput,

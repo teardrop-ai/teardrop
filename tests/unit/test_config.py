@@ -80,6 +80,16 @@ def test_agent_tool_max_calls_per_run_env_override(monkeypatch):
     assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 2}
 
 
+def test_agent_synthesis_max_tokens_default():
+    s = Settings()
+    assert s.agent_synthesis_max_tokens == 2048
+
+
+def test_agent_llm_timeout_default():
+    s = Settings()
+    assert s.agent_llm_timeout_seconds == 180
+
+
 def test_test_settings_fixture_uses_test_env(test_settings):
     assert test_settings.app_env == "test"
 

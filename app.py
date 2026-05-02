@@ -854,6 +854,12 @@ class _A2UIStreamFilter:
         return out
 
 
+def _should_flush_planner_buffer(task_status: str) -> bool:
+    """Return True only for planner statuses that should emit buffered prose."""
+    status = task_status.strip().lower()
+    return status in {"", "planning", "generating_ui", "completed"}
+
+
 # ─── Request / response models ────────────────────────────────────────────────
 
 
@@ -2046,12 +2052,7 @@ async def agent_run(
                     output = event_data.get("output", {})
                     status = str(output.get("task_status", "")).lower()
 
-                    if status == "executing":
-                        # Intermediate planner turns that trigger more tools are
-                        # not user-facing. Drop this turn's buffered prose.
-                        _planner_token_buffer.clear()
-                        _text_filter.flush()
-                    else:
+                    if _should_flush_planner_buffer(status):
                         for message_id, delta in _planner_token_buffer:
                             yield _sse_event(
                                 _EV_TEXT_MSG_CONTENT,
@@ -2065,6 +2066,10 @@ async def agent_run(
                                 _EV_TEXT_MSG_CONTENT,
                                 {"message_id": _last_msg_id, "delta": remainder},
                             )
+                    else:
+                        # Intermediate/planner-failed turns are not user-facing.
+                        _planner_token_buffer.clear()
+                        _text_filter.flush()
 
                     # P1: Explicitly signal timeouts or rate-limits to the client.
                     # This prevents the client from assuming the run finished normally

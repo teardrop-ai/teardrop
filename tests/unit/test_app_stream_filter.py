@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import _A2UIStreamFilter
+from app import _A2UIStreamFilter, _should_flush_planner_buffer
 
 
 def _drain(deltas: list[str]) -> str:
@@ -114,6 +114,19 @@ def test_partial_open_then_not_a_fence():
     assert "```python" in out
     assert "print('hi')" in out
     assert "``` done" in out
+
+
+def test_should_flush_planner_buffer_success_statuses():
+    assert _should_flush_planner_buffer("") is True
+    assert _should_flush_planner_buffer("planning") is True
+    assert _should_flush_planner_buffer("generating_ui") is True
+    assert _should_flush_planner_buffer("completed") is True
+
+
+def test_should_flush_planner_buffer_non_success_statuses():
+    assert _should_flush_planner_buffer("executing") is False
+    assert _should_flush_planner_buffer("failed") is False
+    assert _should_flush_planner_buffer("timeout") is False
 
 
 if __name__ == "__main__":  # pragma: no cover
