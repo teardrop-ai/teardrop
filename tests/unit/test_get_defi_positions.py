@@ -6,8 +6,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
+from web3 import Web3
 
+import tools.definitions.get_defi_positions as gdp
 from tools.definitions.get_defi_positions import get_defi_positions
 
 _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -21,6 +24,20 @@ _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 # Individual tests that need different behaviour can override it further.
 
 _DEFAULT_RESERVE_DATA = (0, 0, 0, 0, 0, 0, 0, 0, False)
+_DEFAULT_POSITION = (
+    0,
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+)
 
 
 def _encode_reserve_data(rd: tuple) -> bytes:
@@ -38,11 +55,77 @@ def patch_multicall3(monkeypatch):
     module-level variable that individual tests can override via
     ``set_reserve_data()``).
     """
-    _current = {"reserve_data": _DEFAULT_RESERVE_DATA}
+    _current = {
+        "reserve_data": _DEFAULT_RESERVE_DATA,
+        "comet_balance": 0,
+        "comet_borrow": 0,
+        "comet_is_liquidatable": False,
+        "comet_user_collateral": (0, 0),
+        "comet_user_collateral_by_asset": {},
+        "uniswap_token_ids": [],
+        "uniswap_position_by_id": {},
+        "uniswap_default_position": _DEFAULT_POSITION,
+    }
 
     async def _stub(w3, calls, *, allow_failure=True):
-        encoded = _encode_reserve_data(_current["reserve_data"])
-        return [(True, encoded)] * len(calls)
+        out: list[tuple[bool, bytes]] = []
+        for _target, call_data in calls:
+            selector = call_data[:4]
+            payload = call_data[4:]
+            if selector == gdp._GET_USER_RESERVE_DATA_SELECTOR:
+                out.append((True, _encode_reserve_data(_current["reserve_data"])))
+                continue
+            if selector == gdp._BALANCE_OF_COMET_SELECTOR:
+                out.append((True, abi_encode(["uint256"], [_current["comet_balance"]])))
+                continue
+            if selector == gdp._BORROW_BALANCE_SELECTOR:
+                out.append((True, abi_encode(["uint256"], [_current["comet_borrow"]])))
+                continue
+            if selector == gdp._IS_LIQUIDATABLE_SELECTOR:
+                out.append((True, abi_encode(["bool"], [_current["comet_is_liquidatable"]])))
+                continue
+            if selector == gdp._USER_COLLATERAL_SELECTOR:
+                _owner, asset = abi_decode(["address", "address"], payload)
+                asset_cs = Web3.to_checksum_address(asset)
+                tup = _current["comet_user_collateral_by_asset"].get(asset_cs, _current["comet_user_collateral"])
+                out.append((True, abi_encode(["uint128", "uint128"], list(tup))))
+                continue
+            if selector == gdp._TOKEN_OF_OWNER_BY_INDEX_SELECTOR:
+                _owner, idx = abi_decode(["address", "uint256"], payload)
+                ids = _current["uniswap_token_ids"]
+                if int(idx) >= len(ids):
+                    out.append((False, b""))
+                else:
+                    out.append((True, abi_encode(["uint256"], [ids[int(idx)]])))
+                continue
+            if selector == gdp._POSITIONS_SELECTOR:
+                token_id = int(abi_decode(["uint256"], payload)[0])
+                pos = _current["uniswap_position_by_id"].get(token_id, _current["uniswap_default_position"])
+                out.append(
+                    (
+                        True,
+                        abi_encode(
+                            [
+                                "uint96",
+                                "address",
+                                "address",
+                                "address",
+                                "uint24",
+                                "int24",
+                                "int24",
+                                "uint128",
+                                "uint256",
+                                "uint256",
+                                "uint128",
+                                "uint128",
+                            ],
+                            list(pos),
+                        ),
+                    )
+                )
+                continue
+            out.append((False, b""))
+        return out
 
     monkeypatch.setattr("tools.definitions.get_defi_positions.multicall3_batch", _stub)
     # Expose a setter so tests can customise reserve_data.
@@ -52,6 +135,11 @@ def patch_multicall3(monkeypatch):
 def set_reserve_data(monkeypatch, rd: tuple):
     """Helper: override the reserve_data returned by the patched multicall3_batch."""
     monkeypatch._multicall3_current["reserve_data"] = rd
+
+
+def set_multicall_data(monkeypatch, **kwargs):
+    """Helper: override other multicall return values (Compound/Uniswap)."""
+    monkeypatch._multicall3_current.update(kwargs)
 
 
 def _make_block_awaitable(value: int = 12345):
@@ -291,6 +379,12 @@ class TestCompoundV3:
             comet_num_assets=0,
             comet_is_liquidatable=False,
         )
+        set_multicall_data(
+            monkeypatch,
+            comet_balance=5000 * 10**6,
+            comet_borrow=0,
+            comet_is_liquidatable=False,
+        )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
@@ -309,16 +403,24 @@ class TestCompoundV3:
     async def test_market_with_collateral(self, test_settings, monkeypatch):
         from tools.definitions.get_defi_positions import get_defi_positions
 
-        # numAssets=1 → getAssetInfo(0) returns struct; userCollateral returns (1e18, 0)
+        # Configure nonzero collateral for WETH + wstETH so every market returns a collateral row.
         weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-        asset_info = (0, weth, "0x0000000000000000000000000000000000000000", 0, 0, 0, 0, 0)
+        wsteth = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
         mock_w3 = _build_mock_w3(
             comet_balance=0,
             comet_borrow=1000 * 10**6,  # borrowed 1000 USDC
-            comet_num_assets=1,
-            comet_asset_infos=[asset_info],
             comet_user_collateral=(10**18, 0),  # 1 WETH
             comet_is_liquidatable=False,
+        )
+        set_multicall_data(
+            monkeypatch,
+            comet_balance=0,
+            comet_borrow=1000 * 10**6,
+            comet_is_liquidatable=False,
+            comet_user_collateral_by_asset={
+                Web3.to_checksum_address(weth): (10**18, 0),
+                Web3.to_checksum_address(wsteth): (10**18, 0),
+            },
         )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
@@ -378,6 +480,11 @@ class TestUniswapV3:
         # Override: balanceOf is shared across Comet + Uniswap in our mock.
         # Force Uniswap path by setting balanceOf = 1.
         mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        set_multicall_data(
+            monkeypatch,
+            uniswap_token_ids=[12345],
+            uniswap_position_by_id={12345: closed_position},
+        )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
@@ -406,6 +513,11 @@ class TestUniswapV3:
             uniswap_position=active_position,
         )
         mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        set_multicall_data(
+            monkeypatch,
+            uniswap_token_ids=[42],
+            uniswap_position_by_id={42: active_position},
+        )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
@@ -448,6 +560,11 @@ class TestUniswapV3:
             uniswap_position=active_position,
         )
         mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        set_multicall_data(
+            monkeypatch,
+            uniswap_token_ids=[99],
+            uniswap_position_by_id={99: active_position},
+        )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
@@ -480,6 +597,11 @@ class TestUniswapV3:
             uniswap_position=active_position,
         )
         mock_w3.eth.contract.return_value.functions.balanceOf.return_value.call = AsyncMock(return_value=1)
+        set_multicall_data(
+            monkeypatch,
+            uniswap_token_ids=[77],
+            uniswap_position_by_id={77: active_position},
+        )
         monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)

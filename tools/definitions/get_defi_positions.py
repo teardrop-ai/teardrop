@@ -2,11 +2,9 @@
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
 """get_defi_positions – aggregate DeFi positions across Aave v3, Compound v3, and Uniswap v3 LP.
 
-View-only, hardcoded protocol addresses, chain_id ∈ {1, 8453}. Uses plain
-``asyncio.gather`` concurrency with per-protocol try/except so a failure in
-one protocol never blocks the others. Multicall3 batching was considered
-for v1 but deferred — per-call concurrency on a modern RPC is fast enough
-(~300–700 ms wall-clock per chain) and avoids manual ABI encode/decode.
+View-only, hardcoded protocol addresses, chain_id ∈ {1, 8453}. Uses per-protocol
+try/except so a failure in one protocol never blocks the others. RPC-heavy fan-outs
+are batched through Multicall3 to reduce provider contention and 429s.
 """
 
 from __future__ import annotations
@@ -81,33 +79,86 @@ _KNOWN_SYMBOLS: dict[int, dict[str, str]] = {
     chain_id: {r["address"]: r["symbol"] for r in reserves} for chain_id, reserves in _AAVE_V3_TRACKED_RESERVES.items()
 }
 
-# Compound v3 (Comet) per-market metadata. ``collaterals`` is empty —
-# we fetch the list dynamically via numAssets() + getAssetInfo(i) so the
-# tool stays correct as Compound adds collaterals.
-_COMPOUND_V3_MARKETS: dict[int, list[dict[str, str]]] = {
+# Function selectors for frequently batched calls.
+_BALANCE_OF_COMET_SELECTOR: bytes = bytes(Web3.keccak(text="balanceOf(address)"))[:4]
+_BORROW_BALANCE_SELECTOR: bytes = bytes(Web3.keccak(text="borrowBalanceOf(address)"))[:4]
+_IS_LIQUIDATABLE_SELECTOR: bytes = bytes(Web3.keccak(text="isLiquidatable(address)"))[:4]
+_USER_COLLATERAL_SELECTOR: bytes = bytes(Web3.keccak(text="userCollateral(address,address)"))[:4]
+_TOKEN_OF_OWNER_BY_INDEX_SELECTOR: bytes = bytes(Web3.keccak(text="tokenOfOwnerByIndex(address,uint256)"))[:4]
+_POSITIONS_SELECTOR: bytes = bytes(Web3.keccak(text="positions(uint256)"))[:4]
+
+# Compound v3 (Comet) per-market metadata.
+# Last reviewed: May 2026.
+_COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
     1: [
-        {"name": "cUSDCv3", "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3", "base_symbol": "USDC", "base_decimals": "6"},
+        {
+            "name": "cUSDCv3",
+            "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+            "base_symbol": "USDC",
+            "base_decimals": "6",
+            "collateral_assets": [
+                {"symbol": "WBTC", "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "decimals": "8"},
+                {"symbol": "COMP", "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "decimals": "18"},
+                {"symbol": "LINK", "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA", "decimals": "18"},
+                {"symbol": "UNI", "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "decimals": "18"},
+                {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": "18"},
+            ],
+        },
         {
             "name": "cWETHv3",
             "address": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
             "base_symbol": "WETH",
             "base_decimals": "18",
+            "collateral_assets": [
+                {"symbol": "wstETH", "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "decimals": "18"},
+                {"symbol": "cbETH", "address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704", "decimals": "18"},
+                {"symbol": "rETH", "address": "0xae78736Cd615f374D3085123A210448E74Fc6393", "decimals": "18"},
+            ],
         },
-        {"name": "cUSDTv3", "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840", "base_symbol": "USDT", "base_decimals": "6"},
+        {
+            "name": "cUSDTv3",
+            "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
+            "base_symbol": "USDT",
+            "base_decimals": "6",
+            "collateral_assets": [
+                {"symbol": "WBTC", "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "decimals": "8"},
+                {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": "18"},
+            ],
+        },
     ],
     8453: [
-        {"name": "cUSDCv3", "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F", "base_symbol": "USDC", "base_decimals": "6"},
+        {
+            "name": "cUSDCv3",
+            "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+            "base_symbol": "USDC",
+            "base_decimals": "6",
+            "collateral_assets": [
+                {"symbol": "WETH", "address": "0x4200000000000000000000000000000000000006", "decimals": "18"},
+                {"symbol": "cbETH", "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "decimals": "18"},
+                {"symbol": "wstETH", "address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "decimals": "18"},
+                {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
+                {"symbol": "USDC", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": "6"},
+            ],
+        },
         {
             "name": "cWETHv3",
             "address": "0x46e6b214b524310239732D51387075E0e70970bf",
             "base_symbol": "WETH",
             "base_decimals": "18",
+            "collateral_assets": [
+                {"symbol": "wstETH", "address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "decimals": "18"},
+                {"symbol": "cbETH", "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "decimals": "18"},
+            ],
         },
         {
             "name": "cUSDbCv3",
             "address": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf",
             "base_symbol": "USDbC",
             "base_decimals": "6",
+            "collateral_assets": [
+                {"symbol": "WETH", "address": "0x4200000000000000000000000000000000000006", "decimals": "18"},
+                {"symbol": "cbETH", "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "decimals": "18"},
+            ],
         },
     ],
 }
@@ -452,39 +503,55 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
 async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -> CompoundMarketPosition | None:
     """Fetch a single Compound v3 Comet market position. Returns None if no position."""
     market_addr = Web3.to_checksum_address(market["address"])
-    comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
+    collateral_assets = market.get("collateral_assets", [])
 
-    # Parallel: supply, borrow, is_liquidatable, numAssets
-    supplied, borrowed, is_liq, num_assets = await asyncio.gather(
-        rpc_call(lambda: comet.functions.balanceOf(wallet).call()),
-        rpc_call(lambda: comet.functions.borrowBalanceOf(wallet).call()),
-        rpc_call(lambda: comet.functions.isLiquidatable(wallet).call()),
-        rpc_call(lambda: comet.functions.numAssets().call()),
+    calls: list[tuple[str, bytes]] = [
+        (market_addr, _BALANCE_OF_COMET_SELECTOR + abi_encode(["address"], [wallet])),
+        (market_addr, _BORROW_BALANCE_SELECTOR + abi_encode(["address"], [wallet])),
+        (market_addr, _IS_LIQUIDATABLE_SELECTOR + abi_encode(["address"], [wallet])),
+    ]
+    calls.extend(
+        [
+            (
+                market_addr,
+                _USER_COLLATERAL_SELECTOR
+                + abi_encode(["address", "address"], [wallet, Web3.to_checksum_address(a["address"])]),
+            )
+            for a in collateral_assets
+        ]
     )
 
-    # Discover collateral asset list, then fetch userCollateral per asset in parallel
-    asset_infos = await asyncio.gather(
-        *[rpc_call(lambda i=i: comet.functions.getAssetInfo(i).call()) for i in range(int(num_assets))]
-    )
+    results = await multicall3_batch(w3, calls)
 
-    async def _collateral(asset_info: Any) -> CompoundCollateral | None:
+    supplied = 0
+    borrowed = 0
+    is_liq = False
+    if len(results) >= 1 and results[0][0] and results[0][1]:
+        supplied = int(abi_decode(["uint256"], results[0][1])[0])
+    if len(results) >= 2 and results[1][0] and results[1][1]:
+        borrowed = int(abi_decode(["uint256"], results[1][1])[0])
+    if len(results) >= 3 and results[2][0] and results[2][1]:
+        is_liq = bool(abi_decode(["bool"], results[2][1])[0])
+
+    collateral: list[CompoundCollateral] = []
+    for asset, (success, return_data) in zip(collateral_assets, results[3:]):
+        if not success or not return_data:
+            continue
         try:
-            # asset_info is a tuple matching the struct; asset is at index 1
-            asset_addr = Web3.to_checksum_address(asset_info[1])
-            result = await rpc_call(lambda: comet.functions.userCollateral(wallet, asset_addr).call())
-            balance = int(result[0])
+            balance = int(abi_decode(["uint128", "uint128"], return_data)[0])
             if balance == 0:
-                return None
-            return CompoundCollateral(asset_address=asset_addr, amount=str(balance))
+                continue
+            collateral.append(
+                CompoundCollateral(
+                    asset_address=Web3.to_checksum_address(asset["address"]),
+                    amount=str(balance),
+                )
+            )
         except Exception as exc:
-            logger.debug("Compound collateral fetch failed: %s", exc)
-            return None
-
-    coll_results = await asyncio.gather(*[_collateral(ai) for ai in asset_infos])
-    collateral = [c for c in coll_results if c is not None]
+            logger.debug("Compound collateral decode failed: %s", exc)
 
     # Skip market entirely if wallet has no activity here
-    if int(supplied) == 0 and int(borrowed) == 0 and not collateral:
+    if supplied == 0 and borrowed == 0 and not collateral:
         return None
 
     base_decimals = int(market["base_decimals"])
@@ -496,10 +563,10 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str]) -
         # Compound's baseToken is implicit in the market — we carry the symbol/decimals
         # statically to avoid an extra RPC call. The market address is the Comet proxy.
         base_asset_address=market_addr,  # Comet proxy; treat market_address as canonical
-        supplied_amount=f"{int(supplied) / base_divisor:.6f}",
-        borrowed_amount=f"{int(borrowed) / base_divisor:.6f}",
+        supplied_amount=f"{supplied / base_divisor:.6f}",
+        borrowed_amount=f"{borrowed / base_divisor:.6f}",
         collateral=collateral,
-        is_liquidatable=bool(is_liq),
+        is_liquidatable=is_liq,
     )
 
 
@@ -528,22 +595,63 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
         return []
 
     limit = min(balance, _UNISWAP_MAX_POSITIONS)
+    if limit == 0:
+        return []
 
-    # Enumerate token IDs in parallel
-    async def _get_token_id(idx: int) -> int | None:
+    token_id_calls = [
+        (
+            nfpm_addr,
+            _TOKEN_OF_OWNER_BY_INDEX_SELECTOR + abi_encode(["address", "uint256"], [wallet, i]),
+        )
+        for i in range(limit)
+    ]
+    token_id_results = await multicall3_batch(w3, token_id_calls)
+
+    token_ids: list[int] = []
+    for idx, (success, return_data) in enumerate(token_id_results):
+        if not success or not return_data:
+            logger.debug("Uniswap tokenOfOwnerByIndex(%d) reverted", idx)
+            continue
         try:
-            return int(await rpc_call(lambda: nfpm.functions.tokenOfOwnerByIndex(wallet, idx).call()))
+            token_ids.append(int(abi_decode(["uint256"], return_data)[0]))
         except Exception as exc:
-            logger.debug("Uniswap tokenOfOwnerByIndex(%d) failed: %s", idx, exc)
-            return None
+            logger.debug("Uniswap tokenOfOwnerByIndex(%d) decode failed: %s", idx, exc)
 
-    token_ids = await asyncio.gather(*[_get_token_id(i) for i in range(limit)])
+    if not token_ids:
+        return []
 
-    async def _get_position(token_id: int | None) -> UniswapV3Position | None:
-        if token_id is None:
-            return None
+    position_calls = [
+        (
+            nfpm_addr,
+            _POSITIONS_SELECTOR + abi_encode(["uint256"], [token_id]),
+        )
+        for token_id in token_ids
+    ]
+    position_results = await multicall3_batch(w3, position_calls)
+
+    positions: list[UniswapV3Position] = []
+    for token_id, (success, return_data) in zip(token_ids, position_results):
+        if not success or not return_data:
+            logger.debug("Uniswap positions(%s) reverted", token_id)
+            continue
         try:
-            result = await rpc_call(lambda: nfpm.functions.positions(token_id).call())
+            result = abi_decode(
+                [
+                    "uint96",
+                    "address",
+                    "address",
+                    "address",
+                    "uint24",
+                    "int24",
+                    "int24",
+                    "uint128",
+                    "uint256",
+                    "uint256",
+                    "uint128",
+                    "uint128",
+                ],
+                return_data,
+            )
             (
                 _nonce,
                 _operator,
@@ -560,30 +668,30 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
             ) = result
             is_closed = int(liquidity) == 0 and int(tokens_owed_0) == 0 and int(tokens_owed_1) == 0
             if is_closed:
-                return None
+                continue
             t0 = Web3.to_checksum_address(token0)
             t1 = Web3.to_checksum_address(token1)
             sym = _KNOWN_SYMBOLS.get(chain_id, {})
-            return UniswapV3Position(
-                token_id=str(token_id),
-                token0_address=t0,
-                token0_symbol=sym.get(t0) or t0,
-                token1_address=t1,
-                token1_symbol=sym.get(t1) or t1,
-                fee_tier_raw=int(fee),
-                tick_lower=int(tick_lower),
-                tick_upper=int(tick_upper),
-                liquidity=str(int(liquidity)),
-                tokens_owed_0=str(int(tokens_owed_0)),
-                tokens_owed_1=str(int(tokens_owed_1)),
-                status="active",
+            positions.append(
+                UniswapV3Position(
+                    token_id=str(token_id),
+                    token0_address=t0,
+                    token0_symbol=sym.get(t0) or t0,
+                    token1_address=t1,
+                    token1_symbol=sym.get(t1) or t1,
+                    fee_tier_raw=int(fee),
+                    tick_lower=int(tick_lower),
+                    tick_upper=int(tick_upper),
+                    liquidity=str(int(liquidity)),
+                    tokens_owed_0=str(int(tokens_owed_0)),
+                    tokens_owed_1=str(int(tokens_owed_1)),
+                    status="active",
+                )
             )
         except Exception as exc:
-            logger.debug("Uniswap positions(%s) failed: %s", token_id, exc)
-            return None
+            logger.debug("Uniswap positions(%s) decode failed: %s", token_id, exc)
 
-    position_results = await asyncio.gather(*[_get_position(tid) for tid in token_ids])
-    return [p for p in position_results if p is not None]
+    return positions
 
 
 # ─── Entry point ─────────────────────────────────────────────────────────────

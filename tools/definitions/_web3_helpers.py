@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
@@ -31,6 +32,7 @@ _web3_cache: dict[tuple[int, int], AsyncWeb3] = {}
 
 _RETRY_MAX = 2
 _RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt → 1.0 s, 2.0 s
+_RETRY_JITTER_RATIO = 0.30
 _RATE_LIMIT_MARKERS = (
     "429",
     "rate limit",
@@ -53,14 +55,16 @@ class _RetryAsyncHTTPProvider(AsyncHTTPProvider):
                 err_lower = str(exc).lower()
                 if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
                     delay = _RETRY_BASE_DELAY * (2**attempt)
+                    jitter = delay * random.uniform(-_RETRY_JITTER_RATIO, _RETRY_JITTER_RATIO)
+                    sleep_for = max(0.0, delay + jitter)
                     logger.debug(
                         "RPC 429 on attempt %d/%d for %s; retrying in %.2fs",
                         attempt + 1,
                         _RETRY_MAX,
                         method,
-                        delay,
+                        sleep_for,
                     )
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(sleep_for)
                     continue
                 raise
         raise RuntimeError("unreachable")  # pragma: no cover
@@ -169,7 +173,8 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None):
         if attempt > 0:
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             # Backoff sleep intentionally occurs outside semaphore acquisition.
-            await asyncio.sleep(delay)
+            jitter = delay * random.uniform(-_RETRY_JITTER_RATIO, _RETRY_JITTER_RATIO)
+            await asyncio.sleep(max(0.0, delay + jitter))
         try:
             async with acquire_rpc_semaphore():
                 return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
