@@ -848,10 +848,19 @@ async def get_marketplace_tool_by_name(
 _PLATFORM_TOOL_CACHE: dict[str, tuple[int, float]] = {}
 _PLATFORM_TOOL_CACHE_TTL = 60.0  # seconds
 
+# Qualified org tool price cache: "org_slug/tool_name" -> (price, expiry).
+_ORG_TOOL_PRICE_CACHE: dict[str, tuple[int, float]] = {}
+_ORG_TOOL_PRICE_CACHE_TTL = 60.0  # seconds
+
 
 def _invalidate_platform_tool_cache() -> None:
     """Drop the entire platform tool price cache (e.g. after admin price update)."""
     _PLATFORM_TOOL_CACHE.clear()
+
+
+def _invalidate_all_org_tool_price_cache() -> None:
+    """Drop the full qualified org tool price cache after marketplace mutations."""
+    _ORG_TOOL_PRICE_CACHE.clear()
 
 
 async def get_platform_tool_price(tool_name: str) -> int | None:
@@ -873,6 +882,45 @@ async def get_platform_tool_price(tool_name: str) -> int | None:
         return None
     price = int(row["base_price_usdc"])
     _PLATFORM_TOOL_CACHE[tool_name] = (price, now + _PLATFORM_TOOL_CACHE_TTL)
+    return price
+
+
+async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | None:
+    """Return base_price_usdc for a qualified marketplace tool, or None.
+
+    ``qualified_name`` must be in ``org_slug/tool_name`` form.
+    Results are cached for 60 s to keep billing paths hot.
+    """
+    if "/" not in qualified_name:
+        return None
+
+    org_slug, tool_name = qualified_name.split("/", 1)
+    if not org_slug or not tool_name:
+        return None
+
+    now = time.monotonic()
+    cached = _ORG_TOOL_PRICE_CACHE.get(qualified_name)
+    if cached is not None and now < cached[1]:
+        return cached[0]
+
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT t.base_price_usdc
+        FROM org_tools t
+        JOIN orgs o ON o.id = t.org_id
+        WHERE t.name = $1
+          AND o.slug = $2
+          AND t.publish_as_mcp = TRUE
+          AND t.is_active = TRUE
+        """,
+        tool_name,
+        org_slug,
+    )
+    if row is None:
+        return None
+    price = int(row["base_price_usdc"])
+    _ORG_TOOL_PRICE_CACHE[qualified_name] = (price, now + _ORG_TOOL_PRICE_CACHE_TTL)
     return price
 
 

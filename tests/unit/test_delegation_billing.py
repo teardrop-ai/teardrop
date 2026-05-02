@@ -76,7 +76,11 @@ class TestCheckDelegationBudget:
         monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "50000")
         _config.get_settings.cache_clear()
 
-        with patch(f"{_BILLING_MOD}.get_credit_balance", AsyncMock(return_value=1_000_000)):
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False}
+        )
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
             result = await check_delegation_budget("org-1", 60_000)
             assert result is not None
             assert "cap" in result.lower()
@@ -88,7 +92,9 @@ class TestCheckDelegationBudget:
         monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
         _config.get_settings.cache_clear()
 
-        with patch(f"{_BILLING_MOD}.get_credit_balance", AsyncMock(return_value=5_000)):
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 5_000, "spending_limit_usdc": 0, "is_paused": False})
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
             result = await check_delegation_budget("org-1", 10_000)
             assert result is not None
             assert "insufficient" in result.lower()
@@ -100,9 +106,58 @@ class TestCheckDelegationBudget:
         monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
         _config.get_settings.cache_clear()
 
-        with patch(f"{_BILLING_MOD}.get_credit_balance", AsyncMock(return_value=100_000)):
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False})
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
             result = await check_delegation_budget("org-1", 10_000)
             assert result is None
+
+    async def test_paused_org_blocked(self, test_settings, monkeypatch):
+        import config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": True})
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
+            result = await check_delegation_budget("org-1", 10_000)
+            assert result is not None
+            assert "paused" in result.lower()
+
+    async def test_spending_limit_exceeded(self, test_settings, monkeypatch):
+        import config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 50_000, "is_paused": False},
+                {"daily_spend": 40_000},
+            ]
+        )
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
+            result = await check_delegation_budget("org-1", 20_000)
+            assert result is not None
+            assert "limit" in result.lower()
+
+    async def test_spending_limit_zero_skips_limit_check(self, test_settings, monkeypatch):
+        import config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False})
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
+            result = await check_delegation_budget("org-1", 10_000)
+            assert result is None
+        assert mock_pool.fetchrow.await_count == 1
 
 
 # ─── check_delegation_allowed ─────────────────────────────────────────────────
@@ -210,8 +265,10 @@ class TestDelegateToAgentBilling:
         with (
             patch(f"{_A2A_MOD}.validate_url", return_value=None),
             patch(
-                f"{_BILLING_MOD}.get_credit_balance",
-                AsyncMock(return_value=0),
+                f"{_BILLING_MOD}._get_pool",
+                return_value=AsyncMock(
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 0, "spending_limit_usdc": 0, "is_paused": False})
+                ),
             ),
         ):
             result = await delegate_to_agent("https://agent.example.com", "test", config=config)
@@ -263,7 +320,12 @@ class TestDelegateToAgentBilling:
 
         with (
             patch(f"{_A2A_MOD}.validate_url", return_value=None),
-            patch(f"{_BILLING_MOD}.get_credit_balance", AsyncMock(return_value=1_000_000)),
+            patch(
+                f"{_BILLING_MOD}._get_pool",
+                return_value=AsyncMock(
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
+                ),
+            ),
             patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
             patch(f"{_A2A_MOD}.send_message", AsyncMock(return_value=mock_response)),
             patch(f"{_A2A_MOD}.extract_result_text", return_value="Result text"),

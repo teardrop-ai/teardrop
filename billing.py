@@ -707,7 +707,7 @@ async def delete_tool_pricing_override(tool_name: str) -> bool:
     return deleted
 
 
-async def _resolve_tool_cost(
+async def resolve_tool_cost(
     tool_name: str,
     overrides: dict[str, int],
     default_cost: int,
@@ -715,15 +715,30 @@ async def _resolve_tool_cost(
 ) -> int:
     """Resolve the per-call cost for a tool.
 
-    Precedence (matches mcp_gateway._billing_gate):
-      1. Admin override in `tool_pricing_overrides`
-      2. Marketplace platform price in `marketplace_platform_tools`
-         (only when marketplace is enabled and the name is unqualified)
-      3. Global `rule.tool_call_cost` fallback
+    Precedence:
+      1. Admin override in `tool_pricing_overrides` (exact key)
+      2. For qualified marketplace names (`org_slug/tool_name`):
+         bare-name override, then author `base_price_usdc`
+      3. For unqualified names: platform marketplace price
+      4. Global `rule.tool_call_cost` fallback
     """
     if tool_name in overrides:
         return overrides[tool_name]
-    if marketplace_enabled and "/" not in tool_name:
+
+    if "/" in tool_name:
+        _, bare_tool_name = tool_name.split("/", 1)
+        if bare_tool_name in overrides:
+            return overrides[bare_tool_name]
+        if marketplace_enabled:
+            # Lazy import: marketplace.py imports from billing at module init.
+            from marketplace import get_org_tool_price_by_qualified_name
+
+            author_price = await get_org_tool_price_by_qualified_name(tool_name)
+            if author_price is not None:
+                return author_price
+        return default_cost
+
+    if marketplace_enabled:
         # Lazy import: marketplace.py imports from billing at module init.
         from marketplace import get_platform_tool_price
 
@@ -744,7 +759,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
     pricing rule first, falling back to the global default.
 
     When tool_names is provided in usage_data, each tool is billed at its
-    resolved cost using `_resolve_tool_cost` (admin override → platform
+    resolved cost using `resolve_tool_cost` (admin override → platform
     marketplace price → `rule.tool_call_cost`).  Calls without a recorded
     name fall back to the global default.
 
@@ -753,7 +768,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
     Formula (usage-based):
         cost = (tokens_in // 1000) * tokens_in_cost_per_1k
              + (tokens_out // 1000) * tokens_out_cost_per_1k
-             + sum(_resolve_tool_cost(name, ...) for name in tool_names)
+             + sum(resolve_tool_cost(name, ...) for name in tool_names)
              + remaining_unnamed_calls * tool_call_cost
     """
 
@@ -782,7 +797,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
         marketplace_enabled = get_settings().marketplace_enabled
         named_cost = 0
         for name in tool_names:
-            named_cost += await _resolve_tool_cost(name, overrides, rule.tool_call_cost, marketplace_enabled)
+            named_cost += await resolve_tool_cost(name, overrides, rule.tool_call_cost, marketplace_enabled)
         # Defensive fallback: bill any gap (e.g. tool_calls counted but name not recorded)
         unnamed_calls = max(0, tool_calls - len(tool_names))
         tool_cost = named_cost + unnamed_calls * rule.tool_call_cost
@@ -1740,10 +1755,40 @@ async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str 
     if estimated_cost_usdc > cap:
         return f"Estimated delegation cost ({estimated_cost_usdc} atomic USDC) exceeds global cap ({cap})."
 
-    # Check credit balance.
-    balance = await get_credit_balance(org_id)
+    # Check org credit state.
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
+        org_id,
+    )
+    balance = int(row["balance_usdc"]) if row else 0
+    spending_limit = int(row["spending_limit_usdc"]) if row else 0
+    is_paused = bool(row["is_paused"]) if row else False
+
+    if is_paused:
+        return "Org billing is paused by admin. Contact your administrator."
+
     if balance < estimated_cost_usdc:
         return f"Insufficient credit for delegation: balance {balance} atomic USDC, estimated cost {estimated_cost_usdc}."
+
+    # Match verify_credit() semantics: enforce 24h rolling spending limit.
+    if spending_limit > 0:
+        daily_row = await pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
+            FROM org_credit_ledger
+            WHERE org_id = $1
+              AND operation = 'debit'
+              AND created_at >= NOW() - INTERVAL '24 hours'
+            """,
+            org_id,
+        )
+        daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+        if daily_spend + estimated_cost_usdc > spending_limit:
+            return (
+                f"Daily spending limit reached: {daily_spend} of {spending_limit} "
+                "atomic USDC used in the last 24 hours."
+            )
 
     return None
 

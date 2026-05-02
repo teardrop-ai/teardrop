@@ -984,21 +984,52 @@ class TestCalculateRunCostPlatformPricing:
         assert cost == 1_000  # falls back to rule.tool_call_cost
         platform_mock.assert_not_called()
 
-    async def test_qualified_marketplace_name_skips_platform_lookup(self):
-        """A name with '/' (e.g. 'acme/weather') is not a platform tool."""
+    async def test_qualified_marketplace_name_uses_author_price(self):
+        """Qualified tools use author base_price_usdc when no override exists."""
         rule = self._usage_rule()
         platform_mock = AsyncMock(return_value=4_000)
         with (
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
             patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
             patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new=AsyncMock(return_value=5_000)),
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
             cost = await calculate_run_cost_usdc(
                 {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
             )
-        assert cost == 1_000
+        assert cost == 5_000
         platform_mock.assert_not_called()
+
+    async def test_qualified_marketplace_bare_override_wins(self):
+        """Bare-name override should take precedence over author base price."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={"weather": 9_000})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new=AsyncMock(return_value=5_000)),
+            patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+            )
+        assert cost == 9_000
+
+    async def test_qualified_marketplace_exact_override_wins(self):
+        """Qualified-name override should be highest precedence."""
+        rule = self._usage_rule()
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={"acme/weather": 12_000, "weather": 9_000})),
+            patch("billing.get_settings", return_value=self._settings(True)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new=AsyncMock(return_value=5_000)),
+            patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+            )
+        assert cost == 12_000
 
     async def test_platform_price_none_falls_back_to_default(self):
         """Tool not in marketplace_platform_tools → rule.tool_call_cost fallback."""

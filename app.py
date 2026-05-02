@@ -104,6 +104,7 @@ from billing import (
     process_pending_settlements,
     record_settlement,
     reset_exhausted_settlement,
+    resolve_tool_cost,
     settle_payment,
     update_org_spending_config,
     upsert_tool_pricing_override,
@@ -1368,14 +1369,14 @@ async def _record_marketplace_earnings(
         overrides = await get_tool_pricing_overrides()
         pricing = await get_current_pricing()
         default_cost = pricing.tool_call_cost if pricing else 0
+        marketplace_enabled = get_settings().marketplace_enabled
 
         for tname in tool_names_used:
             if tname in mp_by_name and "/" in tname:
                 t_slug, t_bare = tname.split("/", 1)
                 t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
                 if t_row:
-                    author_price = t_row.get("base_price_usdc", 0)
-                    t_cost = overrides.get(tname, overrides.get(t_bare, author_price or default_cost))
+                    t_cost = await resolve_tool_cost(tname, overrides, default_cost, marketplace_enabled)
                     author_oid = t_row.get("org_id")
                     if author_oid and t_cost > 0:
                         asyncio.create_task(

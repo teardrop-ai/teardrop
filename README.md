@@ -11,7 +11,7 @@ Agents can securely delegate tasks to other agents via `POST /delegate` or the `
 - **Allowlist control**: Restrict which agents your org can delegate to
 - **JWT forwarding**: Automatically forward authentication context when delegating (set `jwt_forward: true` on agent rules)
 - **Per-run quotas**: Limit delegation calls per agent run (configurable via `A2A_DELEGATION_MAX_PER_RUN`)
-- **Optional billing**: Debit credits for delegations with per-agent cost caps
+- **Optional billing**: Debit credits for delegations with per-agent cost caps plus org pause and 24h spend-limit enforcement
 
 **Environment variables:**
 ```
@@ -507,7 +507,7 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 - **Network effect**: Agents discover and call each other via published Agent Cards
 - **Specialisation**: Route complex tasks to domain-expert agents
 - **Revenue sharing**: Collect payments from delegations and distribute to specialist agent operators
-- **Budget control**: Per-agent cost caps and global delegation spending limits
+- **Budget control**: Per-agent cost caps, global delegation spending limits, and org-level pause/daily spend checks
 
 ### How it works
 

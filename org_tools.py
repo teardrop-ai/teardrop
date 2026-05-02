@@ -397,8 +397,8 @@ async def update_org_tool(
 
     await _record_event(org_id, tool_id, row["name"], "updated", actor_id)
     await invalidate_org_tools_cache(org_id)
-    # Invalidate marketplace cache if publishing status may have changed
-    if publish_as_mcp is not None or is_active is not None:
+    # Invalidate marketplace/pricing caches if publication, visibility, or price changed.
+    if publish_as_mcp is not None or is_active is not None or base_price_usdc is not None:
         await invalidate_marketplace_cache()
 
     # Clear circuit breaker state on FALSE → TRUE transition so the tool
@@ -554,6 +554,13 @@ async def invalidate_marketplace_cache() -> None:
     """Clear the marketplace tools cache.  Called after publish/unpublish mutations."""
     global _marketplace_cache
     _marketplace_cache = None
+    try:
+        from marketplace import _invalidate_all_org_tool_price_cache
+
+        _invalidate_all_org_tool_price_cache()
+    except Exception:
+        logger.debug("Org tool marketplace price cache invalidation failed", exc_info=True)
+
     redis = get_redis()
     if redis is not None:
         try:
