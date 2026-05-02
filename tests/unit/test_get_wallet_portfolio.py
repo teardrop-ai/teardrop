@@ -142,4 +142,4 @@ class TestGetWalletPortfolio:
 
         assert result["holdings"][0]["symbol"] == "ETH"
         assert result["holdings"][0]["balance_formatted"] == "0.000000"
-        assert result["fetch_errors"] == ["ETH balance unavailable (RPC error)"]
+        assert result["fetch_errors"] == ["ETH balance unavailable (RPC/Rate-limit error)"]

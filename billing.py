@@ -434,7 +434,7 @@ async def settle_payment(
         return billing_result
 
     billing_result.settled = True
-    billing_result.tx_hash = getattr(result, "tx_hash", "") or getattr(result, "transaction_hash", "") or ""
+    billing_result.tx_hash = result.transaction or ""
 
     # For upto, record the actual cost we settled; for exact, use the requirement amount.
     if billing_result.scheme == "upto" and actual_cost_usdc is not None:
@@ -1395,7 +1395,7 @@ async def verify_and_settle_usdc_topup(
         logger.error("usdc_topup: facilitator rejected settlement")
         return BillingResult(error="Settlement rejected by facilitator")
 
-    tx_hash = getattr(settle_result, "tx_hash", "") or getattr(settle_result, "transaction_hash", "") or ""
+    tx_hash = settle_result.transaction or ""
     logger.info("usdc_topup: settled tx_hash=%s amount_usdc=%s", tx_hash, amount_usdc)
     return BillingResult(verified=True, settled=True, tx_hash=tx_hash, amount_usdc=amount_usdc)
 
