@@ -1960,6 +1960,16 @@ async def agent_run(
         _last_msg_id: str = run_id
         _planner_token_buffer: list[tuple[str, str]] = []
 
+        def _coerce_stream_text(content: Any) -> str:
+            """Normalise provider-specific content blocks to plain text."""
+            if isinstance(content, list):
+                return "".join(
+                    block.get("text", "") if isinstance(block, dict) else getattr(block, "text", "")
+                    for block in content
+                    if (block.get("type") if isinstance(block, dict) else getattr(block, "type", "")) == "text"
+                )
+            return content if isinstance(content, str) else str(content or "")
+
         try:
             async for event in graph.astream_events(
                 initial_state.model_dump(),
@@ -2053,19 +2063,41 @@ async def agent_run(
                     status = str(output.get("task_status", "")).lower()
 
                     if _should_flush_planner_buffer(status):
+                        emitted_chunks: list[tuple[str, str]] = []
                         for message_id, delta in _planner_token_buffer:
-                            yield _sse_event(
-                                _EV_TEXT_MSG_CONTENT,
-                                {"message_id": message_id, "delta": delta},
-                            )
+                            emitted_chunks.append((message_id, delta))
                         _planner_token_buffer.clear()
 
                         remainder = _text_filter.flush()
                         if remainder:
-                            yield _sse_event(
-                                _EV_TEXT_MSG_CONTENT,
-                                {"message_id": _last_msg_id, "delta": remainder},
-                            )
+                            emitted_chunks.append((_last_msg_id, remainder))
+
+                        # If streamed deltas were fully suppressed (e.g. response began
+                        # with an a2ui fence), derive visible prose from planner output.
+                        if not emitted_chunks:
+                            planner_messages = output.get("messages", [])
+                            if planner_messages:
+                                last_planner_msg = planner_messages[-1]
+                                planner_content = (
+                                    getattr(last_planner_msg, "content", "")
+                                    if not isinstance(last_planner_msg, dict)
+                                    else last_planner_msg.get("content", "")
+                                )
+                                normalized = _coerce_stream_text(planner_content)
+                                if normalized:
+                                    fallback_filter = _A2UIStreamFilter()
+                                    fallback_text = fallback_filter.feed(normalized) + fallback_filter.flush()
+                                    if fallback_text.strip():
+                                        emitted_chunks.append((_last_msg_id, fallback_text))
+
+                        if emitted_chunks:
+                            yield _sse_event(_EV_TEXT_MSG_START, {"message_id": _last_msg_id})
+                            for message_id, delta in emitted_chunks:
+                                yield _sse_event(
+                                    _EV_TEXT_MSG_CONTENT,
+                                    {"message_id": message_id, "delta": delta},
+                                )
+                            yield _sse_event(_EV_TEXT_MSG_END, {"message_id": _last_msg_id})
                     else:
                         # Intermediate/planner-failed turns are not user-facing.
                         _planner_token_buffer.clear()
