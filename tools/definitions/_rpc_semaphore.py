@@ -7,7 +7,8 @@ rate limits (typically 5–10 concurrent calls); we use a global semaphore at th
 to prevent thundering herd under high concurrency.
 
 Initialize once at app startup via `init_rpc_semaphore(config)`.
-Acquire within tool implementations via `async with acquire_rpc_semaphore():`.
+Acquire at the shared RPC helper boundary (``rpc_call``) so each individual
+JSON-RPC attempt is throttled uniformly across tools.
 """
 
 from __future__ import annotations

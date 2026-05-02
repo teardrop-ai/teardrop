@@ -11,6 +11,7 @@ from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
 from config import get_settings
+from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -105,22 +106,25 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None):
         timeout_seconds = get_settings().agent_rpc_call_timeout_seconds
 
     for attempt in range(_RETRY_MAX + 1):
+        if attempt > 0:
+            delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            # Backoff sleep intentionally occurs outside semaphore acquisition.
+            await asyncio.sleep(delay)
         try:
-            return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
+            async with acquire_rpc_semaphore():
+                return await asyncio.wait_for(coro_fn(), timeout=timeout_seconds)
         except asyncio.TimeoutError:
             logger.debug("RPC call timed out after %ds", timeout_seconds)
             raise
         except Exception as exc:
             err_lower = str(exc).lower()
             if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
-                delay = _RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
                     "JSON-RPC rate limit on attempt %d/%d; retrying in %.2fs. Error: %s",
                     attempt + 1,
                     _RETRY_MAX,
-                    delay,
+                    _RETRY_BASE_DELAY * (2**attempt),
                     err_lower,
                 )
-                await asyncio.sleep(delay)
                 continue
             raise

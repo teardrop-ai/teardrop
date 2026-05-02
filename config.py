@@ -65,10 +65,17 @@ class Settings(BaseSettings):
     agent_llm_timeout_seconds: int = Field(default=120, description="Timeout in seconds for the planner LLM call")
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
-        default=12,
+        default=4,
         description=(
             "Maximum planner→tool cycles per agent run. "
             "When exceeded the agent synthesises from partial data rather than looping further."
+        ),
+    )
+    agent_tool_max_calls_per_run: dict[str, int] = Field(
+        default_factory=lambda: {"get_yield_rates": 1, "resolve_ens": 1},
+        description=(
+            "Per-run hard caps for specific platform tools keyed by tool name. "
+            "Values are max allowed calls regardless of argument variation."
         ),
     )
     agent_tool_executor_timeout_seconds: int = Field(
@@ -86,11 +93,11 @@ class Settings(BaseSettings):
         ),
     )
     agent_rpc_semaphore_limit: int = Field(
-        default=25,
+        default=8,
         description=(
             "Global limit on concurrent RPC calls across all agent runs. "
             "Prevents organizational RPC saturation. Typical public provider limit: 5–10 concurrent calls; "
-            "we reduced from 50 to 25 to mitigate 429 rate-limiting on shared RPC nodes."
+            "default is tuned to stay within that range on shared RPC nodes."
         ),
     )
 

@@ -201,7 +201,7 @@ class TestAaveV3:
         assert aave["total_collateral_usd"] == 20000.0
         assert aave["total_debt_usd"] == 0.0
         assert aave["health_factor"] is None
-        assert aave["health_factor_status"] == "no_debt"
+        assert aave["health_factor_status"] == "verified_no_debt"
         assert aave["ltv_bps"] == 8000
         assert aave["liquidation_threshold_bps"] == 8500
 
@@ -455,8 +455,8 @@ class TestUniswapV3:
         assert p["token0_symbol"] == "WETH"
         assert p["token1_symbol"] == "USDC"
 
-    async def test_unknown_token_symbol_is_none(self, test_settings, monkeypatch):
-        """Addresses not in _KNOWN_SYMBOLS should yield None symbols (not trigger read_contract)."""
+    async def test_unknown_token_symbol_falls_back_to_address(self, test_settings, monkeypatch):
+        """Addresses not in _KNOWN_SYMBOLS should fall back to raw address strings."""
         from tools.definitions.get_defi_positions import get_defi_positions
 
         unlisted = "0x1111111111111111111111111111111111111111"
@@ -484,8 +484,8 @@ class TestUniswapV3:
 
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
         p = result["uniswap_v3"][0]
-        assert p["token0_symbol"] is None
-        assert p["token1_symbol"] is None
+        assert p["token0_symbol"] == unlisted
+        assert p["token1_symbol"] == unlisted
 
 
 # ─── Partial-success / error isolation ───────────────────────────────────────

@@ -624,3 +624,77 @@ class TestToolExecutorDedup:
         assert len(result["messages"]) == 2
         blocked = [m for m in result["messages"] if "DUPLICATE_CALL_BLOCKED" in m.content]
         assert len(blocked) == 1
+
+    async def test_tool_name_cap_blocks_second_call_even_with_different_args(self, test_settings):
+        """Per-tool cap should block a second call regardless of argument changes."""
+        calls = [
+            {"id": "c1", "name": "get_yield_rates", "args": {"chain": "Ethereum"}},
+            {"id": "c2", "name": "get_yield_rates", "args": {"chain": "Base"}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"pools": []})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with (
+            patch.object(nodes_module, "_cached_tools_by_name", {"get_yield_rates": mock_tool}),
+            patch.object(test_settings, "agent_tool_max_calls_per_run", {"get_yield_rates": 1}),
+        ):
+            result = await tool_executor_node(state)
+
+        assert mock_tool.ainvoke.call_count == 1
+        blocked = [m for m in result["messages"] if "TOOL_CALL_CAP_EXCEEDED" in m.content]
+        assert len(blocked) == 1
+        assert result["metadata"]["_usage"]["_tool_call_counts"]["get_yield_rates"] == 1
+
+    async def test_liquidation_risk_blocked_when_defi_positions_already_covered(self, test_settings):
+        """If get_defi_positions already covered wallet+chain, liquidation risk is suppressed."""
+        call = {
+            "id": "c1",
+            "name": "get_liquidation_risk",
+            "args": {
+                "wallet_addresses": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"],
+                "chain_id": 1,
+            },
+        }
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"results": []})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={
+                "_usage": {
+                    "_defi_positions_covered": ["1:0xd8da6bf26964af9d7eed9e03e53415d37aa96045"],
+                }
+            },
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_liquidation_risk": mock_tool}):
+            result = await tool_executor_node(state)
+
+        mock_tool.ainvoke.assert_not_called()
+        blocked = [m for m in result["messages"] if "SEMANTIC_REDUNDANCY_BLOCKED" in m.content]
+        assert len(blocked) == 1
+
+    async def test_liquidation_risk_not_blocked_when_defi_positions_not_covered(self, test_settings):
+        """Guard should allow get_liquidation_risk when coverage data is absent."""
+        call = {
+            "id": "c1",
+            "name": "get_liquidation_risk",
+            "args": {
+                "wallet_addresses": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"],
+                "chain_id": 1,
+            },
+        }
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"results": []})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {"_defi_positions_covered": []}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_liquidation_risk": mock_tool}):
+            await tool_executor_node(state)
+
+        mock_tool.ainvoke.assert_called_once()

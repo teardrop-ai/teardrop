@@ -43,7 +43,7 @@ class AgentState(BaseModel):
     task_status: TaskStatus = TaskStatus.IDLE
 
     # A2UI components ready to surface to the frontend
-    ui_components: list[A2UIComponent] = Field(default_factory=list)
+    ui_components: list[dict[str, Any]] = Field(default_factory=list)
 
     # Arbitrary key/value metadata (thread_id, user_id, etc.)
     metadata: dict[str, Any] = Field(default_factory=dict)

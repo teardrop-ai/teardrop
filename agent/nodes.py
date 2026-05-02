@@ -109,10 +109,21 @@ Tool execution model:
     names if NO address is provided.
   - Resilience: Teardrop handles lower-level RPC retries. If a tool fails with
     a rate-limit error after retries, synthesize an answer with remaining data.
+        If get_defi_positions returns a protocol as null with an error entry, mark
+        that protocol as unverified. Never label it safe or debt-free.
   - Synthesize: On re-entry with tool results, do not repeat yourself. Directly
     analyze the results and conclude the task.
 
 Tool use economy:
+    - Use get_liquidation_risk ONLY for multi-wallet batch assessments (2+ wallets).
+        For a single wallet DeFi analysis, get_defi_positions already includes risk
+        metrics. The executor may block redundant get_liquidation_risk calls after
+        get_defi_positions for the same wallet/chain.
+    - Call get_yield_rates at most ONCE per user request. If you need alternate
+        sorting or filtering, perform that analysis in your own response instead of
+        re-calling the tool.
+    - NEVER call resolve_ens if a 0x address is already present or previously
+        used in this session for the same wallet.
   - Prefer structured tools over web_search when the question can be answered
     with on-chain or pricing data.
   - Use the minimum number of tool calls needed to satisfy the request.
@@ -121,9 +132,6 @@ Tool use economy:
   - get_wallet_portfolio already returns the native ETH balance inside its
     holdings list. If you have called or are about to call get_wallet_portfolio,
     do NOT also call get_eth_balance — it is redundant.
-    - Use get_liquidation_risk ONLY for multi-wallet batch assessments (2+ wallets).
-        For a single wallet DeFi analysis, get_defi_positions already includes risk
-        metrics. Do not call both tools for the same wallet unless explicitly asked.
   - The executor blocks duplicate calls: if you issue a tool call with the same
     name and arguments as a prior call this session, it will be suppressed and
     you will receive a DUPLICATE_CALL_BLOCKED notice. Use the prior result
@@ -367,6 +375,45 @@ def _accumulate_usage(state: AgentState, response: AIMessage) -> dict[str, int]:
     return usage
 
 
+def _covered_defi_keys_from_result(content: str) -> set[str]:
+    """Return wallet+chain keys that have DeFi risk coverage from get_defi_positions.
+
+    Coverage is recorded only when both Aave and Compound risk fetches did not
+    fail for that wallet/chain. This avoids blocking get_liquidation_risk when
+    risk-relevant protocol data is partial or unavailable.
+    """
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return set()
+
+    wallet = payload.get("wallet_address")
+    chain_id = payload.get("chain_id")
+    if not wallet or chain_id is None:
+        return set()
+
+    errors = payload.get("errors") or []
+    failed_protocols = {
+        str(err.get("protocol", "")).lower()
+        for err in errors
+        if isinstance(err, dict) and err.get("protocol")
+    }
+    # get_defi_positions risk coverage requires both Aave and Compound fetches.
+    if "aave_v3" in failed_protocols or "compound_v3" in failed_protocols:
+        return set()
+
+    return {f"{int(chain_id)}:{str(wallet).lower()}"}
+
+
+def _get_liquidation_risk_targets(call_args: dict[str, Any]) -> set[str]:
+    """Build wallet+chain keys targeted by a get_liquidation_risk call."""
+    chain_id = call_args.get("chain_id")
+    wallets = call_args.get("wallet_addresses") or []
+    if chain_id is None or not isinstance(wallets, list):
+        return set()
+    return {f"{int(chain_id)}:{str(addr).lower()}" for addr in wallets if addr}
+
+
 async def planner_node(state: AgentState) -> dict[str, Any]:
     """Reasoning / planning node.  Calls the LLM with bound tools."""
     logger.debug("planner_node: entry, %d messages", len(state.messages))
@@ -406,6 +453,21 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         platform_tools=tools,
         org_tools=org_tools,
     )
+    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
+    if tool_iterations > 0:
+        completed_names = state.metadata.get("_usage", {}).get("tool_names", [])
+        unique_names = list(dict.fromkeys(str(name) for name in completed_names))
+        completed_text = ", ".join(unique_names) if unique_names else "none"
+        system_messages.append(
+            SystemMessage(
+                content=(
+                    "Re-entry summary: tool iterations already completed this run. "
+                    f"Completed tool calls: {completed_text}. "
+                    "Do not repeat prior calls unless strictly required by new information. "
+                    "Synthesize from existing tool results when possible."
+                )
+            )
+        )
     messages = [*system_messages, *state.messages]
 
     result = await _invoke_planner_llm(
@@ -559,6 +621,9 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     # ── Accumulate tool usage ─────────────────────────────────────────────
     usage = dict(state.metadata.get("_usage", {}))
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
+    tool_call_counts: dict[str, int] = dict(usage.get("_tool_call_counts", {}))
+    defi_positions_covered: set[str] = set(usage.get("_defi_positions_covered", []))
+    tool_max_calls = dict(get_settings().agent_tool_max_calls_per_run)
 
     # ── Within-run deduplication ──────────────────────────────────────────
     # Calls with identical (tool_name, args) are suppressed so a re-entering
@@ -571,6 +636,40 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         if call["name"] not in platform_tool_names:
             dedup_calls.append(call)
             continue
+
+        max_calls = tool_max_calls.get(call["name"])
+        current_calls = int(tool_call_counts.get(call["name"], 0))
+        # Account for same-tool calls already accepted in this batch.
+        accepted_in_batch = sum(1 for c in dedup_calls if c["name"] == call["name"])
+        if max_calls is not None and (current_calls + accepted_in_batch) >= int(max_calls):
+            logger.debug("cap: suppressing capped call '%s'", call["name"])
+            skipped_messages.append(
+                ToolMessage(
+                    content=(
+                        f"[TOOL_CALL_CAP_EXCEEDED] '{call['name']}' exceeded the per-run cap "
+                        f"({max_calls}). Reuse prior results already in the conversation."
+                    ),
+                    tool_call_id=call["id"],
+                )
+            )
+            continue
+
+        if call["name"] == "get_liquidation_risk":
+            targets = _get_liquidation_risk_targets(call.get("args", {}))
+            if targets and targets.issubset(defi_positions_covered):
+                logger.debug("semantic: suppressing redundant call '%s'", call["name"])
+                skipped_messages.append(
+                    ToolMessage(
+                        content=(
+                            "[SEMANTIC_REDUNDANCY_BLOCKED] get_defi_positions already returned "
+                            "risk-relevant data for the requested wallet(s)/chain. "
+                            "Use those results instead of re-calling get_liquidation_risk."
+                        ),
+                        tool_call_id=call["id"],
+                    )
+                )
+                continue
+
         sig = _call_signature(call["name"], call["args"])
         if sig in completed_sigs or sig in seen_this_batch:
             logger.debug("dedup: suppressing duplicate call '%s'", call["name"])
@@ -620,6 +719,15 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls if c["name"] in platform_tool_names)
     usage["_completed_calls"] = completed_sigs
 
+    for result in results:
+        name = result["name"]
+        tool_call_counts[name] = int(tool_call_counts.get(name, 0)) + 1
+        if name == "get_defi_positions":
+            defi_positions_covered.update(_covered_defi_keys_from_result(result.get("content", "")))
+
+    usage["_tool_call_counts"] = tool_call_counts
+    usage["_defi_positions_covered"] = sorted(defi_positions_covered)
+
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
     usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
     usage["tool_names"] = tool_names_acc
@@ -658,7 +766,7 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
         components = _extract_a2ui_from_text(text)
         if components:
             return {
-                "ui_components": components,
+                "ui_components": [c.model_dump() for c in components],
                 "task_status": TaskStatus.COMPLETED,
             }
 
@@ -678,7 +786,7 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
                 components = _parse_a2ui_json(raw)
                 if components:
                     return {
-                        "ui_components": components,
+                        "ui_components": [c.model_dump() for c in components],
                         "task_status": TaskStatus.COMPLETED,
                     }
             except asyncio.TimeoutError:

@@ -31,7 +31,6 @@ from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
 from web3 import AsyncWeb3
 
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import rpc_call
 
 logger = logging.getLogger(__name__)
@@ -91,26 +90,25 @@ async def multicall3_batch(
     for chunk_start in range(0, len(call_list), BATCH_CHUNK_SIZE):
         chunk = call_list[chunk_start : chunk_start + BATCH_CHUNK_SIZE]
         calldata = _encode_aggregate3(chunk, allow_failure)
-        async with acquire_rpc_semaphore():
-            try:
-                raw: bytes = await rpc_call(
-                    lambda: w3.eth.call(
-                        {
-                            "to": MULTICALL3_ADDRESS,
-                            "data": calldata,
-                        }
-                    )
+        try:
+            raw: bytes = await rpc_call(
+                lambda: w3.eth.call(
+                    {
+                        "to": MULTICALL3_ADDRESS,
+                        "data": calldata,
+                    }
                 )
-                output.extend(_decode_aggregate3(raw))
-            except Exception as exc:
-                logger.warning(
-                    "Multicall3 batch (calls %d–%d of %d) failed: %s; returning all-failed results for this chunk",
-                    chunk_start,
-                    chunk_start + len(chunk) - 1,
-                    len(call_list),
-                    exc,
-                )
-                # Graceful degradation — treat entire failed chunk as reverted.
-                output.extend([(False, b"")] * len(chunk))
+            )
+            output.extend(_decode_aggregate3(raw))
+        except Exception as exc:
+            logger.warning(
+                "Multicall3 batch (calls %d–%d of %d) failed: %s; returning all-failed results for this chunk",
+                chunk_start,
+                chunk_start + len(chunk) - 1,
+                len(call_list),
+                exc,
+            )
+            # Graceful degradation — treat entire failed chunk as reverted.
+            output.extend([(False, b"")] * len(chunk))
 
     return output

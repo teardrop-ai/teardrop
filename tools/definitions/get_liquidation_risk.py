@@ -24,7 +24,6 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.definitions.get_defi_positions import (
     _AAVE_V3_POOL,
@@ -265,21 +264,20 @@ async def _assess_wallet(w3: Any, wallet: str, chain_id: int) -> WalletRiskResul
     aave_result: AaveRisk | None = None
     compound_result: list[CompoundRisk] = []
 
-    async with acquire_rpc_semaphore():
-        aave_task = asyncio.create_task(_fetch_aave_risk(w3, wallet, chain_id))
-        compound_task = asyncio.create_task(_fetch_compound_risk(w3, wallet, chain_id))
+    aave_task = asyncio.create_task(_fetch_aave_risk(w3, wallet, chain_id))
+    compound_task = asyncio.create_task(_fetch_compound_risk(w3, wallet, chain_id))
 
-        try:
-            aave_result = await aave_task
-        except Exception as exc:
-            logger.warning("Aave v3 risk fetch failed for wallet: %s", exc)
-            errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
+    try:
+        aave_result = await aave_task
+    except Exception as exc:
+        logger.warning("Aave v3 risk fetch failed for wallet: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
 
-        try:
-            compound_result = await compound_task
-        except Exception as exc:
-            logger.warning("Compound v3 risk fetch failed for wallet: %s", exc)
-            errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
+    try:
+        compound_result = await compound_task
+    except Exception as exc:
+        logger.warning("Compound v3 risk fetch failed for wallet: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
 
     tiers: list[str] = []
     if aave_result is not None:

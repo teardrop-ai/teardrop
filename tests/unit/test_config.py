@@ -60,13 +60,24 @@ def test_get_settings_is_cached():
 
 def test_agent_max_tool_iterations_default():
     s = Settings()
-    assert s.agent_max_tool_iterations == 12
+    assert s.agent_max_tool_iterations == 4
 
 
 def test_agent_max_tool_iterations_env_override(monkeypatch):
     monkeypatch.setenv("AGENT_MAX_TOOL_ITERATIONS", "5")
     s = Settings()
     assert s.agent_max_tool_iterations == 5
+
+
+def test_agent_tool_max_calls_per_run_default():
+    s = Settings()
+    assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 1, "resolve_ens": 1}
+
+
+def test_agent_tool_max_calls_per_run_env_override(monkeypatch):
+    monkeypatch.setenv("AGENT_TOOL_MAX_CALLS_PER_RUN", '{"get_yield_rates":2}')
+    s = Settings()
+    assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 2}
 
 
 def test_test_settings_fixture_uses_test_env(test_settings):

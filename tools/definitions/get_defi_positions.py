@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field
 from web3 import Web3
 
 from tools.definitions._multicall3 import multicall3_batch
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
 from tools.definitions._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
@@ -291,7 +290,7 @@ class AavePosition(BaseModel):
     ltv_bps: int
     liquidation_threshold_bps: int
     health_factor: float | None
-    health_factor_status: str  # "healthy" | "at_risk" | "no_debt"
+    health_factor_status: str  # "healthy" | "at_risk" | "verified_no_debt"
     reserves: list[AaveReservePosition]
 
 
@@ -348,6 +347,8 @@ class GetDefiPositionsOutput(BaseModel):
         "Report them as 'unrecognized token (0x…)' in the final answer and move on. "
         "Uniswap v3 liquidity is returned raw (no underlying token valuation in v1); "
         "tokensOwed0/1 are uncollected fees only. "
+        "If a protocol is missing (e.g., aave_v3 is null) and appears in errors, "
+        "its risk could not be verified from this snapshot and must not be treated as no debt. "
         "Does not include staking rewards, COMP accruals, or unlisted protocols."
     )
 
@@ -356,9 +357,13 @@ class GetDefiPositionsOutput(BaseModel):
 
 
 def _classify_health_factor(raw: int, total_debt_base: int) -> tuple[float | None, str]:
-    """Map raw Aave healthFactor uint256 → (float_or_None, status_tag)."""
+    """Map raw Aave healthFactor uint256 → (float_or_None, status_tag).
+
+    Returns ``verified_no_debt`` only when Aave account data was fetched and
+    indicates no debt (or equivalent infinite health factor sentinel).
+    """
     if total_debt_base == 0 or raw >= _HEALTH_FACTOR_INFINITE_THRESHOLD or raw == _UINT256_MAX:
-        return None, "no_debt"
+        return None, "verified_no_debt"
     hf = raw / 1e18
     status = "healthy" if hf >= 1.0 else "at_risk"
     return hf, status
@@ -562,9 +567,9 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
             return UniswapV3Position(
                 token_id=str(token_id),
                 token0_address=t0,
-                token0_symbol=sym.get(t0),
+                token0_symbol=sym.get(t0) or t0,
                 token1_address=t1,
-                token1_symbol=sym.get(t1),
+                token1_symbol=sym.get(t1) or t1,
                 fee_tier_raw=int(fee),
                 tick_lower=int(tick_lower),
                 tick_upper=int(tick_upper),
@@ -597,64 +602,63 @@ async def get_defi_positions(
     if chain_id not in _AAVE_V3_POOL:
         raise ValueError(f"Unsupported chain_id={chain_id}. Supported: 1 (Ethereum), 8453 (Base).")
 
-    async with acquire_rpc_semaphore():
-        wallet = Web3.to_checksum_address(wallet_address)
-        w3 = get_web3(chain_id)
+    wallet = Web3.to_checksum_address(wallet_address)
+    w3 = get_web3(chain_id)
 
-        # Launch all three protocol pipelines + block number in parallel
-        aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
-        compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
-        uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
-        block_task = asyncio.create_task(w3.eth.block_number)
+    # Launch all three protocol pipelines + block number in parallel
+    aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
+    compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
+    uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
+    block_task = asyncio.create_task(w3.eth.block_number)
 
-        errors: list[ProtocolErrorInfo] = []
-        aave_result: AavePosition | None = None
-        compound_result: list[CompoundMarketPosition] = []
-        uniswap_result: list[UniswapV3Position] = []
+    errors: list[ProtocolErrorInfo] = []
+    aave_result: AavePosition | None = None
+    compound_result: list[CompoundMarketPosition] = []
+    uniswap_result: list[UniswapV3Position] = []
 
-        try:
-            aave_result = await asyncio.wait_for(aave_task, timeout=45)
-        except asyncio.TimeoutError:
-            logger.warning("Aave v3 fetch timed out after 45s")
-            errors.append(ProtocolErrorInfo(protocol="aave_v3", error="Request timeout (45s)"))
-        except Exception as exc:
-            logger.warning("Aave v3 fetch failed: %s", exc)
-            errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
+    try:
+        aave_result = await asyncio.wait_for(aave_task, timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("Aave v3 fetch timed out after 45s")
+        errors.append(ProtocolErrorInfo(protocol="aave_v3", error="Request timeout (45s)"))
+    except Exception as exc:
+        logger.warning("Aave v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="aave_v3", error=str(exc)[:200]))
 
-        try:
-            compound_result = await asyncio.wait_for(compound_task, timeout=45)
-        except asyncio.TimeoutError:
-            logger.warning("Compound v3 fetch timed out after 45s")
-            errors.append(ProtocolErrorInfo(protocol="compound_v3", error="Request timeout (45s)"))
-        except Exception as exc:
-            logger.warning("Compound v3 fetch failed: %s", exc)
-            errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
+    try:
+        compound_result = await asyncio.wait_for(compound_task, timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("Compound v3 fetch timed out after 45s")
+        errors.append(ProtocolErrorInfo(protocol="compound_v3", error="Request timeout (45s)"))
+    except Exception as exc:
+        logger.warning("Compound v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="compound_v3", error=str(exc)[:200]))
 
-        try:
-            uniswap_result = await asyncio.wait_for(uniswap_task, timeout=45)
-        except asyncio.TimeoutError:
-            logger.warning("Uniswap v3 fetch timed out after 45s")
-            errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error="Request timeout (45s)"))
-        except Exception as exc:
-            logger.warning("Uniswap v3 fetch failed: %s", exc)
-            errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
+    try:
+        uniswap_result = await asyncio.wait_for(uniswap_task, timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("Uniswap v3 fetch timed out after 45s")
+        errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error="Request timeout (45s)"))
+    except Exception as exc:
+        logger.warning("Uniswap v3 fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
 
-        try:
-            block_number = int(await block_task)
-        except Exception as exc:
-            logger.warning("block_number fetch failed: %s", exc)
-            block_number = 0
+    try:
+        block_number = int(await block_task)
+    except Exception as exc:
+        logger.warning("block_number fetch failed: %s", exc)
+        block_number = 0
 
-        output = GetDefiPositionsOutput(
-            wallet_address=wallet,
-            chain_id=chain_id,
-            data_block_number=block_number,
-            aave_v3=aave_result,
-            compound_v3=compound_result,
-            uniswap_v3=uniswap_result,
-            errors=errors,
-        )
-        return output.model_dump()
+    output = GetDefiPositionsOutput(
+        wallet_address=wallet,
+        chain_id=chain_id,
+        data_block_number=block_number,
+        aave_v3=aave_result,
+        compound_v3=compound_result,
+        uniswap_v3=uniswap_result,
+        errors=errors,
+    )
+    return output.model_dump()
 
 
 # ─── Tool definition ─────────────────────────────────────────────────────────

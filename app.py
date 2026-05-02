@@ -1952,6 +1952,7 @@ async def agent_run(
         # langgraph_node so its tokens never reach TEXT_MESSAGE_CONTENT.
         _text_filter = _A2UIStreamFilter()
         _last_msg_id: str = run_id
+        _planner_token_buffer: list[tuple[str, str]] = []
 
         try:
             async for event in graph.astream_events(
@@ -1991,10 +1992,7 @@ async def agent_run(
                             _last_msg_id = msg_id
                             clean = _text_filter.feed(delta)
                             if clean:
-                                yield _sse_event(
-                                    _EV_TEXT_MSG_CONTENT,
-                                    {"message_id": msg_id, "delta": clean},
-                                )
+                                _planner_token_buffer.append((msg_id, clean))
 
                 # --- Tool call start ---
                 elif event_name == "on_tool_start":
@@ -2043,17 +2041,56 @@ async def agent_run(
                         },
                     )
 
-                # --- Planner finished: drain any held-back text buffer ---
+                # --- Planner finished: conditionally flush buffered text ---
                 elif event_name == "on_chain_end" and node_name == "planner":
-                    remainder = _text_filter.flush()
-                    if remainder:
+                    output = event_data.get("output", {})
+                    status = str(output.get("task_status", "")).lower()
+
+                    if status == "executing":
+                        # Intermediate planner turns that trigger more tools are
+                        # not user-facing. Drop this turn's buffered prose.
+                        _planner_token_buffer.clear()
+                        _text_filter.flush()
+                    else:
+                        for message_id, delta in _planner_token_buffer:
+                            yield _sse_event(
+                                _EV_TEXT_MSG_CONTENT,
+                                {"message_id": message_id, "delta": delta},
+                            )
+                        _planner_token_buffer.clear()
+
+                        remainder = _text_filter.flush()
+                        if remainder:
+                            yield _sse_event(
+                                _EV_TEXT_MSG_CONTENT,
+                                {"message_id": _last_msg_id, "delta": remainder},
+                            )
+
+                    # P1: Explicitly signal timeouts or rate-limits to the client.
+                    # This prevents the client from assuming the run finished normally
+                    # when the LLM timed out or failed.
+                    _err_type = output.get("error_type")
+                    if _err_type in ("timeout", "rate_limit"):
+                        _msg = "The model is currently unresponsive. Please try your request again in a moment."
+                        if _err_type == "timeout":
+                            _msg = (
+                                f"The model timed out after {settings.agent_llm_timeout_seconds}s. "
+                                "Your request may be too complex, or the provider is overloaded."
+                            )
+
                         yield _sse_event(
-                            _EV_TEXT_MSG_CONTENT,
-                            {"message_id": _last_msg_id, "delta": remainder},
+                            _EV_CUSTOM,
+                            {
+                                "name": "AGENT_WARNING",
+                                "value": {
+                                    "type": _err_type,
+                                    "message": _msg,
+                                },
+                            },
                         )
 
                 # --- Node outputs (state snapshots) ---
-                elif event_name == "on_chain_end" and node_name in ("planner", "tool_executor"):
+                elif event_name == "on_chain_end" and node_name == "tool_executor":
                     output = event_data.get("output", {})
                     # P1: Explicitly signal timeouts or rate-limits to the client.
                     # This prevents the client from assuming the run finished normally

@@ -69,7 +69,7 @@ class TestRouteAfterTools:
         assert _route_after_tools(state) == "ui_generator"
 
     def test_planning_routes_to_planner_when_below_limit(self, test_settings):
-        """Below the cap (3 of 12) the agent should keep planning."""
+        """Below the cap (3 of 4) the agent should keep planning."""
         state = AgentState(
             messages=[HumanMessage(content="test")],
             task_status=TaskStatus.PLANNING,
@@ -78,11 +78,11 @@ class TestRouteAfterTools:
         assert _route_after_tools(state) == "planner"
 
     def test_planning_routes_to_ui_generator_when_limit_reached(self, test_settings):
-        """Exactly at the default cap (12) the agent must stop looping."""
+        """Exactly at the default cap (4) the agent must stop looping."""
         state = AgentState(
             messages=[HumanMessage(content="test")],
             task_status=TaskStatus.PLANNING,
-            metadata={"_usage": {"tool_iterations": 12}},
+            metadata={"_usage": {"tool_iterations": 4}},
         )
         assert _route_after_tools(state) == "ui_generator"
 
@@ -91,7 +91,7 @@ class TestRouteAfterTools:
         state = AgentState(
             messages=[HumanMessage(content="test")],
             task_status=TaskStatus.PLANNING,
-            metadata={"_usage": {"tool_iterations": 13}},
+            metadata={"_usage": {"tool_iterations": 5}},
         )
         assert _route_after_tools(state) == "ui_generator"
 
