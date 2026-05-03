@@ -500,9 +500,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     )
 
 
-async def _fetch_compound_market(
-    w3: Any, wallet: str, market: dict[str, str], chain_id: int
-) -> CompoundMarketPosition | None:
+async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str], chain_id: int) -> CompoundMarketPosition | None:
     """Fetch a single Compound v3 Comet market position. Returns None if no position."""
     market_addr = Web3.to_checksum_address(market["address"])
     collateral_assets = market.get("collateral_assets", [])

@@ -222,9 +222,7 @@ async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     )
 
 
-async def _fetch_compound_market_risk(
-    w3: Any, wallet: str, market: dict[str, str], chain_id: int
-) -> CompoundRisk | None:
+async def _fetch_compound_market_risk(w3: Any, wallet: str, market: dict[str, str], chain_id: int) -> CompoundRisk | None:
     """Fetch a single Compound v3 market's risk slice. Returns None if no borrow position."""
     market_addr = Web3.to_checksum_address(market["address"])
     comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)

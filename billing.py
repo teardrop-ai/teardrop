@@ -1785,10 +1785,7 @@ async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str 
         )
         daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
         if daily_spend + estimated_cost_usdc > spending_limit:
-            return (
-                f"Daily spending limit reached: {daily_spend} of {spending_limit} "
-                "atomic USDC used in the last 24 hours."
-            )
+            return f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
 
     return None
 

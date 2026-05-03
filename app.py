@@ -2209,7 +2209,9 @@ async def agent_run(
                                 "name": "AGENT_WARNING",
                                 "value": {
                                     "type": "empty_response",
-                                    "message": "The run completed without visible text output. Please retry or simplify your request.",
+                                    "message": (
+                                        "The run completed without visible text output. Please retry or simplify your request."
+                                    ),
                                 },
                             },
                         )
@@ -2272,7 +2274,33 @@ async def agent_run(
         try:
             _run_provider = llm_config["provider"] if llm_config else settings.agent_provider
             _run_model = llm_config["model"] if llm_config else settings.agent_model
-            cost_usdc = await calculate_run_cost_usdc(usage_data, _run_provider, _run_model)
+            turns = usage_data.get("turns") if isinstance(usage_data, dict) else None
+            if isinstance(turns, list) and turns:
+                token_cost_total = 0
+                for turn in turns:
+                    if not isinstance(turn, dict):
+                        continue
+                    turn_provider = str(turn.get("provider") or _run_provider)
+                    turn_model = str(turn.get("model") or _run_model)
+                    turn_usage = {
+                        "tokens_in": int(turn.get("tokens_in", 0)),
+                        "tokens_out": int(turn.get("tokens_out", 0)),
+                        # Token-only per turn; tools are charged separately once per run.
+                        "billable_tool_calls": 0,
+                        "billable_tool_names": [],
+                    }
+                    token_cost_total += await calculate_run_cost_usdc(turn_usage, turn_provider, turn_model)
+
+                tool_usage = {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "billable_tool_calls": int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0))),
+                    "billable_tool_names": usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
+                }
+                tool_cost_total = await calculate_run_cost_usdc(tool_usage, _run_provider, _run_model)
+                cost_usdc = token_cost_total + tool_cost_total
+            else:
+                cost_usdc = await calculate_run_cost_usdc(usage_data, _run_provider, _run_model)
         except Exception:
             logger.debug("Could not calculate run cost", exc_info=True)
 

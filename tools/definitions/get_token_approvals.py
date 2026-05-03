@@ -227,8 +227,7 @@ async def get_token_approvals(
     if is_total_batch_failure:
         response_error = "Approval data unavailable (RPC batch failed; results may be incomplete)."
         logger.warning(
-            "get_token_approvals: multicall batch returned all-failed results "
-            "(chain_id=%s, wallet=%s, pairs=%d)",
+            "get_token_approvals: multicall batch returned all-failed results (chain_id=%s, wallet=%s, pairs=%d)",
             chain_id,
             wallet,
             len(pairs),

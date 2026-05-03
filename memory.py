@@ -418,9 +418,7 @@ async def extract_and_store_memories(
     """
     try:
         facts = await _extract_facts(messages)
-        entries = await asyncio.gather(
-            *[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts]
-        )
+        entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
         stored = sum(1 for entry in entries if entry is not None)
         if stored > 0:
             logger.info("Stored %d memories for org_id=%s run_id=%s", stored, org_id, run_id)

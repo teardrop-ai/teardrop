@@ -403,12 +403,27 @@ async def _invoke_planner_llm(
         }
 
 
-def _accumulate_usage(state: AgentState, response: AIMessage) -> dict[str, int]:
-    """Add this turn's token counts to the running usage in metadata."""
+def _accumulate_usage(state: AgentState, response: AIMessage, *, provider: str, model: str) -> dict[str, Any]:
+    """Add this turn's token counts to running usage and keep per-turn attribution."""
     usage = dict(state.metadata.get("_usage", {}))
     extracted = extract_usage(response)
-    usage["tokens_in"] = usage.get("tokens_in", 0) + extracted["tokens_in"]
-    usage["tokens_out"] = usage.get("tokens_out", 0) + extracted["tokens_out"]
+    delta_in = int(extracted.get("tokens_in", 0))
+    delta_out = int(extracted.get("tokens_out", 0))
+    usage["tokens_in"] = int(usage.get("tokens_in", 0)) + delta_in
+    usage["tokens_out"] = int(usage.get("tokens_out", 0)) + delta_out
+
+    turns = usage.get("turns")
+    if not isinstance(turns, list):
+        turns = []
+    turns.append(
+        {
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "tokens_in": delta_in,
+            "tokens_out": delta_out,
+        }
+    )
+    usage["turns"] = turns
     return usage
 
 
@@ -546,8 +561,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                 _summary = ", ".join(_summary_parts) if _summary_parts else ""
                 prior_call_lines.append(f"- {_name}({_summary})" if _summary else f"- {_name}()")
         prior_calls_block = (
-            "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n"
-            + "\n".join(prior_call_lines)
+            "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n" + "\n".join(prior_call_lines)
             if prior_call_lines
             else ""
         )
@@ -557,8 +571,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                     "Re-entry summary: tool iterations already completed this run. "
                     f"Completed tool calls: {completed_text}. "
                     "Do not repeat prior calls unless strictly required by new information. "
-                    "Synthesize from existing tool results when possible."
-                    + prior_calls_block
+                    "Synthesize from existing tool results when possible." + prior_calls_block
                 )
             )
         )
@@ -605,7 +618,12 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         # Record usage for the failed turn BEFORE retrying, so we don't lose the tokens
         # if the failure was partial or provided usage metadata.
         if "messages" in result and isinstance(result["messages"][0], AIMessage):
-            state.metadata["_usage"] = _accumulate_usage(state, result["messages"][0])
+            state.metadata["_usage"] = _accumulate_usage(
+                state,
+                result["messages"][0],
+                provider=_provider,
+                model=_model,
+            )
             usage_already_recorded = True
 
         fallback_result = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
@@ -625,7 +643,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     response: AIMessage = result
 
     if not usage_already_recorded:
-        usage = _accumulate_usage(state, response)
+        usage = _accumulate_usage(state, response, provider=_provider, model=_model)
     else:
         usage = state.metadata.get("_usage", {})
 

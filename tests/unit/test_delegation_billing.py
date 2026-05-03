@@ -77,9 +77,7 @@ class TestCheckDelegationBudget:
         _config.get_settings.cache_clear()
 
         mock_pool = AsyncMock()
-        mock_pool.fetchrow = AsyncMock(
-            return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False}
-        )
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
         with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
             result = await check_delegation_budget("org-1", 60_000)
             assert result is not None
