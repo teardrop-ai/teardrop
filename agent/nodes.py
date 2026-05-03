@@ -657,6 +657,9 @@ async def _execute_single_tool(
 
     elapsed = int((time.monotonic() - start_mono) * 1000)
     content = result.content
+    max_chars = get_settings().agent_max_tool_result_chars
+    if max_chars > 0 and len(content) > max_chars:
+        content = f"{content[:max_chars]}...[TRUNCATED: {len(result.content)} chars total]"
     logger.info("tool_executor: %s completed in %dms (result_len=%d)", tool_name, elapsed, len(content))
     return {
         "message": ToolMessage(content=content, tool_call_id=call_id),
@@ -774,6 +777,14 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         else:
             seen_this_batch.add(sig)
             dedup_calls.append(call)
+
+    if not dedup_calls:
+        logger.info("tool_executor: all calls suppressed, routing to GENERATING_UI")
+        return {
+            "messages": skipped_messages,
+            "task_status": TaskStatus.GENERATING_UI,
+            "metadata": {**state.metadata, "_usage": usage},
+        }
 
     try:
         import time

@@ -7,6 +7,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
+import time
 
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
@@ -42,6 +44,46 @@ _RATE_LIMIT_MARKERS = (
     "throttl",
     "quanta",
 )
+
+
+def _parse_rate_limit_cooldown(err_lower: str) -> float | None:
+    """Best-effort parse of provider cooldown hints from RPC error text."""
+    if not err_lower:
+        return None
+
+    # Common explicit hints: "retry after 1.5s" / "in 2 seconds".
+    for pattern in (
+        r"retry\s+after\s+([0-9]+(?:\.[0-9]+)?)\s*s",
+        r"retry\s+after\s+([0-9]+(?:\.[0-9]+)?)\s*seconds",
+        r"in\s+([0-9]+(?:\.[0-9]+)?)\s*s",
+        r"in\s+([0-9]+(?:\.[0-9]+)?)\s*seconds",
+    ):
+        match = re.search(pattern, err_lower)
+        if match:
+            parsed = float(match.group(1))
+            return min(60.0, max(0.1, parsed))
+
+    # Provider-specific format observed in some Alchemy responses:
+    # "rate-limited until quantainstant(nanos(<value>s))"
+    match = re.search(r"nanos\(([0-9]+(?:\.[0-9]+)?)s\)", err_lower)
+    if not match:
+        return None
+
+    value = float(match.group(1))
+    now_epoch = time.time()
+
+    # If this looks like epoch seconds, convert to remaining duration.
+    if value > 1_000_000_000:
+        remaining = value - now_epoch
+        if 0.1 <= remaining <= 60.0:
+            return remaining
+        return None
+
+    # Otherwise treat small values as direct cooldown duration.
+    if 0.1 <= value <= 60.0:
+        return value
+
+    return None
 
 
 class _RetryAsyncHTTPProvider(AsyncHTTPProvider):
@@ -154,12 +196,14 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | 
     if timeout_seconds is None:
         timeout_seconds = get_settings().agent_rpc_call_timeout_seconds
 
+    retry_delay_seconds: float | None = None
     for attempt in range(_RETRY_MAX + 1):
         if attempt > 0:
-            delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            delay = retry_delay_seconds if retry_delay_seconds is not None else _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             # Backoff sleep intentionally occurs outside semaphore acquisition.
             jitter = delay * random.uniform(-_RETRY_JITTER_RATIO, _RETRY_JITTER_RATIO)
             await asyncio.sleep(max(0.0, delay + jitter))
+            retry_delay_seconds = None
         try:
             async with acquire_rpc_semaphore():
                 async with acquire_chain_semaphore(chain_id):
@@ -170,12 +214,18 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | 
         except Exception as exc:
             err_lower = str(exc).lower()
             if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
+                parsed_cooldown = _parse_rate_limit_cooldown(err_lower)
+                retry_delay_seconds = parsed_cooldown
                 logger.warning(
                     "JSON-RPC rate limit on attempt %d/%d; retrying in %.2fs. Error: %s",
                     attempt + 1,
                     _RETRY_MAX,
-                    _RETRY_BASE_DELAY * (2**attempt),
+                    retry_delay_seconds
+                    if retry_delay_seconds is not None
+                    else _RETRY_BASE_DELAY * (2**attempt),
                     err_lower,
                 )
+                if parsed_cooldown is None:
+                    logger.debug("RPC cooldown parse failed; using exponential backoff")
                 continue
             raise

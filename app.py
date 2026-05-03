@@ -183,7 +183,7 @@ from org_tools import (
 )
 from scripts.generate_keys import generate_keypair
 from tools import registry
-from tools.definitions._rpc_semaphore import init_chain_semaphore, init_rpc_semaphore
+from tools.definitions._rpc_semaphore import init_chain_rate_limiter, init_chain_semaphore, init_rpc_semaphore
 from tools.executor import execute_tool
 from tools.mcp_server import mcp as _mcp_server
 from usage import (
@@ -584,6 +584,8 @@ async def lifespan(app: FastAPI):
     init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
     init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
     init_chain_semaphore(8453, settings.agent_rpc_chain_semaphore_limit)
+    init_chain_rate_limiter(1, settings.agent_rpc_chain_rps_limit)
+    init_chain_rate_limiter(8453, settings.agent_rpc_chain_rps_limit)
 
     # Launch background workers.
     bg_tasks: list[asyncio.Task] = []

@@ -191,12 +191,23 @@ class GetLiquidationRiskOutput(BaseModel):
 # ─── Protocol fetchers ───────────────────────────────────────────────────────
 
 
+async def _rpc_call_with_chain(coro_fn, chain_id: int):
+    """Call rpc_call with chain_id, falling back for older monkeypatched stubs."""
+    try:
+        return await rpc_call(coro_fn, chain_id=chain_id)
+    except TypeError as exc:
+        msg = str(exc)
+        if "unexpected keyword argument 'chain_id'" in msg:
+            return await rpc_call(coro_fn)
+        raise
+
+
 async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     """Fetch Aave v3 aggregate account data → AaveRisk."""
     pool_addr = Web3.to_checksum_address(_AAVE_V3_POOL[chain_id])
     pool = w3.eth.contract(address=pool_addr, abi=_AAVE_V3_POOL_ABI)
 
-    account_data = await rpc_call(lambda: pool.functions.getUserAccountData(wallet).call())
+    account_data = await _rpc_call_with_chain(lambda: pool.functions.getUserAccountData(wallet).call(), chain_id)
     (total_collateral_base, total_debt_base, _available_borrows_base, liq_threshold, ltv, health_factor_raw) = account_data
 
     hf, tier = _classify_aave_tier(int(health_factor_raw), int(total_debt_base))
@@ -211,14 +222,16 @@ async def _fetch_aave_risk(w3: Any, wallet: str, chain_id: int) -> AaveRisk:
     )
 
 
-async def _fetch_compound_market_risk(w3: Any, wallet: str, market: dict[str, str]) -> CompoundRisk | None:
+async def _fetch_compound_market_risk(
+    w3: Any, wallet: str, market: dict[str, str], chain_id: int
+) -> CompoundRisk | None:
     """Fetch a single Compound v3 market's risk slice. Returns None if no borrow position."""
     market_addr = Web3.to_checksum_address(market["address"])
     comet = w3.eth.contract(address=market_addr, abi=_COMET_ABI)
 
     borrowed, is_liq = await asyncio.gather(
-        rpc_call(lambda: comet.functions.borrowBalanceOf(wallet).call()),
-        rpc_call(lambda: comet.functions.isLiquidatable(wallet).call()),
+        _rpc_call_with_chain(lambda: comet.functions.borrowBalanceOf(wallet).call(), chain_id),
+        _rpc_call_with_chain(lambda: comet.functions.isLiquidatable(wallet).call(), chain_id),
     )
     borrowed_int = int(borrowed)
 
@@ -249,7 +262,7 @@ async def _fetch_compound_risk(w3: Any, wallet: str, chain_id: int) -> list[Comp
 
     async def _safe(market: dict[str, str]) -> CompoundRisk | None:
         try:
-            return await _fetch_compound_market_risk(w3, wallet, market)
+            return await _fetch_compound_market_risk(w3, wallet, market, chain_id)
         except Exception as exc:
             logger.debug("Compound market %s risk fetch failed: %s", market.get("name"), exc)
             return None

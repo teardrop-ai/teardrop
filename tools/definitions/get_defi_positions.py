@@ -720,7 +720,7 @@ async def get_defi_positions(
     aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
     compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
     uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
-    block_task = asyncio.create_task(w3.eth.block_number)
+    block_task = asyncio.create_task(rpc_call(lambda: w3.eth.block_number, chain_id=chain_id))
 
     errors: list[ProtocolErrorInfo] = []
     aave_result: AavePosition | None = None

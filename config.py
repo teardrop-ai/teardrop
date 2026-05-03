@@ -114,6 +114,20 @@ class Settings(BaseSettings):
             "to prevent same-chain bursts from monopolizing RPC capacity."
         ),
     )
+    agent_rpc_chain_rps_limit: int = Field(
+        default=5,
+        description=(
+            "Per-chain token-bucket refill rate (requests per second). Applied alongside "
+            "RPC semaphores to smooth burst traffic and reduce upstream 429 responses."
+        ),
+    )
+    agent_max_tool_result_chars: int = Field(
+        default=8000,
+        description=(
+            "Maximum number of characters from any single tool result retained in conversation "
+            "state before truncation to keep planner context bounded."
+        ),
+    )
     agent_ui_generator_provider: str = Field(
         default="google",
         description="Provider for UI generation turns when no org-level BYOK config is set.",

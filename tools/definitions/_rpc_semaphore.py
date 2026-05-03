@@ -17,6 +17,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 _semaphore: asyncio.Semaphore | None = None
 _chain_semaphores: dict[int, asyncio.Semaphore] = {}
+
+
+@dataclass
+class _TokenBucket:
+    tokens: float
+    capacity: float
+    rate: float
+    last_refill: float
+
+
+_chain_rate_limiters: dict[int, _TokenBucket] = {}
+_chain_rate_locks: dict[int, asyncio.Lock] = {}
 
 # ─── Global diagnostics counters ──────────────────────────────────────────────
 
@@ -47,6 +60,45 @@ def init_chain_semaphore(chain_id: int, limit: int) -> None:
     """Initialize or reset the per-chain semaphore for a specific chain."""
     _chain_semaphores[chain_id] = asyncio.Semaphore(limit)
     logger.info("RPC chain semaphore initialized for chain_id=%d with limit=%d", chain_id, limit)
+
+
+def init_chain_rate_limiter(chain_id: int, rps: float) -> None:
+    """Initialize or reset a per-chain token-bucket rate limiter."""
+    safe_rps = max(0.1, float(rps))
+    now = time.monotonic()
+    _chain_rate_limiters[chain_id] = _TokenBucket(
+        tokens=safe_rps,
+        capacity=safe_rps,
+        rate=safe_rps,
+        last_refill=now,
+    )
+    _chain_rate_locks[chain_id] = asyncio.Lock()
+    logger.info("RPC chain rate limiter initialized for chain_id=%d with rps=%.2f", chain_id, safe_rps)
+
+
+async def _acquire_chain_rate_token(chain_id: int) -> None:
+    """Consume one token from the per-chain bucket, waiting if depleted."""
+    bucket = _chain_rate_limiters.get(chain_id)
+    if bucket is None:
+        return
+
+    lock = _chain_rate_locks.setdefault(chain_id, asyncio.Lock())
+
+    while True:
+        async with lock:
+            now = time.monotonic()
+            elapsed = max(0.0, now - bucket.last_refill)
+            bucket.last_refill = now
+            bucket.tokens = min(bucket.capacity, bucket.tokens + (elapsed * bucket.rate))
+
+            if bucket.tokens >= 1.0:
+                bucket.tokens -= 1.0
+                return
+
+            wait_seconds = max(0.01, (1.0 - bucket.tokens) / bucket.rate)
+
+        logger.info("RPC rate limiter: sleeping %.2fs for chain_id=%d", wait_seconds, chain_id)
+        await asyncio.sleep(wait_seconds)
 
 
 @asynccontextmanager
@@ -129,6 +181,8 @@ async def acquire_chain_semaphore(chain_id: int | None):
                 wait_ms,
                 sem._value,
             )
+
+        await _acquire_chain_rate_token(chain_id)
         yield
 
 
