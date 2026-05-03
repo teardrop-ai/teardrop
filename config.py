@@ -70,6 +70,23 @@ class Settings(BaseSettings):
             "tool iteration. Keeps final synthesis concise and reduces timeout risk."
         ),
     )
+    agent_synthesis_provider: str = Field(
+        default="",
+        description=(
+            "Optional override provider for synthesis-only planner turns "
+            "(tool_iterations >= 1). When unset, the primary agent_provider is used. "
+            "Use this to route long final-synthesis calls through a faster model "
+            "(e.g., openai/gpt-4o-mini) without changing the planner model."
+        ),
+    )
+    agent_synthesis_model: str = Field(
+        default="",
+        description=(
+            "Optional override model for synthesis-only planner turns. "
+            "Only applied when agent_synthesis_provider is also set and the "
+            "request has no org-level BYOK config."
+        ),
+    )
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
         default=4,

@@ -477,9 +477,20 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
+    _synthesis_forced = bool(state.metadata.get("_synthesis_forced", False))
     if tool_iterations > 0 and not llm_config:
         _max_tokens = settings.agent_synthesis_max_tokens
-        llm = create_llm_from_config(
+        # Optional override: route synthesis turns through a dedicated faster
+        # model (e.g., gpt-4o-mini) to slash final-turn latency. Only applied
+        # when both override fields are set and the override provider has a
+        # usable API key — otherwise fall back to the primary planner model.
+        _synth_provider = (settings.agent_synthesis_provider or "").strip()
+        _synth_model = (settings.agent_synthesis_model or "").strip()
+        if _synth_provider and _synth_model:
+            _override_key = _provider_api_key(settings, _synth_provider)
+            if _override_key and not is_provider_cooled_down(_synth_provider, _synth_model):
+                _provider, _model = _synth_provider, _synth_model
+        llm_unbound = create_llm_from_config(
             {
                 "provider": _provider,
                 "model": _model,
@@ -488,7 +499,12 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                 "temperature": settings.agent_temperature,
                 "timeout_seconds": _timeout,
             }
-        ).bind_tools(all_tools)
+        )
+        # When all calls were suppressed last turn, the planner is being asked
+        # to synthesize from existing context — binding tool schemas only
+        # bloats the request (5-8K tokens of unused JSON-Schema) without
+        # any benefit. Skip bind_tools to cut prompt size and latency.
+        llm = llm_unbound if _synthesis_forced else llm_unbound.bind_tools(all_tools)
 
     system_messages = _build_planner_system_messages(
         state,
@@ -504,6 +520,37 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         completed_names = state.metadata.get("_usage", {}).get("tool_names", [])
         unique_names = list(dict.fromkeys(str(name) for name in completed_names))
         completed_text = ", ".join(unique_names) if unique_names else "none"
+        # Build a compact list of already-issued (tool, key-args) pairs from
+        # prior AIMessage tool_calls in this run. Surfacing the actual arg
+        # values (chain_id, wallet_address) — not just tool names — sharply
+        # reduces the planner's tendency to re-issue the same call with
+        # equivalent arguments, which would otherwise be suppressed by the
+        # tool_executor and waste a full LLM round-trip on synthesis.
+        prior_call_lines: list[str] = []
+        _seen_sigs: set[str] = set()
+        _arg_keys = ("chain_id", "wallet_address", "wallet_addresses", "protocol", "tokens")
+        for _msg in state.messages:
+            _calls = getattr(_msg, "tool_calls", None)
+            if not _calls:
+                continue
+            for _c in _calls:
+                _name = _c.get("name") if isinstance(_c, dict) else None
+                _args = _c.get("args") if isinstance(_c, dict) else None
+                if not _name or not isinstance(_args, dict):
+                    continue
+                _sig = _call_signature(_name, _args)
+                if _sig in _seen_sigs:
+                    continue
+                _seen_sigs.add(_sig)
+                _summary_parts = [f"{k}={_args[k]!r}" for k in _arg_keys if k in _args]
+                _summary = ", ".join(_summary_parts) if _summary_parts else ""
+                prior_call_lines.append(f"- {_name}({_summary})" if _summary else f"- {_name}()")
+        prior_calls_block = (
+            "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n"
+            + "\n".join(prior_call_lines)
+            if prior_call_lines
+            else ""
+        )
         system_messages.append(
             SystemMessage(
                 content=(
@@ -511,10 +558,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                     f"Completed tool calls: {completed_text}. "
                     "Do not repeat prior calls unless strictly required by new information. "
                     "Synthesize from existing tool results when possible."
+                    + prior_calls_block
                 )
             )
         )
-    if bool(state.metadata.get("_synthesis_forced", False)):
+    if _synthesis_forced:
         system_messages.append(
             SystemMessage(
                 content=(
@@ -564,7 +612,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         if fallback_result is not None:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
-            fallback_bound = fallback_llm.bind_tools(all_tools)  # type: ignore[arg-type]
+            fallback_bound = fallback_llm if _synthesis_forced else fallback_llm.bind_tools(all_tools)  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
                 messages,
