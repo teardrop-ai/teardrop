@@ -37,6 +37,7 @@ class _TokenBucket:
 
 _chain_rate_limiters: dict[int, _TokenBucket] = {}
 _chain_rate_locks: dict[int, asyncio.Lock] = {}
+_chain_cooldown_until: dict[int, float] = {}
 
 # ─── Global diagnostics counters ──────────────────────────────────────────────
 
@@ -73,7 +74,22 @@ def init_chain_rate_limiter(chain_id: int, rps: float) -> None:
         last_refill=now,
     )
     _chain_rate_locks[chain_id] = asyncio.Lock()
+    _chain_cooldown_until.pop(chain_id, None)
     logger.info("RPC chain rate limiter initialized for chain_id=%d with rps=%.2f", chain_id, safe_rps)
+
+
+def set_chain_cooldown(chain_id: int, cooldown_seconds: float) -> None:
+    """Apply a shared cooldown window for one chain after a provider 429."""
+    if cooldown_seconds <= 0:
+        return
+    now_mono = time.monotonic()
+    proposed_until = now_mono + cooldown_seconds
+    _chain_cooldown_until[chain_id] = max(_chain_cooldown_until.get(chain_id, 0.0), proposed_until)
+
+
+def get_chain_cooldown_wait(chain_id: int) -> float:
+    """Return remaining shared cooldown wait time for one chain."""
+    return max(0.0, _chain_cooldown_until.get(chain_id, 0.0) - time.monotonic())
 
 
 async def _acquire_chain_rate_token(chain_id: int) -> None:
@@ -162,6 +178,11 @@ async def acquire_chain_semaphore(chain_id: int | None):
     if sem is None:
         yield
         return
+
+    cooldown_wait = get_chain_cooldown_wait(chain_id)
+    if cooldown_wait > 0:
+        logger.info("RPC shared cooldown: sleeping %.2fs for chain_id=%d", cooldown_wait, chain_id)
+        await asyncio.sleep(cooldown_wait)
 
     start_mono = time.monotonic()
     logger.debug("Acquiring RPC chain semaphore for chain_id=%d (permits: %d)", chain_id, sem._value)

@@ -1990,6 +1990,7 @@ async def agent_run(
         _text_filter = _A2UIStreamFilter()
         _last_msg_id: str = run_id
         _planner_token_buffer: list[tuple[str, str]] = []
+        _text_emitted = False
 
         def _coerce_stream_text(content: Any) -> str:
             """Normalise provider-specific content blocks to plain text."""
@@ -2129,6 +2130,7 @@ async def agent_run(
                         if emitted_chunks:
                             yield _sse_event(_EV_TEXT_MSG_START, {"message_id": _last_msg_id})
                             for message_id, delta in emitted_chunks:
+                                _text_emitted = True
                                 yield _sse_event(
                                     _EV_TEXT_MSG_CONTENT,
                                     {"message_id": message_id, "delta": delta},
@@ -2198,6 +2200,17 @@ async def agent_run(
                             {
                                 "surface_id": run_id,
                                 "components": [c if isinstance(c, dict) else c.model_dump() for c in ui_components],
+                            },
+                        )
+                    if not _text_emitted:
+                        yield _sse_event(
+                            _EV_CUSTOM,
+                            {
+                                "name": "AGENT_WARNING",
+                                "value": {
+                                    "type": "empty_response",
+                                    "message": "The run completed without visible text output. Please retry or simplify your request.",
+                                },
                             },
                         )
 

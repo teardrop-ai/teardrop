@@ -192,6 +192,7 @@ def _build_planner_system_messages(
     timeout_seconds: int,
     platform_tools: list,
     org_tools: list,
+    emit_ui: bool,
 ) -> list[SystemMessage]:
     """Assemble the planner system prompt(s).
 
@@ -210,6 +211,11 @@ def _build_planner_system_messages(
     # It must NOT contain any org-specific data (memories, org name, balance)
     # to prevent cross-org cache pollution.
     cached_prompt = _PLANNER_SYSTEM
+    if not emit_ui:
+        cached_prompt += (
+            "\n\nOutput constraint: Structured UI output is disabled for this request. "
+            "Do not include any ```a2ui``` fenced block in your response."
+        )
     if platform_tools:
         platform_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in platform_tools]
         cached_prompt += "\n\n## Available Platform Tools\n" + "\n".join(platform_tool_lines)
@@ -492,6 +498,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         timeout_seconds=_timeout,
         platform_tools=tools,
         org_tools=org_tools,
+        emit_ui=bool(state.metadata.get("emit_ui", True)),
     )
     if tool_iterations > 0:
         completed_names = state.metadata.get("_usage", {}).get("tool_names", [])
@@ -504,6 +511,16 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                     f"Completed tool calls: {completed_text}. "
                     "Do not repeat prior calls unless strictly required by new information. "
                     "Synthesize from existing tool results when possible."
+                )
+            )
+        )
+    if bool(state.metadata.get("_synthesis_forced", False)):
+        system_messages.append(
+            SystemMessage(
+                content=(
+                    "All planned tool calls for this turn were suppressed because they duplicate existing "
+                    "results or exceeded safety caps. Do NOT request any further tool calls. "
+                    "Write the final synthesis using the existing conversation context now."
                 )
             )
         )
@@ -567,7 +584,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     return {
         "messages": [response],
         "task_status": TaskStatus.EXECUTING if response.tool_calls else TaskStatus.GENERATING_UI,
-        "metadata": {**state.metadata, "_usage": usage},
+        "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
     }
 
 
@@ -779,11 +796,12 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             dedup_calls.append(call)
 
     if not dedup_calls:
-        logger.info("tool_executor: all calls suppressed, routing to GENERATING_UI")
+        usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
+        logger.info("tool_executor: all calls suppressed, routing to PLANNING for forced synthesis")
         return {
             "messages": skipped_messages,
-            "task_status": TaskStatus.GENERATING_UI,
-            "metadata": {**state.metadata, "_usage": usage},
+            "task_status": TaskStatus.PLANNING,
+            "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": True},
         }
 
     try:
@@ -866,6 +884,11 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
     """Parse or generate A2UI components from the agent's final message."""
     logger.debug("ui_generator_node: entry")
     last_msg = state.messages[-1] if state.messages else None
+    if not isinstance(last_msg, AIMessage):
+        for msg in reversed(state.messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                last_msg = msg
+                break
     emit_ui = bool(state.metadata.get("emit_ui", True))
 
     # --- Try to extract inline ```a2ui``` block first ---

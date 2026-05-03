@@ -5,10 +5,12 @@ import pytest
 from tools.definitions._rpc_semaphore import (
     acquire_chain_semaphore,
     acquire_rpc_semaphore,
+    get_chain_cooldown_wait,
     get_chain_semaphore,
     get_rpc_semaphore,
     init_chain_semaphore,
     init_rpc_semaphore,
+    set_chain_cooldown,
 )
 
 
@@ -73,3 +75,28 @@ async def test_chain_semaphore_none_or_unregistered_is_noop():
         pass
     async with acquire_chain_semaphore(999_999):
         pass
+
+
+def test_chain_cooldown_helpers_set_and_read_remaining_wait():
+    set_chain_cooldown(1, 0.5)
+    wait = get_chain_cooldown_wait(1)
+    assert 0.0 < wait <= 0.5
+
+
+@pytest.mark.asyncio
+async def test_acquire_chain_semaphore_honors_shared_cooldown(monkeypatch):
+    init_chain_semaphore(8453, 1)
+    set_chain_cooldown(8453, 0.25)
+
+    slept_for: list[float] = []
+
+    async def _fake_sleep(seconds: float):
+        slept_for.append(seconds)
+
+    monkeypatch.setattr("tools.definitions._rpc_semaphore.asyncio.sleep", _fake_sleep)
+
+    async with acquire_chain_semaphore(8453):
+        pass
+
+    assert slept_for
+    assert slept_for[0] > 0

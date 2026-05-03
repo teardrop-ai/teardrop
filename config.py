@@ -108,14 +108,14 @@ class Settings(BaseSettings):
         ),
     )
     agent_rpc_chain_semaphore_limit: int = Field(
-        default=4,
+        default=2,
         description=(
             "Per-chain limit on concurrent RPC calls. Applied in addition to the global semaphore "
             "to prevent same-chain bursts from monopolizing RPC capacity."
         ),
     )
     agent_rpc_chain_rps_limit: int = Field(
-        default=5,
+        default=3,
         description=(
             "Per-chain token-bucket refill rate (requests per second). Applied alongside "
             "RPC semaphores to smooth burst traffic and reduce upstream 429 responses."

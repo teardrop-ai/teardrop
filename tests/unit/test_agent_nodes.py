@@ -297,6 +297,23 @@ class TestPlannerNode:
         cfg = mock_create_from_config.call_args.args[0]
         assert cfg["max_tokens"] == test_settings.agent_synthesis_max_tokens
 
+    async def test_forced_synthesis_flag_is_cleared_after_planner_turn(self, test_settings):
+        mock_response = _make_ai_message("Final answer", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = mock_llm
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_synthesis_forced": True})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=mock_llm),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["metadata"]["_synthesis_forced"] is False
+
 
 # ─── tool_executor_node ───────────────────────────────────────────────────────
 
@@ -495,6 +512,25 @@ class TestToolExecutorNode:
         assert result["task_status"] == TaskStatus.PLANNING
         mock_tool.ainvoke.assert_called_once()
 
+    async def test_all_calls_suppressed_routes_back_to_planning(self, test_settings):
+        """If every tool call is suppressed, force a synthesis planner turn instead of ending blank."""
+        tool_call = {"id": "c1", "name": "get_datetime", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+
+        from agent.nodes import _call_signature
+
+        prior_sig = _call_signature("get_datetime", {})
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {"_completed_calls": [prior_sig], "tool_iterations": 2}},
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_datetime": MagicMock()}):
+            result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert result["metadata"]["_synthesis_forced"] is True
+        assert result["metadata"]["_usage"]["tool_iterations"] == 3
+
 
 # ─── ui_generator_node ────────────────────────────────────────────────────────
 
@@ -587,6 +623,16 @@ class TestUiGeneratorNode:
         # task_status should still be COMPLETED; ui_components absent or empty
         assert result["task_status"] == TaskStatus.COMPLETED
         assert result.get("ui_components", []) == []
+
+    async def test_falls_back_to_latest_ai_message_when_last_is_tool_message(self, test_settings):
+        ai_msg = _make_ai_message(content='```a2ui\n{"components": [{"type": "text", "props": {"content": "Done"}}]}\n```')
+        tool_msg = ToolMessage(content="tool output", tool_call_id="t-1")
+        state = _make_state(messages=[HumanMessage(content="run"), ai_msg, tool_msg])
+
+        result = await ui_generator_node(state)
+
+        assert result["task_status"] == TaskStatus.COMPLETED
+        assert len(result["ui_components"]) == 1
 
 
 # ─── _call_signature ─────────────────────────────────────────────────────────

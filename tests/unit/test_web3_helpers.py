@@ -72,3 +72,42 @@ async def test_retry_provider_does_not_retry_internally(monkeypatch):
         await provider.make_request("eth_call", [])
 
     assert parent_make_request.call_count == 1
+
+
+def test_parse_rate_limit_cooldown_quanta_nanos_microseconds():
+    err = "rate-limited until quantainstant(nanos(5041715.957401394s))"
+    cooldown = web3_helpers._parse_rate_limit_cooldown(err)
+    assert cooldown is not None
+    assert 5.0 <= cooldown <= 5.1
+
+
+@pytest.mark.asyncio
+async def test_rpc_call_sets_chain_cooldown_on_rate_limit(monkeypatch):
+    @asynccontextmanager
+    async def _noop_rpc_sem():
+        yield
+
+    @asynccontextmanager
+    async def _noop_chain_sem(chain_id):
+        yield
+
+    monkeypatch.setattr(web3_helpers, "acquire_rpc_semaphore", _noop_rpc_sem)
+    monkeypatch.setattr(web3_helpers, "acquire_chain_semaphore", _noop_chain_sem)
+    monkeypatch.setattr(web3_helpers.asyncio, "sleep", AsyncMock())
+
+    cooldown_calls: list[tuple[int, float]] = []
+    monkeypatch.setattr(web3_helpers, "set_chain_cooldown", lambda chain_id, secs: cooldown_calls.append((chain_id, secs)))
+
+    attempts = {"count": 0}
+
+    async def _flaky():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise Exception("429 too many requests")
+        return "ok"
+
+    result = await web3_helpers.rpc_call(_flaky, timeout_seconds=1, chain_id=8453)
+
+    assert result == "ok"
+    assert attempts["count"] == 2
+    assert cooldown_calls == [(8453, 5.0)]

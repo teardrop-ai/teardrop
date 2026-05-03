@@ -14,7 +14,7 @@ from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
 from config import get_settings
-from tools.definitions._rpc_semaphore import acquire_chain_semaphore, acquire_rpc_semaphore
+from tools.definitions._rpc_semaphore import acquire_chain_semaphore, acquire_rpc_semaphore, set_chain_cooldown
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +77,23 @@ def _parse_rate_limit_cooldown(err_lower: str) -> float | None:
         remaining = value - now_epoch
         if 0.1 <= remaining <= 60.0:
             return remaining
-        return None
+        return 60.0
 
     # Otherwise treat small values as direct cooldown duration.
     if 0.1 <= value <= 60.0:
         return value
+
+    # Some providers encode nanos(...) payloads in microseconds or milliseconds.
+    if 60.0 < value < 1_000_000_000:
+        microseconds_guess = value / 1_000_000.0
+        if 0.1 <= microseconds_guess <= 60.0:
+            return microseconds_guess
+
+        milliseconds_guess = value / 1_000.0
+        if 0.1 <= milliseconds_guess <= 60.0:
+            return milliseconds_guess
+
+        return 60.0
 
     return None
 
@@ -215,17 +227,16 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | 
             err_lower = str(exc).lower()
             if attempt < _RETRY_MAX and any(m in err_lower for m in _RATE_LIMIT_MARKERS):
                 parsed_cooldown = _parse_rate_limit_cooldown(err_lower)
-                retry_delay_seconds = parsed_cooldown
+                effective_cooldown = parsed_cooldown if parsed_cooldown is not None else 5.0
+                retry_delay_seconds = effective_cooldown
+                if chain_id is not None:
+                    set_chain_cooldown(chain_id, effective_cooldown)
                 logger.warning(
                     "JSON-RPC rate limit on attempt %d/%d; retrying in %.2fs. Error: %s",
                     attempt + 1,
                     _RETRY_MAX,
-                    retry_delay_seconds
-                    if retry_delay_seconds is not None
-                    else _RETRY_BASE_DELAY * (2**attempt),
+                    effective_cooldown,
                     err_lower,
                 )
-                if parsed_cooldown is None:
-                    logger.debug("RPC cooldown parse failed; using exponential backoff")
                 continue
             raise
