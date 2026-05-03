@@ -456,7 +456,7 @@ class TestToolExecutorNode:
         assert result["metadata"]["_usage"]["tool_iterations"] == 3
 
     async def test_tool_executor_timeout_returns_failed_status(self, test_settings):
-        """If tools hang, tool_executor_node returns TaskStatus.FAILED with timeout message."""
+        """If a tool hangs, it is converted to timeout ToolMessage and synthesis continues."""
         tool_call = {"id": "c1", "name": "slow_tool", "args": {}}
         last_msg = _make_ai_message(tool_calls=[tool_call])
 
@@ -478,13 +478,41 @@ class TestToolExecutorNode:
         state = _make_state(messages=[last_msg])
 
         with patch.object(nodes_module, "_get_cached_tools_by_name", return_value={"slow_tool": mock_tool}):
-            # Short timeout for testing
-            with patch.object(test_settings, "agent_tool_executor_timeout_seconds", 0.1):
+            with patch.object(test_settings, "agent_single_tool_timeout_seconds", 0.05):
                 result = await tool_executor_node(state)
 
-        assert result["task_status"] == TaskStatus.FAILED
-        assert "timed out" in result["messages"][0].content
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert "[TOOL_TIMEOUT]" in result["messages"][0].content
         assert len(result["messages"]) == 1
+
+    async def test_partial_tool_batch_one_timeout_routes_to_planning(self, test_settings):
+        calls = [
+            {"id": "c1", "name": "fast_tool", "args": {}},
+            {"id": "c2", "name": "slow_tool", "args": {}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        fast_tool = MagicMock()
+        fast_tool.ainvoke = AsyncMock(return_value={"result": "ok"})
+
+        async def slow_invoke(*args, **kwargs):
+            import asyncio
+
+            await asyncio.sleep(10)
+            return {"result": "late"}
+
+        slow_tool = MagicMock()
+        slow_tool.ainvoke = slow_invoke
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value={"fast_tool": fast_tool, "slow_tool": slow_tool}):
+            with patch.object(test_settings, "agent_single_tool_timeout_seconds", 0.05):
+                result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert len(result["messages"]) == 2
+        assert any("[TOOL_TIMEOUT]" in m.content for m in result["messages"])
+        assert result["metadata"]["_usage"]["failed_tool_calls"] == 1
 
     async def test_get_token_price_all_address_tokens_blocked(self, test_settings):
         call = {"id": "c1", "name": "get_token_price", "args": {"tokens": ["0xabc123", "0xdef456"]}}

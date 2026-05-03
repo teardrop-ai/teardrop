@@ -13,6 +13,7 @@ import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
 from tools.registry import ToolDefinition
+from tools.definitions._http_session import get_defillama_session
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +98,15 @@ async def _fetch_current_tvl(slug: str) -> float | None:
     """Call GET /tvl/{slug} — returns a single float or None on failure."""
     url = f"{_DEFILLAMA_BASE_URL}/tvl/{slug}"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    text = await resp.text()
-                    return float(text.strip())
-                if resp.status == 404:
-                    logger.warning("DeFiLlama: protocol not found: %s", slug)
-                    return None
-                logger.warning("DeFiLlama /tvl returned status %d for %s", resp.status, slug)
+        session = await get_defillama_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status == 200:
+                text = await resp.text()
+                return float(text.strip())
+            if resp.status == 404:
+                logger.warning("DeFiLlama: protocol not found: %s", slug)
+                return None
+            logger.warning("DeFiLlama /tvl returned status %d for %s", resp.status, slug)
     except (ValueError, TypeError):
         logger.warning("DeFiLlama /tvl returned non-numeric response for %s", slug)
     except Exception as exc:
@@ -117,14 +118,14 @@ async def _fetch_protocol_detail(slug: str) -> dict[str, Any] | None:
     """Call GET /protocol/{slug} — returns the full DeFiLlama protocol object or None."""
     url = f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                if resp.status == 404:
-                    logger.warning("DeFiLlama: protocol detail not found: %s", slug)
-                    return None
-                logger.warning("DeFiLlama /protocol returned status %d for %s", resp.status, slug)
+        session = await get_defillama_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            if resp.status == 404:
+                logger.warning("DeFiLlama: protocol detail not found: %s", slug)
+                return None
+            logger.warning("DeFiLlama /protocol returned status %d for %s", resp.status, slug)
     except Exception as exc:
         logger.warning("DeFiLlama /protocol request failed for %s: %s", slug, type(exc).__name__)
     return None

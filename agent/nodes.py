@@ -756,6 +756,56 @@ async def _execute_single_tool(
         "error_class": result.error_class,
     }
 
+async def _execute_single_tool_safe(
+    call: dict,
+    tools_by_name: dict,
+    metadata: dict | None,
+    per_tool_timeout_seconds: float | None,
+) -> dict[str, Any]:
+    """Run a single tool with a per-tool timeout and convert failures to ToolMessages."""
+    import time
+
+    start_mono = time.monotonic()
+    tool_name = call.get("name", "unknown_tool")
+    call_id = call.get("id", "unknown_call")
+    try:
+        if per_tool_timeout_seconds is None:
+            return await _execute_single_tool(call, tools_by_name, metadata)
+        return await asyncio.wait_for(
+            _execute_single_tool(call, tools_by_name, metadata),
+            timeout=per_tool_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        elapsed = int((time.monotonic() - start_mono) * 1000)
+        content = (
+            f"[TOOL_TIMEOUT] '{tool_name}' exceeded the {per_tool_timeout_seconds}s per-tool timeout. "
+            "Continue synthesis with available data."
+        )
+        logger.warning("tool_executor: %s per-tool timeout after %ss", tool_name, per_tool_timeout_seconds)
+        return {
+            "message": ToolMessage(content=content, tool_call_id=call_id),
+            "name": tool_name,
+            "elapsed_ms": elapsed,
+            "content": content,
+            "billable": False,
+            "error_class": "timeout",
+        }
+    except Exception as exc:
+        elapsed = int((time.monotonic() - start_mono) * 1000)
+        content = (
+            f"[TOOL_ERROR] '{tool_name}' failed unexpectedly ({type(exc).__name__}). "
+            "Continue synthesis with available data."
+        )
+        logger.exception("tool_executor: %s unexpected failure", tool_name)
+        return {
+            "message": ToolMessage(content=content, tool_call_id=call_id),
+            "name": tool_name,
+            "elapsed_ms": elapsed,
+            "content": content,
+            "billable": False,
+            "error_class": "unexpected_error",
+        }
+
 
 async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     """Execute all pending tool calls in the latest AI message, in parallel."""
@@ -876,9 +926,18 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     try:
         import time
 
+        per_tool_timeout_seconds = float(get_settings().agent_single_tool_timeout_seconds)
+        if per_tool_timeout_seconds <= 0:
+            per_tool_timeout_seconds = None
+
         batch_start_mono = time.monotonic()
         results = await asyncio.wait_for(
-            asyncio.gather(*[_execute_single_tool(call, tools_by_name, state.metadata) for call in dedup_calls]),
+            asyncio.gather(
+                *[
+                    _execute_single_tool_safe(call, tools_by_name, state.metadata, per_tool_timeout_seconds)
+                    for call in dedup_calls
+                ]
+            ),
             timeout=get_settings().agent_tool_executor_timeout_seconds,
         )
         batch_elapsed = int((time.monotonic() - batch_start_mono) * 1000)

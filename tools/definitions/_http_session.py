@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 _coingecko_session: aiohttp.ClientSession | None = None
+_defillama_session: aiohttp.ClientSession | None = None
 _session_lock: asyncio.Lock | None = None
 
 
@@ -55,12 +56,33 @@ async def get_coingecko_session() -> aiohttp.ClientSession:
         return _coingecko_session
 
 
+async def get_defillama_session() -> aiohttp.ClientSession:
+    """Return a shared aiohttp.ClientSession for DeFiLlama calls."""
+    global _defillama_session
+    if _defillama_session is not None and not _defillama_session.closed:
+        return _defillama_session
+
+    async with _get_session_lock():
+        if _defillama_session is not None and not _defillama_session.closed:
+            return _defillama_session
+        connector = aiohttp.TCPConnector(limit=10, ttl_dns_cache=300, force_close=True)
+        _defillama_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
+        logger.debug("Initialised shared DeFiLlama aiohttp session")
+        return _defillama_session
+
+
 async def close_http_sessions() -> None:
     """Close all shared aiohttp sessions. Safe to call multiple times."""
-    global _coingecko_session
+    global _coingecko_session, _defillama_session
     if _coingecko_session is not None and not _coingecko_session.closed:
         try:
             await _coingecko_session.close()
         except Exception as exc:  # pragma: no cover — best-effort shutdown
             logger.warning("Error closing CoinGecko session: %s", exc)
+    if _defillama_session is not None and not _defillama_session.closed:
+        try:
+            await _defillama_session.close()
+        except Exception as exc:  # pragma: no cover — best-effort shutdown
+            logger.warning("Error closing DeFiLlama session: %s", exc)
     _coingecko_session = None
+    _defillama_session = None

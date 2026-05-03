@@ -12,6 +12,7 @@ import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
 from tools.registry import ToolDefinition
+from tools.definitions._http_session import get_defillama_session
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,21 @@ _DEFILLAMA_POOLS_URL = "https://yields.llama.fi/pools"
 _pools_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _POOLS_CACHE_KEY = "pools:all"
 _POOLS_CACHE_TTL = 300  # seconds
+_POOL_KEEP_FIELDS = frozenset(
+    {
+        "pool",
+        "project",
+        "symbol",
+        "chain",
+        "tvlUsd",
+        "apy",
+        "apyMean30d",
+        "apyBase",
+        "apyReward",
+        "stablecoin",
+        "ilRisk",
+    }
+)
 
 # Valid slug/chain name patterns — prevent injection into downstream string ops.
 _SLUG_PATTERN = r"^[a-zA-Z0-9\-\_\.]{1,64}$"
@@ -126,15 +142,20 @@ class GetYieldRatesOutput(BaseModel):
 async def _fetch_pools() -> list[dict[str, Any]]:
     """Call GET /pools and return the raw pool list, or [] on failure."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(_DEFILLAMA_POOLS_URL, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                if resp.status == 200:
-                    payload: dict[str, Any] = await resp.json()
-                    data = payload.get("data", [])
-                    if isinstance(data, list):
-                        return data
-                    return []
-                logger.warning("DeFiLlama /pools returned status %d", resp.status)
+        session = await get_defillama_session()
+        async with session.get(_DEFILLAMA_POOLS_URL, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            if resp.status == 200:
+                payload: dict[str, Any] = await resp.json()
+                data = payload.get("data", [])
+                if isinstance(data, list):
+                    # Keep only fields consumed downstream to reduce cache footprint.
+                    return [
+                        {k: pool.get(k) for k in _POOL_KEEP_FIELDS}
+                        for pool in data
+                        if isinstance(pool, dict)
+                    ]
+                return []
+            logger.warning("DeFiLlama /pools returned status %d", resp.status)
     except Exception as exc:
         logger.warning("DeFiLlama /pools request failed: %s", type(exc).__name__)
     return []

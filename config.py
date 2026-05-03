@@ -109,6 +109,14 @@ class Settings(BaseSettings):
             "Prevents runaway RPC calls or webhook timeouts from blocking the agent."
         ),
     )
+    agent_single_tool_timeout_seconds: int = Field(
+        default=30,
+        description=(
+            "Timeout in seconds for a single tool call within a batch. "
+            "Timed-out tools are converted into non-billable error ToolMessages so "
+            "the planner can synthesize from partial data."
+        ),
+    )
     agent_rpc_call_timeout_seconds: int = Field(
         default=15,
         description=(

@@ -179,6 +179,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 |----------|-------------|
 | `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
 | `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
+| `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
