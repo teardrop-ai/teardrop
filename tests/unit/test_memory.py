@@ -60,12 +60,15 @@ class TestStoreMemory:
         pool = _pool()
         # First fetchrow: count_memories returns (5,), second: INSERT RETURNING id
         pool.fetchrow = AsyncMock(side_effect=[(5,), {"id": "m-new"}])
+        cache: dict[str, tuple[float, bool]] = {}
 
         with (
             patch.object(memory_module, "_pool", pool),
             patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+            patch.object(memory_module, "_memory_count_cache", cache),
         ):
             entry = await memory_module.store_memory("org-1", "user-1", "a fact")
+            assert cache["org-1"][1] is True
 
         assert entry is not None
         assert entry.content == "a fact"
@@ -136,6 +139,7 @@ class TestRecallMemories:
         with (
             patch.object(memory_module, "_pool", pool),
             patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+            patch.object(memory_module, "has_memories_cached", AsyncMock(return_value=True)),
         ):
             results = await memory_module.recall_memories("org-1", "some query")
 
@@ -149,10 +153,63 @@ class TestRecallMemories:
         with (
             patch.object(memory_module, "_pool", pool),
             patch.object(memory_module, "_generate_embedding", _mock_embedding()),
+            patch.object(memory_module, "has_memories_cached", AsyncMock(return_value=True)),
         ):
             results = await memory_module.recall_memories("org-1", "query")
 
         assert results == []
+
+    async def test_skips_embedding_when_org_has_no_memories(self, test_settings):
+        pool = _pool()
+        embed_mock = _mock_embedding()
+
+        with (
+            patch.object(memory_module, "_pool", pool),
+            patch.object(memory_module, "_generate_embedding", embed_mock),
+            patch.object(memory_module, "has_memories_cached", AsyncMock(return_value=False)),
+        ):
+            results = await memory_module.recall_memories("org-1", "query")
+
+        assert results == []
+        embed_mock.assert_not_called()
+        pool.fetch.assert_not_called()
+
+
+# ─── has_memories_cached ─────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestHasMemoriesCached:
+    async def test_returns_false_when_count_is_zero(self, test_settings):
+        with (
+            patch.object(memory_module, "_memory_count_cache", {}),
+            patch.object(memory_module, "count_memories", AsyncMock(return_value=0)),
+        ):
+            result = await memory_module.has_memories_cached("org-1")
+
+        assert result is False
+
+    async def test_uses_cached_value_before_ttl_expires(self, test_settings):
+        with (
+            patch.object(memory_module, "_memory_count_cache", {"org-1": (9999.0, True)}),
+            patch("memory.time.monotonic", return_value=1000.0),
+            patch.object(memory_module, "count_memories", AsyncMock(return_value=0)) as count_mock,
+        ):
+            result = await memory_module.has_memories_cached("org-1")
+
+        assert result is True
+        count_mock.assert_not_called()
+
+    async def test_refreshes_cache_after_ttl_expiry(self, test_settings):
+        with (
+            patch.object(memory_module, "_memory_count_cache", {"org-1": (1000.0, False)}),
+            patch("memory.time.monotonic", return_value=2000.0),
+            patch.object(memory_module, "count_memories", AsyncMock(return_value=3)) as count_mock,
+        ):
+            result = await memory_module.has_memories_cached("org-1")
+
+        assert result is True
+        count_mock.assert_called_once_with("org-1")
 
 
 # ─── list_memories ────────────────────────────────────────────────────────────
@@ -347,6 +404,39 @@ class TestExtractAndStoreMemories:
             count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
 
         assert count == 2
+
+    async def test_skips_extraction_for_stateless_lookup_runs(self, test_settings):
+        with (
+            patch.object(memory_module, "_is_stateless_lookup_run", return_value=True),
+            patch.object(memory_module, "_extract_facts", AsyncMock(return_value=["fact one"])) as extract_mock,
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1",
+                "user-1",
+                [MagicMock(type="human", content="show me btc performance")],
+                "run-1",
+                tool_names_used=["get_token_price_historical"],
+            )
+
+        assert count == 0
+        extract_mock.assert_not_called()
+
+
+# ─── _is_stateless_lookup_run ───────────────────────────────────────────────
+
+
+class TestIsStatelessLookupRun:
+    def test_true_for_simple_lookup(self):
+        msgs = [MagicMock(type="human", content="Show BTC monthly change")]
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_token_price_historical"]) is True
+
+    def test_false_when_wallet_address_present(self):
+        msgs = [MagicMock(type="human", content="check 0x1234567890abcdef1234567890abcdef12345678")]
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_token_price_historical"]) is False
+
+    def test_false_when_non_stateless_tool_used(self):
+        msgs = [MagicMock(type="human", content="analyze this")]
+        assert memory_module._is_stateless_lookup_run(msgs, ["web_search"]) is False
 
 
 # ─── init_memory_db / close_memory_db / _get_pool ────────────────────────────

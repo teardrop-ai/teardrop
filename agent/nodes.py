@@ -157,6 +157,9 @@ Tool use economy:
         get_wallet_portfolio holdings.
     - When calling get_yield_rates for wallet-specific recommendations, pass
         symbols_any using held token symbols to pre-filter irrelevant pools.
+    - get_token_price_historical already returns price_change_pct, price_high,
+        and price_low. Do not call calculate to re-derive those from start/end
+        prices unless the user explicitly requests a different custom formula.
   - The executor blocks duplicate calls: if you issue a tool call with the same
     name and arguments as a prior call this session, it will be suppressed and
     you will receive a DUPLICATE_CALL_BLOCKED notice. Use the prior result

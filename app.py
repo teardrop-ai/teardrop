@@ -568,6 +568,7 @@ async def lifespan(app: FastAPI):
     await apply_pending(pool)
     await init_redis(settings.redis_url)
     await init_checkpointer()
+    await get_graph()
     await init_user_db(pool)
     await init_usage_db(pool)
     await init_wallets_db(pool)
@@ -2342,7 +2343,18 @@ async def agent_run(
             try:
                 state_msgs = (state_snapshot.values or {}).get("messages", [])
                 if state_msgs:
-                    asyncio.create_task(extract_and_store_memories(org_id, user_id, state_msgs, run_id))
+                    billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+                    if not isinstance(billable_tool_names, list):
+                        billable_tool_names = []
+                    asyncio.create_task(
+                        extract_and_store_memories(
+                            org_id,
+                            user_id,
+                            state_msgs,
+                            run_id,
+                            tool_names_used=[str(name) for name in billable_tool_names],
+                        )
+                    )
             except Exception:
                 logger.debug("Memory extraction kickoff failed", exc_info=True)
 

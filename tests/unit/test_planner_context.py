@@ -395,6 +395,26 @@ async def test_available_tools_section_absent_when_no_tools():
     assert "## Additional Organisation Tools" not in system_prompt
 
 
+@pytest.mark.anyio
+async def test_prompt_includes_no_redundant_calculate_guidance():
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "get_token_price_historical already returns price_change_pct" in system_prompt
+    assert "Do not call calculate" in system_prompt
+
+
 # ─── get_model_context_specs ─────────────────────────────────────────────────
 
 

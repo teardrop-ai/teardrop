@@ -53,6 +53,13 @@ class GetTokenPriceHistoricalInput(BaseModel):
         pattern=r"^[a-z]{3,10}$",
         description="Quote currency (usd, eur, gbp, btc, eth). Lowercase 3–10 letters.",
     )
+    stats_only: bool = Field(
+        default=False,
+        description=(
+            "If true, omit the daily price series and return only period stats "
+            "(start/end/change/high/low) to reduce payload size."
+        ),
+    )
 
 
 class DailyPricePoint(BaseModel):
@@ -178,6 +185,7 @@ async def get_token_price_historical(
     tokens: list[str],
     days: int = 30,
     vs_currency: str = "usd",
+    stats_only: bool = False,
 ) -> dict[str, Any]:
     """Get historical prices and trend statistics for one or more crypto tokens."""
     vs = vs_currency.strip().lower()
@@ -228,6 +236,10 @@ async def get_token_price_historical(
         for original, cg_id in zip(tokens, ids)
     ]
 
+    if stats_only:
+        for entry in token_entries:
+            entry["daily_prices"] = []
+
     return {"vs_currency": vs, "days": days, "tokens": token_entries}
 
 
@@ -240,7 +252,9 @@ TOOL = ToolDefinition(
         "Get historical price data for crypto tokens over a specified time window (1–365 days). "
         "Returns period statistics (start, end, % change, high, low) plus a downsampled daily "
         "price series. Use for period comparisons (month-over-month, YTD), trend analysis, and "
-        "price charts. Prefer over web_search for any time-comparative financial query."
+        "price charts. Prefer over web_search for any time-comparative financial query. Pass "
+        "stats_only=true when the daily series is unnecessary. price_change_pct is pre-computed "
+        "and should not be re-derived with calculate."
     ),
     tags=["finance", "crypto", "price", "history", "market"],
     input_schema=GetTokenPriceHistoricalInput,

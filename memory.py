@@ -20,6 +20,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -46,6 +48,19 @@ class MemoryEntry(BaseModel):
 # ─── Database initialisation ─────────────────────────────────────────────────
 
 _pool: asyncpg.Pool | None = None
+_memory_count_cache: dict[str, tuple[float, bool]] = {}
+_MEMORY_COUNT_CACHE_TTL = 60
+
+_STATELESS_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_token_price",
+        "get_token_price_historical",
+        "get_gas_price",
+        "get_datetime",
+        "convert_currency",
+    }
+)
+_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 
 
 async def init_memory_db(pool: asyncpg.Pool) -> None:
@@ -114,6 +129,40 @@ async def _generate_embedding(text: str) -> list[float]:
         return response.data[0].embedding
 
     return await asyncio.get_event_loop().run_in_executor(None, _call)
+
+
+async def has_memories_cached(org_id: str) -> bool:
+    """Return whether the org likely has memories, using a short-lived cache."""
+    now = time.monotonic()
+    cached = _memory_count_cache.get(org_id)
+    if cached and now < cached[0]:
+        return cached[1]
+
+    try:
+        has_memories = await count_memories(org_id) > 0
+    except Exception:
+        # Fail-open to avoid accidentally skipping recall when DB is transiently unavailable.
+        return True
+
+    _memory_count_cache[org_id] = (now + _MEMORY_COUNT_CACHE_TTL, has_memories)
+    return has_memories
+
+
+def _is_stateless_lookup_run(messages: list[Any], tool_names_used: list[str]) -> bool:
+    """Conservatively classify simple lookup runs where memory extraction adds little value."""
+    if len(tool_names_used) > 2:
+        return False
+    if any(name not in _STATELESS_TOOLS for name in tool_names_used):
+        return False
+
+    for msg in messages:
+        if getattr(msg, "type", "") != "human":
+            continue
+        content = getattr(msg, "content", "")
+        if isinstance(content, str) and _WALLET_ADDRESS_RE.search(content):
+            return False
+
+    return True
 
 
 # ─── Write ────────────────────────────────────────────────────────────────────
@@ -189,6 +238,8 @@ async def store_memory(
             logger.debug("Duplicate memory skipped for org_id=%s hash=%s", org_id, content_hash[:8])
             return None
 
+        _memory_count_cache[org_id] = (time.monotonic() + _MEMORY_COUNT_CACHE_TTL, True)
+
         return entry
 
     except Exception:
@@ -209,6 +260,9 @@ async def recall_memories(
     Returns an empty list on any error — memory retrieval must never block agent runs.
     """
     try:
+        if not await has_memories_cached(org_id):
+            return []
+
         pool = _get_pool()
         query_embedding = await _generate_embedding(query_text)
 
@@ -410,6 +464,7 @@ async def extract_and_store_memories(
     user_id: str,
     messages: list[Any],
     run_id: str,
+    tool_names_used: list[str] | None = None,
 ) -> int:
     """Extract facts from a conversation and store each as a memory.
 
@@ -417,6 +472,10 @@ async def extract_and_store_memories(
     Fire-and-forget safe — never raises.
     """
     try:
+        if tool_names_used and _is_stateless_lookup_run(messages, tool_names_used):
+            logger.debug("Skipping memory extraction for stateless lookup run org_id=%s run_id=%s", org_id, run_id)
+            return 0
+
         facts = await _extract_facts(messages)
         entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
         stored = sum(1 for entry in entries if entry is not None)

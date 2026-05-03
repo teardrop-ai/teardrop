@@ -61,6 +61,10 @@ class TestGetTokenPriceHistoricalInput:
         with pytest.raises(ValidationError):
             GetTokenPriceHistoricalInput(tokens=["ETH"], vs_currency="USD")
 
+    def test_stats_only_default_false(self):
+        inp = GetTokenPriceHistoricalInput(tokens=["ETH"])
+        assert inp.stats_only is False
+
 
 class TestDownsampleToDaily:
     def test_groups_by_day_keeps_last(self):
@@ -222,3 +226,25 @@ class TestGetTokenPriceHistorical:
 
         # All tokens were resolvable via _SYMBOL_TO_ID → coins list never fetched.
         load_mock.assert_not_called()
+
+    async def test_stats_only_omits_daily_prices(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
+        payload = {
+            "prices": [
+                [1_704_067_200_000, 2000.0],
+                [1_704_153_600_000, 2100.0],
+                [1_704_240_000_000, 2200.0],
+            ]
+        }
+        session = _make_mock_session(200, payload)
+        with patch(
+            "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await get_token_price_historical(tokens=["ETH"], days=7, stats_only=True)
+
+        entry = result["tokens"][0]
+        assert entry["daily_prices"] == []
+        assert entry["price_start"] == 2000.0
+        assert entry["price_end"] == 2200.0
+        assert entry["price_change_pct"] == pytest.approx(10.0)
