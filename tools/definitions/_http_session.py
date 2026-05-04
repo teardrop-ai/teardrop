@@ -3,9 +3,8 @@
 """Shared aiohttp.ClientSession helper for tool definitions.
 
 Per the aiohttp docs ("Don't create a session per request"), reusing a single
-``ClientSession`` across calls keeps the underlying connection pool warm,
-preserves DNS caching, and re-uses TLS sessions — saving ~100–300 ms per call
-on cold connections compared with the per-request ``async with ClientSession()``
+``ClientSession`` across calls keeps the underlying connector pool and DNS
+cache warm compared with the per-request ``async with ClientSession()``
 pattern.
 
 Sessions are bound to the running event loop, so we lazy-init per loop and
@@ -49,8 +48,8 @@ async def get_coingecko_session() -> aiohttp.ClientSession:
     async with _get_session_lock():
         if _coingecko_session is not None and not _coingecko_session.closed:
             return _coingecko_session
-        # force_close avoids reusing half-closed pooled sockets after task cancellation.
-        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300, force_close=True)
+        # Keep idle sockets bounded while still allowing reuse across bursts.
+        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300, keepalive_timeout=30)
         _coingecko_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared CoinGecko aiohttp session")
         return _coingecko_session
@@ -65,7 +64,7 @@ async def get_defillama_session() -> aiohttp.ClientSession:
     async with _get_session_lock():
         if _defillama_session is not None and not _defillama_session.closed:
             return _defillama_session
-        connector = aiohttp.TCPConnector(limit=10, ttl_dns_cache=300, force_close=True)
+        connector = aiohttp.TCPConnector(limit=10, ttl_dns_cache=300, keepalive_timeout=30)
         _defillama_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared DeFiLlama aiohttp session")
         return _defillama_session

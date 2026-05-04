@@ -27,6 +27,7 @@ _DEFILLAMA_POOLS_URL = "https://yields.llama.fi/pools"
 _pools_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _POOLS_CACHE_KEY = "pools:all"
 _POOLS_CACHE_TTL = 300  # seconds
+_POOLS_CACHE_ERROR_TTL = 60  # seconds for transient fetch failures
 _POOL_KEEP_FIELDS = frozenset(
     {
         "pool",
@@ -238,7 +239,8 @@ async def get_yield_rates(
         except Exception as exc:
             logger.warning("_fetch_pools raised unexpectedly: %s", type(exc).__name__)
             raw_pools = []
-        _pools_cache[_POOLS_CACHE_KEY] = (now + _POOLS_CACHE_TTL, raw_pools)
+        ttl = _POOLS_CACHE_TTL if raw_pools else _POOLS_CACHE_ERROR_TTL
+        _pools_cache[_POOLS_CACHE_KEY] = (now + ttl, raw_pools)
 
     if not raw_pools:
         return GetYieldRatesOutput(

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+import tools.definitions.get_yield_rates as yield_module
 
 from tools.definitions.get_protocol_tvl import (
     GetProtocolTvlInput,
@@ -324,6 +325,22 @@ class TestGetProtocolTvl:
         assert result["tvl_30d_change_pct"] is not None
         assert result["tvl_30d_change_pct"] > 20.0
 
+    async def test_historical_detail_failure_falls_back_to_current_tvl(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+        detail_fetch = AsyncMock(return_value=None)
+        current_fetch = AsyncMock(return_value=123_456_789.0)
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_protocol_detail", detail_fetch)
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", current_fetch)
+
+        result = await get_protocol_tvl("aave-v3", include_historical=True)
+
+        assert result["current_tvl_usd"] == pytest.approx(123_456_789.0)
+        assert result["historical_series"] is None
+        assert result["chain_breakdown"] == []
+        assert "fallback" in result["note"].lower()
+        detail_fetch.assert_awaited_once()
+        current_fetch.assert_awaited_once()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # get_yield_rates tests
@@ -611,6 +628,24 @@ class TestGetYieldRates:
     async def test_symbols_any_empty_behaves_as_no_filter(self, test_settings, monkeypatch):
         result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=[])
         assert result["total_matching"] == 4
+
+    async def test_error_fetch_uses_short_cache_ttl(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+        monkeypatch.setattr("tools.definitions.get_yield_rates.time.monotonic", lambda: 100.0)
+        monkeypatch.setattr("tools.definitions.get_yield_rates._fetch_pools", AsyncMock(return_value=[]))
+
+        await get_yield_rates()
+        expires_at, _ = yield_module._pools_cache[yield_module._POOLS_CACHE_KEY]
+        assert expires_at == pytest.approx(160.0)
+
+    async def test_success_fetch_uses_standard_cache_ttl(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+        monkeypatch.setattr("tools.definitions.get_yield_rates.time.monotonic", lambda: 100.0)
+        monkeypatch.setattr("tools.definitions.get_yield_rates._fetch_pools", AsyncMock(return_value=_SAMPLE_POOLS))
+
+        await get_yield_rates()
+        expires_at, _ = yield_module._pools_cache[yield_module._POOLS_CACHE_KEY]
+        assert expires_at == pytest.approx(400.0)
 
 
 # ─── Tool registration sanity check ───────────────────────────────────────────

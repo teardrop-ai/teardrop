@@ -24,6 +24,8 @@ A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points 
 AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner→tool cycles before forced synthesis (default: 4)
 AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
 AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
+AGENT_PLANNER_PROVIDER=google                    # Optional initial planning-turn override provider
+AGENT_PLANNER_MODEL=gemini-3-flash-preview       # Optional initial planning-turn override model
 ```
 
 ### Platform Tool Marketplace
@@ -42,6 +44,7 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_token_price_historical` | $0.004 (4,000 atomic) |
 | `get_protocol_tvl` | $0.003 (3,000 atomic) |
 | `get_yield_rates` | $0.004 (4,000 atomic) |
+| `get_lending_rates` | $0.003 (3,000 atomic) |
 | `http_fetch` | $0.002 (2,000 atomic) |
 | `convert_currency` | $0.002 (2,000 atomic) |
 | `get_eth_balance` | $0.001 (1,000 atomic) |
@@ -179,6 +182,8 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 |----------|-------------|
 | `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
 | `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
+| `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
+| `AGENT_PLANNER_MODEL` | Optional model override paired with `AGENT_PLANNER_PROVIDER` for first-pass tool selection speed tuning. |
 | `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
@@ -540,6 +545,8 @@ A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
 AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner?tool cycles before forced synthesis (default: 4)
 AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
 AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
+AGENT_PLANNER_PROVIDER=google                    # Optional initial planning-turn override provider
+AGENT_PLANNER_MODEL=gemini-3-flash-preview       # Optional initial planning-turn override model
 
 # Enable billing for delegations
 A2A_DELEGATION_BILLING_ENABLED=true

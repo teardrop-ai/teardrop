@@ -266,6 +266,22 @@ async def get_protocol_tvl(
         # Detail path: richer endpoint with chains + full history.
         detail = await _fetch_protocol_detail(slug)
         if detail is None:
+            fallback_current_tvl = await _fetch_current_tvl(slug)
+            if fallback_current_tvl is not None:
+                result = GetProtocolTvlOutput(
+                    protocol=slug,
+                    current_tvl_usd=fallback_current_tvl,
+                    tvl_7d_change_pct=None,
+                    tvl_30d_change_pct=None,
+                    chain_breakdown=[],
+                    historical_series=None,
+                    note=(
+                        "Historical TVL details unavailable from DeFiLlama; returned current TVL from /tvl fallback. "
+                        "Chain breakdown requires include_historical=True with a successful detail response."
+                    ),
+                ).model_dump()
+                _tvl_cache[cache_key] = (now + 60, result)
+                return result
             result = GetProtocolTvlOutput(
                 protocol=slug,
                 current_tvl_usd=None,

@@ -262,7 +262,7 @@ class TestPlannerNode:
         )
         with (
             patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
-            patch("agent.nodes._get_fallback_llm") as mock_fallback,
+            patch("agent.nodes._get_fallback_llm", return_value=None) as mock_fallback,
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
@@ -296,6 +296,64 @@ class TestPlannerNode:
         assert mock_create_from_config.call_count == 1
         cfg = mock_create_from_config.call_args.args[0]
         assert cfg["max_tokens"] == test_settings.agent_synthesis_max_tokens
+
+    async def test_initial_turn_uses_planner_override_model(self, test_settings):
+        mock_response = _make_ai_message("Planner response", tool_calls=[])
+
+        normal_llm = MagicMock()
+        normal_llm.bind_tools.return_value = normal_llm
+
+        planner_llm = MagicMock()
+        planner_llm.bind_tools.return_value = planner_llm
+        planner_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 0}})
+        with (
+            patch.object(test_settings, "agent_planner_provider", "google"),
+            patch.object(test_settings, "agent_planner_model", "gemini-3-flash-preview"),
+            patch("agent.nodes.get_llm_for_request", return_value=normal_llm),
+            patch("agent.nodes._provider_api_key", return_value="test-key"),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes.create_llm_from_config", return_value=planner_llm) as mock_create_from_config,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert mock_create_from_config.call_count == 1
+        cfg = mock_create_from_config.call_args.args[0]
+        assert cfg["provider"] == "google"
+        assert cfg["model"] == "gemini-3-flash-preview"
+
+    async def test_initial_turn_does_not_use_planner_override_with_org_llm_config(self, test_settings):
+        mock_response = _make_ai_message("Planner response", tool_calls=[])
+        normal_llm = MagicMock()
+        normal_llm.bind_tools.return_value = normal_llm
+        normal_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(
+            metadata={
+                "_usage": {"tool_iterations": 0},
+                "_llm_config": {
+                    "provider": "openrouter",
+                    "model": "deepseek/deepseek-v4-flash",
+                    "is_byok": True,
+                },
+            }
+        )
+        with (
+            patch.object(test_settings, "agent_planner_provider", "google"),
+            patch.object(test_settings, "agent_planner_model", "gemini-3-flash-preview"),
+            patch("agent.nodes.get_llm_for_request", return_value=normal_llm),
+            patch("agent.nodes.create_llm_from_config") as mock_create_from_config,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        mock_create_from_config.assert_not_called()
 
     async def test_forced_synthesis_flag_is_cleared_after_planner_turn(self, test_settings):
         mock_response = _make_ai_message("Final answer", tool_calls=[])

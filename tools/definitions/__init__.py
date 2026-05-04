@@ -15,6 +15,7 @@ from tools.definitions.get_dex_quote import TOOL as get_dex_quote_tool
 from tools.definitions.get_erc20_balance import TOOL as get_erc20_balance_tool
 from tools.definitions.get_eth_balance import TOOL as get_eth_balance_tool
 from tools.definitions.get_gas_price import TOOL as get_gas_price_tool
+from tools.definitions.get_lending_rates import TOOL as get_lending_rates_tool
 from tools.definitions.get_liquidation_risk import TOOL as get_liquidation_risk_tool
 from tools.definitions.get_protocol_tvl import TOOL as get_protocol_tvl_tool
 from tools.definitions.get_token_approvals import TOOL as get_token_approvals_tool
@@ -40,6 +41,7 @@ _ALL_TOOLS = [
     get_dex_quote_tool,
     get_defi_positions_tool,
     get_gas_price_tool,
+    get_lending_rates_tool,
     get_liquidation_risk_tool,
     get_token_approvals_tool,
     get_token_price_tool,

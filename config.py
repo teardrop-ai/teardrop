@@ -87,6 +87,23 @@ class Settings(BaseSettings):
             "request has no org-level BYOK config."
         ),
     )
+    agent_planner_provider: str = Field(
+        default="",
+        description=(
+            "Optional override provider for initial planner turns "
+            "(tool_iterations == 0). When unset, the primary agent_provider is used. "
+            "Use this to route first-pass tool selection through a faster model "
+            "without changing the default planner model."
+        ),
+    )
+    agent_planner_model: str = Field(
+        default="",
+        description=(
+            "Optional override model for initial planner turns. "
+            "Only applied when agent_planner_provider is also set and the "
+            "request has no org-level BYOK config."
+        ),
+    )
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
         default=4,

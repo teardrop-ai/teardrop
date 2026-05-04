@@ -134,6 +134,9 @@ Tool use economy:
         For a single wallet DeFi analysis, get_defi_positions already includes risk
         metrics. The executor may block redundant get_liquidation_risk calls after
         get_defi_positions for the same wallet/chain.
+    - For protocol-specific lending-rate questions (e.g., "Aave vs Compound USDC"),
+        prefer get_lending_rates over get_yield_rates. Use get_yield_rates for
+        broad pool discovery across many protocols.
     - Call get_yield_rates at most ONCE per user request. If you need alternate
         sorting or filtering, perform that analysis in your own response instead of
         re-calling the tool.
@@ -523,6 +526,26 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         # bloats the request (5-8K tokens of unused JSON-Schema) without
         # any benefit. Skip bind_tools to cut prompt size and latency.
         llm = llm_unbound if _synthesis_forced else llm_unbound.bind_tools(all_tools)
+    elif tool_iterations == 0 and not llm_config:
+        # Optional override: route the initial planning turn (tool selection)
+        # through a dedicated fast model. Only applies when override fields are
+        # set and the provider has a usable API key.
+        _planner_provider = (settings.agent_planner_provider or "").strip()
+        _planner_model = (settings.agent_planner_model or "").strip()
+        if _planner_provider and _planner_model:
+            _planner_key = _provider_api_key(settings, _planner_provider)
+            if _planner_key and not is_provider_cooled_down(_planner_provider, _planner_model):
+                _provider, _model = _planner_provider, _planner_model
+                llm = create_llm_from_config(
+                    {
+                        "provider": _provider,
+                        "model": _model,
+                        "api_key": _planner_key,
+                        "max_tokens": _max_tokens,
+                        "temperature": settings.agent_temperature,
+                        "timeout_seconds": _timeout,
+                    }
+                ).bind_tools(all_tools)
 
     system_messages = _build_planner_system_messages(
         state,
