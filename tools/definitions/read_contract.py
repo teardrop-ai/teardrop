@@ -85,6 +85,8 @@ class ReadContractInput(BaseModel):
         default_factory=list,
         description="Positional arguments for the function call",
         max_length=50,
+        # Gemini function_declarations require `items` for array-typed params.
+        json_schema_extra={"items": {}},
     )
     block_identifier: str = Field(
         default="latest",

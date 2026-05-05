@@ -988,6 +988,10 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
     Inserts a row into org_credit_ledger within the same transaction.
     Returns True on success, False on unexpected DB error.
     """
+    if amount_usdc <= 0:
+        logger.debug("debit_credit: skipping non-positive amount org_id=%s amount=%s", org_id, amount_usdc)
+        return True
+
     pool = _get_pool()
     try:
         async with pool.acquire() as conn:
@@ -1493,6 +1497,15 @@ async def enqueue_failed_settlement(
 
     Fire-and-forget safe — logs errors but never raises.
     """
+    if amount_usdc <= 0:
+        logger.debug(
+            "Skipping enqueue_failed_settlement for non-positive amount: run_id=%s method=%s amount=%s",
+            run_id,
+            billing_method,
+            amount_usdc,
+        )
+        return
+
     try:
         pool = _get_pool()
         settings = get_settings()
