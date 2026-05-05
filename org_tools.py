@@ -710,6 +710,21 @@ def _build_pydantic_model(
         py_type = _JSON_SCHEMA_TYPE_MAP.get(json_type, str)
         description = field_def.get("description", "")
 
+        # Special handling for arrays: Pydantic bare 'list' types resolve to
+        # JSON Schema 'type: array' without 'items'. Google/Gemini requires
+        # 'items' to be present. If the schema provides items, we use them
+        # to generate a more specific list type.
+        if json_type == "array":
+            items_def = field_def.get("items")
+            if items_def and isinstance(items_def, dict):
+                item_json_type = items_def.get("type", "string")
+                item_py_type = _JSON_SCHEMA_TYPE_MAP.get(item_json_type, str)
+                py_type = list[item_py_type]  # type: ignore[valid-type]
+            else:
+                # If no items provided, default to list[str] to ensure Pydantic
+                # generates a non-empty 'items' field in the outgoing schema.
+                py_type = list[str]
+
         if field_name in required_set:
             fields[field_name] = (py_type, Field(..., description=description))
         else:

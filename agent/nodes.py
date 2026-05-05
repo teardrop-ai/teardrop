@@ -70,6 +70,76 @@ def _provider_api_key(settings, provider: str) -> str:
     return ""
 
 
+def _validate_schema_for_google(schema: Any, path: str = "$") -> list[str]:
+    """Collect Gemini-incompatible array schema paths.
+
+    Gemini function declarations require every array-typed node to include a
+    non-empty ``items`` schema.
+    """
+    errors: list[str] = []
+    if not isinstance(schema, dict):
+        return errors
+
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        if not isinstance(items, dict) or not items:
+            errors.append(f"{path}: array is missing a non-empty 'items' schema")
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for prop_name, prop_schema in properties.items():
+            errors.extend(_validate_schema_for_google(prop_schema, f"{path}.{prop_name}"))
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        errors.extend(_validate_schema_for_google(items, f"{path}.items"))
+
+    return errors
+
+
+def _validate_tools_for_google(tools: list[Any]) -> None:
+    """Fail fast if any bound tool has a Gemini-incompatible args schema."""
+    violations: list[str] = []
+
+    for idx, tool in enumerate(tools):
+        args_schema = getattr(tool, "args_schema", None)
+        if args_schema is None:
+            continue
+
+        try:
+            if hasattr(args_schema, "model_json_schema"):
+                schema = args_schema.model_json_schema()
+            elif hasattr(args_schema, "schema"):
+                schema = args_schema.schema()
+            else:
+                continue
+        except Exception as exc:
+            logger.warning("Skipping schema validation for tool %s: %s", getattr(tool, "name", idx), exc)
+            continue
+
+        errors = _validate_schema_for_google(schema)
+        if errors:
+            tool_name = getattr(tool, "name", f"index_{idx}")
+            for err in errors:
+                violations.append(f"{tool_name} (index {idx}) -> {err}")
+
+    if violations:
+        summary = "\n".join(violations)
+        logger.error("Gemini tool schema preflight failed:\n%s", summary)
+        raise ValueError(
+            "Google/Gemini tool schema validation failed. "
+            "Array parameters must include a non-empty 'items' schema.\n"
+            f"{summary}"
+        )
+
+
+def _bind_tools_for_provider(llm: Any, tools: list[Any], provider: str) -> Any:
+    """Bind tools with provider-specific preflight checks."""
+    if provider == "google":
+        _validate_tools_for_google(tools)
+    return llm.bind_tools(tools)
+
+
 # ─── System prompts ───────────────────────────────────────────────────────────
 
 _PLANNER_SYSTEM = """\
@@ -494,11 +564,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         fallback_result = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
         if fallback_result is not None:
             fallback_llm, _provider, _model = fallback_result
-            llm = fallback_llm.bind_tools(all_tools)
+            llm = _bind_tools_for_provider(fallback_llm, all_tools, _provider)
         else:
-            llm = get_llm_for_request(llm_config).bind_tools(all_tools)
+            llm = _bind_tools_for_provider(get_llm_for_request(llm_config), all_tools, _provider)
     else:
-        llm = get_llm_for_request(llm_config).bind_tools(all_tools)  # type: ignore[arg-type]
+        llm = _bind_tools_for_provider(get_llm_for_request(llm_config), all_tools, _provider)  # type: ignore[arg-type]
 
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
@@ -529,7 +599,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         # to synthesize from existing context — binding tool schemas only
         # bloats the request (5-8K tokens of unused JSON-Schema) without
         # any benefit. Skip bind_tools to cut prompt size and latency.
-        llm = llm_unbound if _synthesis_forced else llm_unbound.bind_tools(all_tools)
+        llm = llm_unbound if _synthesis_forced else _bind_tools_for_provider(llm_unbound, all_tools, _provider)
     elif tool_iterations == 0 and not llm_config:
         # Optional override: route the initial planning turn (tool selection)
         # through a dedicated fast model. Only applies when override fields are
@@ -549,7 +619,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                         "temperature": settings.agent_temperature,
                         "timeout_seconds": _timeout,
                     }
-                ).bind_tools(all_tools)
+                )
+                llm = _bind_tools_for_provider(llm, all_tools, _provider)
 
     system_messages = _build_planner_system_messages(
         state,
@@ -660,7 +731,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         if fallback_result is not None:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
-            fallback_bound = fallback_llm if _synthesis_forced else fallback_llm.bind_tools(all_tools)  # type: ignore[arg-type]
+            fallback_bound = (
+                fallback_llm
+                if _synthesis_forced
+                else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+            )  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
                 messages,

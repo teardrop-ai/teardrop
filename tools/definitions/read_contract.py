@@ -81,12 +81,15 @@ class ReadContractInput(BaseModel):
         description="Name of the function to call",
         max_length=200,
     )
-    args: list[Any] = Field(
+    args_json: str | None = Field(
+        default=None,
+        description="Optional JSON array string of positional arguments for the function call. Use this instead of 'args' for complex types or when calling via Google/Gemini.",
+        max_length=2000,
+    )
+    args: list[str | int | bool] = Field(
         default_factory=list,
-        description="Positional arguments for the function call",
+        description="DEPRECATED: Positional arguments for the function call. Use 'args_json' for complex objects or Gemini compatibility.",
         max_length=50,
-        # Gemini function_declarations require `items` for array-typed params.
-        json_schema_extra={"items": {}},
     )
     block_identifier: str = Field(
         default="latest",
@@ -111,12 +114,23 @@ async def read_contract(
     contract_address: str,
     abi_fragment: str,
     function_name: str,
+    args_json: str | None = None,
     args: list[Any] | None = None,
     block_identifier: str = "latest",
     chain_id: int = 1,
 ) -> dict[str, Any]:
     """Call a view/pure function on any smart contract and return the result."""
-    args = args or []
+    # Resolve arguments: prefer args_json if provided.
+    final_args: list[Any] = []
+    if args_json:
+        try:
+            final_args = json.loads(args_json)
+            if not isinstance(final_args, list):
+                raise ValueError("args_json must be a JSON array")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid args_json: {exc}") from exc
+    elif args:
+        final_args = args
 
     # Parse ABI
     try:
@@ -159,7 +173,7 @@ async def read_contract(
             f"Function '{function_name}' not found in contract ABI — check that function_name matches the ABI exactly."
         )
 
-    raw = await fn(*args).call(block_identifier=block_id)
+    raw = await fn(*final_args).call(block_identifier=block_id)
 
     return {
         "contract_address": address,
