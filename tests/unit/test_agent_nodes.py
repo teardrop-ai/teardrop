@@ -122,6 +122,39 @@ class TestContainsStructuredData:
         assert not _contains_structured_data("This is a simple sentence with no structure.")
 
 
+class TestGoogleSchemaValidation:
+    def test_array_items_anyof_without_type_is_rejected(self):
+        class _ArgsSchema:
+            @staticmethod
+            def model_json_schema():
+                return {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "array",
+                            "items": {
+                                "anyOf": [
+                                    {"type": "string"},
+                                    {"type": "integer"},
+                                ]
+                            },
+                        }
+                    },
+                }
+
+        class _Tool:
+            name = "bad_tool"
+            args_schema = _ArgsSchema
+
+        from agent.nodes import _validate_tools_for_google
+
+        try:
+            _validate_tools_for_google([_Tool()])
+            assert False, "Expected ValueError for Gemini-incompatible array items schema"
+        except ValueError as exc:
+            assert "Gemini" in str(exc)
+
+
 # ─── planner_node ─────────────────────────────────────────────────────────────
 
 
@@ -563,7 +596,8 @@ class TestToolExecutorNode:
         slow_tool.ainvoke = slow_invoke
 
         state = _make_state(messages=[last_msg], metadata={"_usage": {}})
-        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value={"fast_tool": fast_tool, "slow_tool": slow_tool}):
+        tool_map = {"fast_tool": fast_tool, "slow_tool": slow_tool}
+        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value=tool_map):
             with patch.object(test_settings, "agent_single_tool_timeout_seconds", 0.05):
                 result = await tool_executor_node(state)
 

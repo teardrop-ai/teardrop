@@ -11,8 +11,8 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
-from tools.registry import ToolDefinition
 from tools.definitions._http_session import get_defillama_session
+from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +150,7 @@ async def _fetch_pools() -> list[dict[str, Any]]:
                 data = payload.get("data", [])
                 if isinstance(data, list):
                     # Keep only fields consumed downstream to reduce cache footprint.
-                    return [
-                        {k: pool.get(k) for k in _POOL_KEEP_FIELDS}
-                        for pool in data
-                        if isinstance(pool, dict)
-                    ]
+                    return [{k: pool.get(k) for k in _POOL_KEEP_FIELDS} for pool in data if isinstance(pool, dict)]
                 return []
             logger.warning("DeFiLlama /pools returned status %d", resp.status)
     except Exception as exc:

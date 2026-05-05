@@ -83,12 +83,17 @@ class ReadContractInput(BaseModel):
     )
     args_json: str | None = Field(
         default=None,
-        description="Optional JSON array string of positional arguments for the function call. Use this instead of 'args' for complex types or when calling via Google/Gemini.",
+        description=(
+            "Optional JSON array string of positional arguments for the function call. "
+            "Use this instead of 'args' for complex types or when calling via Google/Gemini."
+        ),
         max_length=2000,
     )
-    args: list[str | int | bool] = Field(
+    args: list[str] = Field(
         default_factory=list,
-        description="DEPRECATED: Positional arguments for the function call. Use 'args_json' for complex objects or Gemini compatibility.",
+        description=(
+            "DEPRECATED: Positional arguments for the function call. Use 'args_json' for complex objects or Gemini compatibility."
+        ),
         max_length=50,
     )
     block_identifier: str = Field(

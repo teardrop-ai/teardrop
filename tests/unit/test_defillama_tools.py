@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
-import tools.definitions.get_yield_rates as yield_module
 
+import tools.definitions.get_yield_rates as yield_module
 from tools.definitions.get_protocol_tvl import (
     GetProtocolTvlInput,
     _compute_change_pct,

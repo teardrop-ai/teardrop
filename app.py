@@ -2164,6 +2164,19 @@ async def agent_run(
                                 },
                             },
                         )
+                    elif output.get("error"):
+                        # Generic planner failures should be surfaced without
+                        # exposing provider/internal error details to clients.
+                        yield _sse_event(
+                            _EV_CUSTOM,
+                            {
+                                "name": "AGENT_WARNING",
+                                "value": {
+                                    "type": "error",
+                                    "message": "The request could not be completed. Please try again.",
+                                },
+                            },
+                        )
 
                 # --- Node outputs (state snapshots) ---
                 elif event_name == "on_chain_end" and node_name == "tool_executor":

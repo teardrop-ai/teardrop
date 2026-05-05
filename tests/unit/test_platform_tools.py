@@ -199,15 +199,17 @@ class TestMCPBillingGatePlatformTools:
             }
         )
 
-        with patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}), \
-             patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)), \
-             patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=2000), \
-             patch(
-                 "billing.verify_credit",
-                 new_callable=AsyncMock,
-                 return_value=MagicMock(verified=True, billing_method="credit", error=None),
-             ), \
-             patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit:
+        with (
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=2000),
+            patch(
+                "billing.verify_credit",
+                new_callable=AsyncMock,
+                return_value=MagicMock(verified=True, billing_method="credit", error=None),
+            ),
+            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+        ):
             resp = await billing_client.post(
                 "/tools/mcp",
                 content=body,
@@ -233,15 +235,17 @@ class TestMCPBillingGatePlatformTools:
             }
         )
 
-        with patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}), \
-             patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)), \
-             patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=None), \
-             patch(
-                 "billing.verify_credit",
-                 new_callable=AsyncMock,
-                 return_value=MagicMock(verified=True, billing_method="credit", error=None),
-             ), \
-             patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit:
+        with (
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=None),
+            patch(
+                "billing.verify_credit",
+                new_callable=AsyncMock,
+                return_value=MagicMock(verified=True, billing_method="credit", error=None),
+            ),
+            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+        ):
             resp = await billing_client.post(
                 "/tools/mcp",
                 content=body,
@@ -413,21 +417,23 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
             }
         )
 
-        with patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}), \
-             patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)), \
-             patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000), \
-             patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True), \
-             patch(
-                 "billing.verify_credit",
-                 new_callable=AsyncMock,
-                 return_value=MagicMock(verified=True, billing_method="credit", error=None),
-             ), \
-             patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit, \
-             patch(
-                 "marketplace.get_marketplace_tool_by_name",
-                 new_callable=AsyncMock,
-                 return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-             ):
+        with (
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+            patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
+            patch(
+                "billing.verify_credit",
+                new_callable=AsyncMock,
+                return_value=MagicMock(verified=True, billing_method="credit", error=None),
+            ),
+            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+            patch(
+                "marketplace.get_marketplace_tool_by_name",
+                new_callable=AsyncMock,
+                return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
+            ),
+        ):
             resp = await billing_client.post(
                 "/tools/mcp",
                 content=body,
@@ -450,21 +456,23 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
             }
         )
 
-        with patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}), \
-             patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)), \
-             patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000), \
-             patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True), \
-             patch(
-                 "billing.verify_credit",
-                 new_callable=AsyncMock,
-                 return_value=MagicMock(verified=True, billing_method="credit", error=None),
-             ) as mock_verify, \
-             patch("billing.debit_credit", new_callable=AsyncMock, return_value=True), \
-             patch(
-                 "marketplace.get_marketplace_tool_by_name",
-                 new_callable=AsyncMock,
-                 return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-             ):
+        with (
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+            patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
+            patch(
+                "billing.verify_credit",
+                new_callable=AsyncMock,
+                return_value=MagicMock(verified=True, billing_method="credit", error=None),
+            ) as mock_verify,
+            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True),
+            patch(
+                "marketplace.get_marketplace_tool_by_name",
+                new_callable=AsyncMock,
+                return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
+            ),
+        ):
             _ = await billing_client.post(
                 "/tools/mcp",
                 content=body,

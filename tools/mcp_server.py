@@ -56,7 +56,13 @@ def _register_tools_with_mcp() -> None:
                     name,
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     annotation=fi.annotation if fi.annotation is not None else Any,
-                    default=(inspect.Parameter.empty if fi.is_required() else fi.default),
+                    default=(
+                        inspect.Parameter.empty
+                        if fi.is_required()
+                        else fi.default_factory()
+                        if fi.default_factory is not None
+                        else fi.default
+                    ),
                 )
                 for name, fi in schema.model_fields.items()
             ]

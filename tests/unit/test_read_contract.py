@@ -244,3 +244,14 @@ class TestReadContract:
                 abi_fragment=huge_abi,
                 function_name="totalSupply",
             )
+
+
+class TestReadContractSchema:
+    def test_args_schema_uses_concrete_item_type_for_gemini(self):
+        from tools.definitions.read_contract import ReadContractInput
+
+        schema = ReadContractInput.model_json_schema()
+        args_schema = schema["properties"]["args"]
+        assert args_schema.get("type") == "array"
+        items = args_schema.get("items", {})
+        assert items.get("type") == "string"

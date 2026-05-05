@@ -12,8 +12,8 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
-from tools.registry import ToolDefinition
 from tools.definitions._http_session import get_defillama_session
+from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
 

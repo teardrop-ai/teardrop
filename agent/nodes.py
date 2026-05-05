@@ -84,6 +84,11 @@ def _validate_schema_for_google(schema: Any, path: str = "$") -> list[str]:
         items = schema.get("items")
         if not isinstance(items, dict) or not items:
             errors.append(f"{path}: array is missing a non-empty 'items' schema")
+        elif "type" not in items and any(k in items for k in ("anyOf", "oneOf", "allOf")):
+            errors.append(
+                f"{path}: array 'items' must declare a concrete 'type' for Gemini compatibility "
+                "(combinators like anyOf/oneOf/allOf are not supported)"
+            )
 
     properties = schema.get("properties")
     if isinstance(properties, dict):
@@ -127,9 +132,7 @@ def _validate_tools_for_google(tools: list[Any]) -> None:
         summary = "\n".join(violations)
         logger.error("Gemini tool schema preflight failed:\n%s", summary)
         raise ValueError(
-            "Google/Gemini tool schema validation failed. "
-            "Array parameters must include a non-empty 'items' schema.\n"
-            f"{summary}"
+            f"Google/Gemini tool schema validation failed. Array parameters must include a non-empty 'items' schema.\n{summary}"
         )
 
 
@@ -732,9 +735,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
-                fallback_llm
-                if _synthesis_forced
-                else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+                fallback_llm if _synthesis_forced else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
             )  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
@@ -858,6 +859,7 @@ async def _execute_single_tool(
         "error_class": result.error_class,
     }
 
+
 async def _execute_single_tool_safe(
     call: dict,
     tools_by_name: dict,
@@ -895,8 +897,7 @@ async def _execute_single_tool_safe(
     except Exception as exc:
         elapsed = int((time.monotonic() - start_mono) * 1000)
         content = (
-            f"[TOOL_ERROR] '{tool_name}' failed unexpectedly ({type(exc).__name__}). "
-            "Continue synthesis with available data."
+            f"[TOOL_ERROR] '{tool_name}' failed unexpectedly ({type(exc).__name__}). Continue synthesis with available data."
         )
         logger.exception("tool_executor: %s unexpected failure", tool_name)
         return {

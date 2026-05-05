@@ -52,10 +52,7 @@ class GetLendingRatesInput(BaseModel):
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base).")
     assets: list[str] | None = Field(
         default=None,
-        description=(
-            "Optional asset-symbol filter (e.g., ['USDC','DAI']). "
-            "Case-insensitive. Max 20 symbols."
-        ),
+        description=("Optional asset-symbol filter (e.g., ['USDC','DAI']). Case-insensitive. Max 20 symbols."),
     )
 
     @field_validator("chain_id")
