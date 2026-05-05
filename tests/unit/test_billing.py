@@ -879,6 +879,24 @@ class TestCalculateRunCostWithOverrides:
             )
         assert cost == 3 * 1_000
 
+    async def test_zero_cost_inprocess_tool_overrides(self):
+        """In-process utility tools can be explicitly set to zero cost via overrides."""
+        rule = self._usage_rule()
+        overrides = {"calculate": 0, "get_datetime": 0, "count_text_stats": 0}
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 3,
+                    "tool_names": ["calculate", "get_datetime", "count_text_stats"],
+                }
+            )
+        assert cost == 0
+
     async def test_defensive_fallback_unnamed_extra_calls(self):
         """tool_calls=3 but only 1 name recorded → 1 override + 2 × default."""
         rule = self._usage_rule()

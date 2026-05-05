@@ -105,6 +105,59 @@ class TestGetLendingRates:
         assert result["rates"][0]["supply_apy_pct"] == pytest.approx(5.0, rel=1e-5)
         assert result["rates"][0]["borrow_apy_pct"] == pytest.approx(7.0, rel=1e-5)
 
+    async def test_aave_retry_succeeds_on_second_attempt(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})
+        monkeypatch.setattr("tools.definitions.get_lending_rates.get_web3", lambda _chain_id=1: _mock_w3(42))
+
+        async def _rpc_call(coro_fn, timeout_seconds=None, chain_id=None):
+            return await coro_fn()
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.rpc_call", _rpc_call)
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates._AAVE_V3_TRACKED_RESERVES",
+            {
+                1: [
+                    {
+                        "symbol": "USDC",
+                        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "decimals": "6",
+                    }
+                ]
+            },
+        )
+        reserve_data = abi_encode(
+            [
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint256",
+                "uint40",
+            ],
+            [0, 0, 0, int(0.05 * 1e27), int(0.07 * 1e27), 0, 0, 0, 0, 0],
+        )
+
+        call_counter = 0
+
+        async def _flaky_multicall(*_args, **_kwargs):
+            nonlocal call_counter
+            call_counter += 1
+            if call_counter == 1:
+                raise OSError("rpc unavailable")
+            return [(True, reserve_data)]
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.multicall3_batch", _flaky_multicall)
+
+        result = await get_lending_rates(protocol="aave-v3", chain_id=1, assets=["USDC"])
+
+        assert call_counter == 2
+        assert result["errors"] == []
+        assert len(result["rates"]) == 1
+
     async def test_compound_rates_happy_path(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})
         monkeypatch.setattr("tools.definitions.get_lending_rates.get_web3", lambda _chain_id=1: _mock_w3(77))
@@ -185,6 +238,37 @@ class TestGetLendingRates:
             "tools.definitions.get_lending_rates.multicall3_batch",
             AsyncMock(return_value=[(False, b"")]),
         )
+
+        result = await get_lending_rates(protocol="aave-v3", chain_id=1, assets=["USDC"])
+
+        assert result["rates"] == []
+        assert "aave-v3 unavailable" in result["errors"]
+
+    async def test_aave_repeated_multicall_failure_records_error(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})
+        monkeypatch.setattr("tools.definitions.get_lending_rates.get_web3", lambda _chain_id=1: _mock_w3(55))
+
+        async def _rpc_call(coro_fn, timeout_seconds=None, chain_id=None):
+            return await coro_fn()
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.rpc_call", _rpc_call)
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates._AAVE_V3_TRACKED_RESERVES",
+            {
+                1: [
+                    {
+                        "symbol": "USDC",
+                        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "decimals": "6",
+                    }
+                ]
+            },
+        )
+
+        async def _always_fail(*_args, **_kwargs):
+            raise TimeoutError("rpc timeout")
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.multicall3_batch", _always_fail)
 
         result = await get_lending_rates(protocol="aave-v3", chain_id=1, assets=["USDC"])
 

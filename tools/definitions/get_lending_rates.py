@@ -8,6 +8,7 @@ Read-only market-rate snapshot (no wallet required). Supports Ethereum (1) and B
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Literal
@@ -35,6 +36,8 @@ _rates_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _SUPPORTED_PROTOCOLS = {"aave-v3", "compound-v3", "all"}
 _SUPPORTED_CHAINS = tuple(sorted({*set(_AAVE_V3_DATA_PROVIDER.keys()), *set(_COMPOUND_V3_MARKETS.keys())}))
 _MAX_ASSET_FILTER = 20
+_RPC_RETRY_ATTEMPTS = 2
+_RPC_RETRY_BACKOFF_SECONDS = 0.5
 
 # Selectors for batched read-only calls.
 _GET_RESERVE_DATA_SELECTOR: bytes = bytes(Web3.keccak(text="getReserveData(address)"))[:4]
@@ -147,7 +150,27 @@ async def _fetch_aave_rates(chain_id: int, assets_filter: set[str] | None) -> li
         )
         for r in reserves
     ]
-    results = await multicall3_batch(w3, calls, chain_id=chain_id)
+    last_err: Exception | None = None
+    results: list[tuple[bool, bytes]] | None = None
+    for attempt in range(1, _RPC_RETRY_ATTEMPTS + 1):
+        try:
+            results = await multicall3_batch(w3, calls, chain_id=chain_id)
+            break
+        except (OSError, RuntimeError, TimeoutError) as exc:
+            last_err = exc
+            if attempt >= _RPC_RETRY_ATTEMPTS:
+                logger.warning(
+                    "get_lending_rates: multicall3 failed for aave-v3 on chain %s after %d attempts: %s",
+                    chain_id,
+                    attempt,
+                    type(exc).__name__,
+                )
+                raise
+            await asyncio.sleep(_RPC_RETRY_BACKOFF_SECONDS)
+    if results is None:
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError(f"aave-v3 multicall did not return results on chain {chain_id}")
 
     entries: list[LendingRateEntry] = []
     attempted = 0

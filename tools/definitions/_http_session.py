@@ -51,7 +51,6 @@ async def get_coingecko_session() -> aiohttp.ClientSession:
         connector = aiohttp.TCPConnector(
             limit=20,
             ttl_dns_cache=300,
-            force_close=True,
         )
         _coingecko_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared CoinGecko aiohttp session")
@@ -70,7 +69,6 @@ async def get_defillama_session() -> aiohttp.ClientSession:
         connector = aiohttp.TCPConnector(
             limit=10,
             ttl_dns_cache=300,
-            force_close=True,
         )
         _defillama_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared DeFiLlama aiohttp session")

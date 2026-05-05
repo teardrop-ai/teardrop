@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class TestHttpSession:
-    async def test_coingecko_session_uses_force_close_connector(self, test_settings, monkeypatch):
+    async def test_coingecko_session_uses_keepalive_connector(self, test_settings, monkeypatch):
         from tools.definitions import _http_session
 
         monkeypatch.setattr(_http_session, "_coingecko_session", None)
@@ -14,7 +14,7 @@ class TestHttpSession:
         session = await _http_session.get_coingecko_session()
         try:
             assert session.connector is not None
-            assert session.connector.force_close is True
+            assert session.connector.force_close is False
         finally:
             await _http_session.close_http_sessions()
 
@@ -30,7 +30,7 @@ class TestHttpSession:
         try:
             assert s1 is s2
             assert s1.connector is not None
-            assert s1.connector.force_close is True
+            assert s1.connector.force_close is False
         finally:
             await _http_session.close_http_sessions()
 

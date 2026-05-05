@@ -52,6 +52,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_block` | $0.001 (1,000 atomic) |
 | `get_transaction` | $0.002 (2,000 atomic) |
 
+In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
+
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`
 - Agent runs that call these tools incur their marketplace prices (in addition to token costs)

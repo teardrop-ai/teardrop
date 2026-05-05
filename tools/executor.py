@@ -221,5 +221,5 @@ async def execute_tool(
             elapsed_ms=int((time.monotonic() - start_mono) * 1000),
             error_class="business_error",
             retry_safe=False,
-            billable=True,
+            billable=False,
         )

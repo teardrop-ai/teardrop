@@ -2354,7 +2354,7 @@ async def agent_run(
         # ── Extract and store memories (fire-and-forget) ─────────────────
         if mem_settings.memory_enabled and state_snapshot is not None:
             try:
-                state_msgs = (state_snapshot.values or {}).get("messages", [])
+                state_msgs = ((state_snapshot.values or {}).get("messages", []))[-10:]
                 if state_msgs:
                     billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
                     if not isinstance(billable_tool_names, list):

@@ -214,6 +214,8 @@ Tool use economy:
         If errors is non-empty, explicitly report each unavailable protocol.
         If rates is empty and errors is empty, treat this as likely transient
         RPC unavailability and report that limitation explicitly.
+        If get_lending_rates returns errors, do NOT call web_search as a
+        fallback for protocol rates. Report those protocols as unavailable.
     - Call get_yield_rates at most ONCE per user request. If you need alternate
         sorting or filtering, perform that analysis in your own response instead of
         re-calling the tool.
@@ -689,8 +691,18 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                 )
             )
         )
-    messages = [*system_messages, *state.messages]
-    recent_tool_messages = [m for m in state.messages if isinstance(m, ToolMessage)][-8:]
+    planner_messages = state.messages
+    if tool_iterations >= 2:
+        tool_msgs = [m for m in state.messages if isinstance(m, ToolMessage)]
+        keep_tool_ids = {id(m) for m in tool_msgs[-8:]}
+        planner_messages = [m for m in state.messages if not isinstance(m, ToolMessage) or id(m) in keep_tool_ids]
+        logger.debug(
+            "planner_node: pruned %d old ToolMessages",
+            max(0, len(tool_msgs) - len(keep_tool_ids)),
+        )
+
+    messages = [*system_messages, *planner_messages]
+    recent_tool_messages = [m for m in planner_messages if isinstance(m, ToolMessage)][-8:]
     recent_tool_chars = sum(len(str(m.content)) for m in recent_tool_messages)
     logger.info(
         (

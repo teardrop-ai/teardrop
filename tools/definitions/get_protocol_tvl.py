@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ _TVL_CACHE_TTL = 300  # seconds
 # Cap chain breakdown and historical series to keep agent context bounded.
 _MAX_CHAIN_ENTRIES = 10
 _MAX_HISTORICAL_POINTS = 90
+_RETRY_ATTEMPTS = 2
+_RETRY_BACKOFF_SECONDS = 0.5
 
 # Valid protocol slug pattern — prevents path traversal / injection.
 _SLUG_PATTERN = r"^[a-zA-Z0-9\-\_\.]{1,64}$"
@@ -97,37 +100,54 @@ class GetProtocolTvlOutput(BaseModel):
 async def _fetch_current_tvl(slug: str) -> float | None:
     """Call GET /tvl/{slug} — returns a single float or None on failure."""
     url = f"{_DEFILLAMA_BASE_URL}/tvl/{slug}"
-    try:
-        session = await get_defillama_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status == 200:
-                text = await resp.text()
-                return float(text.strip())
-            if resp.status == 404:
-                logger.warning("DeFiLlama: protocol not found: %s", slug)
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            session = await get_defillama_session()
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    return float(text.strip())
+                if resp.status == 404:
+                    logger.warning("DeFiLlama: protocol not found: %s", slug)
+                    return None
+                logger.warning("DeFiLlama /tvl returned status %d for %s", resp.status, slug)
                 return None
-            logger.warning("DeFiLlama /tvl returned status %d for %s", resp.status, slug)
-    except (ValueError, TypeError):
-        logger.warning("DeFiLlama /tvl returned non-numeric response for %s", slug)
-    except Exception as exc:
-        logger.warning("DeFiLlama /tvl request failed for %s: %s", slug, type(exc).__name__)
+        except (ValueError, TypeError):
+            logger.warning("DeFiLlama /tvl returned non-numeric response for %s", slug)
+            return None
+        except (aiohttp.ClientPayloadError, aiohttp.ServerDisconnectedError) as exc:
+            if attempt >= _RETRY_ATTEMPTS:
+                logger.warning("DeFiLlama /tvl request failed for %s: %s", slug, type(exc).__name__)
+                return None
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+        except Exception as exc:
+            logger.warning("DeFiLlama /tvl request failed for %s: %s", slug, type(exc).__name__)
+            return None
     return None
 
 
 async def _fetch_protocol_detail(slug: str) -> dict[str, Any] | None:
     """Call GET /protocol/{slug} — returns the full DeFiLlama protocol object or None."""
     url = f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
-    try:
-        session = await get_defillama_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            if resp.status == 200:
-                return await resp.json()
-            if resp.status == 404:
-                logger.warning("DeFiLlama: protocol detail not found: %s", slug)
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            session = await get_defillama_session()
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                if resp.status == 404:
+                    logger.warning("DeFiLlama: protocol detail not found: %s", slug)
+                    return None
+                logger.warning("DeFiLlama /protocol returned status %d for %s", resp.status, slug)
                 return None
-            logger.warning("DeFiLlama /protocol returned status %d for %s", resp.status, slug)
-    except Exception as exc:
-        logger.warning("DeFiLlama /protocol request failed for %s: %s", slug, type(exc).__name__)
+        except (aiohttp.ClientPayloadError, aiohttp.ServerDisconnectedError) as exc:
+            if attempt >= _RETRY_ATTEMPTS:
+                logger.warning("DeFiLlama /protocol request failed for %s: %s", slug, type(exc).__name__)
+                return None
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+        except Exception as exc:
+            logger.warning("DeFiLlama /protocol request failed for %s: %s", slug, type(exc).__name__)
+            return None
     return None
 
 

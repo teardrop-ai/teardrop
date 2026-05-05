@@ -160,3 +160,17 @@ async def test_execute_tool_aiohttp_error_classified_non_billable():
     assert res.success is False
     assert res.error_class == "upstream_unavailable"
     assert res.billable is False
+
+
+@pytest.mark.anyio
+async def test_execute_tool_unexpected_exception_non_billable():
+    tool = _DummyTool(exc=RuntimeError("boom"))
+    res = await execute_tool(
+        tool_name="unexpected",
+        tool_call_id="c9",
+        tool_args={},
+        tool=tool,
+    )
+    assert res.success is False
+    assert res.error_class == "business_error"
+    assert res.billable is False

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 from pydantic import ValidationError
 
@@ -219,8 +220,8 @@ class TestGetProtocolTvl:
     async def test_current_tvl_fast_path(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
         session = _mock_session_text(200, "42000000000.5")
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
-            result = await get_protocol_tvl("aave")
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+        result = await get_protocol_tvl("aave")
         assert result["current_tvl_usd"] == pytest.approx(42_000_000_000.5)
         assert result["protocol"] == "aave"
         assert result["chain_breakdown"] == []
@@ -229,8 +230,8 @@ class TestGetProtocolTvl:
     async def test_protocol_not_found_returns_graceful_error(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
         session = _mock_session_text(404, "")
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
-            result = await get_protocol_tvl("nonexistent-protocol-xyz")
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+        result = await get_protocol_tvl("nonexistent-protocol-xyz")
         assert result["current_tvl_usd"] is None
         assert "not found" in result["note"].lower()
 
@@ -245,9 +246,38 @@ class TestGetProtocolTvl:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=mock_session):
-            result = await get_protocol_tvl("aave")
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=mock_session))
+        result = await get_protocol_tvl("aave")
         assert result["current_tvl_usd"] is None
+
+    async def test_current_tvl_retries_once_on_payload_error(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+        response = _mock_session_text(200, "123.45").get.return_value
+        session = MagicMock()
+        session.get = MagicMock(side_effect=[aiohttp.ClientPayloadError("boom"), response])
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+
+        result = await get_protocol_tvl("aave")
+
+        assert session.get.call_count == 2
+        assert result["current_tvl_usd"] == pytest.approx(123.45)
+
+    async def test_protocol_detail_retries_once_on_disconnect(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+        base_ts = 1_704_067_200
+        payload = {
+            "chainTvls": {"Ethereum": {"tvl": [{"date": base_ts, "totalLiquidityUSD": 5_000_000_000}]}},
+            "tvl": [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(6_000_000_000 + i * 1_000_000)} for i in range(35)],
+        }
+        response = _mock_session_json(200, payload).get.return_value
+        session = MagicMock()
+        session.get = MagicMock(side_effect=[aiohttp.ServerDisconnectedError(), response])
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+
+        result = await get_protocol_tvl("aave", include_historical=True, days=30)
+
+        assert session.get.call_count == 2
+        assert result["historical_series"] is not None
 
     async def test_historical_path_returns_series_and_chain_breakdown(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
@@ -260,8 +290,8 @@ class TestGetProtocolTvl:
             "tvl": [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(6_000_000_000 + i * 1_000_000)} for i in range(35)],
         }
         session = _mock_session_json(200, payload)
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
-            result = await get_protocol_tvl("aave", include_historical=True, days=30)
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+        result = await get_protocol_tvl("aave", include_historical=True, days=30)
         assert result["historical_series"] is not None
         assert len(result["historical_series"]) <= 30
         assert result["chain_breakdown"][0]["chain"] == "Ethereum"
@@ -284,8 +314,8 @@ class TestGetProtocolTvl:
     async def test_non_numeric_tvl_response_handled(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
         session = _mock_session_text(200, "not-a-number")
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
-            result = await get_protocol_tvl("aave")
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+        result = await get_protocol_tvl("aave")
         assert result["current_tvl_usd"] is None
 
     async def test_not_found_result_is_cached(self, test_settings, monkeypatch):
@@ -317,8 +347,8 @@ class TestGetProtocolTvl:
         tvl_entries = [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(1_000_000 + i * 10_000)} for i in range(60)]
         payload = {"chainTvls": {}, "tvl": tvl_entries}
         session = _mock_session_json(200, payload)
-        with patch("tools.definitions.get_protocol_tvl.aiohttp.ClientSession", return_value=session):
-            result = await get_protocol_tvl("aave", include_historical=True, days=7)
+        monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
+        result = await get_protocol_tvl("aave", include_historical=True, days=7)
         # historical_series is trimmed to ≤7 entries
         assert len(result["historical_series"]) <= 7
         # 30d change must reflect the genuine ~23% growth from full series, not ~4% from trimmed
