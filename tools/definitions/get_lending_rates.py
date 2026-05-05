@@ -39,8 +39,9 @@ _MAX_ASSET_FILTER = 20
 # Selectors for batched read-only calls.
 _GET_RESERVE_DATA_SELECTOR: bytes = bytes(Web3.keccak(text="getReserveData(address)"))[:4]
 _GET_UTILIZATION_SELECTOR: bytes = bytes(Web3.keccak(text="getUtilization()"))[:4]
-_GET_SUPPLY_RATE_SELECTOR: bytes = bytes(Web3.keccak(text="getSupplyRate(uint)"))[:4]
-_GET_BORROW_RATE_SELECTOR: bytes = bytes(Web3.keccak(text="getBorrowRate(uint)"))[:4]
+# Canonical ABI signature form requires uint256 rather than uint aliases.
+_GET_SUPPLY_RATE_SELECTOR: bytes = bytes(Web3.keccak(text="getSupplyRate(uint256)"))[:4]
+_GET_BORROW_RATE_SELECTOR: bytes = bytes(Web3.keccak(text="getBorrowRate(uint256)"))[:4]
 
 
 class GetLendingRatesInput(BaseModel):
@@ -152,12 +153,16 @@ async def _fetch_aave_rates(chain_id: int, assets_filter: set[str] | None) -> li
     results = await multicall3_batch(w3, calls, chain_id=chain_id)
 
     entries: list[LendingRateEntry] = []
+    attempted = 0
+    failed = 0
     for reserve, (success, return_data) in zip(reserves, results):
         symbol = str(reserve.get("symbol", "")).upper()
         if assets_filter is not None and symbol not in assets_filter:
             continue
+        attempted += 1
         if not success or not return_data:
             logger.debug("get_lending_rates: aave reserve call reverted for %s", symbol or "unknown")
+            failed += 1
             continue
         try:
             # ProtocolDataProvider.getReserveData(asset):
@@ -194,6 +199,15 @@ async def _fetch_aave_rates(chain_id: int, assets_filter: set[str] | None) -> li
             )
         except Exception as exc:
             logger.debug("get_lending_rates: failed to decode aave reserve data for %s: %s", symbol, exc)
+            failed += 1
+
+    if attempted > 0 and failed == attempted:
+        logger.warning(
+            "get_lending_rates: all %d aave-v3 reserve calls failed on chain %s",
+            attempted,
+            chain_id,
+        )
+        raise RuntimeError(f"all aave-v3 reserve calls failed on chain {chain_id}")
 
     return entries
 
@@ -224,16 +238,27 @@ async def _fetch_compound_rates(chain_id: int, assets_filter: set[str] | None) -
 
     utilization_results = await multicall3_batch(w3, utilization_calls, chain_id=chain_id)
     utilization_values: list[int | None] = []
+    failed_utilization = 0
     for symbol, (success, return_data) in zip(market_symbols, utilization_results):
         if not success or not return_data:
             logger.debug("get_lending_rates: compound utilization call failed for %s", symbol)
             utilization_values.append(None)
+            failed_utilization += 1
             continue
         try:
             utilization_values.append(int(abi_decode(["uint256"], return_data)[0]))
         except Exception as exc:
             logger.debug("get_lending_rates: failed to decode compound utilization for %s: %s", symbol, exc)
             utilization_values.append(None)
+            failed_utilization += 1
+
+    if utilization_values and failed_utilization == len(utilization_values):
+        logger.warning(
+            "get_lending_rates: all %d compound-v3 utilization calls failed on chain %s",
+            len(utilization_values),
+            chain_id,
+        )
+        raise RuntimeError(f"all compound-v3 utilization calls failed on chain {chain_id}")
 
     rate_calls: list[tuple[str, bytes]] = []
     rate_indices: list[int] = []

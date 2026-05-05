@@ -36,6 +36,10 @@ class TestHelpers:
         apy = glr._per_second_rate_to_apy_pct(1_000_000_000)
         assert apy > 0
 
+    def test_compound_selectors_use_uint256(self):
+        assert glr._GET_SUPPLY_RATE_SELECTOR == bytes(glr.Web3.keccak(text="getSupplyRate(uint256)"))[:4]
+        assert glr._GET_BORROW_RATE_SELECTOR == bytes(glr.Web3.keccak(text="getBorrowRate(uint256)"))[:4]
+
 
 class TestGetLendingRates:
     async def test_unsupported_chain_raises(self, test_settings):
@@ -56,7 +60,7 @@ class TestGetLendingRates:
         monkeypatch.setattr("tools.definitions.get_lending_rates.rpc_call", _rpc_call)
         monkeypatch.setattr(
             "tools.definitions.get_lending_rates._AAVE_V3_DATA_PROVIDER",
-            {1: "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD"},
+            {1: "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3"},
         )
         monkeypatch.setattr(
             "tools.definitions.get_lending_rates._AAVE_V3_TRACKED_RESERVES",
@@ -129,9 +133,17 @@ class TestGetLendingRates:
             (True, abi_encode(["uint256"], [1_500_000_000])),
             (True, abi_encode(["uint256"], [2_800_000_000])),
         ]
+        captured_rate_calls: list[tuple[str, bytes]] = []
+
+        async def _mock_multicall3_batch(w3, calls, chain_id=None):
+            if len(calls) == 1:
+                return util_result
+            captured_rate_calls.extend(calls)
+            return rates_result
+
         monkeypatch.setattr(
             "tools.definitions.get_lending_rates.multicall3_batch",
-            AsyncMock(side_effect=[util_result, rates_result]),
+            _mock_multicall3_batch,
         )
 
         result = await get_lending_rates(protocol="compound-v3", chain_id=1, assets=["USDC"])
@@ -145,6 +157,71 @@ class TestGetLendingRates:
         assert row["utilization_pct"] == pytest.approx(82.0)
         assert row["supply_apy_pct"] > 0
         assert row["borrow_apy_pct"] > 0
+        assert len(captured_rate_calls) == 2
+        assert captured_rate_calls[0][1].startswith(glr._GET_SUPPLY_RATE_SELECTOR)
+        assert captured_rate_calls[1][1].startswith(glr._GET_BORROW_RATE_SELECTOR)
+
+    async def test_aave_all_failed_records_error(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})
+        monkeypatch.setattr("tools.definitions.get_lending_rates.get_web3", lambda _chain_id=1: _mock_w3(55))
+
+        async def _rpc_call(coro_fn, timeout_seconds=None, chain_id=None):
+            return await coro_fn()
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.rpc_call", _rpc_call)
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates._AAVE_V3_TRACKED_RESERVES",
+            {
+                1: [
+                    {
+                        "symbol": "USDC",
+                        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "decimals": "6",
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates.multicall3_batch",
+            AsyncMock(return_value=[(False, b"")]),
+        )
+
+        result = await get_lending_rates(protocol="aave-v3", chain_id=1, assets=["USDC"])
+
+        assert result["rates"] == []
+        assert "aave-v3 unavailable" in result["errors"]
+
+    async def test_compound_all_utilization_failed_records_error(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})
+        monkeypatch.setattr("tools.definitions.get_lending_rates.get_web3", lambda _chain_id=1: _mock_w3(66))
+
+        async def _rpc_call(coro_fn, timeout_seconds=None, chain_id=None):
+            return await coro_fn()
+
+        monkeypatch.setattr("tools.definitions.get_lending_rates.rpc_call", _rpc_call)
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates._COMPOUND_V3_MARKETS",
+            {
+                1: [
+                    {
+                        "name": "cUSDCv3",
+                        "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+                        "base_symbol": "USDC",
+                        "base_decimals": "6",
+                        "collateral_assets": [],
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(
+            "tools.definitions.get_lending_rates.multicall3_batch",
+            AsyncMock(return_value=[(False, b"")]),
+        )
+
+        result = await get_lending_rates(protocol="compound-v3", chain_id=1, assets=["USDC"])
+
+        assert result["rates"] == []
+        assert "compound-v3 unavailable" in result["errors"]
 
     async def test_cache_hit_skips_refetch(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_lending_rates._rates_cache", {})

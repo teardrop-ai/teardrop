@@ -137,6 +137,10 @@ Tool use economy:
     - For protocol-specific lending-rate questions (e.g., "Aave vs Compound USDC"),
         prefer get_lending_rates over get_yield_rates. Use get_yield_rates for
         broad pool discovery across many protocols.
+    - get_lending_rates returns both rates and an errors list.
+        If errors is non-empty, explicitly report each unavailable protocol.
+        If rates is empty and errors is empty, treat this as likely transient
+        RPC unavailability and report that limitation explicitly.
     - Call get_yield_rates at most ONCE per user request. If you need alternate
         sorting or filtering, perform that analysis in your own response instead of
         re-calling the tool.

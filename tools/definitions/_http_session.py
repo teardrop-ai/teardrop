@@ -48,8 +48,11 @@ async def get_coingecko_session() -> aiohttp.ClientSession:
     async with _get_session_lock():
         if _coingecko_session is not None and not _coingecko_session.closed:
             return _coingecko_session
-        # Keep idle sockets bounded while still allowing reuse across bursts.
-        connector = aiohttp.TCPConnector(limit=20, ttl_dns_cache=300, keepalive_timeout=30)
+        connector = aiohttp.TCPConnector(
+            limit=20,
+            ttl_dns_cache=300,
+            force_close=True,
+        )
         _coingecko_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared CoinGecko aiohttp session")
         return _coingecko_session
@@ -64,7 +67,11 @@ async def get_defillama_session() -> aiohttp.ClientSession:
     async with _get_session_lock():
         if _defillama_session is not None and not _defillama_session.closed:
             return _defillama_session
-        connector = aiohttp.TCPConnector(limit=10, ttl_dns_cache=300, keepalive_timeout=30)
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            ttl_dns_cache=300,
+            force_close=True,
+        )
         _defillama_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
         logger.debug("Initialised shared DeFiLlama aiohttp session")
         return _defillama_session

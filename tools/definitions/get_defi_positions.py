@@ -42,8 +42,8 @@ _AAVE_V3_POOL: dict[int, str] = {
 }
 
 _AAVE_V3_DATA_PROVIDER: dict[int, str] = {
-    1: "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD",
-    8453: "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A",
+    1: "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3",
+    8453: "0xC4Fcf9893072d61Cc2899C0054877Cb752587981",
 }
 
 # Curated shortlist of major Aave v3 reserves to fetch per-reserve breakdown for.
