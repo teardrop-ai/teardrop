@@ -131,24 +131,28 @@ class TestExtractUsage:
     def test_anthropic_format(self):
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {"input_tokens": 100, "output_tokens": 50}
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result == {
             "tokens_in": 100,
             "tokens_out": 50,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
 
     def test_openai_legacy_format(self):
         """LangChain older versions may pass prompt_tokens/completion_tokens."""
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {"prompt_tokens": 200, "completion_tokens": 75}
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result == {
             "tokens_in": 200,
             "tokens_out": 75,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
 
     def test_normalised_format_preferred(self):
@@ -160,12 +164,14 @@ class TestExtractUsage:
             "prompt_tokens": 999,
             "completion_tokens": 999,
         }
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result == {
             "tokens_in": 100,
             "tokens_out": 50,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
 
     def test_cache_token_fields_extracted(self):
@@ -176,9 +182,11 @@ class TestExtractUsage:
             "cache_read_input_tokens": 90,
             "cache_creation_input_tokens": 10,
         }
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result["cache_read_input_tokens"] == 90
         assert result["cache_creation_input_tokens"] == 10
+        assert result["finish_reason"] == "stop"
 
     def test_openai_cached_tokens_mapped(self):
         msg = MagicMock(spec=AIMessage)
@@ -187,18 +195,22 @@ class TestExtractUsage:
             "output_tokens": 10,
             "prompt_tokens_details": {"cached_tokens": 80},
         }
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result["cache_read_input_tokens"] == 80
+        assert result["finish_reason"] == "stop"
 
     def test_missing_usage_metadata(self):
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = None
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result == {
             "tokens_in": 0,
             "tokens_out": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
 
     def test_no_usage_metadata_attr(self):
@@ -210,18 +222,35 @@ class TestExtractUsage:
             "tokens_out": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
 
     def test_empty_usage_metadata(self):
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {}
+        msg.response_metadata = {}
         result = extract_usage(msg)
         assert result == {
             "tokens_in": 0,
             "tokens_out": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": "stop",
         }
+
+    def test_finish_reason_extracted(self):
+        msg = MagicMock(spec=AIMessage)
+        msg.usage_metadata = {"input_tokens": 1, "output_tokens": 2}
+        msg.response_metadata = {"finish_reason": "length"}
+        result = extract_usage(msg)
+        assert result["finish_reason"] == "length"
+
+    def test_stop_reason_fallback(self):
+        msg = MagicMock(spec=AIMessage)
+        msg.usage_metadata = {"input_tokens": 1, "output_tokens": 2}
+        msg.response_metadata = {"stop_reason": "max_tokens"}
+        result = extract_usage(msg)
+        assert result["finish_reason"] == "max_tokens"
 
 
 # ─── Singleton (get_llm / reset_llm) ─────────────────────────────────────────

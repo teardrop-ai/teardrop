@@ -1071,14 +1071,14 @@ async def build_subscribed_marketplace_tools(
         current_hash = tool_row.get("schema_hash") or ""
         sub_hash = sub.subscribed_schema_hash or ""
         if sub_hash and current_hash and sub_hash != current_hash:
-            logger.warning(
-                "Schema drift detected for marketplace tool %s "
-                "(subscribed=%s… current=%s…) — org_id=%s may be calling with a stale input schema",
+            logger.error(
+                "Schema drift detected for marketplace tool %s (subscribed=%s… current=%s…) — skipping build for org_id=%s",
                 qualified,
                 sub_hash[:8],
                 current_hash[:8],
                 org_id,
             )
+            continue
 
         try:
             lc_tool = _build_marketplace_langchain_tool(tool_row, qualified)
@@ -1110,12 +1110,21 @@ def _build_marketplace_langchain_tool(
     args_model = _build_pydantic_model(qualified_name, raw_schema, model_name=model_name)
 
     _url = tool_row["webhook_url"]
-    _method = tool_row.get("webhook_method", "POST")
+    _method = tool_row.get("webhook_method", "GET")
     _timeout_sec = tool_row.get("timeout_seconds", 10)
     _auth_name = tool_row.get("auth_header_name")
     _auth_enc = tool_row.get("auth_header_enc")
+    _tool_id = tool_row.get("id")
+
+    if _method != "GET":
+        raise ValueError(f"Marketplace tool '{qualified_name}' has non-GET webhook_method '{_method}'")
 
     async def _call(**kwargs: Any) -> dict[str, Any]:
+        from tool_health import is_breaker_tripped, record_failure, record_success
+
+        if _tool_id and await is_breaker_tripped(str(_tool_id)):
+            return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
+
         url_err = await async_validate_url(_url)
         if url_err:
             return {"error": f"Webhook URL blocked: {url_err}"}
@@ -1130,24 +1139,26 @@ def _build_marketplace_langchain_tool(
         timeout = aiohttp.ClientTimeout(total=_timeout_sec)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                if _method == "GET":
-                    resp = await session.get(_url, headers=headers, params=kwargs)
-                elif _method == "PUT":
-                    resp = await session.put(_url, headers=headers, json=kwargs)
-                else:
-                    resp = await session.post(_url, headers=headers, json=kwargs)
+                resp = await session.get(_url, headers=headers, params=kwargs)
 
                 body = await resp.read()
                 if len(body) > 512 * 1024:
                     body = body[: 512 * 1024]
+
+                if _tool_id:
+                    await record_success(str(_tool_id))
 
                 content_type = resp.headers.get("Content-Type", "")
                 if "application/json" in content_type:
                     return _json.loads(body)
                 return {"text": body.decode("utf-8", errors="replace")}
         except asyncio.TimeoutError:
+            if _tool_id:
+                await record_failure(str(_tool_id))
             return {"error": f"Webhook timed out after {_timeout_sec}s"}
         except Exception as exc:
+            if _tool_id:
+                await record_failure(str(_tool_id))
             return {"error": f"Webhook request failed: {type(exc).__name__}"}
 
     return StructuredTool.from_function(

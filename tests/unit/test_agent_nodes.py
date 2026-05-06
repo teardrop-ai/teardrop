@@ -985,3 +985,34 @@ class TestToolExecutorDedup:
             await tool_executor_node(state)
 
         mock_tool.ainvoke.assert_called_once()
+
+    async def test_custom_tool_cap_blocks_non_platform_calls(self, test_settings):
+        calls = [
+            {"id": "c1", "name": "org__tool_a", "args": {"x": 1}},
+            {"id": "c2", "name": "org__tool_b", "args": {"x": 2}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_tool_a = MagicMock()
+        mock_tool_a.ainvoke = AsyncMock(return_value={"ok": True})
+        mock_tool_b = MagicMock()
+        mock_tool_b.ainvoke = AsyncMock(return_value={"ok": True})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={
+                "_usage": {"custom_tool_calls": 0},
+                "_org_tools_by_name": {
+                    "org__tool_a": mock_tool_a,
+                    "org__tool_b": mock_tool_b,
+                },
+            },
+        )
+
+        with patch.object(test_settings, "max_custom_tool_calls_per_run", 1):
+            result = await tool_executor_node(state)
+
+        assert mock_tool_a.ainvoke.call_count + mock_tool_b.ainvoke.call_count == 1
+        blocked = [m for m in result["messages"] if "CUSTOM_TOOL_CAP_EXCEEDED" in m.content]
+        assert len(blocked) == 1
+        assert result["metadata"]["_usage"]["custom_tool_calls"] == 1

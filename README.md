@@ -188,6 +188,7 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 |----------|-------------|
 | `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
 | `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
+| `AGENT_SYNTHESIS_MAX_TOKENS` | Max output tokens for post-tool synthesis turns (`tool_iterations >= 1`). Default: `4096`. |
 | `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
 | `AGENT_PLANNER_MODEL` | Optional model override paired with `AGENT_PLANNER_PROVIDER` for first-pass tool selection speed tuning. |
 | `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
@@ -778,6 +779,7 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 ### Custom Tools
 
 Per-org webhook-backed tools are injected into the agent at run-time and never appear in the public Agent Card or MCP server.
+Custom webhook tools are currently read-only and must use the `GET` HTTP method.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

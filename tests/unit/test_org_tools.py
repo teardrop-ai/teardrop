@@ -46,7 +46,7 @@ def _sample_org_tool(**overrides) -> OrgTool:
             "required": ["query"],
         },
         "webhook_url": "https://example.com/webhook",
-        "webhook_method": "POST",
+        "webhook_method": "GET",
         "has_auth": False,
         "timeout_seconds": 10,
         "is_active": True,
@@ -71,7 +71,7 @@ def _tool_row(**overrides) -> dict:
             }
         ),
         "webhook_url": "https://example.com/webhook",
-        "webhook_method": "POST",
+        "webhook_method": "GET",
         "auth_header_name": None,
         "auth_header_enc": None,
         "timeout_seconds": 10,
@@ -222,7 +222,6 @@ class TestCreateOrgTool:
                     description="Look up CRM records",
                     input_schema={"properties": {"id": {"type": "string"}}, "required": ["id"]},
                     webhook_url="https://example.com/crm",
-                    webhook_method="POST",
                     auth_header_name=None,
                     auth_header_value=None,
                     timeout_seconds=10,
@@ -256,7 +255,6 @@ class TestCreateOrgTool:
                         description="One too many",
                         input_schema={"properties": {}},
                         webhook_url="https://example.com/hook",
-                        webhook_method="POST",
                         auth_header_name=None,
                         auth_header_value=None,
                         timeout_seconds=10,
@@ -282,7 +280,6 @@ class TestCreateOrgTool:
                     description="With auth",
                     input_schema={"properties": {}},
                     webhook_url="https://example.com/hook",
-                    webhook_method="POST",
                     auth_header_name="Authorization",
                     auth_header_value="Bearer secret123",
                     timeout_seconds=10,
@@ -379,7 +376,7 @@ class TestWebhookExecution:
         mock_resp.headers = {"Content-Type": "application/json"}
 
         mock_session = AsyncMock()
-        mock_session.post = AsyncMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -395,7 +392,7 @@ class TestWebhookExecution:
         lc_tool = _build_langchain_tool(tool, None, None)
 
         mock_session = AsyncMock()
-        mock_session.post = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_session.get = AsyncMock(side_effect=asyncio.TimeoutError())
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -416,7 +413,7 @@ class TestWebhookExecution:
         mock_resp.headers = {"Content-Type": "text/html"}
 
         mock_session = AsyncMock()
-        mock_session.post = AsyncMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -453,7 +450,7 @@ class TestWebhookExecution:
             mock_resp.headers = {"Content-Type": "application/json"}
 
             mock_session = AsyncMock()
-            mock_session.post = AsyncMock(return_value=mock_resp)
+            mock_session.get = AsyncMock(return_value=mock_resp)
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -464,7 +461,7 @@ class TestWebhookExecution:
                 result = await lc_tool.ainvoke({"query": "test"})
 
             # Verify auth header was included
-            call_kwargs = mock_session.post.call_args
+            call_kwargs = mock_session.get.call_args
             headers = call_kwargs.kwargs.get("headers", call_kwargs[1].get("headers", {}))
             assert headers.get("Authorization") == "Bearer my-token"
             assert result == {"ok": True}
@@ -485,7 +482,7 @@ class TestWebhookExecution:
         mock_resp.headers = {"Content-Type": "application/json"}
 
         mock_session = AsyncMock()
-        mock_session.post = AsyncMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -513,7 +510,7 @@ class TestWebhookExecution:
             import aiohttp
 
             mock_session = AsyncMock()
-            mock_session.post = AsyncMock(side_effect=aiohttp.ClientError("connection failed"))
+            mock_session.get = AsyncMock(side_effect=aiohttp.ClientError("connection failed"))
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -628,7 +625,7 @@ class TestUpdateOrgTool:
             "description": "A tool",
             "input_schema": "{}",
             "webhook_url": "https://example.com/hook",
-            "webhook_method": "POST",
+            "webhook_method": "GET",
             "auth_header_name": None,
             "auth_header_enc": None,
             "has_auth": False,
@@ -697,7 +694,7 @@ class TestGetOrgToolsCached:
             description="d",
             input_schema={},
             webhook_url="https://hook.example.com",
-            webhook_method="POST",
+            webhook_method="GET",
             has_auth=False,
             timeout_seconds=10,
             is_active=True,
@@ -729,7 +726,7 @@ class TestGetOrgToolsCached:
                     "description": "fresh",
                     "input_schema": "{}",
                     "webhook_url": "https://hook.example.com",
-                    "webhook_method": "POST",
+                    "webhook_method": "GET",
                     "auth_header_name": None,
                     "auth_header_enc": None,
                     "has_auth": False,

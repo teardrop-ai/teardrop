@@ -86,9 +86,11 @@ class TestGetLendingRates:
                 "uint256",
                 "uint256",
                 "uint256",
+                "uint256",
+                "uint256",
                 "uint40",
             ],
-            [0, 0, 0, int(0.05 * 1e27), int(0.07 * 1e27), 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, int(0.05 * 1e27), int(0.07 * 1e27), 0, 0, 0, 0, 0],
         )
         monkeypatch.setattr(
             "tools.definitions.get_lending_rates.multicall3_batch",
@@ -136,9 +138,11 @@ class TestGetLendingRates:
                 "uint256",
                 "uint256",
                 "uint256",
+                "uint256",
+                "uint256",
                 "uint40",
             ],
-            [0, 0, 0, int(0.05 * 1e27), int(0.07 * 1e27), 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, int(0.05 * 1e27), int(0.07 * 1e27), 0, 0, 0, 0, 0],
         )
 
         call_counter = 0

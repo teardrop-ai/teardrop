@@ -33,6 +33,7 @@ _MAX_CHAIN_ENTRIES = 10
 _MAX_HISTORICAL_POINTS = 90
 _RETRY_ATTEMPTS = 2
 _RETRY_BACKOFF_SECONDS = 0.5
+_PROTOCOL_DETAIL_TIMEOUT_SECONDS = 8
 
 # Valid protocol slug pattern — prevents path traversal / injection.
 _SLUG_PATTERN = r"^[a-zA-Z0-9\-\_\.]{1,64}$"
@@ -132,7 +133,7 @@ async def _fetch_protocol_detail(slug: str) -> dict[str, Any] | None:
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
             session = await get_defillama_session()
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=_PROTOCOL_DETAIL_TIMEOUT_SECONDS)) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 if resp.status == 404:
@@ -283,10 +284,23 @@ async def get_protocol_tvl(
             note="TVL sourced from DeFiLlama. Chain breakdown requires include_historical=True.",
         ).model_dump()
     else:
-        # Detail path: richer endpoint with chains + full history.
-        detail = await _fetch_protocol_detail(slug)
+        # Detail path: richer endpoint with chains + full history. Fetch /tvl
+        # in parallel so detail timeouts do not serialize fallback latency.
+        detail_result, fallback_result = await asyncio.gather(
+            _fetch_protocol_detail(slug),
+            _fetch_current_tvl(slug),
+            return_exceptions=True,
+        )
+
+        detail = detail_result if isinstance(detail_result, dict) else None
+        fallback_current_tvl = fallback_result if isinstance(fallback_result, (int, float)) else None
+
+        if isinstance(detail_result, Exception):
+            logger.warning("DeFiLlama /protocol request failed for %s: %s", slug, type(detail_result).__name__)
+        if isinstance(fallback_result, Exception):
+            logger.warning("DeFiLlama /tvl request failed for %s: %s", slug, type(fallback_result).__name__)
+
         if detail is None:
-            fallback_current_tvl = await _fetch_current_tvl(slug)
             if fallback_current_tvl is not None:
                 result = GetProtocolTvlOutput(
                     protocol=slug,

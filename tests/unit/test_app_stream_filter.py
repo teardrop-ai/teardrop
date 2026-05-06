@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import _A2UIStreamFilter, _should_flush_planner_buffer
+from app import _A2UIStreamFilter, _recover_planner_suffix, _should_flush_planner_buffer
 
 
 def _drain(deltas: list[str]) -> str:
@@ -127,6 +127,25 @@ def test_should_flush_planner_buffer_non_success_statuses():
     assert _should_flush_planner_buffer("executing") is False
     assert _should_flush_planner_buffer("failed") is False
     assert _should_flush_planner_buffer("timeout") is False
+
+
+def test_recover_planner_suffix_when_stream_tail_missing():
+    emitted = [("m1", "Hello "), ("m1", "world")]
+    suffix = _recover_planner_suffix(emitted, "Hello world!")
+    assert suffix == "!"
+
+
+def test_recover_planner_suffix_returns_empty_when_full_text_already_emitted():
+    emitted = [("m1", "Complete output")]
+    suffix = _recover_planner_suffix(emitted, "Complete output")
+    assert suffix == ""
+
+
+def test_recover_planner_suffix_handles_fenced_planner_text():
+    emitted = [("m1", "Here is your answer")]
+    planner_text = 'Here is your answer\n```a2ui\n{"components":[]}\n```\n'
+    suffix = _recover_planner_suffix(emitted, planner_text)
+    assert suffix == ""
 
 
 def test_planner_status_enum_normalization():

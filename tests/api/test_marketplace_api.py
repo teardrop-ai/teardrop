@@ -820,7 +820,7 @@ async def test_create_tool_with_base_price(api_client, monkeypatch):
         description="desc",
         input_schema={"type": "object"},
         webhook_url="https://example.com/hook",
-        webhook_method="POST",
+        webhook_method="GET",
         has_auth=False,
         timeout_seconds=10,
         is_active=True,

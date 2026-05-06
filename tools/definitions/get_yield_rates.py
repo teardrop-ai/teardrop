@@ -36,6 +36,7 @@ _POOL_KEEP_FIELDS = frozenset(
         "chain",
         "tvlUsd",
         "apy",
+        "apyMean7d",
         "apyMean30d",
         "apyBase",
         "apyReward",
@@ -124,6 +125,7 @@ class YieldPoolEntry(BaseModel):
     chain: str
     tvl_usd: float
     apy: float
+    apy_mean_7d: float | None
     apy_base: float | None
     apy_reward: float | None
     stable: bool
@@ -187,6 +189,7 @@ def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
     apy_base_raw = pool.get("apyBase")
     apy_reward_raw = pool.get("apyReward")
     il_risk = pool.get("ilRisk")
+    apy_mean_7d_raw = pool.get("apyMean7d")
 
     try:
         apy_base: float | None = float(apy_base_raw) if apy_base_raw is not None else None
@@ -196,6 +199,10 @@ def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
         apy_reward: float | None = float(apy_reward_raw) if apy_reward_raw is not None else None
     except (TypeError, ValueError):
         apy_reward = None
+    try:
+        apy_mean_7d: float | None = float(apy_mean_7d_raw) if apy_mean_7d_raw is not None else None
+    except (TypeError, ValueError):
+        apy_mean_7d = None
 
     return YieldPoolEntry(
         pool_id=str(pool.get("pool", "")),
@@ -204,6 +211,7 @@ def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
         chain=str(pool.get("chain", "")),
         tvl_usd=_safe_float(pool.get("tvlUsd")),
         apy=_resolve_apy(pool),
+        apy_mean_7d=apy_mean_7d,
         apy_base=apy_base,
         apy_reward=apy_reward,
         stable=bool(pool.get("stablecoin", False)),

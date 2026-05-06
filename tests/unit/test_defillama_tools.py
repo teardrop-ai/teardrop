@@ -269,14 +269,28 @@ class TestGetProtocolTvl:
             "chainTvls": {"Ethereum": {"tvl": [{"date": base_ts, "totalLiquidityUSD": 5_000_000_000}]}},
             "tvl": [{"date": base_ts + i * 86400, "totalLiquidityUSD": float(6_000_000_000 + i * 1_000_000)} for i in range(35)],
         }
-        response = _mock_session_json(200, payload).get.return_value
+        protocol_response = _mock_session_json(200, payload).get.return_value
+        tvl_response = _mock_session_text(200, "6100000000.0").get.return_value
+        protocol_calls = 0
+
+        def _get(url, *args, **kwargs):
+            nonlocal protocol_calls
+            if "/protocol/" in url:
+                protocol_calls += 1
+                if protocol_calls == 1:
+                    raise aiohttp.ServerDisconnectedError()
+                return protocol_response
+            if "/tvl/" in url:
+                return tvl_response
+            raise AssertionError(f"Unexpected URL: {url}")
+
         session = MagicMock()
-        session.get = MagicMock(side_effect=[aiohttp.ServerDisconnectedError(), response])
+        session.get = MagicMock(side_effect=_get)
         monkeypatch.setattr("tools.definitions.get_protocol_tvl.get_defillama_session", AsyncMock(return_value=session))
 
         result = await get_protocol_tvl("aave", include_historical=True, days=30)
 
-        assert session.get.call_count == 2
+        assert protocol_calls == 2
         assert result["historical_series"] is not None
 
     async def test_historical_path_returns_series_and_chain_breakdown(self, test_settings, monkeypatch):

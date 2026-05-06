@@ -344,8 +344,8 @@ def _build_compiler_system_extension(all_tool_names: list[str]) -> str:
     return (
         "Compiler mode is enabled. You may optionally emit a structured execution plan as "
         "<plan>{...}</plan> in valid JSON with this shape: "
-        "{\"stages\":[{\"stage_id\":1,\"calls\":[{\"call_id\":\"c1\",\"tool\":\"name\","
-        "\"args\":{},\"depends_on\":[]}]}],\"synthesizer_after_stage\":1}. "
+        '{"stages":[{"stage_id":1,"calls":[{"call_id":"c1","tool":"name",'
+        '"args":{},"depends_on":[]}]}],"synthesizer_after_stage":1}. '
         "Use stage 1 for independent calls, later stages for dependent calls. "
         "For dependent args, reference prior outputs using '{{call_id.path}}'. "
         f"Allowed tools: {names}."
@@ -764,8 +764,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         use_prior_calls_block = not bool(state.slots)
         prior_calls_block = ""
         if use_prior_calls_block and prior_call_lines:
-            prior_calls_block = (
-                "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n" + "\n".join(prior_call_lines)
+            prior_calls_block = "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n" + "\n".join(
+                prior_call_lines
             )
         system_messages.append(
             SystemMessage(
@@ -843,9 +843,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
-                fallback_llm
-                if _synthesis_fast_reason
-                else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+                fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
             )  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
@@ -862,6 +860,15 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         usage = _accumulate_usage(state, response, provider=_provider, model=_model)
     else:
         usage = state.metadata.get("_usage", {})
+
+    finish_reason = str(extract_usage(response).get("finish_reason", "stop")).strip().lower()
+    if finish_reason == "length":
+        logger.warning(
+            "planner_node: synthesis turn hit max_tokens limit (provider=%s, model=%s, max_tokens=%s)",
+            _provider,
+            _model,
+            _max_tokens,
+        )
 
     next_plan = state.plan
     if settings.agent_compiler_mode_enabled:
@@ -1076,8 +1083,10 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     tool_names_acc: list[str] = list(usage.get("tool_names", []))
     failed_tool_names_acc: list[str] = list(usage.get("failed_tool_names", []))
     tool_call_counts: dict[str, int] = dict(usage.get("_tool_call_counts", {}))
+    custom_tool_calls = int(usage.get("custom_tool_calls", 0))
     defi_positions_covered: set[str] = set(usage.get("_defi_positions_covered", []))
     tool_max_calls = dict(get_settings().agent_tool_max_calls_per_run)
+    max_custom_tool_calls = int(get_settings().max_custom_tool_calls_per_run)
 
     # ── Within-run deduplication ──────────────────────────────────────────
     # Calls with identical (tool_name, args) are suppressed so a re-entering
@@ -1088,6 +1097,15 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     seen_this_batch: set[str] = set()
     for call in incoming_calls:
         if call["name"] not in platform_tool_names:
+            accepted_custom_in_batch = sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
+            if (custom_tool_calls + accepted_custom_in_batch) >= max_custom_tool_calls:
+                skipped_messages.append(
+                    ToolMessage(
+                        content=(f"[CUSTOM_TOOL_CAP_EXCEEDED] custom tool calls exceeded per-run cap ({max_custom_tool_calls})."),
+                        tool_call_id=call["id"],
+                    )
+                )
+                continue
             dedup_calls.append(call)
             continue
 
@@ -1247,6 +1265,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage["_defi_positions_covered"] = sorted(defi_positions_covered)
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
+    usage["custom_tool_calls"] = custom_tool_calls + sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
     usage["billable_tool_calls"] = usage.get("billable_tool_calls", 0) + len(billable_results)
     usage["failed_tool_calls"] = usage.get("failed_tool_calls", 0) + len(failed_results)
     usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1

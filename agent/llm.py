@@ -253,7 +253,7 @@ def clear_llm_cache() -> None:
 # ─── Usage normalisation ─────────────────────────────────────────────────────
 
 
-def extract_usage(response: AIMessage) -> dict[str, int]:
+def extract_usage(response: AIMessage) -> dict[str, int | str]:
     """Extract ``tokens_in`` / ``tokens_out`` from an LLM response.
 
     Different providers use different key names in ``usage_metadata``:
@@ -267,11 +267,16 @@ def extract_usage(response: AIMessage) -> dict[str, int]:
     fallback.
     """
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
+        finish_reason = "stop"
+        response_meta = getattr(response, "response_metadata", None)
+        if isinstance(response_meta, dict):
+            finish_reason = str(response_meta.get("finish_reason") or response_meta.get("stop_reason") or "stop")
         return {
             "tokens_in": 0,
             "tokens_out": 0,
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
+            "finish_reason": finish_reason,
         }
 
     meta = response.usage_metadata
@@ -290,9 +295,15 @@ def extract_usage(response: AIMessage) -> dict[str, int]:
     if isinstance(prompt_details, dict):
         cache_read = max(cache_read, int(prompt_details.get("cached_tokens") or 0))
 
+    finish_reason = "stop"
+    response_meta = getattr(response, "response_metadata", None)
+    if isinstance(response_meta, dict):
+        finish_reason = str(response_meta.get("finish_reason") or response_meta.get("stop_reason") or "stop")
+
     return {
         "tokens_in": int(tokens_in),
         "tokens_out": int(tokens_out),
         "cache_read_input_tokens": int(cache_read),
         "cache_creation_input_tokens": int(cache_creation),
+        "finish_reason": finish_reason,
     }

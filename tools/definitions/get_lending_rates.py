@@ -186,11 +186,13 @@ async def _fetch_aave_rates(chain_id: int, assets_filter: set[str] | None) -> li
             continue
         try:
             # ProtocolDataProvider.getReserveData(asset):
-            # (availableLiquidity,totalStableDebt,totalVariableDebt,liquidityRate,
-            #  variableBorrowRate,stableBorrowRate,averageStableBorrowRate,
-            #  liquidityIndex,variableBorrowIndex,lastUpdateTimestamp)
+            # (unbacked,accruedToTreasuryScaled,totalAToken,totalStableDebt,
+            #  totalVariableDebt,liquidityRate,variableBorrowRate,stableBorrowRate,
+            #  averageStableBorrowRate,liquidityIndex,variableBorrowIndex,lastUpdateTimestamp)
             decoded = abi_decode(
                 [
+                    "uint256",
+                    "uint256",
                     "uint256",
                     "uint256",
                     "uint256",
@@ -204,8 +206,8 @@ async def _fetch_aave_rates(chain_id: int, assets_filter: set[str] | None) -> li
                 ],
                 return_data,
             )
-            liquidity_rate = int(decoded[3])
-            variable_borrow_rate = int(decoded[4])
+            liquidity_rate = int(decoded[5])
+            variable_borrow_rate = int(decoded[6])
             entries.append(
                 LendingRateEntry(
                     protocol="aave-v3",

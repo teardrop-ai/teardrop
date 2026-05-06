@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
     agent_synthesis_max_tokens: int = Field(
-        default=2048,
+        default=4096,
         description=(
             "Maximum output tokens for planner synthesis turns after at least one "
             "tool iteration. Keeps final synthesis concise and reduces timeout risk."
@@ -114,15 +114,12 @@ class Settings(BaseSettings):
     agent_compiler_mode_enabled: bool = Field(
         default=False,
         description=(
-            "Enable optional structured staged tool-execution planning via <plan>{...}</plan> "
-            "blocks in planner responses."
+            "Enable optional structured staged tool-execution planning via <plan>{...}</plan> blocks in planner responses."
         ),
     )
     agent_cache_prewarm_enabled: bool = Field(
         default=True,
-        description=(
-            "Pre-warm provider prompt caches for the most active org/model prefixes at startup."
-        ),
+        description=("Pre-warm provider prompt caches for the most active org/model prefixes at startup."),
     )
     agent_cache_prewarm_top_n: int = Field(
         default=50,

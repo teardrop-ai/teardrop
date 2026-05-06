@@ -159,7 +159,6 @@ async def create_org_tool(
     description: str,
     input_schema: dict[str, Any],
     webhook_url: str,
-    webhook_method: str,
     auth_header_name: str | None,
     auth_header_value: str | None,
     timeout_seconds: int,
@@ -215,7 +214,7 @@ async def create_org_tool(
             json.dumps(input_schema),
             json.dumps(output_schema) if output_schema is not None else None,
             webhook_url,
-            webhook_method,
+            "GET",
             auth_header_name,
             auth_enc,
             timeout_seconds,
@@ -240,7 +239,7 @@ async def create_org_tool(
         input_schema=input_schema,
         output_schema=output_schema,
         webhook_url=webhook_url,
-        webhook_method=webhook_method,
+        webhook_method="GET",
         has_auth=auth_header_name is not None,
         timeout_seconds=timeout_seconds,
         is_active=True,
@@ -316,7 +315,6 @@ async def update_org_tool(
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
     webhook_url: str | None = None,
-    webhook_method: str | None = None,
     auth_header_name: str | None = ...,  # type: ignore[assignment]
     auth_header_value: str | None = ...,  # type: ignore[assignment]
     timeout_seconds: int | None = None,
@@ -356,8 +354,6 @@ async def update_org_tool(
         _add("output_schema", json.dumps(output_schema))
     if webhook_url is not None:
         _add("webhook_url", webhook_url)
-    if webhook_method is not None:
-        _add("webhook_method", webhook_method)
     if timeout_seconds is not None:
         _add("timeout_seconds", timeout_seconds)
     if is_active is not None:
@@ -776,6 +772,9 @@ def _build_langchain_tool(
     _header_enc = auth_header_enc
     _host_hash = _hash_webhook_host(_url)
 
+    if _method != "GET":
+        raise ValueError(f"Org tool '{tool.name}' has non-GET webhook_method '{_method}'")
+
     async def _call_webhook(**kwargs: Any) -> dict[str, Any]:
         from tool_health import is_breaker_tripped, record_success
 
@@ -800,12 +799,7 @@ def _build_langchain_tool(
         started = time.monotonic()
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                if _method == "GET":
-                    resp = await session.get(_url, headers=headers, params=kwargs)
-                elif _method == "PUT":
-                    resp = await session.put(_url, headers=headers, json=kwargs)
-                else:
-                    resp = await session.post(_url, headers=headers, json=kwargs)
+                resp = await session.get(_url, headers=headers, params=kwargs)
 
                 body = await resp.read()
                 content_type = resp.headers.get("Content-Type", "")
@@ -946,6 +940,15 @@ async def build_org_langchain_tools(
                 "Org tool '%s' (org=%s) skipped — collides with global tool",
                 ot.name,
                 org_id,
+            )
+            continue
+
+        if ot.webhook_method != "GET":
+            logger.warning(
+                "Org tool '%s' (org=%s) skipped — non-GET webhook_method '%s' not permitted",
+                ot.name,
+                org_id,
+                ot.webhook_method,
             )
             continue
 

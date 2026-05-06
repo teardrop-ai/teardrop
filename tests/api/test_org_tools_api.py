@@ -22,7 +22,7 @@ _TOOL = OrgTool(
         "required": ["query"],
     },
     webhook_url="https://example.com/webhook",
-    webhook_method="POST",
+    webhook_method="GET",
     has_auth=False,
     timeout_seconds=10,
     is_active=True,
@@ -39,7 +39,7 @@ _CREATE_BODY = {
         "required": ["query"],
     },
     "webhook_url": "https://example.com/webhook",
-    "webhook_method": "POST",
+    "webhook_method": "GET",
     "timeout_seconds": 10,
 }
 
@@ -95,6 +95,15 @@ async def test_create_tool_invalid_schema(api_client, monkeypatch):
     # test with clearly invalid schema
     body_bad = {**_CREATE_BODY, "input_schema": {"properties": {"x": {"type": 123}}}}
     resp = await api_client.post("/tools", json=body_bad)
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_create_tool_rejects_post_method(api_client, monkeypatch):
+    monkeypatch.setattr("app.registry.get", MagicMock(return_value=None))
+
+    body = {**_CREATE_BODY, "webhook_method": "POST"}
+    resp = await api_client.post("/tools", json=body)
     assert resp.status_code == 422
 
 

@@ -47,7 +47,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal
 
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -935,6 +935,35 @@ def _should_flush_planner_buffer(task_status: str) -> bool:
     """Return True only for planner statuses that should emit buffered prose."""
     status = task_status.strip().lower()
     return status in {"", "planning", "generating_ui", "completed"}
+
+
+def _recover_planner_suffix(emitted_chunks: list[tuple[str, str]], planner_text: str) -> str:
+    """Return missing planner text suffix not already emitted.
+
+    This reconciles streamed deltas with the final planner message in case the
+    provider dropped trailing token chunks.
+    """
+    if not emitted_chunks or not planner_text:
+        return ""
+
+    emitted_text = "".join(delta for _, delta in emitted_chunks)
+    if not emitted_text:
+        return ""
+
+    fallback_filter = _A2UIStreamFilter()
+    expected_text = fallback_filter.feed(planner_text) + fallback_filter.flush()
+    if not expected_text or len(expected_text) <= len(emitted_text):
+        return ""
+    if expected_text.startswith(emitted_text):
+        return expected_text[len(emitted_text) :]
+
+    # If token chunk boundaries diverged, recover only the non-overlapping tail
+    # to avoid double-emitting already delivered content.
+    max_overlap = min(len(emitted_text), len(expected_text))
+    for overlap in range(max_overlap, 0, -1):
+        if emitted_text.endswith(expected_text[:overlap]):
+            return expected_text[overlap:]
+    return ""
 
 
 # ─── Request / response models ────────────────────────────────────────────────
@@ -2190,6 +2219,20 @@ async def agent_run(
                                         emitted_chunks.append((_last_msg_id, fallback_text))
 
                         if emitted_chunks:
+                            planner_messages = output.get("messages", [])
+                            if planner_messages:
+                                last_planner_msg = planner_messages[-1]
+                                planner_content = (
+                                    getattr(last_planner_msg, "content", "")
+                                    if not isinstance(last_planner_msg, dict)
+                                    else last_planner_msg.get("content", "")
+                                )
+                                normalized = _coerce_stream_text(planner_content)
+                                suffix = _recover_planner_suffix(emitted_chunks, normalized)
+                                if suffix:
+                                    emitted_chunks.append((_last_msg_id, suffix))
+
+                        if emitted_chunks:
                             yield _sse_event(_EV_TEXT_MSG_START, {"message_id": _last_msg_id})
                             for message_id, delta in emitted_chunks:
                                 _text_emitted = True
@@ -3401,7 +3444,7 @@ class CreateOrgToolRequest(BaseModel):
     input_schema: dict = Field(..., description="JSON Schema for tool input parameters")
     output_schema: dict | None = Field(default=None, description="Optional JSON Schema for tool output")
     webhook_url: str = Field(..., max_length=2048)
-    webhook_method: str = Field(default="POST", pattern=r"^(GET|POST|PUT)$")
+    webhook_method: Literal["GET"] = "GET"
     auth_header_name: str | None = Field(default=None, max_length=64)
     auth_header_value: str | None = Field(default=None, max_length=4096)
     timeout_seconds: int = Field(default=10, ge=1, le=30)
@@ -3415,7 +3458,6 @@ class UpdateOrgToolRequest(BaseModel):
     input_schema: dict | None = None
     output_schema: dict | None = None
     webhook_url: str | None = Field(default=None, max_length=2048)
-    webhook_method: str | None = Field(default=None, pattern=r"^(GET|POST|PUT)$")
     auth_header_name: str | None = None
     auth_header_value: str | None = None
     timeout_seconds: int | None = Field(default=None, ge=1, le=30)
@@ -3570,7 +3612,6 @@ async def create_tool(
             input_schema=body.input_schema,
             output_schema=body.output_schema,
             webhook_url=body.webhook_url,
-            webhook_method=body.webhook_method,
             auth_header_name=body.auth_header_name,
             auth_header_value=body.auth_header_value,
             timeout_seconds=body.timeout_seconds,
@@ -3674,7 +3715,6 @@ async def patch_tool(
         "input_schema",
         "output_schema",
         "webhook_url",
-        "webhook_method",
         "auth_header_name",
         "auth_header_value",
         "timeout_seconds",

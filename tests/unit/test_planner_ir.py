@@ -8,7 +8,7 @@ from agent.planner_ir import Plan, parse_plan_from_text, resolve_plan_references
 def test_parse_plan_from_text_round_trip():
     text = (
         "some content\n"
-        "<plan>{\"stages\":[{\"stage_id\":1,\"calls\":[{\"call_id\":\"c1\",\"tool\":\"resolve_ens\",\"args\":{},\"depends_on\":[]}]}],\"synthesizer_after_stage\":1}</plan>"
+        '<plan>{"stages":[{"stage_id":1,"calls":[{"call_id":"c1","tool":"resolve_ens","args":{},"depends_on":[]}]}],"synthesizer_after_stage":1}</plan>'
     )
     plan = parse_plan_from_text(text)
     assert plan is not None
