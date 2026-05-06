@@ -132,14 +132,24 @@ class TestExtractUsage:
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {"input_tokens": 100, "output_tokens": 50}
         result = extract_usage(msg)
-        assert result == {"tokens_in": 100, "tokens_out": 50}
+        assert result == {
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     def test_openai_legacy_format(self):
         """LangChain older versions may pass prompt_tokens/completion_tokens."""
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {"prompt_tokens": 200, "completion_tokens": 75}
         result = extract_usage(msg)
-        assert result == {"tokens_in": 200, "tokens_out": 75}
+        assert result == {
+            "tokens_in": 200,
+            "tokens_out": 75,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     def test_normalised_format_preferred(self):
         """When both formats present, input_tokens/output_tokens wins."""
@@ -151,25 +161,67 @@ class TestExtractUsage:
             "completion_tokens": 999,
         }
         result = extract_usage(msg)
-        assert result == {"tokens_in": 100, "tokens_out": 50}
+        assert result == {
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
+
+    def test_cache_token_fields_extracted(self):
+        msg = MagicMock(spec=AIMessage)
+        msg.usage_metadata = {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 90,
+            "cache_creation_input_tokens": 10,
+        }
+        result = extract_usage(msg)
+        assert result["cache_read_input_tokens"] == 90
+        assert result["cache_creation_input_tokens"] == 10
+
+    def test_openai_cached_tokens_mapped(self):
+        msg = MagicMock(spec=AIMessage)
+        msg.usage_metadata = {
+            "input_tokens": 120,
+            "output_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        }
+        result = extract_usage(msg)
+        assert result["cache_read_input_tokens"] == 80
 
     def test_missing_usage_metadata(self):
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = None
         result = extract_usage(msg)
-        assert result == {"tokens_in": 0, "tokens_out": 0}
+        assert result == {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     def test_no_usage_metadata_attr(self):
         msg = MagicMock(spec=AIMessage, spec_set=False)
         del msg.usage_metadata  # Simulate missing attribute entirely
         result = extract_usage(msg)
-        assert result == {"tokens_in": 0, "tokens_out": 0}
+        assert result == {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     def test_empty_usage_metadata(self):
         msg = MagicMock(spec=AIMessage)
         msg.usage_metadata = {}
         result = extract_usage(msg)
-        assert result == {"tokens_in": 0, "tokens_out": 0}
+        assert result == {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
 
 # ─── Singleton (get_llm / reset_llm) ─────────────────────────────────────────

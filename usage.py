@@ -33,6 +33,8 @@ class UsageEvent(BaseModel):
     run_id: str
     tokens_in: int = 0
     tokens_out: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     tool_calls: int = 0
     tool_names: list[str] = Field(default_factory=list)
     billable_tool_calls: int = 0
@@ -78,6 +80,8 @@ async def init_usage_db(pool: asyncpg.Pool) -> None:
             run_id      TEXT NOT NULL,
             tokens_in   INTEGER NOT NULL DEFAULT 0,
             tokens_out  INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
             tool_calls  INTEGER NOT NULL DEFAULT 0,
             tool_names  TEXT NOT NULL DEFAULT '[]',
             billable_tool_calls INTEGER NOT NULL DEFAULT 0,
@@ -120,11 +124,15 @@ async def record_usage_event(event: UsageEvent) -> None:
             """
             INSERT INTO usage_events
                 (id, user_id, org_id, thread_id, run_id, tokens_in, tokens_out,
+                                 cache_read_tokens, cache_creation_tokens,
                  tool_calls, tool_names, billable_tool_calls, billable_tool_names,
                  failed_tool_calls, failed_tool_names,
                  duration_ms, cost_usdc, platform_fee_usdc,
                  settlement_tx, settlement_status, provider, model, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+            )
             """,
             event.id,
             event.user_id,
@@ -133,6 +141,8 @@ async def record_usage_event(event: UsageEvent) -> None:
             event.run_id,
             event.tokens_in,
             event.tokens_out,
+                        event.cache_read_tokens,
+                        event.cache_creation_tokens,
             event.tool_calls,
             json.dumps(event.tool_names),
             event.billable_tool_calls,

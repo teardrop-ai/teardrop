@@ -11,6 +11,8 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
 
+from agent.planner_ir import Plan
+
 
 class TaskStatus(str, Enum):
     """Lifecycle status of an agent task run."""
@@ -47,6 +49,12 @@ class AgentState(BaseModel):
 
     # Arbitrary key/value metadata (thread_id, user_id, etc.)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    # Structured facts distilled from prior tool outputs.
+    slots: dict[str, Any] = Field(default_factory=dict)
+
+    # Optional staged execution plan emitted by planner compiler mode.
+    plan: Plan | None = None
 
     # Error information when task_status == FAILED
     error: str | None = None

@@ -104,6 +104,34 @@ class TestRouteAfterTools:
         )
         assert _route_after_tools(state) == "planner"
 
+    def test_planning_with_incomplete_plan_routes_to_planner(self, test_settings):
+        state = AgentState.model_validate(
+            {
+                "messages": [HumanMessage(content="test")],
+                "task_status": TaskStatus.PLANNING,
+                "metadata": {},
+                "plan": {
+                    "stages": [{"stage_id": 1, "calls": [{"call_id": "c1", "tool": "x", "args": {}, "depends_on": []}]}],
+                    "current_stage_index": 0,
+                },
+            }
+        )
+        assert _route_after_tools(state) == "planner"
+
+    def test_planning_with_completed_plan_routes_to_ui(self, test_settings):
+        state = AgentState.model_validate(
+            {
+                "messages": [HumanMessage(content="test")],
+                "task_status": TaskStatus.PLANNING,
+                "metadata": {},
+                "plan": {
+                    "stages": [{"stage_id": 1, "calls": [{"call_id": "c1", "tool": "x", "args": {}, "depends_on": []}]}],
+                    "current_stage_index": 1,
+                },
+            }
+        )
+        assert _route_after_tools(state) == "ui_generator"
+
 
 # ─── close_checkpointer ───────────────────────────────────────────────────────
 

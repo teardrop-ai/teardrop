@@ -1,0 +1,12 @@
+[
+  {
+    "id": "defi.balance_check.001",
+    "messages": [{"role": "user", "content": "What is the USDC balance of vitalik.eth on Base?"}],
+    "expected_tool_calls": ["resolve_ens", "get_erc20_balance"],
+    "expected_text_contains": ["USDC", "vitalik"],
+    "max_duration_ms": 8000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Resolves ENS and returns a USDC balance."
+  }
+]

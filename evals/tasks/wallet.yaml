@@ -1,0 +1,12 @@
+[
+  {
+    "id": "wallet.portfolio.001",
+    "messages": [{"role": "user", "content": "Summarize this wallet portfolio on Base: 0x0000000000000000000000000000000000000000"}],
+    "expected_tool_calls": ["get_wallet_portfolio"],
+    "expected_text_contains": ["portfolio"],
+    "max_duration_ms": 10000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Uses wallet portfolio tool and summarizes holdings."
+  }
+]

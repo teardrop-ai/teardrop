@@ -1,0 +1,32 @@
+[
+  {
+    "id": "smoke.datetime.001",
+    "messages": [{"role": "user", "content": "What time is it in UTC right now?"}],
+    "expected_tool_calls": ["get_datetime"],
+    "expected_text_contains": ["UTC"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Returns a UTC timestamp and uses the datetime tool."
+  },
+  {
+    "id": "smoke.wallet.001",
+    "messages": [{"role": "user", "content": "Check the ETH balance for 0x0000000000000000000000000000000000000000 on Ethereum."}],
+    "expected_tool_calls": ["get_eth_balance"],
+    "expected_text_contains": ["ETH"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Returns an ETH balance for the wallet."
+  },
+  {
+    "id": "smoke.price.001",
+    "messages": [{"role": "user", "content": "What is the current ETH price in USD?"}],
+    "expected_tool_calls": ["get_token_price"],
+    "expected_text_contains": ["ETH", "USD"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Returns current ETH price in USD."
+  }
+]

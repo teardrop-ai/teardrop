@@ -17,6 +17,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
 from agent.llm import create_llm_from_config, extract_usage, get_llm_for_request
+from agent.planner_ir import parse_plan_from_text, resolve_plan_references
+from agent.slots import render_slots_markdown, summarize_into_slots
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from benchmarks import get_model_context_specs
 from config import get_settings
@@ -141,6 +143,61 @@ def _bind_tools_for_provider(llm: Any, tools: list[Any], provider: str) -> Any:
     if provider == "google":
         _validate_tools_for_google(tools)
     return llm.bind_tools(tools)
+
+
+def _ai_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    out.append(text)
+            elif hasattr(block, "text"):
+                text = getattr(block, "text")
+                if isinstance(text, str):
+                    out.append(text)
+        return "".join(out)
+    return str(content or "")
+
+
+def _latest_ai_message(state: AgentState) -> AIMessage | None:
+    for msg in reversed(state.messages):
+        if isinstance(msg, AIMessage):
+            return msg
+    return None
+
+
+def _planner_signaled_done(state: AgentState) -> bool:
+    """True when the latest AI message is synthesis text without tool calls."""
+    msg = _latest_ai_message(state)
+    if msg is None:
+        return False
+    if getattr(msg, "tool_calls", None):
+        return False
+    return bool(_ai_content_to_text(getattr(msg, "content", "")).strip())
+
+
+def _max_iterations_reached(state: AgentState) -> bool:
+    usage = state.metadata.get("_usage", {})
+    iterations = int(usage.get("tool_iterations", 0))
+    # Trigger the fast path one turn before router forces ui_generator.
+    return iterations >= max(0, get_settings().agent_max_tool_iterations - 1)
+
+
+def _synthesis_fast_path_reason(state: AgentState) -> str | None:
+    s = get_settings()
+    if not s.agent_synthesis_fast_path_enabled:
+        return None
+    if bool(state.metadata.get("_synthesis_forced", False)):
+        return "forced"
+    if _planner_signaled_done(state):
+        return "signaled_done"
+    if _max_iterations_reached(state):
+        return "max_iter"
+    return None
 
 
 # ─── System prompts ───────────────────────────────────────────────────────────
@@ -268,6 +325,33 @@ No markdown, no prose — pure JSON.
 # ─── Nodes ────────────────────────────────────────────────────────────────────
 
 
+def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool) -> str:
+    """Build the cacheable planner prefix shared across requests."""
+    cached_prompt = _PLANNER_SYSTEM
+    if not emit_ui:
+        cached_prompt += (
+            "\n\nOutput constraint: Structured UI output is disabled for this request. "
+            "Do not include any ```a2ui``` fenced block in your response."
+        )
+    if platform_tools:
+        platform_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in platform_tools]
+        cached_prompt += "\n\n## Available Platform Tools\n" + "\n".join(platform_tool_lines)
+    return cached_prompt
+
+
+def _build_compiler_system_extension(all_tool_names: list[str]) -> str:
+    names = ", ".join(sorted(set(all_tool_names))) if all_tool_names else ""
+    return (
+        "Compiler mode is enabled. You may optionally emit a structured execution plan as "
+        "<plan>{...}</plan> in valid JSON with this shape: "
+        "{\"stages\":[{\"stage_id\":1,\"calls\":[{\"call_id\":\"c1\",\"tool\":\"name\","
+        "\"args\":{},\"depends_on\":[]}]}],\"synthesizer_after_stage\":1}. "
+        "Use stage 1 for independent calls, later stages for dependent calls. "
+        "For dependent args, reference prior outputs using '{{call_id.path}}'. "
+        f"Allowed tools: {names}."
+    )
+
+
 def _build_planner_system_messages(
     state: AgentState,
     *,
@@ -295,15 +379,7 @@ def _build_planner_system_messages(
     # eligible for Anthropic prompt caching (90% discount on cache reads).
     # It must NOT contain any org-specific data (memories, org name, balance)
     # to prevent cross-org cache pollution.
-    cached_prompt = _PLANNER_SYSTEM
-    if not emit_ui:
-        cached_prompt += (
-            "\n\nOutput constraint: Structured UI output is disabled for this request. "
-            "Do not include any ```a2ui``` fenced block in your response."
-        )
-    if platform_tools:
-        platform_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in platform_tools]
-        cached_prompt += "\n\n## Available Platform Tools\n" + "\n".join(platform_tool_lines)
+    cached_prompt = _build_cached_planner_prefix(platform_tools=platform_tools, emit_ui=emit_ui)
 
     # ── Uncached suffix: org memory + runtime context + org-specific tools ─
     uncached_parts: list[str] = []
@@ -318,6 +394,11 @@ def _build_planner_system_messages(
             "The following facts were recalled from previous interactions with this organisation. "
             "Use them as background context only — do not repeat them verbatim unless asked.\n" + memory_block
         )
+
+    if int(state.metadata.get("_usage", {}).get("tool_iterations", 0)) > 0 and state.slots:
+        slot_block = render_slots_markdown(state.slots)
+        if slot_block:
+            uncached_parts.append(slot_block)
 
     now = datetime.now(timezone.utc)
     context_lines = [
@@ -494,8 +575,12 @@ def _accumulate_usage(state: AgentState, response: AIMessage, *, provider: str, 
     extracted = extract_usage(response)
     delta_in = int(extracted.get("tokens_in", 0))
     delta_out = int(extracted.get("tokens_out", 0))
+    delta_cache_read = int(extracted.get("cache_read_input_tokens", 0))
+    delta_cache_creation = int(extracted.get("cache_creation_input_tokens", 0))
     usage["tokens_in"] = int(usage.get("tokens_in", 0)) + delta_in
     usage["tokens_out"] = int(usage.get("tokens_out", 0)) + delta_out
+    usage["cache_read_tokens"] = int(usage.get("cache_read_tokens", 0)) + delta_cache_read
+    usage["cache_creation_tokens"] = int(usage.get("cache_creation_tokens", 0)) + delta_cache_creation
 
     turns = usage.get("turns")
     if not isinstance(turns, list):
@@ -506,6 +591,8 @@ def _accumulate_usage(state: AgentState, response: AIMessage, *, provider: str, 
             "model": str(model or ""),
             "tokens_in": delta_in,
             "tokens_out": delta_out,
+            "cache_read_tokens": delta_cache_read,
+            "cache_creation_tokens": delta_cache_creation,
         }
     )
     usage["turns"] = turns
@@ -578,6 +665,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
     _synthesis_forced = bool(state.metadata.get("_synthesis_forced", False))
+    _synthesis_fast_reason = _synthesis_fast_path_reason(state) if tool_iterations > 0 else None
     if tool_iterations > 0 and not llm_config:
         _max_tokens = settings.agent_synthesis_max_tokens
         # Optional override: route synthesis turns through a dedicated faster
@@ -604,7 +692,11 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         # to synthesize from existing context — binding tool schemas only
         # bloats the request (5-8K tokens of unused JSON-Schema) without
         # any benefit. Skip bind_tools to cut prompt size and latency.
-        llm = llm_unbound if _synthesis_forced else _bind_tools_for_provider(llm_unbound, all_tools, _provider)
+        if _synthesis_fast_reason:
+            logger.debug("planner_node: synthesis fast path active (reason=%s)", _synthesis_fast_reason)
+            llm = llm_unbound
+        else:
+            llm = _bind_tools_for_provider(llm_unbound, all_tools, _provider)
     elif tool_iterations == 0 and not llm_config:
         # Optional override: route the initial planning turn (tool selection)
         # through a dedicated fast model. Only applies when override fields are
@@ -637,6 +729,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         org_tools=org_tools,
         emit_ui=bool(state.metadata.get("emit_ui", True)),
     )
+    if settings.agent_compiler_mode_enabled:
+        all_tool_names = [getattr(t, "name", "") for t in all_tools]
+        system_messages.append(SystemMessage(content=_build_compiler_system_extension(all_tool_names)))
     if tool_iterations > 0:
         completed_names = state.metadata.get("_usage", {}).get("tool_names", [])
         unique_names = list(dict.fromkeys(str(name) for name in completed_names))
@@ -666,11 +761,12 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                 _summary_parts = [f"{k}={_args[k]!r}" for k in _arg_keys if k in _args]
                 _summary = ", ".join(_summary_parts) if _summary_parts else ""
                 prior_call_lines.append(f"- {_name}({_summary})" if _summary else f"- {_name}()")
-        prior_calls_block = (
-            "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n" + "\n".join(prior_call_lines)
-            if prior_call_lines
-            else ""
-        )
+        use_prior_calls_block = not bool(state.slots)
+        prior_calls_block = ""
+        if use_prior_calls_block and prior_call_lines:
+            prior_calls_block = (
+                "\n\nAlready issued tool calls (do NOT repeat with equivalent args):\n" + "\n".join(prior_call_lines)
+            )
         system_messages.append(
             SystemMessage(
                 content=(
@@ -747,7 +843,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
-                fallback_llm if _synthesis_forced else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+                fallback_llm
+                if _synthesis_fast_reason
+                else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
             )  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,
@@ -765,10 +863,29 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     else:
         usage = state.metadata.get("_usage", {})
 
+    next_plan = state.plan
+    if settings.agent_compiler_mode_enabled:
+        try:
+            parsed_plan = parse_plan_from_text(_ai_content_to_text(response.content))
+            if parsed_plan is not None:
+                known_tool_names = {getattr(t, "name", "") for t in all_tools}
+                for stage in parsed_plan.stages:
+                    for call in stage.calls:
+                        if call.tool not in known_tool_names:
+                            raise ValueError(f"Unknown tool in plan: {call.tool}")
+                next_plan = parsed_plan
+        except Exception as exc:
+            logger.error("planner_node: invalid compiler plan ignored (%s)", exc)
+
+    next_status = TaskStatus.GENERATING_UI
+    if response.tool_calls or (next_plan is not None and not next_plan.is_done()):
+        next_status = TaskStatus.EXECUTING
+
     return {
         "messages": [response],
-        "task_status": TaskStatus.EXECUTING if response.tool_calls else TaskStatus.GENERATING_UI,
+        "task_status": next_status,
         "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
+        "plan": next_plan,
     }
 
 
@@ -925,9 +1042,27 @@ async def _execute_single_tool_safe(
 async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     """Execute all pending tool calls in the latest AI message, in parallel."""
     logger.debug("tool_executor_node: entry")
-    last_msg = state.messages[-1]
-    if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
-        return {"task_status": TaskStatus.GENERATING_UI}
+    plan = state.plan
+    plan_outputs = dict(state.metadata.get("_plan_outputs", {}))
+    using_plan = bool(plan is not None and not plan.is_done())
+
+    incoming_calls: list[dict[str, Any]] = []
+    stage_call_ids: list[str] = []
+    if using_plan and plan is not None:
+        stage = plan.stages[plan.current_stage_index]
+        completed = set(plan.completed_call_ids)
+        for call in stage.calls:
+            if any(dep not in completed for dep in call.depends_on):
+                continue
+            resolved_args = resolve_plan_references(call.args, plan_outputs)
+            incoming_calls.append({"id": call.call_id, "name": call.tool, "args": resolved_args})
+            stage_call_ids.append(call.call_id)
+    else:
+        last_msg = state.messages[-1]
+        if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
+            return {"task_status": TaskStatus.GENERATING_UI}
+        incoming_calls = list(last_msg.tool_calls)
+        stage_call_ids = [str(c.get("id", "")) for c in incoming_calls if isinstance(c, dict)]
 
     platform_tools_by_name = _get_cached_tools_by_name()
     tools_by_name = {
@@ -951,7 +1086,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     dedup_calls: list[dict] = []
     skipped_messages: list[ToolMessage] = []
     seen_this_batch: set[str] = set()
-    for call in last_msg.tool_calls:
+    for call in incoming_calls:
         if call["name"] not in platform_tool_names:
             dedup_calls.append(call)
             continue
@@ -1031,6 +1166,25 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
 
     if not dedup_calls:
         usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
+        if using_plan and plan is not None:
+            for call_id in stage_call_ids:
+                if call_id and call_id not in plan.completed_call_ids:
+                    plan.completed_call_ids.append(call_id)
+            plan.current_stage_index += 1
+            logger.info("tool_executor: plan stage had no executable calls, advancing stage")
+            return {
+                "messages": skipped_messages,
+                "task_status": TaskStatus.PLANNING,
+                "metadata": {
+                    **state.metadata,
+                    "_usage": usage,
+                    "_synthesis_forced": False,
+                    "_plan_outputs": plan_outputs,
+                },
+                "slots": state.slots,
+                "plan": plan,
+            }
+
         logger.info("tool_executor: all calls suppressed, routing to PLANNING for forced synthesis")
         return {
             "messages": skipped_messages,
@@ -1116,10 +1270,33 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage["delegation_spend_usdc"] = delegation_spend
     usage["delegation_count"] = delegation_count
 
+    slots = dict(state.slots)
+    for res in results:
+        slots = summarize_into_slots(res["name"], str(res.get("content", "")), slots)
+
+    next_plan = plan
+    if using_plan and plan is not None:
+        for call_id in stage_call_ids:
+            if call_id and call_id not in plan.completed_call_ids:
+                plan.completed_call_ids.append(call_id)
+
+        for call, res in zip(dedup_calls, results):
+            raw = res.get("content", "")
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = raw
+            plan_outputs[str(call.get("id", ""))] = parsed
+
+        plan.current_stage_index += 1
+        next_plan = plan
+
     return {
         "messages": tool_messages,
         "task_status": TaskStatus.PLANNING,
-        "metadata": {**state.metadata, "_usage": usage},
+        "metadata": {**state.metadata, "_usage": usage, "_plan_outputs": plan_outputs},
+        "slots": slots,
+        "plan": next_plan,
     }
 
 

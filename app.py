@@ -57,6 +57,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
+from agent.cache_prewarm import prewarm_org_prefix
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState
 from agent_wallets import (
@@ -540,6 +541,62 @@ async def _refresh_token_cleanup_loop() -> None:
     )
 
 
+async def _prewarm_cache_prefixes(pool: asyncpg.Pool) -> None:
+    """Warm provider prompt caches for the most active org/model prefixes."""
+    if not settings.agent_cache_prewarm_enabled:
+        return
+
+    min_runs = max(1, int(settings.agent_cache_prewarm_min_runs_24h))
+    top_n = max(1, int(settings.agent_cache_prewarm_top_n))
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT org_id, provider, model, COUNT(*) AS run_count
+            FROM usage_events
+            WHERE created_at > NOW() - INTERVAL '24 hours'
+              AND provider != ''
+              AND model != ''
+            GROUP BY org_id, provider, model
+            HAVING COUNT(*) >= $1
+            ORDER BY run_count DESC
+            LIMIT $2
+            """,
+            min_runs,
+            top_n,
+        )
+    except Exception:
+        logger.debug("cache prewarm skipped: usage_events query failed", exc_info=True)
+        return
+    if not rows:
+        return
+
+    warmed = 0
+    cache_creation_total = 0
+    for row in rows:
+        org_id = str(row["org_id"])
+        provider = str(row["provider"])
+        model = str(row["model"])
+
+        llm_config = None
+        try:
+            resolved = await resolve_llm_config(org_id)
+            if resolved and resolved.get("provider") == provider and resolved.get("model") == model:
+                llm_config = resolved
+        except Exception:
+            logger.debug("cache prewarm: resolve_llm_config failed for org %s", org_id, exc_info=True)
+
+        usage = await prewarm_org_prefix(org_id, provider, model, llm_config=llm_config)
+        warmed += 1
+        cache_creation_total += int(usage.get("cache_creation_input_tokens", 0))
+
+    logger.info(
+        "Cache prewarm completed: orgs_warmed=%d total_cache_creation_tokens=%d",
+        warmed,
+        cache_creation_total,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle for DB connections."""
@@ -598,6 +655,8 @@ async def lifespan(app: FastAPI):
         from marketplace import _marketplace_sweep_loop
 
         bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
+    if settings.agent_cache_prewarm_enabled:
+        bg_tasks.append(asyncio.create_task(_prewarm_cache_prefixes(pool)))
     bg_tasks.append(asyncio.create_task(_refresh_token_cleanup_loop()))
 
     yield
@@ -1964,6 +2023,8 @@ async def agent_run(
                 "_usage": {
                     "tokens_in": 0,
                     "tokens_out": 0,
+                    "cache_read_tokens": 0,
+                    "cache_creation_tokens": 0,
                     "tool_calls": 0,
                     "tool_names": [],
                     "billable_tool_calls": 0,
@@ -2337,6 +2398,8 @@ async def agent_run(
             run_id=run_id,
             tokens_in=usage_data.get("tokens_in", 0),
             tokens_out=usage_data.get("tokens_out", 0),
+            cache_read_tokens=usage_data.get("cache_read_tokens", 0),
+            cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
             tool_calls=usage_data.get("tool_calls", 0),
             tool_names=usage_data.get("tool_names", []),
             billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
@@ -2501,6 +2564,8 @@ async def agent_run(
                 "run_id": run_id,
                 "tokens_in": usage_event.tokens_in,
                 "tokens_out": usage_event.tokens_out,
+                "cache_read_tokens": usage_event.cache_read_tokens,
+                "cache_creation_tokens": usage_event.cache_creation_tokens,
                 "tool_calls": usage_event.tool_calls,
                 "duration_ms": usage_event.duration_ms,
                 "cost_usdc": usage_event.cost_usdc,

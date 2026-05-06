@@ -1,0 +1,12 @@
+[
+  {
+    "id": "research.summary.001",
+    "messages": [{"role": "user", "content": "Give me a short summary of recent Ethereum ETF news."}],
+    "expected_tool_calls": ["web_search"],
+    "expected_text_contains": ["ETF", "Ethereum"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Uses web search and provides a concise summary."
+  }
+]

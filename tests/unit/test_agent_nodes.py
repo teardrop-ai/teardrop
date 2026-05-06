@@ -14,7 +14,9 @@ import agent.nodes as nodes_module
 from agent.nodes import (
     _contains_structured_data,
     _extract_a2ui_from_text,
+    _max_iterations_reached,
     _parse_a2ui_json,
+    _planner_signaled_done,
     planner_node,
     tool_executor_node,
     ui_generator_node,
@@ -153,6 +155,20 @@ class TestGoogleSchemaValidation:
             assert False, "Expected ValueError for Gemini-incompatible array items schema"
         except ValueError as exc:
             assert "Gemini" in str(exc)
+
+
+class TestSynthesisFastPathPredicates:
+    def test_planner_signaled_done_true_on_text_without_tools(self):
+        state = _make_state(messages=[_make_ai_message(content="Done.", tool_calls=[])])
+        assert _planner_signaled_done(state) is True
+
+    def test_planner_signaled_done_false_with_tool_calls(self):
+        state = _make_state(messages=[_make_ai_message(content="Thinking", tool_calls=[{"id": "c1", "name": "t", "args": {}}])])
+        assert _planner_signaled_done(state) is False
+
+    def test_max_iterations_reached_guard(self, test_settings):
+        state = _make_state(metadata={"_usage": {"tool_iterations": test_settings.agent_max_tool_iterations - 1}})
+        assert _max_iterations_reached(state) is True
 
 
 # ─── planner_node ─────────────────────────────────────────────────────────────

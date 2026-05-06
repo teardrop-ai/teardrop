@@ -267,11 +267,32 @@ def extract_usage(response: AIMessage) -> dict[str, int]:
     fallback.
     """
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
-        return {"tokens_in": 0, "tokens_out": 0}
+        return {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
 
     meta = response.usage_metadata
 
     tokens_in = meta.get("input_tokens") or meta.get("prompt_tokens") or 0
     tokens_out = meta.get("output_tokens") or meta.get("completion_tokens") or 0
+    cache_read = 0
+    cache_creation = 0
 
-    return {"tokens_in": int(tokens_in), "tokens_out": int(tokens_out)}
+    # Anthropic usage metadata keys.
+    cache_read = int(meta.get("cache_read_input_tokens") or 0)
+    cache_creation = int(meta.get("cache_creation_input_tokens") or 0)
+
+    # OpenAI prompt cache metadata (LangChain/OpenAI normalisation).
+    prompt_details = meta.get("prompt_tokens_details") or {}
+    if isinstance(prompt_details, dict):
+        cache_read = max(cache_read, int(prompt_details.get("cached_tokens") or 0))
+
+    return {
+        "tokens_in": int(tokens_in),
+        "tokens_out": int(tokens_out),
+        "cache_read_input_tokens": int(cache_read),
+        "cache_creation_input_tokens": int(cache_creation),
+    }

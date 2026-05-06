@@ -104,6 +104,34 @@ class Settings(BaseSettings):
             "request has no org-level BYOK config."
         ),
     )
+    agent_synthesis_fast_path_enabled: bool = Field(
+        default=True,
+        description=(
+            "When true, post-tool synthesis turns that are likely final skip tool-schema "
+            "binding to reduce prompt tokens and latency."
+        ),
+    )
+    agent_compiler_mode_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable optional structured staged tool-execution planning via <plan>{...}</plan> "
+            "blocks in planner responses."
+        ),
+    )
+    agent_cache_prewarm_enabled: bool = Field(
+        default=True,
+        description=(
+            "Pre-warm provider prompt caches for the most active org/model prefixes at startup."
+        ),
+    )
+    agent_cache_prewarm_top_n: int = Field(
+        default=50,
+        description="Maximum number of active org/provider/model prefixes to pre-warm at startup.",
+    )
+    agent_cache_prewarm_min_runs_24h: int = Field(
+        default=5,
+        description="Minimum run count in the last 24h required for a prefix to be pre-warmed.",
+    )
     agent_ui_generator_timeout_seconds: int = Field(default=60, description="Timeout in seconds for the UI generator LLM call")
     agent_max_tool_iterations: int = Field(
         default=4,

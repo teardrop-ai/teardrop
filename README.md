@@ -26,6 +26,10 @@ AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete t
 AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
 AGENT_PLANNER_PROVIDER=google                    # Optional initial planning-turn override provider
 AGENT_PLANNER_MODEL=gemini-3-flash-preview       # Optional initial planning-turn override model
+AGENT_SYNTHESIS_FAST_PATH_ENABLED=true            # Skip tool-schema bind on clearly final synthesis turns
+AGENT_COMPILER_MODE_ENABLED=false                 # Enable optional staged <plan>{...}</plan> execution mode
+AGENT_CACHE_PREWARM_ENABLED=true                  # Warm provider prompt caches at startup
+AGENT_CACHE_PREWARM_TOP_N=50                      # Max active org/model prefixes to prewarm
 ```
 
 ### Platform Tool Marketplace
@@ -186,6 +190,10 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
 | `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
 | `AGENT_PLANNER_MODEL` | Optional model override paired with `AGENT_PLANNER_PROVIDER` for first-pass tool selection speed tuning. |
+| `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
+| `AGENT_COMPILER_MODE_ENABLED` | Enables optional staged planner IR (`<plan>{...}</plan>`) execution. Default: `false` (safe rollout). |
+| `AGENT_CACHE_PREWARM_ENABLED` | Enables one-time startup prompt-cache prewarm for top active org/provider/model prefixes. Default: `true`. |
+| `AGENT_CACHE_PREWARM_TOP_N` | Max number of active prefixes warmed per startup batch. Default: `50`. |
 | `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
@@ -627,6 +635,8 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
     "run_id": "run-123",
     "tokens_in": 1500,
     "tokens_out": 800,
+    "cache_read_tokens": 1200,
+    "cache_creation_tokens": 300,
     "tool_calls": 3,
     "cost_usdc": 15000,
     "delegation_cost_usdc": 52500
@@ -875,8 +885,10 @@ START → planner → [tool_executor ↩] → ui_generator → END
 ```
 
 - **planner** — Sends the conversation to the configured LLM with all tools bound. If the LLM decides to call a tool, status is set to `EXECUTING`; otherwise it moves to UI generation.
-- **tool_executor** — Runs all pending tool calls in parallel, appends `ToolMessage` results, then loops back to the planner for further reasoning.
+- **tool_executor** — Runs all pending tool calls in parallel, appends `ToolMessage` results, and builds a compact `slots` fact store used by later planner turns.
 - **ui_generator** — Extracts or generates A2UI component JSON from the final assistant message and attaches it to the state.
+
+When `AGENT_COMPILER_MODE_ENABLED=true`, planner turns may emit an optional staged `<plan>{...}</plan>` block. The executor then runs staged calls with dependency-aware argument resolution while preserving the same graph topology.
 
 Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-backed LangGraph checkpointer).
 
@@ -892,7 +904,7 @@ Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-ba
 | `TOOL_CALL_END` | After a tool returns |
 | `SURFACE_UPDATE` | When A2UI components are ready |
 | `BILLING_SETTLEMENT` | After on-chain payment settles |
-| `USAGE_SUMMARY` | Total tokens, tools, cost for the run |
+| `USAGE_SUMMARY` | Total tokens, cache-read/create tokens, tools, and cost for the run |
 | `RUN_FINISHED` | Agent completed normally |
 | `ERROR` | Unhandled exception |
 | `DONE` | Stream closed |

@@ -293,6 +293,8 @@ async def _query_benchmarks(
                AVG(duration_ms) AS avg_latency_ms,
                PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_latency_ms,
                AVG(cost_usdc) AS avg_cost_usdc,
+             SUM(cache_read_tokens) AS cache_read_tokens,
+             SUM(cache_creation_tokens) AS cache_creation_tokens,
                AVG(
                    CASE WHEN duration_ms > 0 AND tokens_out > 0
                         THEN tokens_out::float / duration_ms * 1000
@@ -310,12 +312,16 @@ async def _query_benchmarks(
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
         key = f"{row['provider']}:{row['model']}"
+        cache_read = float(row.get("cache_read_tokens", 0) or 0)
+        cache_creation = float(row.get("cache_creation_tokens", 0) or 0)
+        denom = cache_read + cache_creation
         result[key] = {
             "total_runs_7d": row["total_runs"],
             "avg_latency_ms": round(float(row["avg_latency_ms"]), 1) if row["avg_latency_ms"] else None,
             "p95_latency_ms": round(float(row["p95_latency_ms"]), 1) if row["p95_latency_ms"] else None,
             "avg_cost_usdc_per_run": round(float(row["avg_cost_usdc"]), 1) if row["avg_cost_usdc"] else None,
             "avg_tokens_per_sec": round(float(row["avg_tokens_per_sec"]), 1) if row["avg_tokens_per_sec"] else None,
+            "cache_hit_ratio_7d": round(cache_read / denom, 4) if denom > 0 else None,
         }
 
     return result
