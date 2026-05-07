@@ -117,8 +117,9 @@ class TestByokDebitFlow:
         # cost_usdc would be 50_000 but is informational only for BYOK
 
         # Debit only the platform fee (mirrors app.py BYOK settlement path)
-        success = await debit_credit(org_id, platform_fee, reason="run:byok-test")
+        success, deducted = await debit_credit(org_id, platform_fee, reason="run:byok-test")
         assert success
+        assert deducted == platform_fee
 
         balance = await get_credit_balance(org_id)
         assert balance == 100_000 - platform_fee  # not cost_usdc
@@ -129,8 +130,9 @@ class TestByokDebitFlow:
 
         cost_usdc = 10_000
 
-        success = await debit_credit(org_id, cost_usdc, reason="run:non-byok-test")
+        success, deducted = await debit_credit(org_id, cost_usdc, reason="run:non-byok-test")
         assert success
+        assert deducted == cost_usdc
 
         balance = await get_credit_balance(org_id)
         assert balance == 100_000 - cost_usdc

@@ -116,7 +116,7 @@ class HttpFetchOutput(BaseModel):
 
 # ─── Implementation ──────────────────────────────────────────────────────────
 
-_MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB
+_MAX_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB
 _REQUEST_TIMEOUT = 10  # seconds
 _USER_AGENT = "Teardrop/1.0 (AI Agent; +https://teardrop.dev)"
 

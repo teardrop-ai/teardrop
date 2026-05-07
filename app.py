@@ -243,6 +243,50 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _process_rss_bytes() -> int | None:
+    """Return current process RSS in bytes, or None when unavailable."""
+    proc_status = Path("/proc/self/status")
+    if proc_status.exists():
+        try:
+            for line in proc_status.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith("VmRSS:"):
+                    # Format: VmRSS:\t  123456 kB
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return int(parts[1]) * 1024
+        except Exception:
+            logger.debug("Failed reading /proc/self/status for RSS telemetry", exc_info=True)
+
+    try:
+        import resource  # noqa: PLC0415
+
+        rss_raw = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if rss_raw <= 0:
+            return None
+        if sys.platform == "darwin":
+            return rss_raw
+        return rss_raw * 1024
+    except Exception:
+        return None
+
+
+def _log_agent_memory(stage: str, *, run_id: str, elapsed_ms: int | None = None) -> None:
+    """Emit lightweight RSS telemetry for memory-spike diagnosis."""
+    if not settings.agent_memory_telemetry_enabled:
+        return
+    rss_bytes = _process_rss_bytes()
+    if rss_bytes is None:
+        return
+    suffix = f" elapsed_ms={elapsed_ms}" if elapsed_ms is not None else ""
+    logger.info(
+        "agent_run memory stage=%s run_id=%s rss_mib=%.1f%s",
+        stage,
+        run_id,
+        rss_bytes / (1024 * 1024),
+        suffix,
+    )
+
 # ─── Sentry ──────────────────────────────────────────────────────────────────
 # Initialize before FastAPI() so the FastAPI/Starlette/asyncpg integrations
 # can hook in. No-op when SENTRY_DSN is empty.
@@ -620,6 +664,14 @@ async def lifespan(app: FastAPI):
         settings.pg_dsn,
         init=_init_conn,
         command_timeout=settings.pg_command_timeout,
+        min_size=settings.pg_pool_min_size,
+        max_size=settings.pg_pool_max_size,
+    )
+    logger.info(
+        "Postgres pool configured: min_size=%d max_size=%d command_timeout=%.1fs",
+        settings.pg_pool_min_size,
+        settings.pg_pool_max_size,
+        settings.pg_command_timeout,
     )
     app.state.pool = pool
     await apply_pending(pool)
@@ -1524,7 +1576,7 @@ async def _run_billing_gate(
         if siwe_credit_balance > 0:
             pricing = await get_current_pricing()
             default_min = pricing.run_price_usdc if pricing is not None else 0
-            min_required = platform_fee if is_byok else default_min
+            min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)
             billing = await verify_credit(org_id, min_required)
             if not billing.verified:
                 raise HTTPException(
@@ -1554,7 +1606,7 @@ async def _run_billing_gate(
     # least one run at the current flat-rate floor.
     pricing = await get_current_pricing()
     default_min = pricing.run_price_usdc if pricing is not None else 0
-    min_required = platform_fee if is_byok else default_min
+    min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)
     billing = await verify_credit(org_id, min_required)
     if not billing.verified:
         raise HTTPException(
@@ -2023,14 +2075,22 @@ async def agent_run(
     async def _stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
+        _log_agent_memory("stream_start", run_id=run_id)
 
         # ── Pre-graph init: gather all independent calls concurrently ─────
         mem_settings = get_settings()
+        prepare_started = time.monotonic()
+        _log_agent_memory("prepare_run_context_start", run_id=run_id)
         ctx = await _prepare_run_context(
             org_id=org_id,
             user_message=body.message,
             billing=billing,
             mem_settings=mem_settings,
+        )
+        _log_agent_memory(
+            "prepare_run_context_end",
+            run_id=run_id,
+            elapsed_ms=int((time.monotonic() - prepare_started) * 1000),
         )
         graph = ctx.graph
         org_lc_tools = ctx.org_lc_tools
@@ -2372,6 +2432,8 @@ async def agent_run(
         # state_snapshot is also read later by the memory-extraction kickoff;
         # initialise to None so a timeout/exception leaves it well-defined.
         state_snapshot = None
+        state_started = time.monotonic()
+        _log_agent_memory("aget_state_start", run_id=run_id)
         try:
             state_snapshot = await asyncio.wait_for(
                 graph.aget_state(config),
@@ -2386,6 +2448,12 @@ async def agent_run(
             )
         except Exception:
             logger.debug("Could not retrieve final state for usage", exc_info=True)
+        finally:
+            _log_agent_memory(
+                "aget_state_end",
+                run_id=run_id,
+                elapsed_ms=int((time.monotonic() - state_started) * 1000),
+            )
 
         # Calculate usage-based cost from live pricing rule (never blocks the stream).
         cost_usdc = 0
@@ -2424,7 +2492,7 @@ async def agent_run(
 
         logger.info(
             "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d "
-            "tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc=%.6f",
+            "tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc_atomic=%d cost_usd=$%.6f",
             run_id,
             org_id,
             duration_ms,
@@ -2432,6 +2500,7 @@ async def agent_run(
             usage_data.get("tokens_out", 0),
             usage_data.get("tool_calls", 0),
             cost_usdc,
+            cost_usdc / 1_000_000,
         )
 
         usage_event = UsageEvent(
@@ -2501,14 +2570,23 @@ async def agent_run(
 
             if billing.billing_method == "credit":
                 # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
-                success = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
+                success, deducted_amount = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
                 if success:
-                    await record_settlement(usage_event.id, debit_amount, "", "settled")
+                    if deducted_amount < debit_amount:
+                        logger.warning(
+                            "billing_shortfall run_id=%s org_id=%s cost_usdc_atomic=%d actual_deducted=%d shortfall=%d",
+                            run_id,
+                            org_id,
+                            debit_amount,
+                            deducted_amount,
+                            debit_amount - deducted_amount,
+                        )
+                    await record_settlement(usage_event.id, deducted_amount, "", "settled")
                     yield _sse_event(
                         _EV_BILLING_SETTLEMENT,
                         {
                             "run_id": run_id,
-                            "amount_usdc": debit_amount,
+                            "amount_usdc": deducted_amount,
                             "tx_hash": "",
                             "network": "credit",
                             "delegation_cost_usdc": delegation_spend,
@@ -2615,6 +2693,11 @@ async def agent_run(
                 "platform_fee_usdc": platform_fee,
                 "delegation_cost_usdc": delegation_spend,
             },
+        )
+        _log_agent_memory(
+            "stream_end",
+            run_id=run_id,
+            elapsed_ms=int((time.monotonic() - start_time) * 1000),
         )
         yield _sse_event(_EV_RUN_FINISHED, {"run_id": run_id})
         yield _sse_event(_EV_DONE, {"run_id": run_id})
@@ -3097,6 +3180,7 @@ async def billing_balance(
             "org_id": org_id,
             "balance_usdc": balance,
             "spending_limit_usdc": spending["spending_limit_usdc"],
+            "spending_limit_active": spending["spending_limit_usdc"] > 0,
             "is_paused": spending["is_paused"],
             "daily_spend_usdc": spending["daily_spend_usdc"],
         }
@@ -4901,7 +4985,7 @@ async def mcp_jsonrpc_handler(
         execution_failed = isinstance(result, dict) and "error" in result
         debited = False
         if billing.verified and billing.billing_method == "credit" and not execution_failed:
-            debited = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
 
         # ── Record author earnings (fire-and-forget) ──────────────────
         # Only record earnings when the caller was actually charged to prevent

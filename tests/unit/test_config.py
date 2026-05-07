@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import config
 from config import Settings
 
@@ -139,3 +141,22 @@ def test_x402_upto_max_amount_atomic_no_dollar_sign():
 def test_x402_upto_max_amount_atomic_unparseable_returns_zero():
     s = Settings(x402_upto_max_amount="invalid")
     assert s.x402_upto_max_amount_atomic == 0
+
+
+def test_pg_pool_size_defaults():
+    s = Settings()
+    assert s.pg_pool_min_size == 2
+    assert s.pg_pool_max_size == 6
+
+
+def test_pg_pool_size_env_overrides(monkeypatch):
+    monkeypatch.setenv("PG_POOL_MIN_SIZE", "3")
+    monkeypatch.setenv("PG_POOL_MAX_SIZE", "9")
+    s = Settings()
+    assert s.pg_pool_min_size == 3
+    assert s.pg_pool_max_size == 9
+
+
+def test_pg_pool_size_invalid_bounds():
+    with pytest.raises(ValueError, match="pg_pool_max_size"):
+        Settings(pg_pool_min_size=8, pg_pool_max_size=4)

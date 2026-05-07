@@ -99,3 +99,24 @@ class TestHttpFetch:
 
         assert len(result["content"]) <= 100
         assert result["truncated"] is True
+
+    async def test_rejects_response_larger_than_cap(self, test_settings):
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.headers = {"content-type": "text/html"}
+        mock_resp.charset = "utf-8"
+        mock_resp.content_length = (1 * 1024 * 1024) + 1
+        mock_resp.read = AsyncMock(return_value=b"unused")
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("tools.definitions.http_fetch.aiohttp.ClientSession", return_value=mock_session):
+            result = await http_fetch(url="https://example.com")
+
+        assert "Response too large" in result["content"]
+        mock_resp.read.assert_not_awaited()

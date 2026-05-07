@@ -564,7 +564,7 @@ class TestDebitCreditMock:
         pool._conn.fetchrow = AsyncMock(return_value=None)
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-missing", 5_000)
-        assert result is False
+        assert result == (False, 0)
 
     async def test_debit_returns_true_on_success(self):
 
@@ -573,7 +573,7 @@ class TestDebitCreditMock:
         pool._conn.execute = AsyncMock()
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-1", 5_000)
-        assert result is True
+        assert result == (True, 5_000)
 
     async def test_debit_inserts_ledger_row(self):
         """debit_credit must insert a row into org_credit_ledger."""
@@ -593,7 +593,7 @@ class TestDebitCreditMock:
         pool.acquire = MagicMock(side_effect=Exception("DB connection lost"))
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-1", 5_000)
-        assert result is False
+        assert result == (False, 0)
 
 
 @pytest.mark.anyio

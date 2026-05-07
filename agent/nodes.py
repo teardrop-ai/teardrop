@@ -187,6 +187,36 @@ def _max_iterations_reached(state: AgentState) -> bool:
     return iterations >= max(0, get_settings().agent_max_tool_iterations - 1)
 
 
+def _all_tool_calls_resolved(state: AgentState) -> bool:
+    """True when all tool calls from the latest AI message have ToolMessage results."""
+    latest_ai = _latest_ai_message(state)
+    if latest_ai is None:
+        return False
+
+    tool_calls = getattr(latest_ai, "tool_calls", None) or []
+    if not tool_calls:
+        return False
+
+    pending_ids = {
+        str(call_id)
+        for call in tool_calls
+        if isinstance(call, dict) and (call_id := call.get("id"))
+    }
+    if not pending_ids:
+        return False
+
+    resolved_ids: set[str] = set()
+    for msg in reversed(state.messages):
+        if msg is latest_ai:
+            break
+        if isinstance(msg, ToolMessage):
+            tool_call_id = getattr(msg, "tool_call_id", None)
+            if tool_call_id:
+                resolved_ids.add(str(tool_call_id))
+
+    return pending_ids.issubset(resolved_ids)
+
+
 def _synthesis_fast_path_reason(state: AgentState) -> str | None:
     s = get_settings()
     if not s.agent_synthesis_fast_path_enabled:
@@ -195,6 +225,8 @@ def _synthesis_fast_path_reason(state: AgentState) -> str | None:
         return "forced"
     if _planner_signaled_done(state):
         return "signaled_done"
+    if _all_tool_calls_resolved(state):
+        return "all_resolved"
     if _max_iterations_reached(state):
         return "max_iter"
     return None
@@ -273,6 +305,10 @@ Tool use economy:
         RPC unavailability and report that limitation explicitly.
         If get_lending_rates returns errors, do NOT call web_search as a
         fallback for protocol rates. Report those protocols as unavailable.
+    - Use get_protocol_tvl with include_historical=True and days when you need
+        TVL trends or chain breakdowns. Without include_historical, it returns
+        only a current TVL scalar. For 2+ protocols, use protocols=[...] in a
+        single batched call rather than separate per-protocol calls.
     - Call get_yield_rates at most ONCE per user request. If you need alternate
         sorting or filtering, perform that analysis in your own response instead of
         re-calling the tool.
@@ -638,6 +674,21 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     """Reasoning / planning node.  Calls the LLM with bound tools."""
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
+    if len(state.messages) > settings.agent_thread_warning_message_count:
+        logger.warning(
+            "planner_node: large thread history detected message_count=%d threshold=%d thread_id=%s",
+            len(state.messages),
+            settings.agent_thread_warning_message_count,
+            str(state.metadata.get("thread_id", "")),
+        )
+    tool_chars = sum(len(str(m.content)) for m in state.messages if isinstance(m, ToolMessage))
+    if tool_chars > settings.agent_thread_warning_tool_chars:
+        logger.warning(
+            "planner_node: large tool payload detected tool_chars=%d threshold=%d thread_id=%s",
+            tool_chars,
+            settings.agent_thread_warning_tool_chars,
+            str(state.metadata.get("thread_id", "")),
+        )
     tools = _get_cached_tools()
     org_tools = state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools

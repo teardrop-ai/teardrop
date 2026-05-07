@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from tools.definitions._http_session import get_defillama_session
 from tools.registry import ToolDefinition
@@ -43,12 +43,20 @@ _SLUG_PATTERN = r"^[a-zA-Z0-9\-\_\.]{1,64}$"
 
 
 class GetProtocolTvlInput(BaseModel):
-    protocol: str = Field(
-        ...,
+    protocol: str | None = Field(
+        default=None,
         description=(
             "DeFiLlama protocol slug (e.g. 'aave-v3', 'uniswap-v3', 'curve-dex'). "
             "Use lowercase with hyphens as shown on DeFiLlama. "
-            "Tip: 'aave' works for the combined Aave TVL; 'aave-v3' for V3 only."
+            "Tip: 'aave' works for the combined Aave TVL; 'aave-v3' for V3 only. "
+            "Optional when using batch mode via protocols=[...]."
+        ),
+    )
+    protocols: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional batch mode: list of DeFiLlama protocol slugs. "
+            "When provided, the tool returns one TVL result object per protocol."
         ),
     )
     include_historical: bool = Field(
@@ -64,15 +72,38 @@ class GetProtocolTvlInput(BaseModel):
 
     @field_validator("protocol")
     @classmethod
-    def _validate_slug(cls, v: str) -> str:
+    def _validate_slug(cls, v: str | None) -> str | None:
         import re
 
+        if v is None:
+            return None
         if not re.match(_SLUG_PATTERN, v):
             raise ValueError(
                 "protocol must be a valid DeFiLlama slug: lowercase letters, "
                 "digits, hyphens, underscores, or dots; max 64 characters."
             )
         return v.lower()
+
+    @field_validator("protocols")
+    @classmethod
+    def _validate_protocols(cls, values: list[str]) -> list[str]:
+        import re
+
+        normalized: list[str] = []
+        for value in values:
+            if not re.match(_SLUG_PATTERN, value):
+                raise ValueError(
+                    "protocols entries must be valid DeFiLlama slugs: lowercase letters, "
+                    "digits, hyphens, underscores, or dots; max 64 characters."
+                )
+            normalized.append(value.lower())
+        return normalized
+
+    @model_validator(mode="after")
+    def _require_protocol_or_protocols(self) -> "GetProtocolTvlInput":
+        if not self.protocol and not self.protocols:
+            raise ValueError("Either protocol or protocols must be provided")
+        return self
 
 
 class ChainTvlEntry(BaseModel):
@@ -245,11 +276,32 @@ def _compute_change_pct(series: list[Any], days_ago: int) -> float | None:
 
 
 async def get_protocol_tvl(
-    protocol: str,
+    protocol: str | None = None,
+    protocols: list[str] | None = None,
     include_historical: bool = False,
     days: int = 30,
-) -> dict[str, Any]:
+) -> dict[str, Any] | list[dict[str, Any]]:
     """Get TVL data for a DeFi protocol from DeFiLlama."""
+    if protocols:
+        # Preserve order while deduplicating to avoid duplicate upstream calls.
+        batch_slugs = list(dict.fromkeys(p.strip().lower() for p in protocols if str(p).strip()))
+        if not batch_slugs:
+            raise ValueError("protocols must include at least one non-empty slug")
+        return await asyncio.gather(
+            *[
+                get_protocol_tvl(
+                    protocol=slug,
+                    protocols=None,
+                    include_historical=include_historical,
+                    days=days,
+                )
+                for slug in batch_slugs
+            ]
+        )
+
+    if not protocol or not protocol.strip():
+        raise ValueError("protocol is required when protocols is empty")
+
     slug = protocol.strip().lower()
     cache_key = f"{slug}:{'hist' if include_historical else 'tvl'}:{days}"
     now = time.monotonic()
@@ -364,17 +416,27 @@ async def get_protocol_tvl(
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
         "Returns current TVL in USD, 7-day and 30-day percentage change, and a "
         "per-chain breakdown. Set include_historical=True to also retrieve a daily "
-        "TVL series for trend analysis. Supports 3,000+ protocols including Aave, "
+        "TVL series for trend analysis. You can also batch multiple protocols via "
+        "protocols=[...]. Supports 3,000+ protocols including Aave, "
         "Uniswap, Curve, Compound, Lido, MakerDAO, and more. "
         "Use the DeFiLlama slug format: 'aave-v3', 'uniswap-v3', 'curve-dex'."
     ),
     tags=["defi", "tvl", "finance", "protocol", "defillama"],
     input_schema=GetProtocolTvlInput,
-    output_schema=GetProtocolTvlOutput,
+    output_schema={
+        "anyOf": [
+            GetProtocolTvlOutput.model_json_schema(),
+            {
+                "type": "array",
+                "items": GetProtocolTvlOutput.model_json_schema(),
+                "minItems": 1,
+            },
+        ]
+    },
     implementation=get_protocol_tvl,
 )

@@ -195,6 +195,29 @@ class Settings(BaseSettings):
             "state before truncation to keep planner context bounded."
         ),
     )
+    agent_memory_telemetry_enabled: bool = Field(
+        default=True,
+        description=(
+            "Emit lightweight memory telemetry logs (RSS) around /agent/run phases "
+            "to diagnose spikes without logging user content."
+        ),
+    )
+    agent_thread_warning_message_count: int = Field(
+        default=250,
+        ge=1,
+        description=(
+            "Warn when a checkpointed thread reaches this many messages. "
+            "Used for operational telemetry before enabling stronger compaction."
+        ),
+    )
+    agent_thread_warning_tool_chars: int = Field(
+        default=120_000,
+        ge=1,
+        description=(
+            "Warn when cumulative ToolMessage content in a planner turn exceeds this "
+            "character budget, indicating potential memory pressure."
+        ),
+    )
     agent_ui_generator_provider: str = Field(
         default="google",
         description="Provider for UI generation turns when no org-level BYOK config is set.",
@@ -303,6 +326,13 @@ class Settings(BaseSettings):
 
     # ── Billing / x402 ────────────────────────────────────────────────────────
     billing_enabled: bool = Field(default=False, description="Enable x402 on-chain billing for paid endpoints")
+    credit_min_run_reserve_usdc: int = Field(
+        default=50_000,
+        description=(
+            "Minimum prepaid credit balance required before starting a credit-billed run. "
+            "This acts as a safety reserve above the flat run floor."
+        ),
+    )
     x402_facilitator_url: str = Field(
         default="https://x402.org/facilitator",
         description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",
@@ -371,6 +401,22 @@ class Settings(BaseSettings):
     pg_command_timeout: float = Field(
         default=30.0,
         description="Default asyncpg command timeout in seconds for all DB queries.",
+    )
+    pg_pool_min_size: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Minimum number of asyncpg connections kept open in the pool. "
+            "Lower values reduce idle memory footprint on small instances."
+        ),
+    )
+    pg_pool_max_size: int = Field(
+        default=6,
+        ge=1,
+        description=(
+            "Maximum number of asyncpg connections allowed in the pool. "
+            "Cap this to avoid memory spikes from large per-connection buffers."
+        ),
     )
 
     # Which auth methods are subject to billing.  SIWE callers pay via x402
@@ -676,6 +722,8 @@ class Settings(BaseSettings):
                 )
             if not entry.get("model"):
                 raise ValueError("default_model_pool entry missing 'model' key")
+        if self.pg_pool_max_size < self.pg_pool_min_size:
+            raise ValueError("pg_pool_max_size must be greater than or equal to pg_pool_min_size")
         return self
 
 

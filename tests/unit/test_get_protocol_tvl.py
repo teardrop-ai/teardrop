@@ -68,3 +68,23 @@ async def test_include_historical_returns_graceful_empty_result_when_all_sources
     assert result["historical_series"] is None
     assert result["chain_breakdown"] == []
     assert "unavailable" in result["note"].lower()
+
+
+@pytest.mark.anyio
+async def test_batch_protocols_returns_list_and_deduplicates(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    async def _fake_fetch(slug: str):
+        return {
+            "aave-v3": 1000.0,
+            "compound-v3": 500.0,
+        }.get(slug)
+
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", _fake_fetch)
+
+    result = await get_protocol_tvl(protocols=["aave-v3", "compound-v3", "aave-v3"])
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert [item["protocol"] for item in result] == ["aave-v3", "compound-v3"]
+    assert result[0]["current_tvl_usd"] == pytest.approx(1000.0)

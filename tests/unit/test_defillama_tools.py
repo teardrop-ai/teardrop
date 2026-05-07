@@ -8,6 +8,7 @@ and output field correctness.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -49,8 +50,11 @@ def _mock_session_text(status: int, text: str = "") -> MagicMock:
 def _mock_session_json(status: int, payload: dict | list | None = None) -> MagicMock:
     """Build a mock aiohttp.ClientSession whose response returns JSON."""
     mock_resp = AsyncMock()
+    safe_payload = payload or {}
     mock_resp.status = status
-    mock_resp.json = AsyncMock(return_value=payload or {})
+    mock_resp.json = AsyncMock(return_value=safe_payload)
+    # Historical TVL tests issue a parallel /tvl fallback that reads text().
+    mock_resp.text = AsyncMock(return_value=json.dumps(safe_payload))
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_resp.__aexit__ = AsyncMock(return_value=False)
     mock_session = MagicMock()
@@ -111,6 +115,19 @@ class TestGetProtocolTvlInput:
     def test_days_over_365_rejected(self):
         with pytest.raises(ValidationError):
             GetProtocolTvlInput(protocol="aave", days=366)
+
+    def test_protocols_batch_mode_valid(self):
+        inp = GetProtocolTvlInput(protocols=["AAVE-V3", "compound-v3"])
+        assert inp.protocol is None
+        assert inp.protocols == ["aave-v3", "compound-v3"]
+
+    def test_requires_protocol_or_protocols(self):
+        with pytest.raises(ValidationError):
+            GetProtocolTvlInput()
+
+    def test_protocols_invalid_slug_rejected(self):
+        with pytest.raises(ValidationError):
+            GetProtocolTvlInput(protocols=["aave-v3", "../bad"])
 
 
 class TestExtractChainBreakdown:

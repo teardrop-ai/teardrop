@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
+from cache import get_redis
 from tools.definitions._http_session import get_defillama_session
 from tools.registry import ToolDefinition
 
@@ -26,6 +28,7 @@ _DEFILLAMA_POOLS_URL = "https://yields.llama.fi/pools"
 # APY rates update every few hours; 5-minute TTL is appropriate for agent use.
 _pools_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _POOLS_CACHE_KEY = "pools:all"
+_POOLS_REDIS_KEY = "tool:get_yield_rates:pools:all"
 _POOLS_CACHE_TTL = 300  # seconds
 _POOLS_CACHE_ERROR_TTL = 60  # seconds for transient fetch failures
 _POOL_KEEP_FIELDS = frozenset(
@@ -51,6 +54,13 @@ _CHAIN_PATTERN = r"^[a-zA-Z0-9\- ]{1,32}$"
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
+
+
+def _normalize_cached_pools(raw: Any) -> list[dict[str, Any]]:
+    """Defensively normalize cached pool payloads to list[dict]."""
+    if not isinstance(raw, list):
+        return []
+    return [pool for pool in raw if isinstance(pool, dict)]
 
 
 class GetYieldRatesInput(BaseModel):
@@ -232,19 +242,39 @@ async def get_yield_rates(
 ) -> dict[str, Any]:
     """Get DeFi yield pool rates filtered and sorted by APY."""
     now = time.monotonic()
+    redis = get_redis()
+    raw_pools: list[dict[str, Any]] = []
 
-    # Fetch or serve from cache.
-    cached = _pools_cache.get(_POOLS_CACHE_KEY)
-    if cached and now < cached[0]:
-        raw_pools = cached[1]
-    else:
+    # Multi-container cache path: Redis-first.
+    if redis is not None:
+        try:
+            cached = await redis.get(_POOLS_REDIS_KEY)
+            if cached:
+                raw_pools = _normalize_cached_pools(json.loads(cached))
+        except Exception:
+            logger.warning("Yield rates Redis cache read failed; refreshing source", exc_info=True)
+
+    # Single-container fallback: in-process cache.
+    if not raw_pools and redis is None:
+        cached = _pools_cache.get(_POOLS_CACHE_KEY)
+        if cached and now < cached[0]:
+            raw_pools = cached[1]
+
+    if not raw_pools:
         try:
             raw_pools = await _fetch_pools()
         except Exception as exc:
             logger.warning("_fetch_pools raised unexpectedly: %s", type(exc).__name__)
             raw_pools = []
+
         ttl = _POOLS_CACHE_TTL if raw_pools else _POOLS_CACHE_ERROR_TTL
-        _pools_cache[_POOLS_CACHE_KEY] = (now + ttl, raw_pools)
+        if redis is not None:
+            try:
+                await redis.setex(_POOLS_REDIS_KEY, ttl, json.dumps(raw_pools, separators=(",", ":")))
+            except Exception:
+                logger.warning("Yield rates Redis cache write failed", exc_info=True)
+        else:
+            _pools_cache[_POOLS_CACHE_KEY] = (now + ttl, raw_pools)
 
     if not raw_pools:
         return GetYieldRatesOutput(

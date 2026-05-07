@@ -12,11 +12,13 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import agent.nodes as nodes_module
 from agent.nodes import (
+    _all_tool_calls_resolved,
     _contains_structured_data,
     _extract_a2ui_from_text,
     _max_iterations_reached,
     _parse_a2ui_json,
     _planner_signaled_done,
+    _synthesis_fast_path_reason,
     planner_node,
     tool_executor_node,
     ui_generator_node,
@@ -169,6 +171,52 @@ class TestSynthesisFastPathPredicates:
     def test_max_iterations_reached_guard(self, test_settings):
         state = _make_state(metadata={"_usage": {"tool_iterations": test_settings.agent_max_tool_iterations - 1}})
         assert _max_iterations_reached(state) is True
+
+    def test_all_tool_calls_resolved_true(self):
+        ai = _make_ai_message(
+            content="Calling tools",
+            tool_calls=[
+                {"id": "call-1", "name": "get_a", "args": {}},
+                {"id": "call-2", "name": "get_b", "args": {}},
+            ],
+        )
+        state = _make_state(
+            messages=[
+                HumanMessage(content="hi"),
+                ai,
+                ToolMessage(content="{}", tool_call_id="call-1"),
+                ToolMessage(content="{}", tool_call_id="call-2"),
+            ]
+        )
+        assert _all_tool_calls_resolved(state) is True
+
+    def test_all_tool_calls_resolved_false_when_missing_tool_result(self):
+        ai = _make_ai_message(
+            content="Calling tools",
+            tool_calls=[
+                {"id": "call-1", "name": "get_a", "args": {}},
+                {"id": "call-2", "name": "get_b", "args": {}},
+            ],
+        )
+        state = _make_state(
+            messages=[
+                HumanMessage(content="hi"),
+                ai,
+                ToolMessage(content="{}", tool_call_id="call-1"),
+            ]
+        )
+        assert _all_tool_calls_resolved(state) is False
+
+    def test_synthesis_fast_path_reason_all_resolved(self, test_settings):
+        ai = _make_ai_message(
+            content="Gathering",
+            tool_calls=[{"id": "call-1", "name": "get_a", "args": {}}],
+        )
+        state = _make_state(
+            messages=[HumanMessage(content="hi"), ai, ToolMessage(content="{}", tool_call_id="call-1")],
+            metadata={"_usage": {"tool_iterations": 1}},
+        )
+        assert _synthesis_fast_path_reason(state) == "all_resolved"
 
 
 # ─── planner_node ─────────────────────────────────────────────────────────────

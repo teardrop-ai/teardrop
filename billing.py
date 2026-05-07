@@ -980,17 +980,17 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
     return BillingResult(verified=True, billing_method="credit")
 
 
-async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
+async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
     """Debit amount_usdc from org's credit balance using a serialisable transaction.
 
     Uses SELECT FOR UPDATE to prevent concurrent double-debits.
     Floors balance at 0 — will not go negative.
     Inserts a row into org_credit_ledger within the same transaction.
-    Returns True on success, False on unexpected DB error.
+    Returns ``(success, actual_deducted_usdc_atomic)``.
     """
     if amount_usdc <= 0:
         logger.debug("debit_credit: skipping non-positive amount org_id=%s amount=%s", org_id, amount_usdc)
-        return True
+        return True, 0
 
     pool = _get_pool()
     try:
@@ -1002,8 +1002,10 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
                 )
                 if row is None:
                     # Row doesn't exist — nothing to debit
-                    return False
-                new_balance = max(0, int(row["balance_usdc"]) - amount_usdc)
+                    return False, 0
+                original_balance = int(row["balance_usdc"])
+                new_balance = max(0, original_balance - amount_usdc)
+                actual_deducted = original_balance - new_balance
                 await conn.execute(
                     """
                     UPDATE org_credits
@@ -1021,11 +1023,11 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
                     """,
                     str(uuid.uuid4()),
                     org_id,
-                    amount_usdc,
+                    actual_deducted,
                     new_balance,
                     reason,
                 )
-        return True
+        return True, actual_deducted
     except Exception as exc:
         logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
         with sentry_sdk.new_scope() as scope:
@@ -1033,7 +1035,7 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> bool:
             scope.set_tag("amount_usdc_atomic", str(amount_usdc))
             scope.set_tag("rail", "credit")
             sentry_sdk.capture_exception(exc)
-        return False
+        return False, 0
 
 
 async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") -> int:
@@ -1570,7 +1572,7 @@ async def process_pending_settlements() -> int:
 
         try:
             if billing_method == "credit":
-                success = await debit_credit(row["org_id"], row["amount_usdc"], reason=f"run:{row['run_id']}")
+                success, settled_amount = await debit_credit(row["org_id"], row["amount_usdc"], reason=f"run:{row['run_id']}")
                 if not success:
                     error_msg = "debit_credit returned False"
             else:
@@ -1592,7 +1594,7 @@ async def process_pending_settlements() -> int:
                 settlement_id,
                 retry_count,
             )
-            await record_settlement(row["usage_event_id"], row["amount_usdc"], "", "settled")
+            await record_settlement(row["usage_event_id"], settled_amount, "", "settled")
             processed += 1
             logger.info(
                 "Settlement retry succeeded: id=%s run_id=%s attempt=%d",
@@ -1867,7 +1869,8 @@ async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: s
     Returns True on success, False if the debit failed (e.g. insufficient funds).
     """
     reason = f"a2a_delegation run={run_id} agent={agent_url}"
-    return await debit_credit(org_id, cost_usdc, reason)
+    success, _ = await debit_credit(org_id, cost_usdc, reason)
+    return success
 
 
 async def record_delegation_event(

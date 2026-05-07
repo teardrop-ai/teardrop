@@ -43,7 +43,7 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | Tool | Price/call |
 |------|------------|
 | `get_wallet_portfolio` | $0.004 (4,000 atomic) |
-| `web_search` | $0.010 (10,000 atomic) |
+| `web_search` | $0.015 (15,000 atomic) |
 | `get_token_price` | $0.002 (2,000 atomic) |
 | `get_token_price_historical` | $0.004 (4,000 atomic) |
 | `get_protocol_tvl` | $0.003 (3,000 atomic) |
@@ -57,6 +57,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_transaction` | $0.002 (2,000 atomic) |
 
 In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
+
+Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`
@@ -708,6 +710,8 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `GET` | `/billing/topup/stripe/status` | Bearer | Check Stripe checkout session status |
 | `GET` | `/billing/topup/usdc/requirements` | Bearer | Get on-chain USDC top-up payment requirements |
 | `POST` | `/billing/topup/usdc` | Bearer | Submit and verify an on-chain USDC top-up |
+
+`GET /billing/balance` returns atomic USDC fields. A `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`).
 
 ### Wallets
 

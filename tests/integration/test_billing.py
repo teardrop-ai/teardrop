@@ -148,8 +148,9 @@ async def test_verify_credit_exact_balance_passes(billing_db_pool):
 async def test_debit_credit_decreases_balance(billing_db_pool):
     org = await create_org("debit-org-1")
     await admin_topup_credit(org.id, 100_000)
-    success = await debit_credit(org.id, 30_000)
+    success, deducted = await debit_credit(org.id, 30_000)
     assert success is True
+    assert deducted == 30_000
     balance = await get_credit_balance(org.id)
     assert balance == 70_000
 
@@ -158,8 +159,9 @@ async def test_debit_credit_floors_at_zero(billing_db_pool):
     """Debiting more than the balance floors at 0 — never goes negative."""
     org = await create_org("floor-org")
     await admin_topup_credit(org.id, 10_000)
-    success = await debit_credit(org.id, 999_999)
+    success, deducted = await debit_credit(org.id, 999_999)
     assert success is True
+    assert deducted == 10_000
     balance = await get_credit_balance(org.id)
     assert balance == 0
 
@@ -168,16 +170,18 @@ async def test_debit_credit_no_row_returns_false(billing_db_pool):
     """If no org_credits row exists, debit returns False without error."""
     org = await create_org("no-credit-org")
     # Do NOT call admin_topup_credit — no row in org_credits
-    success = await debit_credit(org.id, 10_000)
+    success, deducted = await debit_credit(org.id, 10_000)
     assert success is False
+    assert deducted == 0
 
 
 async def test_debit_credit_full_balance(billing_db_pool):
     """Debiting exactly the balance leaves it at 0."""
     org = await create_org("full-debit-org")
     await admin_topup_credit(org.id, 50_000)
-    success = await debit_credit(org.id, 50_000)
+    success, deducted = await debit_credit(org.id, 50_000)
     assert success is True
+    assert deducted == 50_000
     assert await get_credit_balance(org.id) == 0
 
 

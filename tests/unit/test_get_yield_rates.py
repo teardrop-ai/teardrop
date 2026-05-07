@@ -69,3 +69,25 @@ async def test_get_yield_rates_handles_malformed_apy_mean_7d(monkeypatch):
 
     assert result["total_matching"] == 1
     assert result["pools"][0]["apy_mean_7d"] is None
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_uses_redis_cache_when_available(monkeypatch):
+    class _FakeRedis:
+        async def get(self, key):
+            assert key == "tool:get_yield_rates:pools:all"
+            return (
+                '[{"pool":"pool-1","project":"aave-v3","symbol":"USDC",'
+                '"chain":"Ethereum","tvlUsd":2000000,"apy":5.2}]'
+            )
+
+    monkeypatch.setattr("tools.definitions.get_yield_rates.get_redis", lambda: _FakeRedis())
+    monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+    mock_fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr("tools.definitions.get_yield_rates._fetch_pools", mock_fetch)
+
+    result = await get_yield_rates(min_tvl_usd=0, limit=5)
+
+    assert result["total_matching"] == 1
+    assert result["pools"][0]["project"] == "aave-v3"
+    mock_fetch.assert_not_awaited()

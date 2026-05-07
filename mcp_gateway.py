@@ -338,7 +338,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             # Phase 2: credit debit.
             from billing import debit_credit
 
-            debited = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
             if not debited:
                 logger.warning("MCP debit failed org=%s tool=%s", org_id, tool_name)
                 return response
