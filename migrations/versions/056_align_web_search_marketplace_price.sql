@@ -9,6 +9,5 @@
 -- Product note: this increases direct marketplace web_search price by $0.005.
 
 UPDATE marketplace_platform_tools
-SET base_price_usdc = 15000,
-    updated_at = NOW()
+SET base_price_usdc = 15000
 WHERE tool_name = 'web_search';
