@@ -60,6 +60,7 @@ _STATELESS_TOOLS: frozenset[str] = frozenset(
         "convert_currency",
         "get_lending_rates",
         "get_protocol_tvl",
+        "get_yield_rates",
     }
 )
 _WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")

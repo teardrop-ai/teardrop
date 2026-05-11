@@ -308,6 +308,11 @@ Tool use economy:
     - Call get_yield_rates at most ONCE per user request. If you need alternate
         sorting or filtering, perform that analysis in your own response instead of
         re-calling the tool.
+    - For consistency-focused yield queries (e.g., "consistent", "stable", "no spikes",
+        "exclude short-term rates"), call get_yield_rates with stable_only=true and
+        treat apy_mean_30d as the primary metric. If apy_reward is non-zero, label the
+        pool as reward-dependent and avoid presenting spot APY as durable. Do not use
+        7-day trailing rates as the headline consistency metric.
     - NEVER call resolve_ens if a 0x address is already present or previously
         used in this session for the same wallet.
   - Prefer structured tools over web_search when the question can be answered
@@ -906,6 +911,13 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     if isinstance(result, dict):
         return result
     response: AIMessage = result
+
+    if _synthesis_forced and getattr(response, "tool_calls", None):
+        logger.warning(
+            "planner_node: forced synthesis produced tool_calls (provider=%s, model=%s); ignoring advisory output",
+            _provider,
+            _model,
+        )
 
     if not usage_already_recorded:
         usage = _accumulate_usage(state, response, provider=_provider, model=_model)

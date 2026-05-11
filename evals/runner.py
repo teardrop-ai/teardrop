@@ -24,6 +24,7 @@ class EvalTask(BaseModel):
     messages: list[EvalMessage]
     expected_tool_calls: list[str] = Field(default_factory=list)
     expected_text_contains: list[str] = Field(default_factory=list)
+    expected_text_not_contains: list[str] = Field(default_factory=list)
     max_duration_ms: int = 0
     max_cost_usdc: int = 0
     scorer: str = "contains"
@@ -130,6 +131,7 @@ async def run_suite(
         score = score_task(
             scorer=task.scorer,
             expected_text_contains=task.expected_text_contains,
+            expected_text_not_contains=task.expected_text_not_contains,
             actual_text=artifact.text,
         )
         tool_call_ok = True

@@ -98,6 +98,13 @@ class GetYieldRatesInput(BaseModel):
             "Use held token symbols from get_wallet_portfolio to focus results."
         ),
     )
+    stable_only: bool = Field(
+        default=False,
+        description=(
+            "When true, return only stablecoin pools and rank by 30d mean APY first "
+            "to emphasize consistency over short-term spikes."
+        ),
+    )
 
     @field_validator("protocols")
     @classmethod
@@ -136,6 +143,7 @@ class YieldPoolEntry(BaseModel):
     tvl_usd: float
     apy: float
     apy_mean_7d: float | None
+    apy_mean_30d: float | None
     apy_base: float | None
     apy_reward: float | None
     stable: bool
@@ -194,12 +202,32 @@ def _resolve_apy(pool: dict[str, Any]) -> float:
     return _safe_float(pool.get("apyMean30d"))
 
 
+def _resolve_mean_30d(pool: dict[str, Any]) -> float | None:
+    """Return parsed 30d mean APY when present, else None."""
+    raw = pool.get("apyMean30d")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sort_key_stable(pool: dict[str, Any]) -> float:
+    """Consistency-first key for stable pools: 30d mean when available."""
+    mean_30d = _resolve_mean_30d(pool)
+    if mean_30d is not None:
+        return mean_30d
+    return _resolve_apy(pool)
+
+
 def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
     """Map a raw DeFiLlama pool dict to a YieldPoolEntry."""
     apy_base_raw = pool.get("apyBase")
     apy_reward_raw = pool.get("apyReward")
     il_risk = pool.get("ilRisk")
     apy_mean_7d_raw = pool.get("apyMean7d")
+    apy_mean_30d_raw = pool.get("apyMean30d")
 
     try:
         apy_base: float | None = float(apy_base_raw) if apy_base_raw is not None else None
@@ -213,6 +241,10 @@ def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
         apy_mean_7d: float | None = float(apy_mean_7d_raw) if apy_mean_7d_raw is not None else None
     except (TypeError, ValueError):
         apy_mean_7d = None
+    try:
+        apy_mean_30d: float | None = float(apy_mean_30d_raw) if apy_mean_30d_raw is not None else None
+    except (TypeError, ValueError):
+        apy_mean_30d = None
 
     return YieldPoolEntry(
         pool_id=str(pool.get("pool", "")),
@@ -222,6 +254,7 @@ def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
         tvl_usd=_safe_float(pool.get("tvlUsd")),
         apy=_resolve_apy(pool),
         apy_mean_7d=apy_mean_7d,
+        apy_mean_30d=apy_mean_30d,
         apy_base=apy_base,
         apy_reward=apy_reward,
         stable=bool(pool.get("stablecoin", False)),
@@ -239,6 +272,7 @@ async def get_yield_rates(
     min_apy: float = 0.0,
     limit: int = 20,
     symbols_any: list[str] | None = None,
+    stable_only: bool = False,
 ) -> dict[str, Any]:
     """Get DeFi yield pool rates filtered and sorted by APY."""
     now = time.monotonic()
@@ -305,10 +339,13 @@ async def get_yield_rates(
         if symbol_terms:
             filtered = [pool for pool in filtered if any(term in str(pool.get("symbol", "")).lower() for term in symbol_terms)]
 
+    if stable_only:
+        filtered = [pool for pool in filtered if bool(pool.get("stablecoin", False))]
+
     total_matching = len(filtered)
 
     # Sort by APY descending, then slice.
-    filtered.sort(key=_resolve_apy, reverse=True)
+    filtered.sort(key=_sort_key_stable if stable_only else _resolve_apy, reverse=True)
     filtered = filtered[:limit]
 
     pools = [_pool_to_entry(p) for p in filtered]
@@ -320,6 +357,7 @@ async def get_yield_rates(
         "min_apy": min_apy,
         "limit": limit,
         "symbols_any": symbols_any,
+        "stable_only": stable_only,
     }
 
     return GetYieldRatesOutput(
@@ -329,6 +367,8 @@ async def get_yield_rates(
         note=(
             "Yield data sourced from DeFiLlama. APY values use spot rate; "
             "apyMean30d used as fallback when spot is unavailable. "
+            "For consistency-focused analysis, compare apy_mean_30d and apy_reward "
+            "instead of relying on short windows alone. "
             "TVL and APY can change rapidly — verify before transacting."
         ),
     ).model_dump()
@@ -341,7 +381,8 @@ TOOL = ToolDefinition(
     version="1.0.0",
     description=(
         "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "
-        "all chains. Returns pools sorted by APY with TVL, base rate, and reward APY. "
+        "all chains. Returns pools sorted by APY with TVL, base rate, reward APY, "
+        "and 7d/30d mean APY context. "
         "Filter by protocol (e.g. 'aave-v3', 'compound-v3'), chain (e.g. 'Ethereum', "
         "'Base'), minimum TVL, and minimum APY. Use this to answer questions like "
         "'Where can I get the best USDC yield?', 'What is Aave's current APY on Ethereum?', "
@@ -349,7 +390,9 @@ TOOL = ToolDefinition(
         "IMPORTANT: Call ONCE per query. The returned `symbol` field contains the "
         "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
         "by inspecting `symbol` rather than re-calling with different arguments. "
-        "Use `min_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call."
+        "Use `min_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call. "
+        "Set stable_only=true when you need consistent stablecoin yield screening; this "
+        "ranks by 30d mean APY first and still returns spot/base/reward components."
     ),
     tags=["defi", "yield", "apy", "finance", "defillama"],
     input_schema=GetYieldRatesInput,

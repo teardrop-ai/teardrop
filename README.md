@@ -58,6 +58,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 
 In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
 
+`get_yield_rates` supports an optional `stable_only` filter for consistency-focused stablecoin discovery and returns both `apy_mean_7d` and `apy_mean_30d` so clients can avoid short-window APY spikes.
+
 Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:

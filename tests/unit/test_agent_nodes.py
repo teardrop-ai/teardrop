@@ -469,6 +469,31 @@ class TestPlannerNode:
 
         assert result["metadata"]["_synthesis_forced"] is False
 
+    async def test_synthesis_forced_uses_unbound_llm(self, test_settings):
+        mock_response = _make_ai_message("Final answer", tool_calls=[])
+
+        base_llm = MagicMock()
+        base_llm.bind_tools.return_value = base_llm
+        base_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        unbound_llm = MagicMock()
+        unbound_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_synthesis_forced": True})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=base_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=unbound_llm),
+            patch("agent.nodes._bind_tools_for_provider") as bind_mock,
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert bind_mock.call_count == 1
+        unbound_llm.ainvoke.assert_called_once()
+        assert result["metadata"]["_synthesis_forced"] is False
+
 
 # ─── tool_executor_node ───────────────────────────────────────────────────────
 

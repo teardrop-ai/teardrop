@@ -35,5 +35,21 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Calls get_protocol_tvl and cites the current TVL figure."
+  },
+  {
+    "id": "defi.consistent_yield.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Where is the best consistent stablecoin yield in DeFi currently? Don't include spikes or short-term rates."
+      }
+    ],
+    "expected_tool_calls": ["get_yield_rates"],
+    "expected_text_contains": ["30d", "USDC", "%"],
+    "expected_text_not_contains": ["7-day trailing", "up to 14.5%", "Pendle"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 700000,
+    "scorer": "contains",
+    "rubric": "Uses get_yield_rates with consistency framing and avoids short-term/spiky yield language."
   }
 ]

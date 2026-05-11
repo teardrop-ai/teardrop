@@ -444,6 +444,10 @@ class TestIsStatelessLookupRun:
         assert memory_module._is_stateless_lookup_run(msgs, ["get_protocol_tvl"]) is True
         assert memory_module._is_stateless_lookup_run(msgs, ["get_lending_rates", "get_protocol_tvl"]) is True
 
+    def test_true_for_get_yield_rates_lookup(self):
+        msgs = [MagicMock(type="human", content="show consistent usdc yield")]
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_yield_rates"]) is True
+
     def test_false_for_three_tool_lookup_even_if_stateless(self):
         msgs = [MagicMock(type="human", content="compare market data")]
         assert (

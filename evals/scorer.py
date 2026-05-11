@@ -21,6 +21,14 @@ def score_contains(expected_items: list[str], actual: str) -> float:
     return hits / len(expected_items)
 
 
+def score_not_contains(excluded_items: list[str], actual: str) -> float:
+    if not excluded_items:
+        return 1.0
+    lower = actual.lower()
+    misses = sum(1 for item in excluded_items if item.lower() not in lower)
+    return misses / len(excluded_items)
+
+
 def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
     try:
         payload = json.loads(actual)
@@ -43,14 +51,24 @@ def score_contains_pattern(expected_patterns: list[str], actual: str) -> float:
     return hits / len(expected_patterns)
 
 
-def score_task(*, scorer: str, expected_text_contains: list[str], actual_text: str) -> float:
+def score_task(
+    *,
+    scorer: str,
+    expected_text_contains: list[str],
+    actual_text: str,
+    expected_text_not_contains: list[str] | None = None,
+) -> float:
+    negative_score = score_not_contains(expected_text_not_contains or [], actual_text)
+
     if scorer == "contains":
-        return score_contains(expected_text_contains, actual_text)
+        return score_contains(expected_text_contains, actual_text) * negative_score
     if scorer == "contains_pattern":
-        return score_contains_pattern(expected_text_contains, actual_text)
+        return score_contains_pattern(expected_text_contains, actual_text) * negative_score
     if scorer == "exact":
         if not expected_text_contains:
-            return 1.0
-        return score_exact(expected_text_contains[0], actual_text)
+            return negative_score
+        return score_exact(expected_text_contains[0], actual_text) * negative_score
+    if scorer == "not_contains":
+        return negative_score
     # Default and fallback: contains. LLM-judge can be plugged in later.
-    return score_contains(expected_text_contains, actual_text)
+    return score_contains(expected_text_contains, actual_text) * negative_score
