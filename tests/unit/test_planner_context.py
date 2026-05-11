@@ -67,6 +67,8 @@ def _default_settings():
         agent_model="claude-haiku-4-5-20251001",
         agent_max_tokens=4096,
         agent_llm_timeout_seconds=120,
+        agent_thread_warning_message_count=1000,
+        agent_thread_warning_tool_chars=100000,
     )
 
 
@@ -151,6 +153,8 @@ async def test_knowledge_cutoff_falls_back_for_unknown_model():
                     agent_model="gpt-99-ultra-unknown",
                     agent_max_tokens=2048,
                     agent_llm_timeout_seconds=60,
+                    agent_thread_warning_message_count=1000,
+                    agent_thread_warning_tool_chars=100000,
                 )
                 mock_factory.return_value = mock_llm
                 await planner_node(state)
@@ -180,6 +184,8 @@ async def test_context_injected_when_llm_config_is_none():
                     agent_model="claude-sonnet-4-20250514",
                     agent_max_tokens=8192,
                     agent_llm_timeout_seconds=180,
+                    agent_thread_warning_message_count=1000,
+                    agent_thread_warning_tool_chars=100000,
                 )
                 mock_factory.return_value = mock_llm
                 await planner_node(state)
@@ -563,3 +569,24 @@ async def test_system_prompt_contains_dedup_executor_notice():
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
     assert "DUPLICATE_CALL_BLOCKED" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_system_prompt_contains_numeric_citation_rule():
+    """Prompt must require exact numerical reproduction from tool outputs."""
+    state = _make_state()
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "reproduce them exactly" in system_prompt
+    assert "state them precisely as returned" in system_prompt

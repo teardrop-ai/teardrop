@@ -8,5 +8,32 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Resolves ENS and returns a USDC balance."
+  },
+  {
+    "id": "defi.lending_rates.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare USDC supply and borrow APY on Aave v3 vs Compound v3 on Base mainnet."
+      }
+    ],
+    "expected_tool_calls": ["get_lending_rates"],
+    "expected_text_contains": ["Aave", "Compound", "USDC", "%"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 600000,
+    "scorer": "contains",
+    "rubric": "Calls get_lending_rates and cites APY percentages for both protocols."
+  },
+  {
+    "id": "defi.protocol_tvl.001",
+    "messages": [
+      {"role": "user", "content": "What is the current TVL of the Aave protocol?"}
+    ],
+    "expected_tool_calls": ["get_protocol_tvl"],
+    "expected_text_contains": ["Aave", "TVL", "$"] ,
+    "max_duration_ms": 10000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Calls get_protocol_tvl and cites the current TVL figure."
   }
 ]

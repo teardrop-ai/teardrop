@@ -32,7 +32,7 @@ async def _run_task_http(task: EvalTask, *, base_url: str, token: str | None) ->
     payload = {
         "message": user_msg,
         "thread_id": f"eval-{task.id}",
-        "emit_ui": True,
+        "emit_ui": False,
     }
 
     text_parts: list[str] = []

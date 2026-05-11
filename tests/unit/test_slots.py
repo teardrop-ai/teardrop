@@ -29,3 +29,22 @@ def test_unknown_tool_does_not_change_slots():
     slots = {"a": 1}
     out = summarize_into_slots("unknown", "{}", slots)
     assert out == slots
+
+
+def test_summarize_protocol_tvl_into_slots():
+    payload = (
+        '{"protocol":"aave","current_tvl_usd":12345.67,'
+        '"tvl_7d_change_pct":1.25,"tvl_30d_change_pct":-3.5,'
+        '"chain_breakdown":[{"chain":"Ethereum","tvl_usd":1000}],'
+        '"historical_series":[{"date":"2026-05-01","tvl_usd":1000}],'
+        '"note":"ok"}'
+    )
+    slots = summarize_into_slots("get_protocol_tvl", payload, {})
+    assert "tvl" in slots
+    assert "aave" in slots["tvl"]
+    assert slots["tvl"]["aave"]["current_tvl_usd"] == 12345.67
+    assert slots["tvl"]["aave"]["tvl_7d_change_pct"] == 1.25
+    assert slots["tvl"]["aave"]["tvl_30d_change_pct"] == -3.5
+    assert slots["tvl"]["aave"]["note"] == "ok"
+    assert "chain_breakdown" not in slots["tvl"]["aave"]
+    assert "historical_series" not in slots["tvl"]["aave"]

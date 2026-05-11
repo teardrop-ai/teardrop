@@ -118,12 +118,28 @@ def _write_get_lending_rates(payload: dict[str, Any], slots: dict[str, Any]) -> 
     return slots
 
 
+def _write_get_protocol_tvl(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    protocol = str(payload.get("protocol") or "").strip().lower()
+    if not protocol:
+        return slots
+    tvl = dict(slots.get("tvl", {}))
+    tvl[protocol] = {
+        "current_tvl_usd": payload.get("current_tvl_usd"),
+        "tvl_7d_change_pct": payload.get("tvl_7d_change_pct"),
+        "tvl_30d_change_pct": payload.get("tvl_30d_change_pct"),
+        "note": payload.get("note"),
+    }
+    slots["tvl"] = tvl
+    return slots
+
+
 _WRITERS = {
     "get_wallet_portfolio": _write_get_wallet_portfolio,
     "get_erc20_balance": _write_get_erc20_balance,
     "get_token_price": _write_get_token_price,
     "get_defi_positions": _write_get_defi_positions,
     "get_lending_rates": _write_get_lending_rates,
+    "get_protocol_tvl": _write_get_protocol_tvl,
 }
 
 

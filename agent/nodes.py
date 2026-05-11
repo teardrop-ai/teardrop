@@ -197,11 +197,7 @@ def _all_tool_calls_resolved(state: AgentState) -> bool:
     if not tool_calls:
         return False
 
-    pending_ids = {
-        str(call_id)
-        for call in tool_calls
-        if isinstance(call, dict) and (call_id := call.get("id"))
-    }
+    pending_ids = {str(call_id) for call in tool_calls if isinstance(call, dict) and (call_id := call.get("id"))}
     if not pending_ids:
         return False
 
@@ -345,6 +341,10 @@ Final synthesis style:
         the user explicitly asks for tables.
     - Prefer short bullet sections and omit empty sections.
     - Cap yield recommendations to the top 5 relevant pools.
+    - When tool results include specific numerical values (interest rates, APY,
+        TVL, prices, balances), reproduce them exactly in the response. Do not
+        summarize or paraphrase numbers; state them precisely as returned by
+        the tool output.
 """
 
 _UI_GENERATOR_SYSTEM = """\

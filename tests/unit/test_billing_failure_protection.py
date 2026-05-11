@@ -42,7 +42,7 @@ async def test_settle_billing_debits_on_success():
     response = MagicMock()
     pending = ("org-1", 100, "test_tool", "req-1")  # no slash → skip earnings branch
 
-    with patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as debit_mock:
+    with patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 100)) as debit_mock:
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     debit_mock.assert_called_once()

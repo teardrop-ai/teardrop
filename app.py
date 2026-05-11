@@ -287,6 +287,7 @@ def _log_agent_memory(stage: str, *, run_id: str, elapsed_ms: int | None = None)
         suffix,
     )
 
+
 # ─── Sentry ──────────────────────────────────────────────────────────────────
 # Initialize before FastAPI() so the FastAPI/Starlette/asyncpg integrations
 # can hook in. No-op when SENTRY_DSN is empty.

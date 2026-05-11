@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -35,9 +36,18 @@ def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
     return hits / len(keys)
 
 
+def score_contains_pattern(expected_patterns: list[str], actual: str) -> float:
+    if not expected_patterns:
+        return 1.0
+    hits = sum(1 for pattern in expected_patterns if re.search(pattern, actual))
+    return hits / len(expected_patterns)
+
+
 def score_task(*, scorer: str, expected_text_contains: list[str], actual_text: str) -> float:
     if scorer == "contains":
         return score_contains(expected_text_contains, actual_text)
+    if scorer == "contains_pattern":
+        return score_contains_pattern(expected_text_contains, actual_text)
     if scorer == "exact":
         if not expected_text_contains:
             return 1.0

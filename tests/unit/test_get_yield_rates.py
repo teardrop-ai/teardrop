@@ -76,10 +76,7 @@ async def test_get_yield_rates_uses_redis_cache_when_available(monkeypatch):
     class _FakeRedis:
         async def get(self, key):
             assert key == "tool:get_yield_rates:pools:all"
-            return (
-                '[{"pool":"pool-1","project":"aave-v3","symbol":"USDC",'
-                '"chain":"Ethereum","tvlUsd":2000000,"apy":5.2}]'
-            )
+            return '[{"pool":"pool-1","project":"aave-v3","symbol":"USDC","chain":"Ethereum","tvlUsd":2000000,"apy":5.2}]'
 
     monkeypatch.setattr("tools.definitions.get_yield_rates.get_redis", lambda: _FakeRedis())
     monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})

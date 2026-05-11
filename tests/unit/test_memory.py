@@ -438,6 +438,22 @@ class TestIsStatelessLookupRun:
         msgs = [MagicMock(type="human", content="analyze this")]
         assert memory_module._is_stateless_lookup_run(msgs, ["web_search"]) is False
 
+    def test_true_for_lending_rates_and_protocol_tvl_lookup(self):
+        msgs = [MagicMock(type="human", content="compare aave and compound rates")]
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_lending_rates"]) is True
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_protocol_tvl"]) is True
+        assert memory_module._is_stateless_lookup_run(msgs, ["get_lending_rates", "get_protocol_tvl"]) is True
+
+    def test_false_for_three_tool_lookup_even_if_stateless(self):
+        msgs = [MagicMock(type="human", content="compare market data")]
+        assert (
+            memory_module._is_stateless_lookup_run(
+                msgs,
+                ["get_lending_rates", "get_protocol_tvl", "get_token_price"],
+            )
+            is False
+        )
+
 
 # ─── init_memory_db / close_memory_db / _get_pool ────────────────────────────
 
