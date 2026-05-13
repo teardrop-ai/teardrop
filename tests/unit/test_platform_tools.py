@@ -405,7 +405,6 @@ class TestWeb3MarketplaceToolsMigration046:
         assert await get_platform_tool_price("get_datetime") is None
 
 
-@pytest.mark.anyio
 class TestMCPBillingGateQualifiedMarketplaceTools:
     async def test_qualified_tool_billed_at_author_price(self, billing_client, test_jwt_token):
         body = json.dumps(

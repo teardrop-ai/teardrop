@@ -84,6 +84,7 @@ _BALANCE_OF_COMET_SELECTOR: bytes = bytes(Web3.keccak(text="balanceOf(address)")
 _BORROW_BALANCE_SELECTOR: bytes = bytes(Web3.keccak(text="borrowBalanceOf(address)"))[:4]
 _IS_LIQUIDATABLE_SELECTOR: bytes = bytes(Web3.keccak(text="isLiquidatable(address)"))[:4]
 _USER_COLLATERAL_SELECTOR: bytes = bytes(Web3.keccak(text="userCollateral(address,address)"))[:4]
+_GET_ASSET_INFO_SELECTOR: bytes = bytes(Web3.keccak(text="getAssetInfo(uint8)"))[:4]
 _TOKEN_OF_OWNER_BY_INDEX_SELECTOR: bytes = bytes(Web3.keccak(text="tokenOfOwnerByIndex(address,uint256)"))[:4]
 _POSITIONS_SELECTOR: bytes = bytes(Web3.keccak(text="positions(uint256)"))[:4]
 
@@ -348,6 +349,8 @@ class AavePosition(BaseModel):
 class CompoundCollateral(BaseModel):
     asset_address: str
     amount: str  # raw units (decimals not fetched — included in note)
+    borrow_collateral_factor: float | None = None
+    liquidate_collateral_factor: float | None = None
 
 
 class CompoundMarketPosition(BaseModel):
@@ -393,6 +396,7 @@ class GetDefiPositionsOutput(BaseModel):
         "On-chain position snapshot at data_block_number. "
         "Aave USD values are from the Aave oracle (base currency = USD, 8 decimals on Ethereum/Base). "
         "Compound collateral and Uniswap v3 amounts are raw integer units — divide by 10**decimals to format. "
+        "Compound collateral factors are decimals (e.g., 0.90 = 90%) when available from Comet getAssetInfo. "
         "Token symbols are resolved for well-known tokens; None means unrecognised — "
         "do NOT call read_contract, web_search, or any external lookup to identify these tokens. "
         "Report them as 'unrecognized token (0x…)' in the final answer and move on. "
@@ -500,7 +504,7 @@ async def _fetch_aave_v3(w3: Any, wallet: str, chain_id: int) -> AavePosition:
     )
 
 
-async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str], chain_id: int) -> CompoundMarketPosition | None:
+async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, Any], chain_id: int) -> CompoundMarketPosition | None:
     """Fetch a single Compound v3 Comet market position. Returns None if no position."""
     market_addr = Web3.to_checksum_address(market["address"])
     collateral_assets = market.get("collateral_assets", [])
@@ -519,6 +523,15 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str], c
             for a in collateral_assets
         ]
     )
+    calls.extend(
+        [
+            (
+                market_addr,
+                _GET_ASSET_INFO_SELECTOR + abi_encode(["uint8"], [i]),
+            )
+            for i, _ in enumerate(collateral_assets)
+        ]
+    )
 
     results = await multicall3_batch(w3, calls, chain_id=chain_id)
 
@@ -532,18 +545,48 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, str], c
     if len(results) >= 3 and results[2][0] and results[2][1]:
         is_liq = bool(abi_decode(["bool"], results[2][1])[0])
 
+    collateral_results = results[3 : 3 + len(collateral_assets)]
+    asset_info_results = results[3 + len(collateral_assets) : 3 + (2 * len(collateral_assets))]
+
     collateral: list[CompoundCollateral] = []
-    for asset, (success, return_data) in zip(collateral_assets, results[3:]):
+    for asset, (success, return_data), (info_success, info_data) in zip(
+        collateral_assets,
+        collateral_results,
+        asset_info_results,
+    ):
         if not success or not return_data:
             continue
         try:
             balance = int(abi_decode(["uint128", "uint128"], return_data)[0])
             if balance == 0:
                 continue
+            borrow_factor: float | None = None
+            liquidate_factor: float | None = None
+            if info_success and info_data:
+                try:
+                    info = abi_decode(
+                        ["uint8", "address", "address", "uint64", "uint64", "uint64", "uint64", "uint128"],
+                        info_data,
+                    )
+                    info_asset = Web3.to_checksum_address(info[1])
+                    if info_asset == Web3.to_checksum_address(asset["address"]):
+                        borrow_factor = int(info[4]) / 1e18
+                        liquidate_factor = int(info[5]) / 1e18
+                    else:
+                        logger.debug(
+                            "Compound getAssetInfo asset mismatch for %s: expected=%s actual=%s",
+                            market.get("name"),
+                            Web3.to_checksum_address(asset["address"]),
+                            info_asset,
+                        )
+                except Exception as exc:
+                    logger.debug("Compound asset info decode failed: %s", exc)
             collateral.append(
                 CompoundCollateral(
                     asset_address=Web3.to_checksum_address(asset["address"]),
                     amount=str(balance),
+                    borrow_collateral_factor=borrow_factor,
+                    liquidate_collateral_factor=liquidate_factor,
                 )
             )
         except Exception as exc:

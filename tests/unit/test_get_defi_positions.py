@@ -38,6 +38,16 @@ _DEFAULT_POSITION = (
     0,
     0,
 )
+_DEFAULT_ASSET_INFO = (
+    0,
+    "0x0000000000000000000000000000000000000000",
+    "0x0000000000000000000000000000000000000000",
+    0,
+    0,
+    0,
+    0,
+    0,
+)
 
 
 def _encode_reserve_data(rd: tuple) -> bytes:
@@ -62,6 +72,8 @@ def patch_multicall3(monkeypatch):
         "comet_is_liquidatable": False,
         "comet_user_collateral": (0, 0),
         "comet_user_collateral_by_asset": {},
+        "comet_asset_info_by_index": {},
+        "comet_asset_info_fail_indexes": set(),
         "uniswap_token_ids": [],
         "uniswap_position_by_id": {},
         "uniswap_default_position": _DEFAULT_POSITION,
@@ -89,6 +101,22 @@ def patch_multicall3(monkeypatch):
                 asset_cs = Web3.to_checksum_address(asset)
                 tup = _current["comet_user_collateral_by_asset"].get(asset_cs, _current["comet_user_collateral"])
                 out.append((True, abi_encode(["uint128", "uint128"], list(tup))))
+                continue
+            if selector == gdp._GET_ASSET_INFO_SELECTOR:
+                idx = int(abi_decode(["uint8"], payload)[0])
+                if idx in _current["comet_asset_info_fail_indexes"]:
+                    out.append((False, b""))
+                    continue
+                info = _current["comet_asset_info_by_index"].get(idx, _DEFAULT_ASSET_INFO)
+                out.append(
+                    (
+                        True,
+                        abi_encode(
+                            ["uint8", "address", "address", "uint64", "uint64", "uint64", "uint64", "uint128"],
+                            list(info),
+                        ),
+                    )
+                )
                 continue
             if selector == gdp._TOKEN_OF_OWNER_BY_INDEX_SELECTOR:
                 _owner, idx = abi_decode(["address", "uint256"], payload)
@@ -438,6 +466,75 @@ class TestCompoundV3:
         assert len(usdc_like) == 2
         for m in usdc_like:
             assert float(m["borrowed_amount"]) == 1000.0
+
+    async def test_market_with_collateral_factors_when_asset_info_available(self, test_settings, monkeypatch):
+        from tools.definitions.get_defi_positions import get_defi_positions
+
+        wbtc = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
+        mock_w3 = _build_mock_w3(
+            comet_balance=0,
+            comet_borrow=500 * 10**6,
+            comet_user_collateral=(10**8, 0),
+            comet_is_liquidatable=False,
+        )
+        set_multicall_data(
+            monkeypatch,
+            comet_balance=0,
+            comet_borrow=500 * 10**6,
+            comet_is_liquidatable=False,
+            comet_user_collateral_by_asset={
+                Web3.to_checksum_address(wbtc): (10**8, 0),
+            },
+            comet_asset_info_by_index={
+                0: (
+                    0,
+                    Web3.to_checksum_address(wbtc),
+                    "0x0000000000000000000000000000000000000001",
+                    0,
+                    int(0.90 * 10**18),
+                    int(0.93 * 10**18),
+                    0,
+                    0,
+                )
+            },
+        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        market = next(m for m in result["compound_v3"] if m["market_name"] == "cUSDCv3")
+        collateral = next(c for c in market["collateral"] if c["asset_address"] == Web3.to_checksum_address(wbtc))
+        assert collateral["borrow_collateral_factor"] == pytest.approx(0.9, rel=1e-6)
+        assert collateral["liquidate_collateral_factor"] == pytest.approx(0.93, rel=1e-6)
+
+    async def test_market_with_collateral_factors_none_when_asset_info_fails(self, test_settings, monkeypatch):
+        from tools.definitions.get_defi_positions import get_defi_positions
+
+        wbtc = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
+        mock_w3 = _build_mock_w3(
+            comet_balance=0,
+            comet_borrow=500 * 10**6,
+            comet_user_collateral=(10**8, 0),
+            comet_is_liquidatable=False,
+        )
+        set_multicall_data(
+            monkeypatch,
+            comet_balance=0,
+            comet_borrow=500 * 10**6,
+            comet_is_liquidatable=False,
+            comet_user_collateral_by_asset={
+                Web3.to_checksum_address(wbtc): (10**8, 0),
+            },
+            comet_asset_info_fail_indexes={0},
+        )
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        market = next(m for m in result["compound_v3"] if m["market_name"] == "cUSDCv3")
+        collateral = next(c for c in market["collateral"] if c["asset_address"] == Web3.to_checksum_address(wbtc))
+        assert collateral["borrow_collateral_factor"] is None
+        assert collateral["liquidate_collateral_factor"] is None
 
 
 # ─── Uniswap v3 ──────────────────────────────────────────────────────────────

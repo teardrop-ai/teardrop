@@ -288,10 +288,21 @@ Tool execution model:
     analyze the results and conclude the task.
 
 Tool use economy:
+    - Hypothetical analysis: when the user describes a hypothetical position
+        (e.g., "hypothetical", "if I had", "suppose", "what if", "simulate"),
+        treat it as an analytical exercise. Do NOT call tools with the injected
+        User Wallet Address unless the user explicitly requests analysis of their
+        real on-chain wallet. Only use wallet addresses explicitly provided in the
+        user message for hypothetical scenarios.
     - Use get_liquidation_risk ONLY for multi-wallet batch assessments (2+ wallets).
         For a single wallet DeFi analysis, get_defi_positions already includes risk
         metrics. The executor may block redundant get_liquidation_risk calls after
         get_defi_positions for the same wallet/chain.
+    - Compound v3 risk reporting: Compound v3 exposes only a boolean
+        isLiquidatable signal and does not expose a numeric health factor.
+        NEVER compute, estimate, or state a numeric Compound health factor.
+        NEVER state a Compound liquidation or breach price unless a tool output
+        explicitly provides that value.
     - For protocol-specific lending-rate questions (e.g., "Aave vs Compound USDC"),
         prefer get_lending_rates over get_yield_rates. Use get_yield_rates for
         broad pool discovery across many protocols.

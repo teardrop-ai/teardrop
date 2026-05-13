@@ -421,6 +421,8 @@ class TestOutputSchema:
         assert result["data_block_number"] == 98765
         assert result["chain_id"] == 1
         assert "snapshot" in result["note"].lower()
+        assert "do not attempt to compute, estimate, or infer" in result["note"].lower()
+        assert "do not infer a compound liquidation or breach price" in result["note"].lower()
 
     async def test_block_number_failure_graceful(self, test_settings, monkeypatch):
         from tools.definitions.get_liquidation_risk import get_liquidation_risk

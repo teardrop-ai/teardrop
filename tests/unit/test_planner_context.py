@@ -195,6 +195,48 @@ async def test_context_injected_when_llm_config_is_none():
     assert "Date & Time (UTC)" in system_prompt
 
 
+@pytest.mark.anyio
+async def test_system_prompt_includes_hypothetical_wallet_isolation_rule():
+    """Planner prompt should include the policy that blocks wallet injection for hypothetical asks."""
+    state = _make_state(_llm_config=None)
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "Hypothetical analysis" in system_prompt
+    assert "Do NOT call tools with the injected" in system_prompt
+
+
+@pytest.mark.anyio
+async def test_system_prompt_includes_compound_no_numeric_hf_rule():
+    """Planner prompt should include policy disallowing inferred numeric Compound HF."""
+    state = _make_state(_llm_config=None)
+    ai_resp = _make_ai_response()
+    mock_llm = MagicMock()
+    mock_llm.bind_tools.return_value = mock_llm
+    mock_llm.ainvoke = AsyncMock(return_value=ai_resp)
+
+    with patch("agent.nodes.get_llm_for_request") as mock_factory:
+        with patch("agent.nodes.get_settings") as mock_settings:
+            with patch("agent.nodes._get_cached_tools", return_value=[]):
+                mock_settings.return_value = _default_settings()
+                mock_factory.return_value = mock_llm
+                await planner_node(state)
+
+    system_prompt = _captured_system_prompt(mock_llm.ainvoke)
+    assert "Compound v3 risk reporting" in system_prompt
+    assert "NEVER compute, estimate, or state a numeric Compound health factor" in system_prompt
+
+
 # ─── Org, user role, and credit balance ──────────────────────────────────────
 
 
@@ -300,7 +342,7 @@ async def test_wallet_address_injected_when_siwe_auth():
                 await planner_node(state)
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
-    assert "User Wallet Address" in system_prompt
+    assert "**User Wallet Address**:" in system_prompt
     assert "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" in system_prompt
 
 
@@ -321,7 +363,7 @@ async def test_wallet_address_omitted_when_none():
                 await planner_node(state)
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
-    assert "User Wallet Address" not in system_prompt
+    assert "**User Wallet Address**:" not in system_prompt
 
 
 # ─── Prompt injection sanitisation ───────────────────────────────────────────
