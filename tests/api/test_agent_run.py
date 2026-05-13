@@ -96,6 +96,8 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
     mock_settings.rate_limit_requests_per_minute = 1_000
     mock_settings.rate_limit_agent_rpm = 1_000
     mock_settings.rate_limit_auth_rpm = 1_000
+    mock_settings.rate_limit_org_agent_rpm = 1_000
+    mock_settings.credit_min_run_reserve_usdc = 0
     mock_settings.app_env = "test"
 
     monkeypatch.setattr("app.settings", mock_settings)

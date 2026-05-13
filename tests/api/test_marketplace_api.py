@@ -937,7 +937,7 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
         "app.verify_credit",
         AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
     )
-    monkeypatch.setattr("app.debit_credit", AsyncMock(return_value=True))
+    monkeypatch.setattr("app.debit_credit", AsyncMock(return_value=(True, 1_000)))
     monkeypatch.setattr("app._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
     mock_earnings = AsyncMock()
     monkeypatch.setattr("app.record_tool_call_earnings", mock_earnings)

@@ -172,7 +172,10 @@ class ToolRegistry:
                 "input_schema": tool.input_schema.model_json_schema(),
             }
             if tool.output_schema is not None:
-                entry["output_schema"] = tool.output_schema.model_json_schema()
+                if isinstance(tool.output_schema, dict):
+                    entry["output_schema"] = tool.output_schema
+                else:
+                    entry["output_schema"] = tool.output_schema.model_json_schema()
             if tool.deprecated:
                 entry["deprecated"] = True
             tools.append(entry)
