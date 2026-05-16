@@ -167,6 +167,9 @@ async def close_billing() -> None:
     _last_requirements_price_usdc = -1
     _live_pricing_cache.reset()
     _tool_overrides_cache_obj.reset()
+    for cache in _daily_spend_caches.values():
+        cache.reset()
+    _daily_spend_caches.clear()
     logger.info("Billing resources released")
 
 
@@ -646,6 +649,23 @@ _tool_overrides_cache_obj: TTLCache[dict[str, int]] = TTLCache(
     stale_default={},
 )
 
+_daily_spend_caches: dict[str, TTLCache[int]] = {}
+
+
+def _get_daily_spend_cache(org_id: str) -> TTLCache[int]:
+    """Return per-org cache for 24h debit spend used by display endpoints."""
+    if org_id not in _daily_spend_caches:
+        _daily_spend_caches[org_id] = TTLCache(
+            name=f"daily spend:{org_id}",
+            redis_key=f"teardrop:daily_spend:{org_id}",
+            ttl_seconds_fn=lambda: 30,
+            loader=lambda: _get_daily_debit_spend(_get_pool(), org_id),
+            serialize=lambda v: str(v),
+            deserialize=lambda raw: int(raw),
+            stale_default=0,
+        )
+    return _daily_spend_caches[org_id]
+
 
 async def get_live_pricing() -> PricingRule | None:
     """Return the current pricing rule using a TTL cache.
@@ -929,6 +949,21 @@ async def get_credit_balance(org_id: str) -> int:
     return int(row["balance_usdc"]) if row is not None else 0
 
 
+async def _get_daily_debit_spend(executor: asyncpg.Connection | asyncpg.Pool, org_id: str) -> int:
+    """Return 24h rolling debit spend in atomic USDC for an org."""
+    daily_row = await executor.fetchrow(
+        """
+        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
+        FROM org_credit_ledger
+        WHERE org_id = $1
+          AND operation = 'debit'
+          AND created_at >= NOW() - INTERVAL '24 hours'
+        """,
+        org_id,
+    )
+    return int(daily_row["daily_spend"]) if daily_row else 0
+
+
 async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
     """Check that org has sufficient credit and is within spending limits.
 
@@ -961,17 +996,7 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
 
     # Check 3: daily spending limit (24h rolling window).
     if spending_limit > 0:
-        daily_row = await pool.fetchrow(
-            """
-            SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-            FROM org_credit_ledger
-            WHERE org_id = $1
-              AND operation = 'debit'
-              AND created_at >= NOW() - INTERVAL '24 hours'
-            """,
-            org_id,
-        )
-        daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+        daily_spend = await _get_daily_debit_spend(pool, org_id)
         if daily_spend + min_balance_usdc > spending_limit:
             return BillingResult(
                 error=(f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours.")
@@ -983,7 +1008,8 @@ async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
 async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
     """Debit amount_usdc from org's credit balance using a serialisable transaction.
 
-    Uses SELECT FOR UPDATE to prevent concurrent double-debits.
+    Uses SELECT FOR UPDATE to prevent concurrent double-debits and enforces
+    pause + daily spending limits atomically under the same lock.
     Floors balance at 0 — will not go negative.
     Inserts a row into org_credit_ledger within the same transaction.
     Returns ``(success, actual_deducted_usdc_atomic)``.
@@ -997,13 +1023,27 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple
         async with pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "SELECT balance_usdc FROM org_credits WHERE org_id = $1 FOR UPDATE",
+                    "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1 FOR UPDATE",
                     org_id,
                 )
                 if row is None:
                     # Row doesn't exist — nothing to debit
                     return False, 0
                 original_balance = int(row["balance_usdc"])
+                spending_limit = int(row["spending_limit_usdc"])
+                is_paused = bool(row["is_paused"])
+
+                # Enforce pause state during settlement-time debit as well.
+                if is_paused:
+                    return False, 0
+
+                # Enforce daily spending limit inside the same transaction to
+                # avoid race conditions from pre-check-only validation.
+                if spending_limit > 0:
+                    daily_spend = await _get_daily_debit_spend(conn, org_id)
+                    if daily_spend + amount_usdc > spending_limit:
+                        return False, 0
+
                 new_balance = max(0, original_balance - amount_usdc)
                 actual_deducted = original_balance - new_balance
                 await conn.execute(
@@ -1027,6 +1067,7 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple
                     new_balance,
                     reason,
                 )
+            await _get_daily_spend_cache(org_id).invalidate()
         return True, actual_deducted
     except Exception as exc:
         logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
@@ -1695,18 +1736,8 @@ async def get_org_spending_config(org_id: str) -> dict:
     spending_limit = int(row["spending_limit_usdc"]) if row else 0
     is_paused = bool(row["is_paused"]) if row else False
 
-    # 24-hour rolling window daily spend from the credit ledger
-    daily_row = await pool.fetchrow(
-        """
-        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-        FROM org_credit_ledger
-        WHERE org_id = $1
-          AND operation = 'debit'
-          AND created_at >= NOW() - INTERVAL '24 hours'
-        """,
-        org_id,
-    )
-    daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+    # 24-hour rolling window daily spend cached for dashboard-style reads.
+    daily_spend = (await _get_daily_spend_cache(org_id).get()) or 0
 
     return {
         "org_id": org_id,
@@ -1788,17 +1819,7 @@ async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str 
 
     # Match verify_credit() semantics: enforce 24h rolling spending limit.
     if spending_limit > 0:
-        daily_row = await pool.fetchrow(
-            """
-            SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-            FROM org_credit_ledger
-            WHERE org_id = $1
-              AND operation = 'debit'
-              AND created_at >= NOW() - INTERVAL '24 hours'
-            """,
-            org_id,
-        )
-        daily_spend = int(daily_row["daily_spend"]) if daily_row else 0
+        daily_spend = await _get_daily_debit_spend(pool, org_id)
         if daily_spend + estimated_cost_usdc > spending_limit:
             return f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
 

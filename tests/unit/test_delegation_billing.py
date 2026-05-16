@@ -157,6 +157,25 @@ class TestCheckDelegationBudget:
             assert result is None
         assert mock_pool.fetchrow.await_count == 1
 
+    async def test_budget_check_bypasses_display_cache(self, test_settings, monkeypatch):
+        import config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 50_000, "is_paused": False})
+        with (
+            patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool),
+            patch(f"{_BILLING_MOD}._get_daily_debit_spend", new=AsyncMock(return_value=5_000)),
+            patch(f"{_BILLING_MOD}._get_daily_spend_cache") as mock_cache_factory,
+        ):
+            result = await check_delegation_budget("org-1", 10_000)
+            assert result is None
+
+        mock_cache_factory.assert_not_called()
+
 
 # ─── check_delegation_allowed ─────────────────────────────────────────────────
 

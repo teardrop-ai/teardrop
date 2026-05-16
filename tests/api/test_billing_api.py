@@ -37,6 +37,7 @@ async def test_billing_pricing_when_disabled(api_client, monkeypatch):
     resp = await api_client.get("/billing/pricing")
     assert resp.status_code == 200
     assert resp.json()["billing_enabled"] is False
+    assert resp.headers["cache-control"] == "public, max-age=60"
 
 
 @pytest.mark.anyio
@@ -58,6 +59,7 @@ async def test_billing_pricing_when_enabled_with_rule(api_client, monkeypatch):
     assert data["pricing"]["id"] == "default"
     assert data["pricing"]["run_price_usdc"] == 10_000
     assert data["network"] == "base-sepolia"
+    assert resp.headers["cache-control"] == "public, max-age=60"
 
 
 @pytest.mark.anyio
@@ -75,6 +77,7 @@ async def test_billing_pricing_enabled_no_rule(api_client, monkeypatch):
     data = resp.json()
     assert data["billing_enabled"] is True
     assert data["pricing"] is None
+    assert resp.headers["cache-control"] == "public, max-age=60"
 
 
 @pytest.mark.anyio
@@ -209,7 +212,6 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
 
 @pytest.mark.anyio
 async def test_billing_balance_returns_balance(api_client, monkeypatch):
-    monkeypatch.setattr("app.get_credit_balance", AsyncMock(return_value=500_000))
     monkeypatch.setattr(
         "app.get_org_spending_config",
         AsyncMock(
@@ -228,6 +230,7 @@ async def test_billing_balance_returns_balance(api_client, monkeypatch):
     data = resp.json()
     assert data["balance_usdc"] == 500_000
     assert data["org_id"] == "test-org-id"
+    assert data["spending_limit_active"] is False
     assert data["is_paused"] is False
 
 

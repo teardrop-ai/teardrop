@@ -22,6 +22,7 @@ from billing import (
     credit_usdc_topup,
     debit_credit,
     get_credit_balance,
+    get_org_spending_config,
     settle_payment,
     verify_and_settle_usdc_topup,
     verify_credit,
@@ -210,6 +211,52 @@ class TestVerifyCredit:
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
         assert result.verified is True
+
+    async def test_verify_credit_bypasses_display_cache(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 50_000, "is_paused": False})
+        with (
+            patch.object(billing_module, "_pool", mock_pool),
+            patch.object(billing_module, "_get_daily_debit_spend", new=AsyncMock(return_value=1_000)),
+            patch.object(billing_module, "_get_daily_spend_cache") as mock_cache_factory,
+        ):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is True
+        mock_cache_factory.assert_not_called()
+
+
+@pytest.mark.anyio
+class TestDailyDebitSpendHelper:
+    async def test_helper_with_pool(self):
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={"daily_spend": 12_345})
+        result = await billing_module._get_daily_debit_spend(pool, "org-1")
+        assert result == 12_345
+
+    async def test_helper_with_connection(self):
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(return_value={"daily_spend": 54_321})
+        result = await billing_module._get_daily_debit_spend(conn, "org-1")
+        assert result == 54_321
+
+
+@pytest.mark.anyio
+class TestGetOrgSpendingConfig:
+    async def test_uses_daily_spend_cache(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"balance_usdc": 500_000, "spending_limit_usdc": 0, "is_paused": False})
+        cache = MagicMock()
+        cache.get = AsyncMock(return_value=1_111)
+        with (
+            patch.object(billing_module, "_pool", pool),
+            patch.object(billing_module, "_get_daily_spend_cache", return_value=cache),
+        ):
+            config = await get_org_spending_config("org-1")
+
+        assert config["balance_usdc"] == 500_000
+        assert config["daily_spend_usdc"] == 1_111
+        pool.fetchrow.assert_awaited_once()
+        cache.get.assert_awaited_once()
 
 
 # ─── get_credit_balance ───────────────────────────────────────────────────────
@@ -569,7 +616,13 @@ class TestDebitCreditMock:
     async def test_debit_returns_true_on_success(self):
 
         pool = _pool_mock()
-        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000})
+        pool._conn.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 20_000,
+                "spending_limit_usdc": 0,
+                "is_paused": False,
+            }
+        )
         pool._conn.execute = AsyncMock()
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-1", 5_000)
@@ -579,7 +632,13 @@ class TestDebitCreditMock:
         """debit_credit must insert a row into org_credit_ledger."""
 
         pool = _pool_mock()
-        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000})
+        pool._conn.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 20_000,
+                "spending_limit_usdc": 0,
+                "is_paused": False,
+            }
+        )
         pool._conn.execute = AsyncMock()
         with patch.object(billing_module, "_pool", pool):
             await debit_credit("org-1", 5_000, reason="run:abc")
@@ -594,6 +653,57 @@ class TestDebitCreditMock:
         with patch.object(billing_module, "_pool", pool):
             result = await debit_credit("org-1", 5_000)
         assert result == (False, 0)
+
+    async def test_debit_returns_false_when_org_is_paused(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 20_000,
+                "spending_limit_usdc": 0,
+                "is_paused": True,
+            }
+        )
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 5_000)
+        assert result == (False, 0)
+        pool._conn.execute.assert_not_called()
+
+    async def test_debit_returns_false_when_daily_limit_exceeded(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "balance_usdc": 20_000,
+                    "spending_limit_usdc": 10_000,
+                    "is_paused": False,
+                },
+                {"daily_spend": 9_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 2_000)
+        assert result == (False, 0)
+        pool._conn.execute.assert_not_called()
+
+    async def test_debit_invalidates_daily_spend_cache(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 20_000,
+                "spending_limit_usdc": 0,
+                "is_paused": False,
+            }
+        )
+        pool._conn.execute = AsyncMock()
+        cache = MagicMock()
+        cache.invalidate = AsyncMock()
+        with (
+            patch.object(billing_module, "_pool", pool),
+            patch.object(billing_module, "_get_daily_spend_cache", return_value=cache),
+        ):
+            result = await debit_credit("org-1", 5_000)
+        assert result == (True, 5_000)
+        cache.invalidate.assert_awaited_once()
 
 
 @pytest.mark.anyio

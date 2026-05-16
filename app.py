@@ -319,15 +319,13 @@ def _validate_production_config(s: "Settings") -> None:
             )
         logger.warning("%s ⚠  JWT_CLIENT_SECRET is empty — client-credentials auth is disabled", prefix)
 
-    # CORS — open wildcard is acceptable for bearer-token APIs, but flag it loudly.
-    if s.cors_origins in ("", "*"):
-        if is_prod:
-            logger.warning(
-                "%s ⚠  CORS_ORIGINS is open (*) — recommended: restrict to your frontend origin",
-                prefix,
-            )
-        else:
-            logger.info("%s ·  CORS_ORIGINS open (*) — OK for local development", prefix)
+    # CORS — wildcard is allowed in development but blocked in production.
+    _guard(
+        bool(s.cors_origins in ("", "*")),
+        "CORS_ORIGINS is open (*). Restrict it to your frontend origin(s) in production.",
+    )
+    if not is_prod and s.cors_origins in ("", "*"):
+        logger.info("%s ·  CORS_ORIGINS open (*) — OK for local development", prefix)
 
     # SIWE domain — defaults to app_host (0.0.0.0) which will fail SIWE validation.
     if not s.siwe_domain and is_prod:
@@ -777,6 +775,19 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-RateLimit-Scope", "Retry-After"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Apply baseline security headers to every response."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=()")
+    if settings.app_env == "production":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 # ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
 from mcp_gateway import MCPGatewayMiddleware  # noqa: E402
@@ -3072,10 +3083,16 @@ async def admin_usage_org(
 async def billing_pricing() -> JSONResponse:
     """Return current pricing rules (public)."""
     if not settings.billing_enabled:
-        return JSONResponse(content={"billing_enabled": False})
+        return JSONResponse(
+            content={"billing_enabled": False},
+            headers={"Cache-Control": "public, max-age=60"},
+        )
     pricing = await get_current_pricing()
     if pricing is None:
-        return JSONResponse(content={"billing_enabled": True, "pricing": None})
+        return JSONResponse(
+            content={"billing_enabled": True, "pricing": None},
+            headers={"Cache-Control": "public, max-age=60"},
+        )
     tool_overrides = await get_tool_pricing_overrides()
     pricing_data = pricing.model_dump(mode="json")
     pricing_data["tool_overrides"] = tool_overrides
@@ -3084,7 +3101,8 @@ async def billing_pricing() -> JSONResponse:
             "billing_enabled": True,
             "pricing": pricing_data,
             "network": settings.x402_network,
-        }
+        },
+        headers={"Cache-Control": "public, max-age=60"},
     )
 
 
@@ -3174,12 +3192,11 @@ async def billing_balance(
 ) -> JSONResponse:
     """Return the authenticated org's current credit balance."""
     org_id = _require_org_id(payload, "No org_id in token — credit balance requires an org-scoped credential.")
-    balance = await get_credit_balance(org_id)
     spending = await get_org_spending_config(org_id)
     return JSONResponse(
         content={
             "org_id": org_id,
-            "balance_usdc": balance,
+            "balance_usdc": spending["balance_usdc"],
             "spending_limit_usdc": spending["spending_limit_usdc"],
             "spending_limit_active": spending["spending_limit_usdc"] > 0,
             "is_paused": spending["is_paused"],
@@ -5281,7 +5298,8 @@ async def get_marketplace_catalog_endpoint(
                 for t in catalog
             ],
             "next_cursor": next_cursor,
-        }
+        },
+        headers={"Cache-Control": "public, max-age=60"},
     )
 
 

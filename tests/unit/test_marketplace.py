@@ -741,7 +741,7 @@ class TestGetPlatformToolPrice:
         import marketplace as mp
         from marketplace import get_platform_tool_price
 
-        mp._PLATFORM_TOOL_CACHE.clear()
+        await mp._invalidate_platform_tool_cache()
         mock_pool = MagicMock()
         mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 5000})
         monkeypatch.setattr(mp, "_pool", mock_pool)
@@ -752,7 +752,7 @@ class TestGetPlatformToolPrice:
         import marketplace as mp
         from marketplace import get_platform_tool_price
 
-        mp._PLATFORM_TOOL_CACHE.clear()
+        await mp._invalidate_platform_tool_cache()
         mock_pool = MagicMock()
         mock_pool.fetchrow = AsyncMock(return_value=None)
         monkeypatch.setattr(mp, "_pool", mock_pool)

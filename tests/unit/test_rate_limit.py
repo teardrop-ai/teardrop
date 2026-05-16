@@ -218,6 +218,44 @@ class TestOrgRateLimitKeying:
             allowed_b, _, _ = await app_module._check_rate_limit("run:org:org-b", limit)
             assert allowed_b is True
 
+
+class TestProductionConfigValidation:
+    def _base_prod_settings(self):
+        s = MagicMock(wraps=app_module.settings)
+        s.app_env = "production"
+        s.jwt_client_secret = "prod-secret"
+        s.cors_origins = "https://app.example.com"
+        s.siwe_domain = "api.example.com"
+        s.stripe_secret_key = ""
+        s.stripe_webhook_secret = ""
+        s.marketplace_enabled = False
+        s.billing_enabled = True
+        s.org_tool_encryption_key = ""
+        s.default_model_pool = [{"provider": "openrouter"}]
+        s.openrouter_api_key = "ok"
+        s.anthropic_api_key = ""
+        s.google_api_key = ""
+        s.openai_api_key = ""
+        s.agent_wallet_enabled = False
+        s.cdp_configured = False
+        s.cdp_network = "base"
+        s.marketplace_settlement_chain_id = 8453
+        s.marketplace_auto_sweep_enabled = False
+        s.base_rpc_url = ""
+        s.marketplace_settlement_cdp_account = ""
+        s.marketplace_tx_confirm_timeout_seconds = 60
+        return s
+
+    def test_cors_wildcard_raises_in_production(self):
+        s = self._base_prod_settings()
+        s.cors_origins = "*"
+        with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
+            app_module._validate_production_config(s)
+
+    def test_restricted_cors_passes_in_production(self):
+        s = self._base_prod_settings()
+        app_module._validate_production_config(s)
+
     async def test_org_mcp_key_format(self):
         """MCP org keys use 'mcp:org:{org_id}' format."""
         with patch.object(app_module, "get_redis", return_value=None):

@@ -115,10 +115,10 @@ class TestGetMarketplaceCatalogWithPlatformTools:
 
 class TestGetPlatformToolPrice:
     @pytest.fixture(autouse=True)
-    def _clear_cache(self):
-        _invalidate_platform_tool_cache()
+    async def _clear_cache(self):
+        await _invalidate_platform_tool_cache()
         yield
-        _invalidate_platform_tool_cache()
+        await _invalidate_platform_tool_cache()
 
     @pytest.mark.anyio
     async def test_returns_price_for_active_tool(self, monkeypatch):
@@ -159,7 +159,7 @@ class TestGetPlatformToolPrice:
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         await get_platform_tool_price("http_fetch")
-        _invalidate_platform_tool_cache()
+        await _invalidate_platform_tool_cache()
         await get_platform_tool_price("http_fetch")
 
         assert mock_pool.fetchrow.call_count == 2
@@ -267,10 +267,10 @@ class TestWeb3MarketplaceToolsMigration046:
     """Verify pricing and catalog visibility for the four tools seeded in migration 046."""
 
     @pytest.fixture(autouse=True)
-    def _clear_cache(self):
-        _invalidate_platform_tool_cache()
+    async def _clear_cache(self):
+        await _invalidate_platform_tool_cache()
         yield
-        _invalidate_platform_tool_cache()
+        await _invalidate_platform_tool_cache()
 
     # ── get_platform_tool_price — per-tool price resolution ──────────────
 

@@ -26,6 +26,7 @@ import sentry_sdk
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from cache import TTLCache
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -842,37 +843,15 @@ async def get_marketplace_tool_by_name(
     return dict(row)
 
 
-# ─── Platform tool pricing cache ─────────────────────────────────────────────
-# Module-level TTL cache: tool_name → (price_usdc, expiry_monotonic).
-# Keeps the hot billing path from hitting Postgres on every MCP call.
-_PLATFORM_TOOL_CACHE: dict[str, tuple[int, float]] = {}
-_PLATFORM_TOOL_CACHE_TTL = 60.0  # seconds
+# ─── Platform + qualified tool pricing cache ─────────────────────────────────
+_PLATFORM_TOOL_PRICE_TTL_SECONDS = 60
+_ORG_TOOL_PRICE_TTL_SECONDS = 60
 
-# Qualified org tool price cache: "org_slug/tool_name" -> (price, expiry).
-_ORG_TOOL_PRICE_CACHE: dict[str, tuple[int, float]] = {}
-_ORG_TOOL_PRICE_CACHE_TTL = 60.0  # seconds
+_platform_tool_caches: dict[str, TTLCache[int | None]] = {}
+_org_tool_price_caches: dict[str, TTLCache[int | None]] = {}
 
 
-def _invalidate_platform_tool_cache() -> None:
-    """Drop the entire platform tool price cache (e.g. after admin price update)."""
-    _PLATFORM_TOOL_CACHE.clear()
-
-
-def _invalidate_all_org_tool_price_cache() -> None:
-    """Drop the full qualified org tool price cache after marketplace mutations."""
-    _ORG_TOOL_PRICE_CACHE.clear()
-
-
-async def get_platform_tool_price(tool_name: str) -> int | None:
-    """Return base_price_usdc for a platform-owned marketplace tool, or None if not found.
-
-    Results are cached per-tool for 60 s.
-    """
-    now = time.monotonic()
-    cached = _PLATFORM_TOOL_CACHE.get(tool_name)
-    if cached is not None and now < cached[1]:
-        return cached[0]
-
+async def _load_platform_tool_price(tool_name: str) -> int | None:
     pool = _get_pool()
     row = await pool.fetchrow(
         "SELECT base_price_usdc FROM marketplace_platform_tools WHERE tool_name = $1 AND is_active = TRUE",
@@ -880,29 +859,25 @@ async def get_platform_tool_price(tool_name: str) -> int | None:
     )
     if row is None:
         return None
-    price = int(row["base_price_usdc"])
-    _PLATFORM_TOOL_CACHE[tool_name] = (price, now + _PLATFORM_TOOL_CACHE_TTL)
-    return price
+    return int(row["base_price_usdc"])
 
 
-async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | None:
-    """Return base_price_usdc for a qualified marketplace tool, or None.
+def _get_platform_tool_cache(tool_name: str) -> TTLCache[int | None]:
+    if tool_name not in _platform_tool_caches:
+        _platform_tool_caches[tool_name] = TTLCache(
+            name=f"platform_tool_price:{tool_name}",
+            redis_key=f"teardrop:platform_tool_price:{tool_name}",
+            ttl_seconds_fn=lambda: _PLATFORM_TOOL_PRICE_TTL_SECONDS,
+            loader=lambda: _load_platform_tool_price(tool_name),
+            serialize=lambda v: str(v),
+            deserialize=lambda raw: int(raw),
+            stale_default=None,
+        )
+    return _platform_tool_caches[tool_name]
 
-    ``qualified_name`` must be in ``org_slug/tool_name`` form.
-    Results are cached for 60 s to keep billing paths hot.
-    """
-    if "/" not in qualified_name:
-        return None
 
+async def _load_org_tool_price(qualified_name: str) -> int | None:
     org_slug, tool_name = qualified_name.split("/", 1)
-    if not org_slug or not tool_name:
-        return None
-
-    now = time.monotonic()
-    cached = _ORG_TOOL_PRICE_CACHE.get(qualified_name)
-    if cached is not None and now < cached[1]:
-        return cached[0]
-
     pool = _get_pool()
     row = await pool.fetchrow(
         """
@@ -919,9 +894,59 @@ async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | Non
     )
     if row is None:
         return None
-    price = int(row["base_price_usdc"])
-    _ORG_TOOL_PRICE_CACHE[qualified_name] = (price, now + _ORG_TOOL_PRICE_CACHE_TTL)
-    return price
+    return int(row["base_price_usdc"])
+
+
+def _get_org_tool_price_cache(qualified_name: str) -> TTLCache[int | None]:
+    if qualified_name not in _org_tool_price_caches:
+        _org_tool_price_caches[qualified_name] = TTLCache(
+            name=f"org_tool_price:{qualified_name}",
+            redis_key=f"teardrop:org_tool_price:{qualified_name}",
+            ttl_seconds_fn=lambda: _ORG_TOOL_PRICE_TTL_SECONDS,
+            loader=lambda: _load_org_tool_price(qualified_name),
+            serialize=lambda v: str(v),
+            deserialize=lambda raw: int(raw),
+            stale_default=None,
+        )
+    return _org_tool_price_caches[qualified_name]
+
+
+async def _invalidate_platform_tool_cache() -> None:
+    """Drop platform tool price caches (in-process + Redis)."""
+    for cache in _platform_tool_caches.values():
+        await cache.invalidate()
+    _platform_tool_caches.clear()
+
+
+async def _invalidate_all_org_tool_price_cache() -> None:
+    """Drop qualified org tool price caches (in-process + Redis)."""
+    for cache in _org_tool_price_caches.values():
+        await cache.invalidate()
+    _org_tool_price_caches.clear()
+
+
+async def get_platform_tool_price(tool_name: str) -> int | None:
+    """Return base_price_usdc for a platform-owned marketplace tool, or None if not found.
+
+    Results are cached per-tool for 60 s.
+    """
+    return await _get_platform_tool_cache(tool_name).get()
+
+
+async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | None:
+    """Return base_price_usdc for a qualified marketplace tool, or None.
+
+    ``qualified_name`` must be in ``org_slug/tool_name`` form.
+    Results are cached for 60 s to keep billing paths hot.
+    """
+    if "/" not in qualified_name:
+        return None
+
+    org_slug, tool_name = qualified_name.split("/", 1)
+    if not org_slug or not tool_name:
+        return None
+
+    return await _get_org_tool_price_cache(qualified_name).get()
 
 
 # ─── Marketplace subscriptions ───────────────────────────────────────────────

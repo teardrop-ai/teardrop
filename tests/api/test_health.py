@@ -13,6 +13,10 @@ async def test_health_ok(api_client):
     assert body["status"] == "ok"
     assert body["service"] == "teardrop"
     assert "version" in body
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+    assert resp.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert resp.headers["permissions-policy"] == "geolocation=(), microphone=()"
 
 
 @pytest.mark.anyio

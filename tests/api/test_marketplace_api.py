@@ -195,6 +195,7 @@ async def test_catalog_success(anon_client, monkeypatch):
     data = resp.json()
     assert len(data["tools"]) == 1
     assert data["tools"][0]["name"] == "acme/my_tool"
+    assert resp.headers["cache-control"] == "public, max-age=60"
 
     config.get_settings.cache_clear()
 

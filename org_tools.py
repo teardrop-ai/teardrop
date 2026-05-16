@@ -553,7 +553,7 @@ async def invalidate_marketplace_cache() -> None:
     try:
         from marketplace import _invalidate_all_org_tool_price_cache
 
-        _invalidate_all_org_tool_price_cache()
+        await _invalidate_all_org_tool_price_cache()
     except Exception:
         logger.debug("Org tool marketplace price cache invalidation failed", exc_info=True)
 
