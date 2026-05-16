@@ -53,6 +53,7 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert "platform/http_fetch" in names
         by_name = {t.qualified_name: t for t in catalog}
         assert by_name["platform/http_fetch"].cost_usdc == 2000
+        assert by_name["platform/http_fetch"].display_name == "HTTP Fetch"
         assert by_name["platform/http_fetch"].author_org_slug == "platform"
         assert by_name["platform/web_search"].cost_usdc == 10000
 

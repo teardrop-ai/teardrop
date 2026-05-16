@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import _A2UIStreamFilter, _recover_planner_suffix, _should_flush_planner_buffer
+from app import _A2UIStreamFilter, _normalize_exclusion_name, _recover_planner_suffix, _should_flush_planner_buffer
 
 
 def _drain(deltas: list[str]) -> str:
@@ -162,6 +162,19 @@ def test_planner_status_enum_normalization():
     status = (getattr(ts, "value", None) or str(ts)).strip().lower()
     assert status == "generating_ui"
     assert _should_flush_planner_buffer(status) is True
+
+
+def test_normalize_exclusion_name_platform_prefix():
+    assert _normalize_exclusion_name("platform/web_search") == "web_search"
+
+
+def test_normalize_exclusion_name_org_prefix():
+    assert _normalize_exclusion_name("org/my_tool") == "my_tool"
+
+
+def test_normalize_exclusion_name_mcp_and_marketplace_passthrough():
+    assert _normalize_exclusion_name("github__list_repos") == "github__list_repos"
+    assert _normalize_exclusion_name("acme/sentiment") == "acme/sentiment"
 
 
 if __name__ == "__main__":  # pragma: no cover

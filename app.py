@@ -17,6 +17,7 @@ POST /register/invite        – accept an org invite and create account
 GET  /auth/me                – return the authenticated user's identity
 GET  /auth/siwe/nonce        – generate a single-use SIWE nonce
 POST /agent/run              – AG-UI streaming endpoint (SSE)
+GET  /agent/tools            – list tools available to the authenticated org
 GET  /.well-known/agent-card.json – A2A agent card for discoverability
 POST /admin/orgs             – create organisation (admin)
 POST /admin/users            – create user (admin)
@@ -54,7 +55,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, s
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, constr, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from agent.cache_prewarm import prewarm_org_prefix
@@ -136,6 +137,7 @@ from marketplace import (
     get_author_earnings_history,
     get_marketplace_catalog,
     get_marketplace_tool_by_name,
+    get_subscribed_tools_catalog,
     init_marketplace_db,
     list_pending_withdrawals,
     process_withdrawal,
@@ -789,6 +791,7 @@ async def add_security_headers(request: Request, call_next: Callable[[Request], 
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
+
 # ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
 from mcp_gateway import MCPGatewayMiddleware  # noqa: E402
 
@@ -1033,6 +1036,25 @@ def _recover_planner_suffix(emitted_chunks: list[tuple[str, str]], planner_text:
 # ─── Request / response models ────────────────────────────────────────────────
 
 
+_TOOL_NAMESPACE_PREFIXES = ("platform/", "org/")
+
+
+def _normalize_exclusion_name(name: str) -> str:
+    """Map API-facing qualified names to internal executor/binder tool keys."""
+    for prefix in _TOOL_NAMESPACE_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix) :]
+    return name
+
+
+class ToolPolicy(BaseModel):
+    exclude_names: list[constr(min_length=1, max_length=200)] = Field(
+        default_factory=list,
+        max_length=50,
+        description="Qualified tool names to exclude for this run.",
+    )
+
+
 class AgentRunRequest(BaseModel):
     message: str = Field(..., description="User message to send to the agent", max_length=4096)
     thread_id: str = Field(
@@ -1046,6 +1068,10 @@ class AgentRunRequest(BaseModel):
     emit_ui: bool = Field(
         default=True,
         description="Whether to generate structured UI components in the final output.",
+    )
+    tool_policy: ToolPolicy | None = Field(
+        default=None,
+        description="Optional per-run tool exclusion policy.",
     )
 
 
@@ -2112,6 +2138,9 @@ async def agent_run(
         llm_config = ctx.llm_config
         _org_name = ctx.org_name
         _credit_balance_usdc = ctx.credit_balance_usdc
+        excluded_tools: frozenset[str] = frozenset()
+        if body.tool_policy and body.tool_policy.exclude_names:
+            excluded_tools = frozenset(_normalize_exclusion_name(name) for name in body.tool_policy.exclude_names)
 
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
@@ -2135,6 +2164,7 @@ async def agent_run(
                 },
                 "_org_tools": org_lc_tools,
                 "_org_tools_by_name": org_tools_by_name,
+                "_excluded_tool_names": list(excluded_tools),
                 "_memories": recalled,
                 "_llm_config": llm_config,
                 "_org_name": _org_name,
@@ -3588,6 +3618,17 @@ class OrgToolResponse(BaseModel):
     updated_at: str
 
 
+class AgentToolItem(BaseModel):
+    name: str
+    qualified_name: str
+    source: Literal["platform", "org", "marketplace"]
+    access_mode: Literal["included", "subscribed"]
+    display_name: str
+    description: str
+    cost_usdc: int
+    input_schema: dict[str, Any]
+
+
 class TestWebhookRequest(BaseModel):
     """Pre-publish webhook diagnostic probe.
 
@@ -3755,6 +3796,80 @@ async def get_tool(
     if tool is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool not found.")
     return JSONResponse(content=_org_tool_to_response(tool))
+
+
+@app.get("/agent/tools", tags=["Agent"])
+async def list_agent_tools(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Return all tools available to the authenticated org's agent runs."""
+    org_id = _require_org_id(payload)
+    settings = get_settings()
+
+    tool_overrides = await get_tool_pricing_overrides()
+    pricing = await get_current_pricing()
+    default_cost = pricing.tool_call_cost if pricing else 0
+
+    if settings.marketplace_enabled:
+        platform_tools, org_tools, subscribed_tools = await asyncio.gather(
+            get_marketplace_catalog(tool_overrides, default_cost, org_slug="platform"),
+            list_org_tools(org_id),
+            get_subscribed_tools_catalog(org_id, tool_overrides, default_cost),
+        )
+    else:
+        org_tools = await list_org_tools(org_id)
+        platform_tools = []
+        subscribed_tools = []
+
+    tools: list[AgentToolItem] = []
+
+    for tool in platform_tools:
+        tools.append(
+            AgentToolItem(
+                name=tool.name,
+                qualified_name=tool.qualified_name,
+                source="platform",
+                access_mode="included",
+                display_name=tool.display_name or tool.name,
+                description=tool.marketplace_description or tool.description,
+                cost_usdc=tool.cost_usdc,
+                input_schema=tool.input_schema,
+            )
+        )
+
+    for tool in org_tools:
+        if not tool.is_active:
+            continue
+        qualified_name = f"org/{tool.name}"
+        cost_usdc = tool_overrides.get(qualified_name, tool_overrides.get(tool.name, default_cost))
+        tools.append(
+            AgentToolItem(
+                name=tool.name,
+                qualified_name=qualified_name,
+                source="org",
+                access_mode="included",
+                display_name=tool.name,
+                description=tool.description,
+                cost_usdc=cost_usdc,
+                input_schema=tool.input_schema,
+            )
+        )
+
+    for tool in subscribed_tools:
+        tools.append(
+            AgentToolItem(
+                name=tool.name,
+                qualified_name=tool.qualified_name,
+                source="marketplace",
+                access_mode="subscribed",
+                display_name=tool.display_name or tool.name,
+                description=tool.marketplace_description or tool.description,
+                cost_usdc=tool.cost_usdc,
+                input_schema=tool.input_schema,
+            )
+        )
+
+    return JSONResponse(content={"tools": [t.model_dump() for t in tools]})
 
 
 @app.patch("/tools/{tool_id}", tags=["Tools"])

@@ -671,6 +671,7 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `GET` | `/` | — | Redirects to `/docs` |
 | `GET` | `/health` | — | Liveness probe |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
+| `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card |
 | `GET` | `/docs` | — | Swagger UI |
 | `GET` | `/redoc` | — | ReDoc UI |

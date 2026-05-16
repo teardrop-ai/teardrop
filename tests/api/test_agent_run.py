@@ -206,3 +206,69 @@ async def test_agent_run_thread_id_scoped_to_user(api_client, monkeypatch):
     # Thread ID must start with the authenticated user's sub from api_client fixture
     assert captured.get("thread_id", "").startswith("test-user-id:")
     assert "my-thread" in captured.get("thread_id", "")
+
+
+@pytest.mark.anyio
+async def test_agent_run_tool_policy_normalizes_exclude_names(api_client, monkeypatch):
+    """tool_policy.exclude_names should be normalized before entering graph state."""
+    captured: dict = {}
+
+    async def _spy_astream_events(state_dict, config=None, version=None):
+        captured["excluded"] = state_dict.get("metadata", {}).get("_excluded_tool_names", [])
+        return
+        yield
+
+    mock_graph = MagicMock()
+    mock_graph.astream_events = _spy_astream_events
+    mock_graph.aget_state = AsyncMock(return_value=MagicMock(values={}))
+
+    mock_settings = MagicMock()
+    mock_settings.billing_enabled = False
+    mock_settings.billable_auth_methods = []
+    mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
+    mock_settings.app_env = "test"
+    mock_settings.agent_provider = "anthropic"
+    mock_settings.agent_model = "claude-3-5-sonnet-20241022"
+
+    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("app.record_usage_event", AsyncMock())
+    monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
+
+    resp = await api_client.post(
+        "/agent/run",
+        json={
+            "message": "hello",
+            "tool_policy": {
+                "exclude_names": ["platform/web_search", "org/my_tool", "acme/weather", "github__repos"]
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    assert set(captured.get("excluded", [])) == {"web_search", "my_tool", "acme/weather", "github__repos"}
+
+
+@pytest.mark.anyio
+async def test_agent_run_tool_policy_rejects_too_many_exclusions(api_client):
+    too_many = [f"platform/tool_{i}" for i in range(51)]
+    resp = await api_client.post(
+        "/agent/run",
+        json={"message": "hello", "tool_policy": {"exclude_names": too_many}},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_agent_run_tool_policy_rejects_overlong_entry(api_client):
+    too_long = "platform/" + ("a" * 201)
+    resp = await api_client.post(
+        "/agent/run",
+        json={"message": "hello", "tool_policy": {"exclude_names": [too_long]}},
+    )
+    assert resp.status_code == 422

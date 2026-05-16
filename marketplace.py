@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import time
@@ -637,6 +638,7 @@ class MarketplaceTool(BaseModel):
 
     name: str
     qualified_name: str  # {org_slug}/{tool_name}
+    display_name: str = ""
     description: str
     marketplace_description: str
     input_schema: dict[str, Any]
@@ -764,6 +766,7 @@ async def get_marketplace_catalog(
                 MarketplaceTool(
                     name=r["name"],
                     qualified_name=qualified,
+                    display_name=r["name"],
                     description=r["description"],
                     marketplace_description=r["marketplace_description"] or r["description"],
                     input_schema=raw_schema,
@@ -794,6 +797,7 @@ async def get_marketplace_catalog(
                 MarketplaceTool(
                     name=name,
                     qualified_name=f"platform/{name}",
+                    display_name=pr["display_name"],
                     description=pr["description"],
                     marketplace_description=pr["description"],
                     input_schema={},
@@ -1036,6 +1040,73 @@ async def get_org_subscriptions(org_id: str) -> list[MarketplaceSubscription]:
         org_id,
     )
     return [MarketplaceSubscription(**dict(r)) for r in rows]
+
+
+async def get_subscribed_tools_catalog(
+    org_id: str,
+    tool_overrides: dict[str, int] | None = None,
+    default_tool_cost: int = 0,
+) -> list[MarketplaceTool]:
+    """Return active marketplace tools subscribed by an org.
+
+    Results are filtered to currently active + published tools to avoid returning
+    stale subscriptions when a publisher deactivates or unpublishes a tool.
+    """
+    if tool_overrides is None:
+        tool_overrides = {}
+
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT
+            t.name,
+            t.description,
+            t.marketplace_description,
+            t.input_schema,
+            t.base_price_usdc,
+            o.name AS org_name,
+            o.slug AS org_slug
+        FROM org_marketplace_subscriptions s
+        JOIN orgs o
+            ON o.slug = split_part(s.qualified_tool_name, '/', 1)
+        JOIN org_tools t
+            ON t.org_id = o.id
+           AND t.name = split_part(s.qualified_tool_name, '/', 2)
+        WHERE s.org_id = $1
+          AND s.is_active = TRUE
+          AND s.qualified_tool_name LIKE '%/%'
+          AND t.publish_as_mcp = TRUE
+          AND t.is_active = TRUE
+        ORDER BY t.name
+        """,
+        org_id,
+    )
+
+    catalog: list[MarketplaceTool] = []
+    for r in rows:
+        raw_schema = r["input_schema"]
+        if isinstance(raw_schema, str):
+            raw_schema = json.loads(raw_schema)
+
+        qualified = f"{r['org_slug']}/{r['name']}"
+        author_price = r.get("base_price_usdc", 0)
+        cost = tool_overrides.get(qualified, tool_overrides.get(r["name"], author_price or default_tool_cost))
+
+        catalog.append(
+            MarketplaceTool(
+                name=r["name"],
+                qualified_name=qualified,
+                display_name=r["name"],
+                description=r["description"],
+                marketplace_description=r["marketplace_description"] or r["description"],
+                input_schema=raw_schema,
+                cost_usdc=cost,
+                author_org_name=r["org_name"],
+                author_org_slug=r["org_slug"],
+            )
+        )
+
+    return catalog
 
 
 # ─── Subscription cache ───────────────────────────────────────────────────────

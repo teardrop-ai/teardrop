@@ -708,6 +708,9 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     tools = _get_cached_tools()
     org_tools = state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
+    excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
+    if excluded_tool_names:
+        all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in excluded_tool_names]
     llm_config = state.metadata.get("_llm_config")
     tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
 
@@ -1150,6 +1153,9 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         **platform_tools_by_name,
         **state.metadata.get("_org_tools_by_name", {}),
     }
+    excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
+    if excluded_tool_names:
+        tools_by_name = {name: tool for name, tool in tools_by_name.items() if name not in excluded_tool_names}
     platform_tool_names = set(platform_tools_by_name.keys())
 
     # ── Accumulate tool usage ─────────────────────────────────────────────

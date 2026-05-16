@@ -223,6 +223,43 @@ class TestSynthesisFastPathPredicates:
 
 
 class TestPlannerNode:
+    async def test_excluded_tools_not_bound_to_llm(self, test_settings):
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _bind_spy(llm, tools, provider):
+            captured["tools"] = list(tools)
+            return llm
+
+        state = _make_state(
+            metadata={
+                "_usage": {},
+                "_org_tools": [_Tool("org_allowed"), _Tool("org_blocked")],
+                "_excluded_tool_names": ["web_search", "org_blocked"],
+            }
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch.object(nodes_module, "_cached_tools", [_Tool("web_search"), _Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        bound_names = [tool.name for tool in captured["tools"]]
+        assert "web_search" not in bound_names
+        assert "org_blocked" not in bound_names
+        assert "calculate" in bound_names
+        assert "org_allowed" in bound_names
+
     async def test_no_tool_calls_routes_to_generating_ui(self, test_settings):
         mock_response = _make_ai_message("Here is my answer.", tool_calls=[])
         mock_llm = MagicMock()
@@ -499,6 +536,29 @@ class TestPlannerNode:
 
 
 class TestToolExecutorNode:
+    async def test_excluded_tool_not_executed(self, test_settings):
+        call = {"id": "c1", "name": "acme/weather", "args": {"city": "NYC"}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"temp": 72})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={
+                "_usage": {},
+                "_org_tools_by_name": {"acme/weather": mock_tool},
+                "_excluded_tool_names": ["acme/weather"],
+            },
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state)
+
+        mock_tool.ainvoke.assert_not_called()
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert len(result["messages"]) == 1
+        assert "not found" in result["messages"][0].content.lower()
+
     async def test_executes_tool_and_returns_tool_message(self, test_settings):
         tool_call = {"id": "call-1", "name": "calculate", "args": {"expression": "2+2"}}
         last_msg = _make_ai_message(tool_calls=[tool_call])
