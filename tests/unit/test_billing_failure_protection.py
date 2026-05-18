@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from billing import BillingResult
 from mcp_gateway import MCPGatewayMiddleware
 
 
@@ -46,6 +47,54 @@ async def test_settle_billing_debits_on_success():
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     debit_mock.assert_called_once()
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_x402_rejected_skips_earnings():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock()
+    request.state.x402_billing = MagicMock()
+    response = MagicMock()
+    pending = ("org-1", 100, "acme/test_tool", "req-1")
+
+    with (
+        patch(
+            "billing.settle_payment",
+            new=AsyncMock(return_value=BillingResult(verified=True, settled=False, error="rejected")),
+        ) as settle_mock,
+        patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock()) as get_tool_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    settle_mock.assert_awaited_once()
+    get_tool_mock.assert_not_called()
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_x402_success_records_earnings():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock()
+    request.state.x402_billing = MagicMock()
+    response = MagicMock()
+    pending = ("org-1", 100, "acme/test_tool", "req-1")
+
+    with (
+        patch(
+            "billing.settle_payment",
+            new=AsyncMock(return_value=BillingResult(verified=True, settled=True, tx_hash="0xabc")),
+        ) as settle_mock,
+        patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value={"org_id": "author-org"})),
+        patch("marketplace.record_tool_call_earnings", new=AsyncMock()),
+        patch("mcp_gateway.asyncio.create_task") as create_task_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    settle_mock.assert_awaited_once()
+    create_task_mock.assert_called_once()
     assert result is response
 
 

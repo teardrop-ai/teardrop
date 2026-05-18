@@ -438,6 +438,11 @@ async def settle_payment(
 
     billing_result.settled = True
     billing_result.tx_hash = result.transaction or ""
+    if not billing_result.tx_hash:
+        logger.warning(
+            "settle_payment: facilitator returned success without tx hash scheme=%s",
+            billing_result.scheme,
+        )
 
     # For upto, record the actual cost we settled; for exact, use the requirement amount.
     if billing_result.scheme == "upto" and actual_cost_usdc is not None:
@@ -477,6 +482,62 @@ async def record_settlement(
         with sentry_sdk.new_scope() as scope:
             scope.set_tag("usage_event_id", str(usage_event_id))
             scope.set_tag("settlement_status", str(settlement_status))
+            sentry_sdk.capture_exception(exc)
+
+
+async def verify_settlement_on_chain(
+    usage_event_id: str,
+    tx_hash: str,
+    chain_id: int,
+) -> None:
+    """Best-effort receipt check for x402 settlements after facilitator success.
+
+    This runs out-of-band and never raises to callers.
+    """
+    if not tx_hash:
+        return
+
+    try:
+        from agent_wallets import verify_usdc_transfer  # noqa: PLC0415
+
+        confirmed = await verify_usdc_transfer(tx_hash=tx_hash, chain_id=chain_id)
+        if confirmed:
+            return
+
+        # Mined but reverted on-chain.
+        await record_settlement(usage_event_id, 0, tx_hash, "reverted")
+        logger.error(
+            "x402 settlement reverted on-chain usage_event_id=%s tx_hash=%s chain_id=%d",
+            usage_event_id,
+            tx_hash,
+            chain_id,
+        )
+    except TimeoutError:
+        logger.warning(
+            "x402 settlement receipt check timed out usage_event_id=%s tx_hash=%s chain_id=%d",
+            usage_event_id,
+            tx_hash,
+            chain_id,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "x402 settlement receipt check skipped usage_event_id=%s tx_hash=%s chain_id=%d: %s",
+            usage_event_id,
+            tx_hash,
+            chain_id,
+            exc,
+        )
+    except Exception as exc:
+        logger.exception(
+            "x402 settlement receipt check failed usage_event_id=%s tx_hash=%s chain_id=%d",
+            usage_event_id,
+            tx_hash,
+            chain_id,
+        )
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("usage_event_id", str(usage_event_id))
+            scope.set_tag("settlement_tx", str(tx_hash))
+            scope.set_tag("chain_id", str(chain_id))
             sentry_sdk.capture_exception(exc)
 
 
@@ -1708,9 +1769,28 @@ async def get_pending_settlements(
     return [dict(r) for r in rows]
 
 
-async def reset_exhausted_settlement(settlement_id: str) -> bool:
-    """Reset an exhausted settlement back to pending (admin manual retry)."""
+async def reset_exhausted_settlement(settlement_id: str) -> bool | None:
+    """Reset an exhausted settlement back to pending (admin manual retry).
+
+    Returns:
+        True if reset occurred.
+        False if settlement not found or not exhausted.
+        None if settlement is x402 (single-use payload cannot be retried).
+    """
     pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT billing_method
+        FROM pending_settlements
+        WHERE id = $1 AND status = 'exhausted'
+        """,
+        settlement_id,
+    )
+    if row is None:
+        return False
+    if row["billing_method"] == "x402":
+        return None
+
     result = await pool.execute(
         """
         UPDATE pending_settlements

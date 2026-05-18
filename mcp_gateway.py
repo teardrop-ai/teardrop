@@ -330,10 +330,17 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
             billing = request.state.x402_billing
             try:
-                await settle_payment(billing, actual_cost_usdc=tool_cost)
+                settled = await settle_payment(billing, actual_cost_usdc=tool_cost)
             except Exception:
                 logger.warning("x402 MCP settlement failed", exc_info=True)
                 return response  # Settlement failed — do not record phantom earnings
+
+            if not settled.settled:
+                logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
+                return response
+
+            if settled.tx_hash:
+                logger.info("x402 MCP settlement succeeded org=%s tool=%s tx_hash=%s", org_id, tool_name, settled.tx_hash)
         else:
             # Phase 2: credit debit.
             from billing import debit_credit

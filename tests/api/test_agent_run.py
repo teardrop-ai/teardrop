@@ -244,9 +244,7 @@ async def test_agent_run_tool_policy_normalizes_exclude_names(api_client, monkey
         "/agent/run",
         json={
             "message": "hello",
-            "tool_policy": {
-                "exclude_names": ["platform/web_search", "org/my_tool", "acme/weather", "github__repos"]
-            },
+            "tool_policy": {"exclude_names": ["platform/web_search", "org/my_tool", "acme/weather", "github__repos"]},
         },
     )
 

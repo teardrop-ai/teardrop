@@ -23,10 +23,12 @@ from billing import (
     debit_credit,
     get_credit_balance,
     get_org_spending_config,
+    reset_exhausted_settlement,
     settle_payment,
     verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
+    verify_settlement_on_chain,
 )
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -729,6 +731,58 @@ class TestRecordSettlement:
         with patch.object(billing_module, "_pool", pool):
             # Should not raise
             await record_settlement("evt-1", 0, "0x", "failed")
+
+
+@pytest.mark.anyio
+class TestVerifySettlementOnChain:
+    async def test_confirmed_receipt_keeps_status(self):
+        with (
+            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+            patch("billing.record_settlement", new=AsyncMock()) as record_mock,
+        ):
+            await verify_settlement_on_chain("evt-1", "0xabc", 8453)
+
+        record_mock.assert_not_called()
+
+    async def test_reverted_receipt_marks_event_reverted(self):
+        with (
+            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=False)),
+            patch("billing.record_settlement", new=AsyncMock()) as record_mock,
+        ):
+            await verify_settlement_on_chain("evt-1", "0xabc", 8453)
+
+        record_mock.assert_awaited_once_with("evt-1", 0, "0xabc", "reverted")
+
+    async def test_timeout_does_not_raise_or_mutate(self):
+        with (
+            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(side_effect=TimeoutError("late"))),
+            patch("billing.record_settlement", new=AsyncMock()) as record_mock,
+        ):
+            await verify_settlement_on_chain("evt-1", "0xabc", 8453)
+
+        record_mock.assert_not_called()
+
+
+@pytest.mark.anyio
+class TestResetExhaustedSettlement:
+    async def test_returns_none_for_x402(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"billing_method": "x402"})
+        with patch.object(billing_module, "_pool", pool):
+            result = await reset_exhausted_settlement("set-1")
+
+        assert result is None
+        pool.execute.assert_not_called()
+
+    async def test_resets_credit_settlement(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"billing_method": "credit"})
+        pool.execute = AsyncMock(return_value="UPDATE 1")
+        with patch.object(billing_module, "_pool", pool):
+            result = await reset_exhausted_settlement("set-1")
+
+        assert result is True
+        pool.execute.assert_awaited_once()
 
 
 # ─── _get_server ──────────────────────────────────────────────────────────────

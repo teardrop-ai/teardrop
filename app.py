@@ -113,6 +113,7 @@ from billing import (
     verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
+    verify_settlement_on_chain,
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
@@ -1048,7 +1049,7 @@ def _normalize_exclusion_name(name: str) -> str:
 
 
 class ToolPolicy(BaseModel):
-    exclude_names: list[constr(min_length=1, max_length=200)] = Field(
+    exclude_names: list[str] = Field(
         default_factory=list,
         max_length=50,
         description="Qualified tool names to exclude for this run.",
@@ -2698,6 +2699,22 @@ async def agent_run(
                             "platform_fee_usdc": platform_fee,
                         },
                     )
+                    if billing_settled.tx_hash:
+                        try:
+                            chain_id = int(str(settings.x402_network).rsplit(":", 1)[-1])
+                        except (TypeError, ValueError):
+                            logger.warning(
+                                "Skipping x402 receipt check due to unparseable network: %s",
+                                settings.x402_network,
+                            )
+                        else:
+                            asyncio.create_task(
+                                verify_settlement_on_chain(
+                                    usage_event.id,
+                                    billing_settled.tx_hash,
+                                    chain_id,
+                                )
+                            )
                 else:
                     await record_settlement(usage_event.id, 0, "", "failed")
                     await enqueue_failed_settlement(
@@ -3306,6 +3323,14 @@ async def admin_billing_retry(
 ) -> JSONResponse:
     """Reset an exhausted settlement for manual retry (admin only)."""
     ok = await reset_exhausted_settlement(settlement_id)
+    if ok is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "x402 settlements cannot be retried: payment payloads are single-use. "
+                "Reconcile manually via /admin/billing/pending."
+            ),
+        )
     if not ok:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

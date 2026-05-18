@@ -736,3 +736,24 @@ async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_clien
     resp = await admin_api_client.delete("/admin/pricing/tools/nonexistent_tool")
     assert resp.status_code == 404
     assert "No pricing override found" in resp.json()["detail"]
+
+
+# ─── /admin/billing/pending/{settlement_id}/retry ───────────────────────────
+
+
+@pytest.mark.anyio
+async def test_admin_billing_retry_x402_returns_422(admin_api_client, monkeypatch):
+    monkeypatch.setattr("app.reset_exhausted_settlement", AsyncMock(return_value=None))
+
+    resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
+    assert resp.status_code == 422
+    assert "x402 settlements cannot be retried" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_admin_billing_retry_credit_returns_pending(admin_api_client, monkeypatch):
+    monkeypatch.setattr("app.reset_exhausted_settlement", AsyncMock(return_value=True))
+
+    resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending"
