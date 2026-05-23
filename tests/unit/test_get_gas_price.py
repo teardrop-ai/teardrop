@@ -181,3 +181,77 @@ class TestGetGasPrice:
             result = await get_gas_price(chain_id=8453)
 
         assert result["chain_id"] == 8453
+
+    async def test_include_usd_estimate_populates_fields(self, test_settings, monkeypatch):
+        from tools.definitions.get_gas_price import get_gas_price
+
+        monkeypatch.setattr("tools.definitions.get_gas_price._GAS_CACHE", {})
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block(base_fee=10_000_000_000))
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
+        monkeypatch.setattr("tools.definitions.get_gas_price._get_eth_price_usd", AsyncMock(return_value=3000.0))
+
+        with patch("tools.definitions.get_gas_price._get_max_priority_fee", AsyncMock(return_value=1_000_000_000)):
+            result = await get_gas_price(chain_id=1, include_usd_estimate=True)
+
+        assert result["eth_price_usd"] == 3000.0
+        assert result["estimated_transfer_cost_usd"] is not None
+        assert result["estimated_swap_cost_usd"] is not None
+
+    async def test_include_usd_estimate_false_returns_none_fields(self, test_settings, monkeypatch):
+        from tools.definitions.get_gas_price import get_gas_price
+
+        monkeypatch.setattr("tools.definitions.get_gas_price._GAS_CACHE", {})
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block())
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
+
+        with patch("tools.definitions.get_gas_price._get_max_priority_fee", AsyncMock(return_value=1_000_000_000)):
+            result = await get_gas_price(chain_id=1)
+
+        assert result["eth_price_usd"] is None
+        assert result["estimated_transfer_cost_usd"] is None
+        assert result["estimated_swap_cost_usd"] is None
+
+    async def test_include_usd_estimate_gracefully_handles_price_failure(self, test_settings, monkeypatch):
+        from tools.definitions.get_gas_price import get_gas_price
+
+        monkeypatch.setattr("tools.definitions.get_gas_price._GAS_CACHE", {})
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_block = AsyncMock(return_value=self._mock_block())
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
+        monkeypatch.setattr("tools.definitions.get_gas_price._get_eth_price_usd", AsyncMock(return_value=None))
+
+        with patch("tools.definitions.get_gas_price._get_max_priority_fee", AsyncMock(return_value=1_000_000_000)):
+            result = await get_gas_price(chain_id=1, include_usd_estimate=True)
+
+        assert result["gas_price_gwei"] is not None
+        assert result["eth_price_usd"] is None
+        assert result["estimated_transfer_cost_usd"] is None
+        assert result["estimated_swap_cost_usd"] is None
+
+    async def test_cache_key_separates_usd_and_non_usd_requests(self, test_settings, monkeypatch):
+        from tools.definitions.get_gas_price import get_gas_price
+
+        monkeypatch.setattr("tools.definitions.get_gas_price._GAS_CACHE", {})
+
+        call_count = 0
+
+        async def counting_get_block(identifier):
+            nonlocal call_count
+            call_count += 1
+            return self._mock_block()
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_block = counting_get_block
+        monkeypatch.setattr("tools.definitions.get_gas_price.get_web3", lambda chain_id=1: mock_w3)
+        monkeypatch.setattr("tools.definitions.get_gas_price._get_eth_price_usd", AsyncMock(return_value=3000.0))
+
+        with patch("tools.definitions.get_gas_price._get_max_priority_fee", AsyncMock(return_value=1_000_000_000)):
+            await get_gas_price(chain_id=1, include_usd_estimate=False)
+            await get_gas_price(chain_id=1, include_usd_estimate=True)
+
+        assert call_count == 2

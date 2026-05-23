@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -88,3 +89,91 @@ async def test_batch_protocols_returns_list_and_deduplicates(monkeypatch):
     assert len(result) == 2
     assert [item["protocol"] for item in result] == ["aave-v3", "compound-v3"]
     assert result[0]["current_tvl_usd"] == pytest.approx(1000.0)
+
+
+@pytest.mark.anyio
+async def test_slug_alias_applied_for_spark_protocol(monkeypatch, caplog):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+    current_mock = AsyncMock(return_value=(321.0, None, None))
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", current_mock)
+
+    caplog.set_level("INFO")
+    result = await get_protocol_tvl(protocol="spark-protocol")
+
+    current_mock.assert_awaited_once_with("spark")
+    assert result["protocol"] == "spark"
+    assert "slug alias applied" in caplog.text.lower()
+
+
+@pytest.mark.anyio
+async def test_result_includes_error_fields_on_not_found(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_current_tvl",
+        AsyncMock(return_value=(None, "not_found", "Protocol not found on DeFiLlama")),
+    )
+
+    result = await get_protocol_tvl(protocol="missing-protocol")
+
+    assert result["current_tvl_usd"] is None
+    assert result["error_type"] == "not_found"
+    assert "not found" in (result["error"] or "").lower()
+
+
+@pytest.mark.anyio
+async def test_batch_continues_after_one_slug_exception(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    async def _fake_single(protocol: str | None = None, include_historical: bool = False, days: int = 30):
+        if protocol == "compound-v3":
+            raise RuntimeError("upstream boom")
+        return {
+            "protocol": protocol,
+            "current_tvl_usd": 1000.0,
+            "tvl_7d_change_pct": None,
+            "tvl_30d_change_pct": None,
+            "chain_breakdown": [],
+            "historical_series": None,
+            "note": "ok",
+            "error": None,
+            "error_type": None,
+        }
+
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._get_protocol_tvl_single", _fake_single)
+
+    result = await get_protocol_tvl(protocols=["aave-v3", "compound-v3"])
+
+    assert result[0]["protocol"] == "aave-v3"
+    assert result[0]["error_type"] is None
+    assert result[1]["protocol"] == "compound-v3"
+    assert result[1]["error_type"] == "upstream_error"
+
+
+@pytest.mark.anyio
+async def test_batch_timeout_returns_partial_results(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._BATCH_TIMEOUT_SECONDS", 0.03)
+
+    async def _fake_single(protocol: str | None = None, include_historical: bool = False, days: int = 30):
+        if protocol == "slow-protocol":
+            await asyncio.sleep(0.1)
+        return {
+            "protocol": protocol,
+            "current_tvl_usd": 1000.0,
+            "tvl_7d_change_pct": None,
+            "tvl_30d_change_pct": None,
+            "chain_breakdown": [],
+            "historical_series": None,
+            "note": "ok",
+            "error": None,
+            "error_type": None,
+        }
+
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._get_protocol_tvl_single", _fake_single)
+
+    result = await get_protocol_tvl(protocols=["slow-protocol", "aave-v3"])
+
+    assert result[0]["protocol"] == "slow-protocol"
+    assert result[0]["error_type"] == "batch_timeout"
+    assert result[1]["protocol"] == "aave-v3"
+    assert result[1]["error_type"] is None

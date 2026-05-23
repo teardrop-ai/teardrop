@@ -55,7 +55,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, s
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field, constr, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from agent.cache_prewarm import prewarm_org_prefix
@@ -1054,6 +1054,19 @@ class ToolPolicy(BaseModel):
         max_length=50,
         description="Qualified tool names to exclude for this run.",
     )
+
+    @field_validator("exclude_names")
+    @classmethod
+    def _validate_exclude_names(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError("exclude_names entries must be non-empty strings")
+            if len(stripped) > 200:
+                raise ValueError("exclude_names entries must be 200 characters or fewer")
+            normalized.append(stripped)
+        return normalized
 
 
 class AgentRunRequest(BaseModel):

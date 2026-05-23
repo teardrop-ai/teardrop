@@ -448,14 +448,30 @@ class TestIsStatelessLookupRun:
         msgs = [MagicMock(type="human", content="show consistent usdc yield")]
         assert memory_module._is_stateless_lookup_run(msgs, ["get_yield_rates"]) is True
 
-    def test_false_for_three_tool_lookup_even_if_stateless(self):
+    def test_true_for_three_tool_lookup_when_all_are_stateless(self):
         msgs = [MagicMock(type="human", content="compare market data")]
         assert (
             memory_module._is_stateless_lookup_run(
                 msgs,
                 ["get_lending_rates", "get_protocol_tvl", "get_token_price"],
             )
-            is False
+            is True
+        )
+
+    def test_true_for_five_tool_lookup_when_all_are_stateless(self):
+        msgs = [MagicMock(type="human", content="compare market data")]
+        assert (
+            memory_module._is_stateless_lookup_run(
+                msgs,
+                [
+                    "get_lending_rates",
+                    "get_protocol_tvl",
+                    "get_token_price",
+                    "get_gas_price",
+                    "get_yield_rates",
+                ],
+            )
+            is True
         )
 
 

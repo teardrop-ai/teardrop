@@ -19,7 +19,7 @@ from tools.registry import ToolDefinition
 # Gas prices change every block (~12 s Ethereum, ~2 s Base).  A 10-second cache
 # prevents hammering the RPC on high-frequency agent loops while staying fresh
 # enough for any practical transaction-timing decision.
-_GAS_CACHE: dict[int, tuple[dict[str, Any], float]] = {}
+_GAS_CACHE: dict[tuple[int, bool], tuple[dict[str, Any], float]] = {}
 _GAS_TTL = 10.0  # seconds
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,13 @@ _GAS_TTL = 10.0  # seconds
 
 class GetGasPriceInput(BaseModel):
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
+    include_usd_estimate: bool = Field(
+        default=False,
+        description=(
+            "If true, include ETH spot price and rough USD cost estimates for a simple transfer "
+            "(21k gas) and a swap-like transaction (150k gas)."
+        ),
+    )
 
 
 class GetGasPriceOutput(BaseModel):
@@ -36,6 +43,9 @@ class GetGasPriceOutput(BaseModel):
     priority_fee_gwei: str | None
     next_base_fee_gwei: str | None
     gas_used_ratio: float | None
+    eth_price_usd: float | None = None
+    estimated_transfer_cost_usd: float | None = None
+    estimated_swap_cost_usd: float | None = None
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -45,6 +55,22 @@ async def _get_max_priority_fee(w3: AsyncWeb3) -> int | None:
     """Return eth_maxPriorityFeePerGas, or None on pre-EIP-1559 chains."""
     try:
         return await w3.eth.max_priority_fee
+    except Exception:
+        return None
+
+
+async def _get_eth_price_usd() -> float | None:
+    """Fetch ETH spot price in USD via the existing token-price tool."""
+    try:
+        from tools.definitions.get_token_price import get_token_price
+
+        result = await get_token_price(tokens=["eth"], vs_currency="usd")
+        prices = result.get("prices", [])
+        if not isinstance(prices, list) or not prices:
+            return None
+        first = prices[0] if isinstance(prices[0], dict) else {}
+        value = first.get("price")
+        return float(value) if value is not None else None
     except Exception:
         return None
 
@@ -67,10 +93,11 @@ def _next_base_fee(base_fee: int, gas_used: int, gas_limit: int) -> int:
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def get_gas_price(chain_id: int = 1) -> dict[str, Any]:
+async def get_gas_price(chain_id: int = 1, include_usd_estimate: bool = False) -> dict[str, Any]:
     """Return current EIP-1559 fee components and next-block base fee estimate."""
     now = time.monotonic()
-    cached = _GAS_CACHE.get(chain_id)
+    cache_key = (chain_id, include_usd_estimate)
+    cached = _GAS_CACHE.get(cache_key)
     if cached and now < cached[1]:
         return cached[0]
 
@@ -113,8 +140,22 @@ async def get_gas_price(chain_id: int = 1) -> dict[str, Any]:
         "priority_fee_gwei": priority_fee_gwei,
         "next_base_fee_gwei": next_base_fee_gwei,
         "gas_used_ratio": gas_used_ratio,
+        "eth_price_usd": None,
+        "estimated_transfer_cost_usd": None,
+        "estimated_swap_cost_usd": None,
     }
-    _GAS_CACHE[chain_id] = (result, now + _GAS_TTL)
+
+    if include_usd_estimate and base_fee is not None:
+        effective_gas_price_wei = base_fee + (priority_fee_wei or 0)
+        eth_price_usd = await _get_eth_price_usd()
+        if eth_price_usd is not None:
+            result["eth_price_usd"] = round(eth_price_usd, 6)
+            transfer_cost_eth = (effective_gas_price_wei * 21_000) / 10**18
+            swap_cost_eth = (effective_gas_price_wei * 150_000) / 10**18
+            result["estimated_transfer_cost_usd"] = round(transfer_cost_eth * eth_price_usd, 6)
+            result["estimated_swap_cost_usd"] = round(swap_cost_eth * eth_price_usd, 6)
+
+    _GAS_CACHE[cache_key] = (result, now + _GAS_TTL)
     return result
 
 
@@ -127,6 +168,7 @@ TOOL = ToolDefinition(
         "Get current EIP-1559 gas fees on Ethereum or Base. Returns base fee, priority fee, "
         "and next-block base fee estimate (useful for timing transactions). "
         "gas_used_ratio indicates network congestion (>0.5 = busy, >0.9 = very congested). "
+        "Optional USD estimates include ETH spot price and rough transfer/swap costs. "
         "Results cached 10 seconds per chain."
     ),
     tags=["web3", "ethereum", "gas", "fees", "eip1559"],

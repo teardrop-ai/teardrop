@@ -153,8 +153,6 @@ async def has_memories_cached(org_id: str) -> bool:
 
 def _is_stateless_lookup_run(messages: list[Any], tool_names_used: list[str]) -> bool:
     """Conservatively classify simple lookup runs where memory extraction adds little value."""
-    if len(tool_names_used) > 2:
-        return False
     if any(name not in _STATELESS_TOOLS for name in tool_names_used):
         return False
 
