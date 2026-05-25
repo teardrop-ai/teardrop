@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -13,7 +14,7 @@ import sentry_sdk
 
 from billing.context import _bind_pool, _clear_pool, _get_pool, _reset_daily_spend_caches
 from billing.models import BillingResult, atomic_usdc_to_price_str
-from billing.pricing import get_live_pricing, reset_pricing_caches
+from billing.pricing import get_current_pricing, get_live_pricing, reset_pricing_caches
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -77,13 +78,35 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     _server = server
 
     # Resolve price from live pricing_rules; fall back to config value.
-    rule = await get_live_pricing()
+    # Use get_current_pricing() directly (bypassing the TTL cache) so that a
+    # transient DB error at startup — which TTLCache silently converts to None
+    # via stale_default — triggers a retry instead of a silent fallback.
+    rule: object = None
+    for attempt in range(2):
+        try:
+            rule = await get_current_pricing()
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 0:
+                logger.warning("Pricing DB query failed on startup (attempt 1); retrying: %s", exc)
+                await asyncio.sleep(1)
+            else:
+                logger.error(
+                    "Pricing DB query failed on startup after retry: %s — "
+                    "using config fallback price=%s",
+                    exc,
+                    settings.x402_run_price,
+                )
     if rule is not None:
         price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
         _last_requirements_price_usdc = rule.run_price_usdc
     else:
         price_str = settings.x402_run_price
-        logger.warning("No pricing_rules row found; using config fallback price=%s", price_str)
+        logger.error(
+            "No global pricing_rules row found (provider='', model='', is_byok=FALSE); "
+            "using config fallback price=%s — run migrations to seed pricing data",
+            price_str,
+        )
 
     # Always build exact requirements.
     exact_config = ResourceConfig(

@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 async def get_current_pricing() -> PricingRule | None:
-    """Return the currently effective pricing rule (direct DB query, no cache)."""
+    """Return the currently effective global pricing rule (direct DB query, no cache).
+
+    Only considers rows where provider='' and model='' and is_byok=FALSE so that
+    per-model seeds (migrations 022+) never shadow the global flat-rate rule.
+    """
     pool = _get_pool()
     row = await pool.fetchrow(
         """
@@ -26,6 +30,9 @@ async def get_current_pricing() -> PricingRule | None:
                tokens_out_cost_per_1k, tool_call_cost, effective_from, created_at
         FROM pricing_rules
         WHERE effective_from <= NOW()
+          AND provider = ''
+          AND model = ''
+          AND is_byok = FALSE
         ORDER BY effective_from DESC
         LIMIT 1
         """
