@@ -1,4 +1,4 @@
-"""Unit tests for email_utils.py — mocked httpx to avoid real email delivery."""
+"""Unit tests for shared.email — mocked httpx to avoid real email delivery."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import email_utils
+import shared.email as email_utils
 
 
 def _mock_settings(has_key: bool = True):
@@ -31,8 +31,8 @@ class TestSendVerificationEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             await email_utils.send_verification_email("user@test.com", "tok-123", "https://app.test")
 
@@ -46,8 +46,8 @@ class TestSendVerificationEmail:
         assert "?token=tok-123" in payload["html"]
 
     async def test_skips_when_no_api_key(self):
-        with patch("email_utils.get_settings", return_value=_mock_settings(has_key=False)):
-            with patch("email_utils.httpx.AsyncClient") as mock_cls:
+        with patch("shared.email.get_settings", return_value=_mock_settings(has_key=False)):
+            with patch("shared.email.httpx.AsyncClient") as mock_cls:
                 await email_utils.send_verification_email("user@test.com", "tok", "https://app.test")
 
         mock_cls.assert_not_called()
@@ -59,8 +59,8 @@ class TestSendVerificationEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             # Must not raise
             await email_utils.send_verification_email("u@test.com", "tok", "https://app")
@@ -74,8 +74,8 @@ class TestSendVerificationEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             await email_utils.send_verification_email("u@test.com", "t", "")
 
@@ -97,8 +97,8 @@ class TestSendInviteEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             await email_utils.send_invite_email("invite@test.com", "inv-tok", "org-1", "https://app.test")
 
@@ -108,8 +108,8 @@ class TestSendInviteEmail:
         assert "inv-tok" in payload["html"]
 
     async def test_skips_when_no_api_key(self):
-        with patch("email_utils.get_settings", return_value=_mock_settings(has_key=False)):
-            with patch("email_utils.httpx.AsyncClient") as mock_cls:
+        with patch("shared.email.get_settings", return_value=_mock_settings(has_key=False)):
+            with patch("shared.email.httpx.AsyncClient") as mock_cls:
                 await email_utils.send_invite_email("u@test.com", "tok", "org", "https://app")
 
         mock_cls.assert_not_called()
@@ -121,8 +121,8 @@ class TestSendInviteEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             await email_utils.send_invite_email("u@test.com", "tok", "org", "https://app")
 
@@ -135,8 +135,8 @@ class TestSendInviteEmail:
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("email_utils.get_settings", return_value=_mock_settings(has_key=True)),
-            patch("email_utils.httpx.AsyncClient", return_value=mock_client),
+            patch("shared.email.get_settings", return_value=_mock_settings(has_key=True)),
+            patch("shared.email.httpx.AsyncClient", return_value=mock_client),
         ):
             await email_utils.send_invite_email("u@test.com", "t", "org-1", "")
 

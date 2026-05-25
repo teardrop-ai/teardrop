@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 from cache import TTLCache
 from config import get_settings
-from db_pool_registry import bind_pool, require_pool, unbind_pool
+from shared.db_pool import bind_pool, require_pool, unbind_pool
 
 logger = logging.getLogger(__name__)
 
@@ -1206,9 +1206,9 @@ def _build_marketplace_langchain_tool(
     """Wrap a marketplace tool row as a LangChain StructuredTool via webhook."""
     import json as _json
 
-    from tool_shared import build_pydantic_model, decrypt_header_value
+    from shared.webhook import WebhookCaller, WebhookCallError
     from tools.definitions.http_fetch import async_validate_url
-    from webhook_caller import WebhookCaller, WebhookCallError
+    from tools.shared import build_pydantic_model, decrypt_header_value
 
     raw_schema = tool_row.get("input_schema", {})
     if isinstance(raw_schema, str):
@@ -1235,7 +1235,7 @@ def _build_marketplace_langchain_tool(
         raise ValueError(f"Marketplace tool '{qualified_name}' has non-GET webhook_method '{_method}'")
 
     async def _call(**kwargs: Any) -> dict[str, Any]:
-        from tool_health import is_breaker_tripped, record_failure, record_success
+        from tools.health import is_breaker_tripped, record_failure, record_success
 
         if _tool_id and await is_breaker_tripped(str(_tool_id)):
             return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
@@ -1293,7 +1293,7 @@ async def notify_subscribers_of_deactivation(
     the breaker after a manual re-enable.
     """
     from cache import get_redis
-    from email_utils import send_tool_deactivated_email
+    from shared.email import send_tool_deactivated_email
 
     settings = get_settings()
     redis = get_redis()

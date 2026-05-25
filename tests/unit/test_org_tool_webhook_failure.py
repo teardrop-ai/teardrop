@@ -14,7 +14,7 @@ async def test_on_webhook_failure_records_audit_event_and_breaker_increment():
     """A non-tripping failure writes an audit event and increments the breaker."""
     with (
         patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock,
-        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False) as breaker_mock,
+        patch("tools.health.record_failure", new_callable=AsyncMock, return_value=False) as breaker_mock,
     ):
         await org_tools._on_webhook_failure(
             "tool-1",
@@ -42,7 +42,7 @@ async def test_on_webhook_failure_tripped_calls_auto_deactivate():
     """When breaker trips, auto_deactivate_tool_for_health is invoked."""
     with (
         patch("org_tools._record_event", new_callable=AsyncMock),
-        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=True),
+        patch("tools.health.record_failure", new_callable=AsyncMock, return_value=True),
         patch("org_tools.sentry_sdk") as sentry_mock,
         patch("marketplace.auto_deactivate_tool_for_health", new_callable=AsyncMock) as deact_mock,
     ):
@@ -63,7 +63,7 @@ async def test_on_webhook_failure_tripped_calls_auto_deactivate():
 async def test_on_webhook_failure_includes_status_code_in_detail():
     with (
         patch("org_tools._record_event", new_callable=AsyncMock) as audit_mock,
-        patch("tool_health.record_failure", new_callable=AsyncMock, return_value=False),
+        patch("tools.health.record_failure", new_callable=AsyncMock, return_value=False),
     ):
         await org_tools._on_webhook_failure(
             "tool-1",

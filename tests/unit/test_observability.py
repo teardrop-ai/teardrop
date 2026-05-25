@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Unit tests for the Sentry observability scrubber.
 
-These tests assert that ``observability._before_send`` strips the
+These tests assert that ``shared.observability._before_send`` strips the
 Teardrop-specific sensitive headers and extras before any event would
 reach Sentry. The scrubber is the only line of defense between secrets
 and a third-party SaaS, so coverage here is mandatory.
@@ -10,7 +10,7 @@ and a third-party SaaS, so coverage here is mandatory.
 
 from __future__ import annotations
 
-from observability import (
+from shared.observability import (
     _FILTERED,
     _SENSITIVE_EXTRA_KEYS,
     _SENSITIVE_HEADERS,

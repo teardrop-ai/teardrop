@@ -1032,12 +1032,12 @@ Set `DATABASE_URL` to your Neon connection string (no `+asyncpg` prefix needed â
 ```
 app.py              # FastAPI app, SSE streaming, billing gate, all route handlers
 auth.py             # RS256 JWT: create_access_token, require_auth dependency
-billing.py          # x402 billing layer, pricing, invoice queries, credit system
+billing/            # x402 billing layer, pricing, invoice queries, credit system
 cache.py            # Redis cache helpers
 config.py           # Settings via pydantic-settings (reads .env)
 memory.py           # Per-org pgvector memory: LLM extraction, recall, CRUD
-mcp_client.py       # Per-org MCP client: CRUD, session pool, tool discovery
-org_tools.py        # Per-org custom webhook tools: CRUD, caching, execution
+mcp_client/         # Per-org MCP client: CRUD, session pool, tool discovery
+org_tools/          # Per-org custom webhook tools: CRUD, caching, execution
 usage.py            # UsageEvent model, usage recording and aggregation
 users.py            # Org + User models, CRUD, PBKDF2-SHA256 password hashing
 wallets.py          # User wallet management, SIWE nonce lifecycle
@@ -1055,6 +1055,7 @@ tools/
 migrations/
   runner.py         # Applies SQL migrations in order
   versions/         # 001_baseline through 039_new_model_pricing_seed
+shared/             # Internal shared utilities: db pool registry, audit inserts, webhook caller
 scripts/
   generate_keys.py  # Generate RSA keypair â†’ keys/private.pem + keys/public.pem
   init_neon.py      # Initialize Neon Postgres schema

@@ -117,7 +117,6 @@ from billing import (
 )
 from cache import close_redis, get_redis, init_redis
 from config import Settings, get_settings
-from email_utils import send_invite_email, send_verification_email
 from llm_config import (
     ALLOWED_ROUTING_PREFERENCES,
     OrgLlmConfig,
@@ -186,6 +185,7 @@ from org_tools import (
     validate_safe_schema_subset,
 )
 from scripts.generate_keys import generate_keypair
+from shared.email import send_invite_email, send_verification_email
 from tools import registry
 from tools.definitions._rpc_semaphore import init_chain_rate_limiter, init_chain_semaphore, init_rpc_semaphore
 from tools.executor import execute_tool
@@ -294,7 +294,7 @@ def _log_agent_memory(stage: str, *, run_id: str, elapsed_ms: int | None = None)
 # ─── Sentry ──────────────────────────────────────────────────────────────────
 # Initialize before FastAPI() so the FastAPI/Starlette/asyncpg integrations
 # can hook in. No-op when SENTRY_DSN is empty.
-from observability import init_sentry  # noqa: E402
+from shared.observability import init_sentry  # noqa: E402
 
 init_sentry(settings)
 
@@ -3272,7 +3272,7 @@ async def billing_invoices(
     cursor: str | None = None,
 ) -> JSONResponse:
     """Return per-run invoice records for the authenticated user (cursor paginated)."""
-    from pagination import parse_cursor
+    from shared.pagination import parse_cursor
 
     cursor_dt = parse_cursor(cursor)
     invoices = await get_invoices(payload["sub"], min(limit, 200), cursor_dt)
@@ -3395,7 +3395,7 @@ async def billing_credit_history(
     cursor: str | None = None,
 ) -> JSONResponse:
     """Return credit ledger entries for the authenticated org (cursor paginated)."""
-    from pagination import parse_cursor
+    from shared.pagination import parse_cursor
 
     org_id = _require_org_id(payload, "No org_id in token — credit history requires an org-scoped credential.")
     if operation is not None and operation not in ("debit", "topup"):
@@ -4339,7 +4339,7 @@ async def list_memories_endpoint(
     """List memories for the authenticated org (newest first, cursor-paginated)."""
     org_id = _require_org_id(payload, "No org_id in token — memory requires an org-scoped credential.")
 
-    from pagination import parse_cursor
+    from shared.pagination import parse_cursor
 
     cursor_dt = parse_cursor(cursor)
     entries = await list_memories(org_id, limit, cursor_dt)
@@ -4859,8 +4859,8 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
     import aiohttp  # noqa: PLC0415
 
     from org_tools import _decrypt_header, _hash_webhook_host, _on_webhook_failure, _record_event  # noqa: PLC0415
-    from tool_health import is_breaker_tripped, record_success  # noqa: PLC0415
     from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
+    from tools.health import is_breaker_tripped, record_success  # noqa: PLC0415
 
     tool_id = tool_row.get("id", "")
     org_id = tool_row.get("org_id", "")
@@ -5292,7 +5292,7 @@ async def get_marketplace_earnings(
 
     Optionally filter by ``tool_name`` to see earnings for a specific tool.
     """
-    from pagination import parse_cursor
+    from shared.pagination import parse_cursor
 
     org_id = _require_org_id(payload)
     cursor_dt = parse_cursor(cursor)
@@ -5356,7 +5356,7 @@ async def get_marketplace_withdrawals(
 ) -> JSONResponse:
     """Get paginated withdrawal history (all statuses) for the authenticated org."""
     from marketplace import list_org_withdrawals
-    from pagination import parse_cursor
+    from shared.pagination import parse_cursor
 
     org_id = _require_org_id(payload)
     cursor_dt = parse_cursor(cursor)

@@ -309,11 +309,11 @@ async def test_no_audit_event_recorded(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_no_circuit_breaker_interaction(api_client, monkeypatch):
-    """A test call must not call tool_health.record_failure / record_success."""
+    """A test call must not call tools.health.record_failure / record_success."""
     record_failure = AsyncMock()
     record_success = AsyncMock()
-    monkeypatch.setattr("tool_health.record_failure", record_failure)
-    monkeypatch.setattr("tool_health.record_success", record_success)
+    monkeypatch.setattr("tools.health.record_failure", record_failure)
+    monkeypatch.setattr("tools.health.record_success", record_success)
     session = _mock_session(status=500, body=b'{"err": "x"}')
     with (
         patch("aiohttp.ClientSession", return_value=session),

@@ -23,20 +23,20 @@ import sentry_sdk
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from audit_event_store import insert_event_row
 from cache import TTLCache, get_redis
 from config import get_settings
-from db_pool_registry import bind_pool, require_pool, unbind_pool
-from tool_shared import (
+from shared.audit import insert_event_row
+from shared.db_pool import bind_pool, require_pool, unbind_pool
+from shared.webhook import WebhookCaller, WebhookCallError
+from tools.definitions.http_fetch import async_validate_url
+from tools.shared import (
     build_pydantic_model,
     decrypt_header_value,
     encrypt_header_value,
 )
-from tool_shared import (
+from tools.shared import (
     validate_safe_schema_subset as _validate_safe_schema_subset,
 )
-from tools.definitions.http_fetch import async_validate_url
-from webhook_caller import WebhookCaller, WebhookCallError
 
 logger = logging.getLogger(__name__)
 
@@ -400,7 +400,7 @@ async def update_org_tool(
     # starts with a clean failure window after manual re-enable.
     if is_active is True and row["is_active"] is False:
         try:
-            from tool_health import clear_breaker
+            from tools.health import clear_breaker
 
             await clear_breaker(tool_id)
         except Exception:  # pragma: no cover
@@ -427,7 +427,7 @@ async def delete_org_tool(tool_id: str, org_id: str, *, actor_id: str) -> bool:
 
         # Clear breaker state so a future re-creation starts fresh.
         try:
-            from tool_health import clear_breaker
+            from tools.health import clear_breaker
 
             await clear_breaker(tool_id)
         except Exception:  # pragma: no cover
@@ -693,7 +693,7 @@ def _build_langchain_tool(
         return {"error": exc.message}
 
     async def _call_webhook(**kwargs: Any) -> dict[str, Any]:
-        from tool_health import is_breaker_tripped, record_success
+        from tools.health import is_breaker_tripped, record_success
 
         # Pre-execution gate: skip immediately if breaker is tripped.
         if await is_breaker_tripped(_tool_id):
@@ -763,7 +763,7 @@ async def _on_webhook_failure(
     status_code: int | None = None,
 ) -> None:
     """Centralised failure side-effects: audit, breaker, sentry, deactivation."""
-    from tool_health import record_failure
+    from tools.health import record_failure
 
     detail: dict[str, Any] = {"error_type": error_type, "host_hash": host_hash}
     if status_code is not None:

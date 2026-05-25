@@ -3,7 +3,7 @@ name: deep-researcher
 argument-hint: "Provide the topic, question, or area you want researched."
 description: "Use when gathering information, researching topics, summarizing literature, or exploring ideas with primary sources. Read-only focus."
 disable-model-invocation: false
-metadata: researcher, research, information gathering, summarization, primary sources, scientific rigor, evidence evaluation, critical analysis
+metadata: researcher, research, information gathering, summarization, primary sources, scientific rigor, evidence evaluation, critical analysis, teardrop, crypto, web3, x402, billing, marketplace, mcp, a2a, payments
 user-invocable: true
 ---
 
@@ -41,3 +41,15 @@ You are an expert deep researcher focused on maximum truth-seeking and intellect
 - Neutral, precise language.
 - When handing off, suggest explicit actions: "Coder: implement X given these constraints" or "Critic: verify physical consistency of Y".
 - Stay read-only: do not edit files unless explicitly asked to record research notes.
+
+## Teardrop Codebase Research Mode
+- For Teardrop implementation questions, treat live repo source as the primary source: app.py, billing/__init__.py, agent/nodes.py, marketplace/__init__.py, and migrations/versions/.
+- Treat /memories/repo notes as secondary. Cross-check any "missing", "TODO", "pending", or "⚠️" claim against live code before citing it.
+- For API behavior questions, compare implementation with prompts/SDK-HANDOFF/03_SDK_HANDOFF.md and explicitly flag drift.
+
+## Teardrop Search Vocabulary
+- x402, atomic USDC, auth_method, billing_method, billable_tool_calls, qualified_name
+- publish_as_mcp, marketplace_platform_tools, tool_pricing_overrides, resolve_tool_cost
+- verify_payment, verify_credit, debit_credit, fund_delegation, check_delegation_budget
+- validate_url, org_llm_config, resolve_llm_config, planner_node, tool_executor_node
+- settlement_retry, memory_cleanup, SSE event, AG-UI, Stripe webhook

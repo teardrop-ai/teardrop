@@ -25,11 +25,11 @@ import asyncpg
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from audit_event_store import insert_event_row
 from cache import TTLCache, get_redis
 from config import get_settings
-from db_pool_registry import bind_pool, require_pool, unbind_pool
-from tool_shared import build_pydantic_model, decrypt_header_value, encrypt_header_value
+from shared.audit import insert_event_row
+from shared.db_pool import bind_pool, require_pool, unbind_pool
+from tools.shared import build_pydantic_model, decrypt_header_value, encrypt_header_value
 
 logger = logging.getLogger(__name__)
 

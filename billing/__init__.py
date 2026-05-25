@@ -32,11 +32,11 @@ import asyncpg
 import sentry_sdk
 from pydantic import BaseModel, Field
 
-from billing_credit import BillingCreditService
-from billing_delegation import BillingDelegationService
+from billing.credit import BillingCreditService
+from billing.delegation import BillingDelegationService
 from cache import TTLCache, get_redis
 from config import get_settings
-from db_pool_registry import bind_pool, require_pool, unbind_pool
+from shared.db_pool import bind_pool, require_pool, unbind_pool
 
 logger = logging.getLogger(__name__)
 
