@@ -18,7 +18,7 @@ _CATALOG_SORT_COLUMNS = {
 }
 
 # Sentinel used to distinguish "filter to platform only" from "no filter".
-_PLATFORM_SLUG = "platform"
+PLATFORM_SLUG = "platform"
 
 _PLATFORM_TOOL_PRICE_TTL_SECONDS = 60
 _ORG_TOOL_PRICE_TTL_SECONDS = 60
@@ -109,7 +109,7 @@ async def get_marketplace_catalog(
         except Exception:
             pass
 
-    if org_slug != _PLATFORM_SLUG:
+    if org_slug != PLATFORM_SLUG:
         order_col = _CATALOG_SORT_COLUMNS[sort]
 
         where_clauses = ["t.publish_as_mcp = TRUE", "t.is_active = TRUE"]
@@ -175,11 +175,12 @@ async def get_marketplace_catalog(
                     cost_usdc=cost,
                     author_org_name=r["org_name"],
                     author_org_slug=r["org_slug"],
+                    tool_type="community",
                 )
             )
 
-    if org_slug is None or org_slug == _PLATFORM_SLUG:
-        platform_limit_clause = f"LIMIT {limit}" if org_slug == _PLATFORM_SLUG else ""
+    if org_slug is None or org_slug == PLATFORM_SLUG:
+        platform_limit_clause = f"LIMIT {limit}" if org_slug == PLATFORM_SLUG else ""
         platform_rows = await pool.fetch(
             f"""
             SELECT tool_name, display_name, description, base_price_usdc
@@ -195,14 +196,15 @@ async def get_marketplace_catalog(
             catalog.append(
                 MarketplaceTool(
                     name=name,
-                    qualified_name=f"platform/{name}",
+                    qualified_name=f"{PLATFORM_SLUG}/{name}",
                     display_name=pr["display_name"],
                     description=pr["description"],
                     marketplace_description=pr["description"],
                     input_schema={},
                     cost_usdc=cost,
                     author_org_name="Teardrop",
-                    author_org_slug="platform",
+                    author_org_slug=PLATFORM_SLUG,
+                    tool_type="platform",
                 )
             )
 

@@ -63,7 +63,8 @@ In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` hav
 Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
-- Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"`
+- Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
+- Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`
 - Agent runs that call these tools incur their marketplace prices (in addition to token costs)
 - Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls
 

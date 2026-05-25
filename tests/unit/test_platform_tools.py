@@ -12,9 +12,11 @@ from httpx import ASGITransport, AsyncClient
 import teardrop.config as config
 from marketplace import (
     MarketplaceTool,
+    PlatformToolSubscriptionError,
     _invalidate_platform_tool_cache,
     get_marketplace_catalog,
     get_platform_tool_price,
+    subscribe_to_tool,
 )
 
 # ─── get_marketplace_catalog with platform tools ─────────────────────────────
@@ -55,7 +57,9 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert by_name["platform/http_fetch"].cost_usdc == 2000
         assert by_name["platform/http_fetch"].display_name == "HTTP Fetch"
         assert by_name["platform/http_fetch"].author_org_slug == "platform"
+        assert by_name["platform/http_fetch"].tool_type == "platform"
         assert by_name["platform/web_search"].cost_usdc == 10000
+        assert by_name["platform/web_search"].tool_type == "platform"
 
     @pytest.mark.anyio
     async def test_platform_tools_merged_with_org_tools(self, monkeypatch):
@@ -89,6 +93,9 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         names = [t.qualified_name for t in catalog]
         assert "acme/weather" in names
         assert "platform/get_token_price" in names
+        by_name = {t.qualified_name: t for t in catalog}
+        assert by_name["acme/weather"].tool_type == "community"
+        assert by_name["platform/get_token_price"].tool_type == "platform"
 
     @pytest.mark.anyio
     async def test_platform_tool_override_price(self, monkeypatch):
@@ -164,6 +171,13 @@ class TestGetPlatformToolPrice:
         await get_platform_tool_price("http_fetch")
 
         assert mock_pool.fetchrow.call_count == 2
+
+
+class TestPlatformToolSubscriptions:
+    @pytest.mark.anyio
+    async def test_platform_tool_subscription_rejected(self):
+        with pytest.raises(PlatformToolSubscriptionError, match="always available without subscription"):
+            await subscribe_to_tool("org-1", "platform/web_search")
 
 
 # ─── MCP billing gate: platform tool detection ──────────────────────────────

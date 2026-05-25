@@ -76,6 +76,8 @@ _MARKETPLACE_SWEEP_LOOP_ORIG = _worker._marketplace_sweep_loop
 # Root-level mutable compatibility state patched by tests.
 _pool: asyncpg.Pool | None = _ctx._pool
 _SUBSCRIPTION_CACHE = _subscriptions._SUBSCRIPTION_CACHE
+PLATFORM_SLUG = _catalog.PLATFORM_SLUG
+PlatformToolSubscriptionError = _subscriptions.PlatformToolSubscriptionError
 
 
 def _sync_to_modules() -> None:
@@ -94,6 +96,7 @@ def _sync_to_modules() -> None:
     _worker.asyncio = asyncio
 
     _subscriptions.get_marketplace_tool_by_name = get_marketplace_tool_by_name
+    _subscriptions.get_org_subscriptions = get_org_subscriptions
 
     _earnings.get_author_config = get_author_config
     _withdrawals.get_author_config = get_author_config

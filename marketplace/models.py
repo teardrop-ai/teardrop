@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -64,6 +64,7 @@ class MarketplaceTool(BaseModel):
     cost_usdc: int
     author_org_name: str
     author_org_slug: str
+    tool_type: Literal["platform", "community"] = "community"
 
 
 class MarketplaceSubscription(BaseModel):

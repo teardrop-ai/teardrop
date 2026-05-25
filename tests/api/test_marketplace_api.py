@@ -192,6 +192,7 @@ async def test_catalog_success(anon_client, monkeypatch):
     data = resp.json()
     assert len(data["tools"]) == 1
     assert data["tools"][0]["name"] == "acme/my_tool"
+    assert data["tools"][0]["tool_type"] == "community"
     assert resp.headers["cache-control"] == "public, max-age=60"
 
     config.get_settings.cache_clear()
@@ -585,6 +586,29 @@ async def test_subscribe_tool_not_found(api_client, monkeypatch):
         },
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_subscribe_platform_tool_rejected(api_client, monkeypatch):
+    from marketplace import PlatformToolSubscriptionError
+
+    monkeypatch.setattr(
+        "marketplace.subscribe_to_tool",
+        AsyncMock(
+            side_effect=PlatformToolSubscriptionError(
+                "'platform/web_search' is a built-in platform tool and is always available without subscription."
+            )
+        ),
+    )
+
+    resp = await api_client.post(
+        "/marketplace/subscriptions",
+        json={
+            "qualified_tool_name": "platform/web_search",
+        },
+    )
+    assert resp.status_code == 400
+    assert "always available without subscription" in resp.json()["detail"]
 
 
 @pytest.mark.anyio

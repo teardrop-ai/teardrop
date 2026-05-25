@@ -13,12 +13,16 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from marketplace.catalog import get_marketplace_tool_by_name
+from marketplace.catalog import PLATFORM_SLUG, get_marketplace_tool_by_name
 from marketplace.context import _get_pool
 from marketplace.models import MarketplaceSubscription, MarketplaceTool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class PlatformToolSubscriptionError(ValueError):
+    """Raised when callers attempt to subscribe to always-available platform tools."""
 
 
 _SUBSCRIPTION_CACHE: dict[str, tuple[frozenset[str], float]] = {}
@@ -31,12 +35,16 @@ def _invalidate_subscription_cache(org_id: str) -> None:
 
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
     """Subscribe an org to a marketplace tool by qualified name."""
-    pool = _get_pool()
-
     if "/" not in qualified_tool_name:
         raise ValueError("Tool name must be qualified: {org_slug}/{tool_name}")
 
     org_slug, tool_name = qualified_tool_name.split("/", 1)
+    if org_slug == PLATFORM_SLUG:
+        raise PlatformToolSubscriptionError(
+            f"'{qualified_tool_name}' is a built-in platform tool and is always available without subscription."
+        )
+
+    pool = _get_pool()
     tool_row = await get_marketplace_tool_by_name(tool_name, org_slug)
     if tool_row is None:
         raise ValueError(f"Marketplace tool not found: {qualified_tool_name}")

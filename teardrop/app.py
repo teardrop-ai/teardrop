@@ -5443,6 +5443,7 @@ async def get_marketplace_catalog_endpoint(
                     "description": t.marketplace_description,
                     "input_schema": t.input_schema,
                     "cost_usdc": t.cost_usdc,
+                    "tool_type": t.tool_type,
                     # author_slug is the canonical filter key; author is kept for
                     # backward compatibility and human display.
                     "author": t.author_org_name,
@@ -5469,11 +5470,13 @@ async def subscribe_to_marketplace_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Subscribe the authenticated org to a marketplace tool for /agent/run injection."""
-    from marketplace import subscribe_to_tool
+    from marketplace import PlatformToolSubscriptionError, subscribe_to_tool
 
     org_id: str = payload.get("org_id", "")
     try:
         sub = await subscribe_to_tool(org_id, body.qualified_tool_name)
+    except PlatformToolSubscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
