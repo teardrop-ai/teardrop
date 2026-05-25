@@ -20,20 +20,35 @@ from typing import Any
 import aiohttp
 import asyncpg
 import sentry_sdk
-from cryptography.fernet import Fernet, InvalidToken
-from jsonschema import Draft7Validator
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel
 
+from audit_event_store import insert_event_row
 from cache import TTLCache, get_redis
 from config import get_settings
+from db_pool_registry import bind_pool, require_pool, unbind_pool
+from tool_shared import (
+    build_pydantic_model,
+    decrypt_header_value,
+    encrypt_header_value,
+)
+from tool_shared import (
+    validate_safe_schema_subset as _validate_safe_schema_subset,
+)
 from tools.definitions.http_fetch import async_validate_url
+from webhook_caller import WebhookCaller, WebhookCallError
 
 logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _MAX_RESPONSE_BYTES = 50 * 1024  # 50 KB webhook response cap
+_POOL_SCOPE = "org_tools"
+_ORG_TOOL_EVENT_INSERT_SQL = (
+    "INSERT INTO org_tool_events"
+    " (id, org_id, tool_id, tool_name, event_type, actor_id, detail)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7)"
+)
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -69,7 +84,7 @@ _pool: asyncpg.Pool | None = None
 async def init_org_tools_db(pool: asyncpg.Pool) -> None:
     """Store the asyncpg pool reference.  Called during app lifespan startup."""
     global _pool
-    _pool = pool
+    _pool = bind_pool(_POOL_SCOPE, pool)
     logger.info("Org tools DB ready")
 
 
@@ -78,45 +93,29 @@ async def close_org_tools_db() -> None:
     global _pool
     if _pool is not None:
         _pool = None
+        unbind_pool(_POOL_SCOPE)
         logger.info("Org tools DB reference released")
 
 
 def _get_pool() -> asyncpg.Pool:
-    if _pool is None:
-        raise RuntimeError("Org tools DB not initialised — call init_org_tools_db() first")
-    return _pool
+    return require_pool(
+        _POOL_SCOPE,
+        _pool,
+        "Org tools DB not initialised — call init_org_tools_db() first",
+    )
 
 
 # ─── Encryption ───────────────────────────────────────────────────────────────
 
-_fernet: Fernet | None = None
-
-
-def _get_fernet() -> Fernet:
-    """Return a Fernet cipher, lazily initialised from config."""
-    global _fernet
-    if _fernet is not None:
-        return _fernet
-    settings = get_settings()
-    key = settings.org_tool_encryption_key
-    if not key:
-        raise RuntimeError(
-            "ORG_TOOL_ENCRYPTION_KEY is not set — generate one with: "
-            'python -c "from cryptography.fernet import Fernet; '
-            'print(Fernet.generate_key().decode())"'
-        )
-    _fernet = Fernet(key.encode())
-    return _fernet
-
 
 def _encrypt_header(value: str) -> str:
     """Encrypt a webhook auth header value.  Returns base64 Fernet token."""
-    return _get_fernet().encrypt(value.encode()).decode()
+    return encrypt_header_value(value)
 
 
 def _decrypt_header(encrypted: str) -> str:
     """Decrypt a webhook auth header value."""
-    return _get_fernet().decrypt(encrypted.encode()).decode()
+    return decrypt_header_value(encrypted)
 
 
 # ─── Audit logging ────────────────────────────────────────────────────────────
@@ -133,17 +132,17 @@ async def _record_event(
     """Insert an immutable audit event.  Best-effort — errors logged, never raised."""
     try:
         pool = _get_pool()
-        await pool.execute(
-            "INSERT INTO org_tool_events"
-            " (id, org_id, tool_id, tool_name, event_type, actor_id, detail)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            str(uuid.uuid4()),
-            org_id,
-            tool_id,
-            tool_name,
-            event_type,
-            actor_id,
-            json.dumps(detail or {}),
+        await insert_event_row(
+            pool,
+            insert_sql=_ORG_TOOL_EVENT_INSERT_SQL,
+            values=(
+                org_id,
+                tool_id,
+                tool_name,
+                event_type,
+                actor_id,
+                json.dumps(detail or {}),
+            ),
         )
     except Exception:
         logger.warning("Failed to record org tool event", exc_info=True)
@@ -567,33 +566,6 @@ async def invalidate_marketplace_cache() -> None:
 
 # ─── Dynamic Pydantic model from JSON Schema ─────────────────────────────────
 
-_JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
-    "object": dict,
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-    "array": list,
-}
-
-_SAFE_SCHEMA_KEYS: set[str] = {
-    "type",
-    "properties",
-    "required",
-    "description",
-    "title",
-    "default",
-    "enum",
-    "minimum",
-    "maximum",
-    "minLength",
-    "maxLength",
-    "pattern",
-    "items",
-}
-
-_SAFE_SCHEMA_TYPES: set[str] = {"object", "string", "integer", "number", "boolean", "array"}
-
 
 def normalize_webhook_response(
     raw: bytes,
@@ -647,40 +619,7 @@ def normalize_webhook_response(
 
 def validate_safe_schema_subset(schema: dict[str, Any]) -> list[str]:
     """Return unsupported schema keywords/types that runtime tooling cannot enforce."""
-    errors: list[str] = []
-
-    def _walk(node: Any, path: str, *, in_properties_map: bool = False) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if in_properties_map:
-                    # Property names are user-defined keys that each hold a schema node.
-                    _walk(value, f"{path}.{key}")
-                    continue
-                if key not in _SAFE_SCHEMA_KEYS:
-                    errors.append(f"{path}.{key}: keyword not supported")
-                if key == "type":
-                    if isinstance(value, str):
-                        if value not in _SAFE_SCHEMA_TYPES:
-                            errors.append(f"{path}.type={value}: type not supported")
-                    elif isinstance(value, list):
-                        bad = [t for t in value if t not in _SAFE_SCHEMA_TYPES]
-                        if bad:
-                            errors.append(f"{path}.type={bad}: type not supported")
-                    else:
-                        errors.append(f"{path}.type: invalid type declaration")
-                _walk(value, f"{path}.{key}", in_properties_map=(key == "properties"))
-        elif isinstance(node, list):
-            for i, item in enumerate(node):
-                _walk(item, f"{path}[{i}]", in_properties_map=False)
-
-    try:
-        Draft7Validator.check_schema(schema)
-    except Exception:
-        # Schema syntax errors are validated at API layer.
-        return ["$.schema: invalid JSON Schema"]
-
-    _walk(schema, "$")
-    return errors
+    return _validate_safe_schema_subset(schema)
 
 
 def _build_pydantic_model(
@@ -688,46 +627,8 @@ def _build_pydantic_model(
     schema: dict[str, Any],
     model_name: str | None = None,
 ) -> type[BaseModel]:
-    """Create a Pydantic model from a JSON Schema 'properties' dict.
-
-    Supports basic types (string, integer, number, boolean).  Unknown types
-    default to ``str``.  Required fields come from the schema's ``required``
-    list; everything else is ``Optional`` with a default of ``None``.
-
-    ``model_name`` overrides the auto-generated class name; defaults to
-    ``OrgTool_{name}_Input``.
-    """
-    properties = schema.get("properties", {})
-    required_set = set(schema.get("required", []))
-    fields: dict[str, Any] = {}
-
-    for field_name, field_def in properties.items():
-        json_type = field_def.get("type", "string")
-        py_type = _JSON_SCHEMA_TYPE_MAP.get(json_type, str)
-        description = field_def.get("description", "")
-
-        # Special handling for arrays: Pydantic bare 'list' types resolve to
-        # JSON Schema 'type: array' without 'items'. Google/Gemini requires
-        # 'items' to be present. If the schema provides items, we use them
-        # to generate a more specific list type.
-        if json_type == "array":
-            items_def = field_def.get("items")
-            if items_def and isinstance(items_def, dict):
-                item_json_type = items_def.get("type", "string")
-                item_py_type = _JSON_SCHEMA_TYPE_MAP.get(item_json_type, str)
-                py_type = list[item_py_type]  # type: ignore[valid-type]
-            else:
-                # If no items provided, default to list[str] to ensure Pydantic
-                # generates a non-empty 'items' field in the outgoing schema.
-                py_type = list[str]
-
-        if field_name in required_set:
-            fields[field_name] = (py_type, Field(..., description=description))
-        else:
-            fields[field_name] = (py_type | None, Field(default=None, description=description))
-
-    cls_name = model_name if model_name is not None else f"OrgTool_{name}_Input"
-    return create_model(cls_name, **fields)
+    """Backward-compatible wrapper around the shared Pydantic model builder."""
+    return build_pydantic_model(name, schema, model_name=model_name)
 
 
 # ─── Webhook execution & LangChain tool building ─────────────────────────────
@@ -771,9 +672,25 @@ def _build_langchain_tool(
     _header_name = auth_header_name
     _header_enc = auth_header_enc
     _host_hash = _hash_webhook_host(_url)
+    caller = WebhookCaller(
+        url=_url,
+        timeout_seconds=_timeout,
+        auth_header_name=_header_name,
+        auth_header_encrypted=_header_enc,
+        max_response_bytes=_MAX_RESPONSE_BYTES,
+    )
 
     if _method != "GET":
         raise ValueError(f"Org tool '{tool.name}' has non-GET webhook_method '{_method}'")
+
+    async def _handle_call_error(exc: WebhookCallError) -> dict[str, Any]:
+        if exc.error_type == "ssrf_blocked":
+            return {"error": exc.message}
+        if exc.error_type == "decrypt_failure":
+            await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "decrypt_failure")
+            return {"error": exc.message}
+        await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, exc.error_type)
+        return {"error": exc.message}
 
     async def _call_webhook(**kwargs: Any) -> dict[str, Any]:
         from tool_health import is_breaker_tripped, record_success
@@ -782,64 +699,47 @@ def _build_langchain_tool(
         if await is_breaker_tripped(_tool_id):
             return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
 
-        # SSRF re-check at call time (DNS rebinding defense)
-        url_error = await async_validate_url(_url)
-        if url_error is not None:
-            return {"error": f"Webhook URL blocked: {url_error}"}
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if _header_name and _header_enc:
-            try:
-                headers[_header_name] = _decrypt_header(_header_enc)
-            except (InvalidToken, Exception):
-                await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "decrypt_failure")
-                return {"error": "Failed to decrypt webhook auth header"}
-
-        timeout = aiohttp.ClientTimeout(total=_timeout)
         started = time.monotonic()
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                resp = await session.get(_url, headers=headers, params=kwargs)
+            call_result = await caller.call_get(
+                params=kwargs,
+                decrypt_header=_decrypt_header,
+                validate_url=async_validate_url,
+                client_session_factory=aiohttp.ClientSession,
+            )
+        except WebhookCallError as exc:
+            return await _handle_call_error(exc)
 
-                body = await resp.read()
-                content_type = resp.headers.get("Content-Type", "")
-                normalized = normalize_webhook_response(
-                    body,
-                    content_type=content_type,
-                    status_code=resp.status,
-                    max_bytes=_MAX_RESPONSE_BYTES,
-                )
+        normalized = normalize_webhook_response(
+            call_result.body,
+            content_type=call_result.content_type,
+            status_code=call_result.status_code,
+            max_bytes=_MAX_RESPONSE_BYTES,
+        )
 
-                if not normalized["success"]:
-                    await _on_webhook_failure(
-                        _tool_id,
-                        _org_id,
-                        _tool_name,
-                        _host_hash,
-                        normalized["error_type"] or "upstream_error",
-                        status_code=resp.status,
-                    )
-                    return {"error": normalized["error"], "status": resp.status}
+        if not normalized["success"]:
+            await _on_webhook_failure(
+                _tool_id,
+                _org_id,
+                _tool_name,
+                _host_hash,
+                normalized["error_type"] or "upstream_error",
+                status_code=call_result.status_code,
+            )
+            return {"error": normalized["error"], "status": call_result.status_code}
 
-                # Success path.
-                latency_ms = int((time.monotonic() - started) * 1000)
-                await record_success(_tool_id)
-                await _record_event(
-                    _org_id,
-                    _tool_id,
-                    _tool_name,
-                    "executed",
-                    actor_id="agent",
-                    detail={"latency_ms": latency_ms, "status": resp.status},
-                )
-                return normalized["response_body"]
-
-        except asyncio.TimeoutError:
-            await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, "timeout")
-            return {"error": f"Webhook timed out after {_timeout}s"}
-        except aiohttp.ClientError as exc:
-            await _on_webhook_failure(_tool_id, _org_id, _tool_name, _host_hash, type(exc).__name__)
-            return {"error": f"Webhook request failed: {type(exc).__name__}"}
+        # Success path.
+        latency_ms = int((time.monotonic() - started) * 1000)
+        await record_success(_tool_id)
+        await _record_event(
+            _org_id,
+            _tool_id,
+            _tool_name,
+            "executed",
+            actor_id="agent",
+            detail={"latency_ms": latency_ms, "status": call_result.status_code},
+        )
+        return normalized["response_body"]
 
     return StructuredTool.from_function(
         coroutine=_call_webhook,

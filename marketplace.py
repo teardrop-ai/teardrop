@@ -29,12 +29,14 @@ from pydantic import BaseModel
 
 from cache import TTLCache
 from config import get_settings
+from db_pool_registry import bind_pool, require_pool, unbind_pool
 
 logger = logging.getLogger(__name__)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _EIP55_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_POOL_SCOPE = "marketplace"
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -87,7 +89,7 @@ _pool: asyncpg.Pool | None = None
 async def init_marketplace_db(pool: asyncpg.Pool) -> None:
     """Store the asyncpg pool reference.  Called during app lifespan startup."""
     global _pool
-    _pool = pool
+    _pool = bind_pool(_POOL_SCOPE, pool)
     logger.info("Marketplace DB ready")
 
 
@@ -96,13 +98,16 @@ async def close_marketplace_db() -> None:
     global _pool
     if _pool is not None:
         _pool = None
+        unbind_pool(_POOL_SCOPE)
         logger.info("Marketplace DB reference released")
 
 
 def _get_pool() -> asyncpg.Pool:
-    if _pool is None:
-        raise RuntimeError("Marketplace DB not initialised — call init_marketplace_db() first")
-    return _pool
+    return require_pool(
+        _POOL_SCOPE,
+        _pool,
+        "Marketplace DB not initialised — call init_marketplace_db() first",
+    )
 
 
 # ─── Wallet validation ────────────────────────────────────────────────────────
@@ -305,199 +310,196 @@ async def get_author_earnings_history(
 # ─── Withdrawals ──────────────────────────────────────────────────────────────
 
 
-async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
-    """Request a withdrawal of accumulated earnings.
+class _WithdrawalService:
+    """Encapsulates withdrawal validation and settlement side-effects."""
 
-    Validates:
-    - Author config exists (settlement wallet required)
-    - Amount >= minimum withdrawal threshold
-    - Amount <= pending balance
-    - Cooldown period respected
+    def __init__(self, pool: asyncpg.Pool, settings: Any):
+        self._pool = pool
+        self._settings = settings
 
-    Returns the created withdrawal record.
-    Raises ValueError on validation failure.
-    """
-    pool = _get_pool()
-    settings = get_settings()
+    async def request(self, org_id: str, amount_usdc: int) -> AuthorWithdrawal:
+        """Create a validated pending withdrawal request."""
+        if not self._settings.agent_wallet_enabled:
+            raise ValueError("Withdrawals are unavailable: agent wallets are not enabled on this platform")
 
-    if not settings.agent_wallet_enabled:
-        raise ValueError("Withdrawals are unavailable: agent wallets are not enabled on this platform")
+        config = await get_author_config(org_id)
+        if config is None:
+            raise ValueError("Author config not set — register a settlement wallet first")
 
-    # Author config required
-    config = await get_author_config(org_id)
-    if config is None:
-        raise ValueError("Author config not set — register a settlement wallet first")
+        if amount_usdc < self._settings.marketplace_minimum_withdrawal_usdc:
+            min_str = f"${self._settings.marketplace_minimum_withdrawal_usdc / 1_000_000:.2f}"
+            raise ValueError(f"Minimum withdrawal amount is {min_str}")
 
-    # Minimum amount
-    if amount_usdc < settings.marketplace_minimum_withdrawal_usdc:
-        min_str = f"${settings.marketplace_minimum_withdrawal_usdc / 1_000_000:.2f}"
-        raise ValueError(f"Minimum withdrawal amount is {min_str}")
+        balance = await get_author_balance(org_id)
+        if amount_usdc > balance:
+            raise ValueError(f"Insufficient balance: requested {amount_usdc} atomic USDC but only {balance} pending")
 
-    # Sufficient pending balance
-    balance = await get_author_balance(org_id)
-    if amount_usdc > balance:
-        raise ValueError(f"Insufficient balance: requested {amount_usdc} atomic USDC but only {balance} pending")
+        last_withdrawal = await self._pool.fetchrow(
+            """
+            SELECT created_at FROM tool_author_withdrawals
+            WHERE org_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            org_id,
+        )
+        if last_withdrawal is not None:
+            elapsed = (datetime.now(timezone.utc) - last_withdrawal["created_at"]).total_seconds()
+            if elapsed < self._settings.marketplace_withdrawal_cooldown_seconds:
+                remaining = int(self._settings.marketplace_withdrawal_cooldown_seconds - elapsed)
+                raise ValueError(f"Withdrawal cooldown: {remaining}s remaining")
 
-    # Cooldown check
-    last_withdrawal = await pool.fetchrow(
-        """
-        SELECT created_at FROM tool_author_withdrawals
-        WHERE org_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        org_id,
-    )
-    if last_withdrawal is not None:
-        elapsed = (datetime.now(timezone.utc) - last_withdrawal["created_at"]).total_seconds()
-        if elapsed < settings.marketplace_withdrawal_cooldown_seconds:
-            remaining = int(settings.marketplace_withdrawal_cooldown_seconds - elapsed)
-            raise ValueError(f"Withdrawal cooldown: {remaining}s remaining")
+        now = datetime.now(timezone.utc)
+        withdrawal_id = str(uuid.uuid4())
+        await self._pool.execute(
+            """
+            INSERT INTO tool_author_withdrawals (id, org_id, amount_usdc, wallet, status, created_at)
+            VALUES ($1, $2, $3, $4, 'pending', $5)
+            """,
+            withdrawal_id,
+            org_id,
+            amount_usdc,
+            config.settlement_wallet,
+            now,
+        )
+        return AuthorWithdrawal(
+            id=withdrawal_id,
+            org_id=org_id,
+            amount_usdc=amount_usdc,
+            tx_hash="",
+            wallet=config.settlement_wallet,
+            status="pending",
+            created_at=now,
+            settled_at=None,
+        )
 
-    now = datetime.now(timezone.utc)
-    withdrawal_id = str(uuid.uuid4())
+    async def _load_pending_withdrawal(self, withdrawal_id: str) -> asyncpg.Record:
+        row = await self._pool.fetchrow(
+            "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
+            withdrawal_id,
+        )
+        if row is None:
+            raise ValueError("Withdrawal not found or not in 'pending' status")
+        return row
 
-    await pool.execute(
-        """
-        INSERT INTO tool_author_withdrawals (id, org_id, amount_usdc, wallet, status, created_at)
-        VALUES ($1, $2, $3, $4, 'pending', $5)
-        """,
-        withdrawal_id,
-        org_id,
-        amount_usdc,
-        config.settlement_wallet,
-        now,
-    )
+    async def _select_earnings_to_settle(
+        self,
+        conn: asyncpg.Connection,
+        *,
+        org_id: str,
+        amount_usdc: int,
+    ) -> tuple[list[str], int]:
+        earnings_rows = await conn.fetch(
+            """
+            SELECT id, author_share_usdc FROM tool_author_earnings
+            WHERE org_id = $1 AND status = 'pending'
+            ORDER BY created_at ASC
+            FOR UPDATE
+            """,
+            org_id,
+        )
 
-    return AuthorWithdrawal(
-        id=withdrawal_id,
-        org_id=org_id,
-        amount_usdc=amount_usdc,
-        tx_hash="",
-        wallet=config.settlement_wallet,
-        status="pending",
-        created_at=now,
-        settled_at=None,
-    )
+        remaining = amount_usdc
+        settled_ids: list[str] = []
+        settled_total = 0
+        for er in earnings_rows:
+            if remaining <= 0:
+                break
+            row_share = er["author_share_usdc"]
+            if row_share > remaining:
+                continue
+            settled_ids.append(er["id"])
+            settled_total += row_share
+            remaining -= row_share
+        return settled_ids, settled_total
 
+    async def _attempt_transfer(
+        self,
+        *,
+        withdrawal_id: str,
+        dest_wallet: str,
+        settled_total: int,
+    ) -> tuple[str, bool, str]:
+        if settled_total <= 0 or not self._settings.agent_wallet_enabled:
+            return "", False, ""
 
-async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
-    """Process a pending withdrawal: settle earnings + auto-transfer USDC via CDP.
+        try:
+            from agent_wallets import transfer_usdc, verify_usdc_transfer
 
-    1. Marks matching pending earnings as 'settled' (oldest first, up to amount).
-    2. Transfers USDC from the platform settlement wallet to the author's
-       settlement wallet using CDP SDK.
-    3. Records the tx_hash on the withdrawal row.
-
-    If CDP transfer fails, earnings are reverted to 'pending' and the
-    withdrawal is marked 'failed'.
-    """
-    pool = _get_pool()
-    settings = get_settings()
-
-    if not settings.agent_wallet_enabled:
-        raise RuntimeError("Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first")
-
-    row = await pool.fetchrow(
-        "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
-        withdrawal_id,
-    )
-    if row is None:
-        raise ValueError("Withdrawal not found or not in 'pending' status")
-
-    org_id = row["org_id"]
-    amount = row["amount_usdc"]
-    dest_wallet = row["wallet"]
-
-    # Mark earnings as settled (oldest first, up to withdrawal amount)
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            earnings_rows = await conn.fetch(
-                """
-                SELECT id, author_share_usdc FROM tool_author_earnings
-                WHERE org_id = $1 AND status = 'pending'
-                ORDER BY created_at ASC
-                FOR UPDATE
-                """,
-                org_id,
+            tx_hash = await transfer_usdc(
+                from_cdp_account=self._settings.marketplace_settlement_cdp_account,
+                to_address=dest_wallet,
+                amount_usdc=settled_total,
+                chain_id=self._settings.marketplace_settlement_chain_id,
+            )
+            logger.info(
+                "process_withdrawal: transfer ok id=%s tx=%s amount=%d",
+                withdrawal_id,
+                tx_hash,
+                settled_total,
             )
 
-            remaining = amount
-            settled_ids: list[str] = []
-            settled_total = 0
-            for er in earnings_rows:
-                if remaining <= 0:
-                    break
-                row_share = er["author_share_usdc"]
-                if row_share > remaining:
-                    continue
-                settled_ids.append(er["id"])
-                settled_total += row_share
-                remaining -= row_share
+            try:
+                confirmed = await verify_usdc_transfer(
+                    tx_hash=tx_hash,
+                    chain_id=self._settings.marketplace_settlement_chain_id,
+                    timeout_seconds=self._settings.marketplace_tx_confirm_timeout_seconds,
+                )
+            except ValueError:
+                logger.warning(
+                    "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
+                    tx_hash,
+                    withdrawal_id,
+                )
+                confirmed = True
 
-            if settled_ids:
-                await conn.execute(
-                    """
-                    UPDATE tool_author_earnings
-                    SET status = 'settled'
-                    WHERE id = ANY($1::text[])
-                    """,
-                    settled_ids,
+            if not confirmed:
+                raise RuntimeError(f"Transaction {tx_hash} was reverted on-chain")
+            return tx_hash, False, ""
+        except Exception as exc:
+            logger.error("process_withdrawal: CDP transfer failed id=%s: %s", withdrawal_id, exc)
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("withdrawal_id", str(withdrawal_id))
+                scope.set_tag("rail", "cdp")
+                sentry_sdk.capture_exception(exc)
+            return "", True, str(exc)
+
+    async def process(self, withdrawal_id: str) -> AuthorWithdrawal:
+        """Process a pending withdrawal and return the resulting state."""
+        if not self._settings.agent_wallet_enabled:
+            raise RuntimeError("Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first")
+
+        row = await self._load_pending_withdrawal(withdrawal_id)
+        org_id = row["org_id"]
+        amount = row["amount_usdc"]
+        dest_wallet = row["wallet"]
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                settled_ids, settled_total = await self._select_earnings_to_settle(
+                    conn,
+                    org_id=org_id,
+                    amount_usdc=amount,
                 )
 
-            # Attempt CDP transfer
-            tx_hash = ""
-            transfer_failed = False
-            transfer_error = ""
-            if settled_total > 0 and settings.agent_wallet_enabled:
-                try:
-                    from agent_wallets import transfer_usdc, verify_usdc_transfer
-
-                    tx_hash = await transfer_usdc(
-                        from_cdp_account=settings.marketplace_settlement_cdp_account,
-                        to_address=dest_wallet,
-                        amount_usdc=settled_total,
-                        chain_id=settings.marketplace_settlement_chain_id,
-                    )
-                    logger.info(
-                        "process_withdrawal: transfer ok id=%s tx=%s amount=%d",
-                        withdrawal_id,
-                        tx_hash,
-                        settled_total,
+                if settled_ids:
+                    await conn.execute(
+                        """
+                        UPDATE tool_author_earnings
+                        SET status = 'settled'
+                        WHERE id = ANY($1::text[])
+                        """,
+                        settled_ids,
                     )
 
-                    # Confirm the transaction was mined and not reverted.
-                    try:
-                        confirmed = await verify_usdc_transfer(
-                            tx_hash=tx_hash,
-                            chain_id=settings.marketplace_settlement_chain_id,
-                            timeout_seconds=settings.marketplace_tx_confirm_timeout_seconds,
-                        )
-                    except ValueError:
-                        # No RPC URL configured — skip verification, proceed optimistically.
-                        logger.warning(
-                            "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
-                            tx_hash,
-                            withdrawal_id,
-                        )
-                        confirmed = True
+                tx_hash, transfer_failed, transfer_error = await self._attempt_transfer(
+                    withdrawal_id=withdrawal_id,
+                    dest_wallet=dest_wallet,
+                    settled_total=settled_total,
+                )
 
-                    if not confirmed:
-                        raise RuntimeError(f"Transaction {tx_hash} was reverted on-chain")
-
-                except Exception as exc:
-                    logger.error(
-                        "process_withdrawal: CDP transfer failed id=%s: %s",
-                        withdrawal_id,
-                        exc,
-                    )
-                    with sentry_sdk.new_scope() as scope:
-                        scope.set_tag("withdrawal_id", str(withdrawal_id))
-                        scope.set_tag("rail", "cdp")
-                        sentry_sdk.capture_exception(exc)
-                    transfer_failed = True
-                    transfer_error = str(exc)
-                    # Revert earnings back to pending
+                now = datetime.now(timezone.utc)
+                if transfer_failed:
                     if settled_ids:
                         await conn.execute(
                             """
@@ -507,52 +509,63 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
                             """,
                             settled_ids,
                         )
+                    await conn.execute(
+                        """
+                        UPDATE tool_author_withdrawals
+                        SET status = 'failed', settled_at = $2, last_sweep_error = $3
+                        WHERE id = $1
+                        """,
+                        withdrawal_id,
+                        now,
+                        transfer_error,
+                    )
+                    return AuthorWithdrawal(
+                        id=withdrawal_id,
+                        org_id=org_id,
+                        amount_usdc=amount,
+                        tx_hash="",
+                        wallet=dest_wallet,
+                        status="failed",
+                        last_sweep_error=transfer_error,
+                        created_at=row["created_at"],
+                        settled_at=now,
+                    )
 
-            now = datetime.now(timezone.utc)
-            if transfer_failed:
                 await conn.execute(
                     """
                     UPDATE tool_author_withdrawals
-                    SET status = 'failed', settled_at = $2, last_sweep_error = $3
+                    SET status = 'settled', tx_hash = $2, settled_at = $3
                     WHERE id = $1
                     """,
                     withdrawal_id,
+                    tx_hash,
                     now,
-                    transfer_error,
-                )
-                return AuthorWithdrawal(
-                    id=withdrawal_id,
-                    org_id=org_id,
-                    amount_usdc=amount,
-                    tx_hash="",
-                    wallet=dest_wallet,
-                    status="failed",
-                    last_sweep_error=transfer_error,
-                    created_at=row["created_at"],
-                    settled_at=now,
                 )
 
-            await conn.execute(
-                """
-                UPDATE tool_author_withdrawals
-                SET status = 'settled', tx_hash = $2, settled_at = $3
-                WHERE id = $1
-                """,
-                withdrawal_id,
-                tx_hash,
-                now,
-            )
+        return AuthorWithdrawal(
+            id=withdrawal_id,
+            org_id=org_id,
+            amount_usdc=amount,
+            tx_hash=tx_hash,
+            wallet=dest_wallet,
+            status="settled",
+            created_at=row["created_at"],
+            settled_at=now,
+        )
 
-    return AuthorWithdrawal(
-        id=withdrawal_id,
-        org_id=org_id,
-        amount_usdc=amount,
-        tx_hash=tx_hash,
-        wallet=dest_wallet,
-        status="settled",
-        created_at=row["created_at"],
-        settled_at=now,
-    )
+
+def _get_withdrawal_service() -> _WithdrawalService:
+    return _WithdrawalService(_get_pool(), get_settings())
+
+
+async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
+    """Request a validated withdrawal of accumulated earnings."""
+    return await _get_withdrawal_service().request(org_id, amount_usdc)
+
+
+async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
+    """Process a pending withdrawal and return the updated withdrawal model."""
+    return await _get_withdrawal_service().process(withdrawal_id)
 
 
 async def complete_withdrawal(withdrawal_id: str, tx_hash: str) -> None:
@@ -1193,17 +1206,16 @@ def _build_marketplace_langchain_tool(
     """Wrap a marketplace tool row as a LangChain StructuredTool via webhook."""
     import json as _json
 
-    import aiohttp
-
-    from org_tools import _build_pydantic_model, _decrypt_header
+    from tool_shared import build_pydantic_model, decrypt_header_value
     from tools.definitions.http_fetch import async_validate_url
+    from webhook_caller import WebhookCaller, WebhookCallError
 
     raw_schema = tool_row.get("input_schema", {})
     if isinstance(raw_schema, str):
         raw_schema = _json.loads(raw_schema)
 
     model_name = f"MPTool_{qualified_name.replace('/', '_')}_Input"
-    args_model = _build_pydantic_model(qualified_name, raw_schema, model_name=model_name)
+    args_model = build_pydantic_model(qualified_name, raw_schema, model_name=model_name)
 
     _url = tool_row["webhook_url"]
     _method = tool_row.get("webhook_method", "GET")
@@ -1211,6 +1223,13 @@ def _build_marketplace_langchain_tool(
     _auth_name = tool_row.get("auth_header_name")
     _auth_enc = tool_row.get("auth_header_enc")
     _tool_id = tool_row.get("id")
+    caller = WebhookCaller(
+        url=_url,
+        timeout_seconds=_timeout_sec,
+        auth_header_name=_auth_name,
+        auth_header_encrypted=_auth_enc,
+        max_response_bytes=512 * 1024,
+    )
 
     if _method != "GET":
         raise ValueError(f"Marketplace tool '{qualified_name}' has non-GET webhook_method '{_method}'")
@@ -1221,37 +1240,28 @@ def _build_marketplace_langchain_tool(
         if _tool_id and await is_breaker_tripped(str(_tool_id)):
             return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
 
-        url_err = await async_validate_url(_url)
-        if url_err:
-            return {"error": f"Webhook URL blocked: {url_err}"}
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if _auth_name and _auth_enc:
-            try:
-                headers[_auth_name] = _decrypt_header(_auth_enc)
-            except Exception:
-                return {"error": "Failed to decrypt webhook auth header"}
-
-        timeout = aiohttp.ClientTimeout(total=_timeout_sec)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                resp = await session.get(_url, headers=headers, params=kwargs)
-
-                body = await resp.read()
-                if len(body) > 512 * 1024:
-                    body = body[: 512 * 1024]
-
-                if _tool_id:
-                    await record_success(str(_tool_id))
-
-                content_type = resp.headers.get("Content-Type", "")
-                if "application/json" in content_type:
-                    return _json.loads(body)
-                return {"text": body.decode("utf-8", errors="replace")}
-        except asyncio.TimeoutError:
+            call_result = await caller.call_get(
+                params=kwargs,
+                decrypt_header=decrypt_header_value,
+                validate_url=async_validate_url,
+            )
+        except WebhookCallError as exc:
+            if _tool_id and exc.error_type not in {"ssrf_blocked", "decrypt_failure"}:
+                await record_failure(str(_tool_id))
+            return {"error": exc.message}
+        except Exception as exc:
             if _tool_id:
                 await record_failure(str(_tool_id))
-            return {"error": f"Webhook timed out after {_timeout_sec}s"}
+            return {"error": f"Webhook request failed: {type(exc).__name__}"}
+
+        if _tool_id:
+            await record_success(str(_tool_id))
+
+        try:
+            if "application/json" in call_result.content_type:
+                return _json.loads(call_result.body)
+            return {"text": call_result.body.decode("utf-8", errors="replace")}
         except Exception as exc:
             if _tool_id:
                 await record_failure(str(_tool_id))

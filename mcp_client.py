@@ -25,8 +25,11 @@ import asyncpg
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from audit_event_store import insert_event_row
 from cache import TTLCache, get_redis
 from config import get_settings
+from db_pool_registry import bind_pool, require_pool, unbind_pool
+from tool_shared import build_pydantic_model, decrypt_header_value, encrypt_header_value
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 _MAX_RESPONSE_BYTES = 50 * 1024  # 50 KB response cap per MCP tool call
 _NAME_SEPARATOR = "__"  # server_name__tool_name
+_POOL_SCOPE = "mcp_client"
+_MCP_EVENT_INSERT_SQL = (
+    "INSERT INTO org_mcp_server_events"
+    " (id, org_id, server_id, server_name, event_type, detail, actor_id)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7)"
+)
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -62,7 +71,7 @@ _pool: asyncpg.Pool | None = None
 async def init_mcp_client_db(pool: asyncpg.Pool) -> None:
     """Store the asyncpg pool reference.  Called during app lifespan startup."""
     global _pool
-    _pool = pool
+    _pool = bind_pool(_POOL_SCOPE, pool)
     logger.info("MCP client DB ready")
 
 
@@ -72,30 +81,29 @@ async def close_mcp_client_db() -> None:
     await _close_all_sessions()
     if _pool is not None:
         _pool = None
+        unbind_pool(_POOL_SCOPE)
         logger.info("MCP client DB reference released")
 
 
 def _get_pool() -> asyncpg.Pool:
-    if _pool is None:
-        raise RuntimeError("MCP client DB not initialised — call init_mcp_client_db() first")
-    return _pool
+    return require_pool(
+        _POOL_SCOPE,
+        _pool,
+        "MCP client DB not initialised — call init_mcp_client_db() first",
+    )
 
 
-# ─── Encryption (reuse org_tools Fernet) ──────────────────────────────────────
+# ─── Encryption (shared helpers) ──────────────────────────────────────────────
 
 
 def _encrypt_token(value: str) -> str:
     """Encrypt an auth token for at-rest storage."""
-    from org_tools import _encrypt_header
-
-    return _encrypt_header(value)
+    return encrypt_header_value(value)
 
 
 def _decrypt_token(encrypted: str) -> str:
     """Decrypt a stored auth token."""
-    from org_tools import _decrypt_header
-
-    return _decrypt_header(encrypted)
+    return decrypt_header_value(encrypted)
 
 
 # ─── Audit logging ────────────────────────────────────────────────────────────
@@ -112,17 +120,17 @@ async def _record_event(
     """Insert an immutable audit event.  Best-effort — errors logged, never raised."""
     try:
         pool = _get_pool()
-        await pool.execute(
-            "INSERT INTO org_mcp_server_events"
-            " (id, org_id, server_id, server_name, event_type, detail, actor_id)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            str(uuid.uuid4()),
-            org_id,
-            server_id,
-            server_name,
-            event_type,
-            detail,
-            actor_id,
+        await insert_event_row(
+            pool,
+            insert_sql=_MCP_EVENT_INSERT_SQL,
+            values=(
+                org_id,
+                server_id,
+                server_name,
+                event_type,
+                detail,
+                actor_id,
+            ),
         )
     except Exception:
         logger.warning("Failed to record MCP server event", exc_info=True)
@@ -393,29 +401,14 @@ _sessions: dict[str, tuple[Any, AsyncExitStack, float]] = {}
 # Key: server_id → (ClientSession, exit_stack, expires_at_monotonic)
 
 
-async def _get_or_create_session(server: OrgMcpServer) -> Any:
-    """Return a cached MCP ClientSession or create a new one.
+class _SessionPool:
+    """Manages cached Streamable-HTTP MCP sessions per server."""
 
-    Uses Streamable HTTP transport with optional auth headers.
-    """
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    async def _build_auth_headers(self, server: OrgMcpServer) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if not server.has_auth:
+            return headers
 
-    settings = get_settings()
-    now = time.monotonic()
-
-    # Check cache hit
-    cached = _sessions.get(server.id)
-    if cached is not None:
-        session, _, expires_at = cached
-        if now < expires_at:
-            return session
-        # Expired — close and recreate
-        await _evict_session(server.id)
-
-    # Build auth headers
-    headers: dict[str, str] = {}
-    if server.has_auth:
         pool = _get_pool()
         row = await pool.fetchrow(
             "SELECT auth_type, auth_token_enc, auth_header_name FROM org_mcp_servers WHERE id = $1",
@@ -427,68 +420,107 @@ async def _get_or_create_session(server: OrgMcpServer) -> Any:
                 headers["Authorization"] = f"Bearer {token}"
             elif row["auth_type"] == "header" and row["auth_header_name"]:
                 headers[row["auth_header_name"]] = token
+        return headers
 
-    # Connect via Streamable HTTP
-    exit_stack = AsyncExitStack()
-    try:
-        transport = await exit_stack.enter_async_context(
-            streamablehttp_client(
-                url=server.url,
-                headers=headers or None,
+    async def get_or_create(self, server: OrgMcpServer) -> Any:
+        """Return a cached MCP ClientSession or create a new one."""
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        settings = get_settings()
+        now = time.monotonic()
+
+        cached = _sessions.get(server.id)
+        if cached is not None:
+            session, _, expires_at = cached
+            if now < expires_at:
+                return session
+            await self.evict(server.id)
+
+        headers = await self._build_auth_headers(server)
+        exit_stack = AsyncExitStack()
+        try:
+            transport = await exit_stack.enter_async_context(
+                streamablehttp_client(
+                    url=server.url,
+                    headers=headers or None,
+                    timeout=float(settings.mcp_client_connect_timeout_seconds),
+                )
+            )
+            read_stream, write_stream, _ = transport
+            session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await asyncio.wait_for(
+                session.initialize(),
                 timeout=float(settings.mcp_client_connect_timeout_seconds),
             )
-        )
-        read_stream, write_stream, _ = transport
-        session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
-        await asyncio.wait_for(
-            session.initialize(),
-            timeout=float(settings.mcp_client_connect_timeout_seconds),
-        )
-    except Exception as exc:
-        await exit_stack.aclose()
-        await _record_event(
-            server.org_id,
-            server.id,
-            server.name,
-            "connection_failed",
-            detail=str(exc)[:200],
-        )
-        raise
+        except Exception as exc:
+            await exit_stack.aclose()
+            await _record_event(
+                server.org_id,
+                server.id,
+                server.name,
+                "connection_failed",
+                detail=str(exc)[:200],
+            )
+            raise
 
-    ttl = settings.mcp_client_tool_cache_ttl_seconds
-    _sessions[server.id] = (session, exit_stack, time.monotonic() + ttl)
+        ttl = settings.mcp_client_tool_cache_ttl_seconds
+        _sessions[server.id] = (session, exit_stack, time.monotonic() + ttl)
+        await _record_event(server.org_id, server.id, server.name, "connected")
+        return session
 
-    await _record_event(server.org_id, server.id, server.name, "connected")
-    return session
+    async def evict(self, server_id: str) -> None:
+        """Close and remove a cached session."""
+        entry = _sessions.pop(server_id, None)
+        if entry is not None:
+            _, exit_stack, _ = entry
+            try:
+                await exit_stack.aclose()
+            except Exception:
+                logger.debug("Error closing MCP session %s", server_id, exc_info=True)
+
+    async def close_all(self) -> None:
+        """Close all cached sessions."""
+        server_ids = list(_sessions.keys())
+        for sid in server_ids:
+            await self.evict(sid)
+        logger.info("All MCP client sessions closed (%d)", len(server_ids))
+
+
+_session_pool: _SessionPool | None = None
+
+
+def _get_session_pool() -> _SessionPool:
+    global _session_pool
+    if _session_pool is None:
+        _session_pool = _SessionPool()
+    return _session_pool
+
+
+async def _get_or_create_session(server: OrgMcpServer) -> Any:
+    """Return a cached MCP ClientSession or create a new one.
+
+    Uses Streamable HTTP transport with optional auth headers.
+    """
+    return await _get_session_pool().get_or_create(server)
 
 
 async def _evict_session(server_id: str) -> None:
     """Close and remove a cached session."""
-    entry = _sessions.pop(server_id, None)
-    if entry is not None:
-        _, exit_stack, _ = entry
-        try:
-            await exit_stack.aclose()
-        except Exception:
-            logger.debug("Error closing MCP session %s", server_id, exc_info=True)
+    await _get_session_pool().evict(server_id)
 
 
 async def _close_all_sessions() -> None:
     """Close all cached MCP sessions.  Called during shutdown."""
-    server_ids = list(_sessions.keys())
-    for sid in server_ids:
-        await _evict_session(sid)
-    logger.info("All MCP client sessions closed (%d)", len(server_ids))
+    await _get_session_pool().close_all()
 
 
-# ─── Dynamic Pydantic model (reuse from org_tools) ───────────────────────────
+# ─── Dynamic Pydantic model (shared helper) ───────────────────────────────────
 
 
 def _build_pydantic_model(name: str, schema: dict[str, Any]) -> type:
     """Create a Pydantic model from an MCP tool's inputSchema."""
-    from org_tools import _build_pydantic_model as _build
-
-    return _build(name, schema)
+    return build_pydantic_model(name, schema)
 
 
 # ─── Tool Discovery + LangChain Wrapping ─────────────────────────────────────

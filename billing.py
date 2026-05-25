@@ -32,8 +32,11 @@ import asyncpg
 import sentry_sdk
 from pydantic import BaseModel, Field
 
+from billing_credit import BillingCreditService
+from billing_delegation import BillingDelegationService
 from cache import TTLCache, get_redis
 from config import get_settings
+from db_pool_registry import bind_pool, require_pool, unbind_pool
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,26 @@ _upto_requirements_cache: list | None = None  # upto-scheme requirements (when o
 # cache below remains inline because of its different shape.
 
 _last_requirements_price_usdc: int = -1  # run_price_usdc when requirements were last built
+_POOL_SCOPE = "billing"
+
+
+def _get_credit_service() -> BillingCreditService:
+    return BillingCreditService(
+        get_pool=_get_pool,
+        get_daily_spend_cache=_get_daily_spend_cache,
+        get_daily_debit_spend_fn=_get_daily_debit_spend,
+        billing_result_factory=BillingResult,
+    )
+
+
+def _get_delegation_service() -> BillingDelegationService:
+    return BillingDelegationService(
+        get_pool=_get_pool,
+        get_settings=get_settings,
+        get_daily_debit_spend=_get_daily_debit_spend,
+        debit_credit=debit_credit,
+        get_live_pricing_for_model=get_live_pricing_for_model,
+    )
 
 
 def _get_server():
@@ -77,7 +100,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
     settings = get_settings()
 
     # Always store pool — pricing queries run regardless of billing_enabled.
-    _pool = pool
+    _pool = bind_pool(_POOL_SCOPE, pool)
 
     if not settings.billing_enabled:
         logger.info("Billing disabled — skipping x402 initialisation")
@@ -164,6 +187,7 @@ async def close_billing() -> None:
     _exact_requirements_cache = None
     _upto_requirements_cache = None
     _pool = None
+    unbind_pool(_POOL_SCOPE)
     _last_requirements_price_usdc = -1
     _live_pricing_cache.reset()
     _tool_overrides_cache_obj.reset()
@@ -179,9 +203,7 @@ _pool: asyncpg.Pool | None = None
 
 
 def _get_pool() -> asyncpg.Pool:
-    if _pool is None:
-        raise RuntimeError("Billing DB not initialised")
-    return _pool
+    return require_pool(_POOL_SCOPE, _pool, "Billing DB not initialised")
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────
@@ -1002,12 +1024,7 @@ async def get_invoice_by_run(run_id: str, user_id: str) -> dict | None:
 
 async def get_credit_balance(org_id: str) -> int:
     """Return org's current credit balance in atomic USDC (0 if no row yet)."""
-    pool = _get_pool()
-    row = await pool.fetchrow(
-        "SELECT balance_usdc FROM org_credits WHERE org_id = $1",
-        org_id,
-    )
-    return int(row["balance_usdc"]) if row is not None else 0
+    return await _get_credit_service().get_credit_balance(org_id)
 
 
 async def _get_daily_debit_spend(executor: asyncpg.Connection | asyncpg.Pool, org_id: str) -> int:
@@ -1026,151 +1043,18 @@ async def _get_daily_debit_spend(executor: asyncpg.Connection | asyncpg.Pool, or
 
 
 async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
-    """Check that org has sufficient credit and is within spending limits.
-
-    Returns BillingResult(verified=True, billing_method='credit') on success.
-    Checks: (1) not paused, (2) sufficient balance, (3) daily spending limit.
-    """
-    pool = _get_pool()
-
-    # Fetch credit row with spending config in one query.
-    row = await pool.fetchrow(
-        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
-        org_id,
-    )
-    balance = int(row["balance_usdc"]) if row else 0
-    spending_limit = int(row["spending_limit_usdc"]) if row else 0
-    is_paused = bool(row["is_paused"]) if row else False
-
-    # Check 1: admin pause.
-    if is_paused:
-        return BillingResult(error="Org billing is paused by admin. Contact your administrator.")
-
-    # Check 2: sufficient balance.
-    if balance < min_balance_usdc:
-        return BillingResult(
-            error=(
-                f"Insufficient credit: balance {balance} atomic USDC, "
-                f"required {min_balance_usdc}. Top up via POST /admin/credits/topup."
-            )
-        )
-
-    # Check 3: daily spending limit (24h rolling window).
-    if spending_limit > 0:
-        daily_spend = await _get_daily_debit_spend(pool, org_id)
-        if daily_spend + min_balance_usdc > spending_limit:
-            return BillingResult(
-                error=(f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours.")
-            )
-
-    return BillingResult(verified=True, billing_method="credit")
+    """Check that org has sufficient credit and is within spending limits."""
+    return await _get_credit_service().verify_credit(org_id, min_balance_usdc)
 
 
 async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
-    """Debit amount_usdc from org's credit balance using a serialisable transaction.
-
-    Uses SELECT FOR UPDATE to prevent concurrent double-debits and enforces
-    pause + daily spending limits atomically under the same lock.
-    Floors balance at 0 — will not go negative.
-    Inserts a row into org_credit_ledger within the same transaction.
-    Returns ``(success, actual_deducted_usdc_atomic)``.
-    """
-    if amount_usdc <= 0:
-        logger.debug("debit_credit: skipping non-positive amount org_id=%s amount=%s", org_id, amount_usdc)
-        return True, 0
-
-    pool = _get_pool()
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1 FOR UPDATE",
-                    org_id,
-                )
-                if row is None:
-                    # Row doesn't exist — nothing to debit
-                    return False, 0
-                original_balance = int(row["balance_usdc"])
-                spending_limit = int(row["spending_limit_usdc"])
-                is_paused = bool(row["is_paused"])
-
-                # Enforce pause state during settlement-time debit as well.
-                if is_paused:
-                    return False, 0
-
-                # Enforce daily spending limit inside the same transaction to
-                # avoid race conditions from pre-check-only validation.
-                if spending_limit > 0:
-                    daily_spend = await _get_daily_debit_spend(conn, org_id)
-                    if daily_spend + amount_usdc > spending_limit:
-                        return False, 0
-
-                new_balance = max(0, original_balance - amount_usdc)
-                actual_deducted = original_balance - new_balance
-                await conn.execute(
-                    """
-                    UPDATE org_credits
-                    SET balance_usdc = $2, updated_at = NOW()
-                    WHERE org_id = $1
-                    """,
-                    org_id,
-                    new_balance,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO org_credit_ledger
-                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-                    VALUES ($1, $2, 'debit', $3, $4, $5, NOW())
-                    """,
-                    str(uuid.uuid4()),
-                    org_id,
-                    actual_deducted,
-                    new_balance,
-                    reason,
-                )
-            await _get_daily_spend_cache(org_id).invalidate()
-        return True, actual_deducted
-    except Exception as exc:
-        logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
-        with sentry_sdk.new_scope() as scope:
-            scope.set_tag("org_id", str(org_id))
-            scope.set_tag("amount_usdc_atomic", str(amount_usdc))
-            scope.set_tag("rail", "credit")
-            sentry_sdk.capture_exception(exc)
-        return False, 0
+    """Debit amount_usdc from org's credit balance atomically."""
+    return await _get_credit_service().debit_credit(org_id, amount_usdc, reason)
 
 
 async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") -> int:
     """Add amount_usdc to org's credit balance (upsert). Returns new balance."""
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                INSERT INTO org_credits (org_id, balance_usdc, updated_at)
-                VALUES ($1, $2, NOW())
-                ON CONFLICT (org_id) DO UPDATE
-                    SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
-                        updated_at = NOW()
-                RETURNING balance_usdc
-                """,
-                org_id,
-                amount_usdc,
-            )
-            new_balance = int(row["balance_usdc"])
-            await conn.execute(
-                """
-                INSERT INTO org_credit_ledger
-                    (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-                VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
-                """,
-                str(uuid.uuid4()),
-                org_id,
-                amount_usdc,
-                new_balance,
-                reason,
-            )
-    return new_balance
+    return await _get_credit_service().admin_topup_credit(org_id, amount_usdc, reason)
 
 
 async def get_credit_history(
@@ -1179,32 +1063,8 @@ async def get_credit_history(
     limit: int = 50,
     cursor: datetime | None = None,
 ) -> list[dict]:
-    """Return credit ledger entries for an org (cursor paginated, newest first).
-
-    ``operation`` can be ``'debit'``, ``'topup'``, or ``None`` for all.
-    ``cursor`` is the ``created_at`` of the last item returned (exclusive).
-    """
-    pool = _get_pool()
-    params: list = [org_id, limit]
-    filters = ["org_id = $1"]
-    if operation is not None:
-        params.append(operation)
-        filters.append(f"operation = ${len(params)}")
-    if cursor is not None:
-        params.append(cursor)
-        filters.append(f"created_at < ${len(params)}")
-    where = " AND ".join(filters)
-    rows = await pool.fetch(
-        f"""
-        SELECT id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at
-        FROM org_credit_ledger
-        WHERE {where}
-        ORDER BY created_at DESC
-        LIMIT $2
-        """,
-        *params,
-    )
-    return [dict(r) for r in rows]
+    """Return credit ledger entries for an org (cursor paginated, newest first)."""
+    return await _get_credit_service().get_credit_history(org_id, operation, limit, cursor)
 
 
 # ─── Stripe (prepaid credit top-up) ──────────────────────────────────────────
@@ -1867,43 +1727,8 @@ async def update_org_spending_config(
 
 
 async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str | None:
-    """Pre-flight check: can the org afford a delegation of *estimated_cost_usdc*?
-
-    Returns None on success, or an error string describing the shortfall.
-    Does NOT debit — that happens after the delegation completes.
-    """
-    settings = get_settings()
-    if not settings.a2a_delegation_billing_enabled:
-        return None  # billing disabled — allow unconditionally
-
-    # Apply global cap.
-    cap = settings.a2a_delegation_max_cost_usdc
-    if estimated_cost_usdc > cap:
-        return f"Estimated delegation cost ({estimated_cost_usdc} atomic USDC) exceeds global cap ({cap})."
-
-    # Check org credit state.
-    pool = _get_pool()
-    row = await pool.fetchrow(
-        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
-        org_id,
-    )
-    balance = int(row["balance_usdc"]) if row else 0
-    spending_limit = int(row["spending_limit_usdc"]) if row else 0
-    is_paused = bool(row["is_paused"]) if row else False
-
-    if is_paused:
-        return "Org billing is paused by admin. Contact your administrator."
-
-    if balance < estimated_cost_usdc:
-        return f"Insufficient credit for delegation: balance {balance} atomic USDC, estimated cost {estimated_cost_usdc}."
-
-    # Match verify_credit() semantics: enforce 24h rolling spending limit.
-    if spending_limit > 0:
-        daily_spend = await _get_daily_debit_spend(pool, org_id)
-        if daily_spend + estimated_cost_usdc > spending_limit:
-            return f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
-
-    return None
+    """Pre-flight check: can the org afford a delegation of *estimated_cost_usdc*?"""
+    return await _get_delegation_service().check_delegation_budget(org_id, estimated_cost_usdc)
 
 
 def apply_platform_fee(cost_usdc: int) -> int:
@@ -1911,9 +1736,7 @@ def apply_platform_fee(cost_usdc: int) -> int:
 
     Example: cost=10000, fee=500 bps (5%) → 10500
     """
-    settings = get_settings()
-    fee_bps = settings.a2a_delegation_platform_fee_bps
-    return cost_usdc + (cost_usdc * fee_bps) // 10_000
+    return _get_delegation_service().apply_platform_fee(cost_usdc)
 
 
 def get_byok_platform_fee(is_byok: bool) -> int:
@@ -1925,9 +1748,7 @@ def get_byok_platform_fee(is_byok: bool) -> int:
         seeded in migration 041.  This function now serves only as a minimum
         floor via ``byok_platform_fee_usdc`` config.
     """
-    if not is_byok:
-        return 0
-    return get_settings().byok_platform_fee_usdc
+    return _get_delegation_service().get_byok_platform_fee(is_byok)
 
 
 async def calculate_byok_orchestration_cost(
@@ -1936,31 +1757,8 @@ async def calculate_byok_orchestration_cost(
     provider: str = "",
     model: str = "",
 ) -> int:
-    """Calculate the BYOK orchestration fee for a completed run.
-
-    Resolves a BYOK-tier pricing rule (``is_byok=TRUE`` in ``pricing_rules``)
-    and bills per-token orchestration overhead.  BYOK users pay the LLM
-    provider directly; this fee covers Teardrop's routing, streaming, billing,
-    and storage infrastructure.
-
-    Falls back to ``byok_platform_fee_usdc`` (flat floor) when:
-    - No BYOK pricing rule exists in the DB yet (pre-migration 041).
-    - Computed token cost is less than the configured floor.
-
-    Returns 0 only when both the rule is missing AND the floor is 0.
-    """
-    settings = get_settings()
-    floor = settings.byok_platform_fee_usdc
-
-    rule = await get_live_pricing_for_model(provider, model, is_byok=True)
-    if rule is None:
-        return floor
-
-    computed = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
-
-    # Apply floor so zero-token runs (e.g. tool-only or very short prompts) still
-    # register as a paid transaction in the ledger.
-    return max(computed, floor)
+    """Calculate the BYOK orchestration fee for a completed run."""
+    return await _get_delegation_service().calculate_byok_orchestration_cost(tokens_in, tokens_out, provider, model)
 
 
 async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:
@@ -1969,9 +1767,7 @@ async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: s
     Wraps ``debit_credit`` with a delegation-specific reason string.
     Returns True on success, False if the debit failed (e.g. insufficient funds).
     """
-    reason = f"a2a_delegation run={run_id} agent={agent_url}"
-    success, _ = await debit_credit(org_id, cost_usdc, reason)
-    return success
+    return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url)
 
 
 async def record_delegation_event(
@@ -1985,38 +1781,18 @@ async def record_delegation_event(
     settlement_tx: str = "",
     error: str = "",
 ) -> None:
-    """Insert a row into a2a_delegation_events for audit trail.
-
-    Fire-and-forget: logs but never raises on DB errors so the caller's
-    critical path is not interrupted.
-    """
-    try:
-        pool = _get_pool()
-        await pool.execute(
-            """
-            INSERT INTO a2a_delegation_events
-                (id, org_id, run_id, agent_url, agent_name,
-                 task_status, cost_usdc, billing_method, settlement_tx, error, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-            """,
-            str(uuid.uuid4()),
-            org_id,
-            run_id,
-            agent_url,
-            agent_name,
-            task_status,
-            cost_usdc,
-            billing_method,
-            settlement_tx,
-            error,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to record delegation event org=%s run=%s agent=%s",
-            org_id,
-            run_id,
-            agent_url,
-        )
+    """Insert a row into a2a_delegation_events for audit trail."""
+    await _get_delegation_service().record_delegation_event(
+        org_id,
+        run_id,
+        agent_url,
+        agent_name,
+        task_status,
+        cost_usdc,
+        billing_method,
+        settlement_tx,
+        error,
+    )
 
 
 async def get_delegation_events(
@@ -2025,22 +1801,7 @@ async def get_delegation_events(
     cursor: datetime | None = None,
 ) -> list[dict]:
     """Return delegation events for an org (cursor-paginated, newest first)."""
-    pool = _get_pool()
-    cursor_clause = "" if cursor is None else "AND created_at < $3"
-    args: list = [org_id, limit, *([cursor] if cursor is not None else [])]
-    rows = await pool.fetch(
-        f"""
-        SELECT id, org_id, run_id, agent_url, agent_name,
-               task_status, cost_usdc, billing_method, settlement_tx, error, created_at
-        FROM a2a_delegation_events
-        WHERE org_id = $1
-          {cursor_clause}
-        ORDER BY created_at DESC
-        LIMIT $2
-        """,
-        *args,
-    )
-    return [dict(r) for r in rows]
+    return await _get_delegation_service().get_delegation_events(org_id, limit, cursor)
 
 
 def get_treasury_signer():
