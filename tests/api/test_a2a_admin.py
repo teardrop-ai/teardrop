@@ -17,7 +17,7 @@ def _mock_pool(*, execute_return="INSERT 0 1", fetch_return=None, execute_side_e
 
 @pytest.mark.anyio
 async def test_add_a2a_agent(admin_api_client, monkeypatch):
-    from app import app
+    from teardrop.main import app
 
     pool = _mock_pool()
     app.state.pool = pool
@@ -39,7 +39,7 @@ async def test_add_a2a_agent(admin_api_client, monkeypatch):
 async def test_add_a2a_agent_duplicate(admin_api_client):
     import asyncpg
 
-    from app import app
+    from teardrop.main import app
 
     pool = _mock_pool(execute_side_effect=asyncpg.UniqueViolationError("duplicate"))
     app.state.pool = pool
@@ -64,7 +64,7 @@ async def test_add_a2a_agent_requires_admin(api_client):
 async def test_list_a2a_agents(admin_api_client):
     from datetime import datetime, timezone
 
-    from app import app
+    from teardrop.main import app
 
     mock_rows = [
         {
@@ -90,7 +90,7 @@ async def test_list_a2a_agents(admin_api_client):
 
 @pytest.mark.anyio
 async def test_list_a2a_agents_empty(admin_api_client):
-    from app import app
+    from teardrop.main import app
 
     pool = _mock_pool(fetch_return=[])
     app.state.pool = pool
@@ -102,7 +102,7 @@ async def test_list_a2a_agents_empty(admin_api_client):
 
 @pytest.mark.anyio
 async def test_delete_a2a_agent(admin_api_client):
-    from app import app
+    from teardrop.main import app
 
     pool = _mock_pool(execute_return="DELETE 1")
     app.state.pool = pool
@@ -114,7 +114,7 @@ async def test_delete_a2a_agent(admin_api_client):
 
 @pytest.mark.anyio
 async def test_delete_a2a_agent_not_found(admin_api_client):
-    from app import app
+    from teardrop.main import app
 
     pool = _mock_pool(execute_return="DELETE 0")
     app.state.pool = pool

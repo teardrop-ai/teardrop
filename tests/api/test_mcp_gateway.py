@@ -8,15 +8,13 @@ import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import config
-
-# ── JWKS endpoint ─────────────────────────────────────────────────────────────
+import teardrop.config as config  # ── JWKS endpoint ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_jwks_returns_valid_key(test_settings):
     """GET /.well-known/jwks.json returns a valid RSA JWK."""
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.get("/.well-known/jwks.json")
@@ -45,7 +43,7 @@ async def mcp_client(test_settings, monkeypatch):
     # Disable audience check so test tokens (which have no 'aud' claim) pass through.
     monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
     config.get_settings.cache_clear()
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -127,7 +125,7 @@ async def test_auth_gate_disabled_passes_through(test_settings, monkeypatch):
     """When mcp_auth_enabled=False, unauthenticated requests pass through."""
     monkeypatch.setenv("MCP_AUTH_ENABLED", "false")
     config.get_settings.cache_clear()
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.post(

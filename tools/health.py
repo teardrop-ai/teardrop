@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 
-from cache import get_redis
-from config import get_settings
+from teardrop.cache import get_redis
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 

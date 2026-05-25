@@ -14,7 +14,7 @@ from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field
 from web3 import Web3
 
-from config import get_settings
+from teardrop.config import get_settings
 from tools.definitions._http_session import get_coingecko_session
 from tools.definitions._multicall3 import multicall3_batch
 from tools.definitions._web3_helpers import get_web3, rpc_call

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import _A2UIStreamFilter, _normalize_exclusion_name, _recover_planner_suffix, _should_flush_planner_buffer
+from teardrop.main import _A2UIStreamFilter, _normalize_exclusion_name, _recover_planner_suffix, _should_flush_planner_buffer
 
 
 def _drain(deltas: list[str]) -> str:

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Import the rate limiter internals from app module.
-import app as app_module
+import teardrop.main as app_module
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

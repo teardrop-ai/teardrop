@@ -51,7 +51,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
     agent's response.  When delegation billing is enabled, enforces the org's
     allowlist, checks budget, debits credits, and records an audit event.
     """
-    from config import get_settings
+    from teardrop.config import get_settings
 
     settings = get_settings()
 
@@ -66,7 +66,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
         }
 
     # ── SSRF check ────────────────────────────────────────────────────────
-    from a2a_client import async_validate_url
+    from teardrop.a2a_client import async_validate_url
 
     ssrf_err = await async_validate_url(agent_url)
     if ssrf_err:
@@ -99,7 +99,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
 
     # ── Allowlist check (independent of billing) ─────────────────────────
     if org_id and db_pool:
-        from a2a_client import check_delegation_allowed
+        from teardrop.a2a_client import check_delegation_allowed
 
         allowed, agent_rule = await check_delegation_allowed(org_id, agent_url, db_pool)
         if not allowed and settings.a2a_delegation_require_allowlist:
@@ -155,7 +155,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
             }
 
     # ── Discover agent card ───────────────────────────────────────────────
-    from a2a_client import discover_agent_card, extract_result_text, send_message
+    from teardrop.a2a_client import discover_agent_card, extract_result_text, send_message
 
     try:
         card = await discover_agent_card(
@@ -177,8 +177,8 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
     cost_usdc = 0
     try:
         if use_x402:
-            from a2a_client import send_message_with_payment
             from billing import get_treasury_signer
+            from teardrop.a2a_client import send_message_with_payment
 
             signer = get_treasury_signer()
             response = await send_message_with_payment(

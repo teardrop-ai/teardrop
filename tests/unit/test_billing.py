@@ -737,7 +737,7 @@ class TestRecordSettlement:
 class TestVerifySettlementOnChain:
     async def test_confirmed_receipt_keeps_status(self):
         with (
-            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+            patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
             patch("billing.record_settlement", new=AsyncMock()) as record_mock,
         ):
             await verify_settlement_on_chain("evt-1", "0xabc", 8453)
@@ -746,7 +746,7 @@ class TestVerifySettlementOnChain:
 
     async def test_reverted_receipt_marks_event_reverted(self):
         with (
-            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=False)),
+            patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=False)),
             patch("billing.record_settlement", new=AsyncMock()) as record_mock,
         ):
             await verify_settlement_on_chain("evt-1", "0xabc", 8453)
@@ -755,7 +755,7 @@ class TestVerifySettlementOnChain:
 
     async def test_timeout_does_not_raise_or_mutate(self):
         with (
-            patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(side_effect=TimeoutError("late"))),
+            patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(side_effect=TimeoutError("late"))),
             patch("billing.record_settlement", new=AsyncMock()) as record_mock,
         ):
             await verify_settlement_on_chain("evt-1", "0xabc", 8453)
@@ -1457,7 +1457,7 @@ class TestUptoScheme:
 @pytest.mark.anyio
 class TestTTLCache:
     def _make_cache(self, loader, stale_default=None):
-        from cache import TTLCache
+        from teardrop.cache import TTLCache
 
         return TTLCache(
             name="test",
@@ -1471,7 +1471,7 @@ class TestTTLCache:
 
     async def test_get_returns_value_from_loader(self):
         cache = self._make_cache(AsyncMock(return_value="hello"))
-        with patch("cache.get_redis", return_value=None):
+        with patch("teardrop.cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "hello"
 
@@ -1482,7 +1482,7 @@ class TestTTLCache:
         cache = self._make_cache(loader)
         cache._value = "cached"
         cache._expires = time.monotonic() + 9999
-        with patch("cache.get_redis", return_value=None):
+        with patch("teardrop.cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "cached"
         loader.assert_not_called()
@@ -1490,7 +1490,7 @@ class TestTTLCache:
     async def test_loader_failure_returns_stale_default(self):
         loader = AsyncMock(side_effect=RuntimeError("DB down"))
         cache = self._make_cache(loader, stale_default="fallback")
-        with patch("cache.get_redis", return_value=None):
+        with patch("teardrop.cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "fallback"
 
@@ -1499,7 +1499,7 @@ class TestTTLCache:
         cache = self._make_cache(loader)
         cache._value = "stale"
         cache._expires = 0.0  # expired in-process, but stale present
-        with patch("cache.get_redis", return_value=None):
+        with patch("teardrop.cache.get_redis", return_value=None):
             result = await cache.get()
         assert result == "stale"
 
@@ -1508,14 +1508,14 @@ class TestTTLCache:
         redis.get = AsyncMock(return_value='"from_redis"')
         cache = self._make_cache(AsyncMock(return_value="from_loader"))
         cache._deserialize = lambda s: s.strip('"')
-        with patch("cache.get_redis", return_value=redis):
+        with patch("teardrop.cache.get_redis", return_value=redis):
             result = await cache.get()
         assert result == "from_redis"
 
     async def test_invalidate_clears_value(self):
         cache = self._make_cache(AsyncMock(return_value="v"))
         cache._value = "old"
-        with patch("cache.get_redis", return_value=None):
+        with patch("teardrop.cache.get_redis", return_value=None):
             await cache.invalidate()
         assert cache._value is None
         assert cache._expires == 0.0

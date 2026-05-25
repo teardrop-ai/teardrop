@@ -92,8 +92,7 @@ class TestEncryption:
         # Reset cached fernet
         org_tools_module._fernet = None
         try:
-            import config
-
+            import teardrop.config as config
             config.get_settings.cache_clear()
             encrypted = _encrypt_header("Bearer my-secret-token")
             decrypted = _decrypt_header(encrypted)
@@ -106,8 +105,7 @@ class TestEncryption:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
         try:
-            import config
-
+            import teardrop.config as config
             config.get_settings.cache_clear()
             encrypted = _encrypt_header("secret-value")
 
@@ -209,8 +207,7 @@ class TestCreateOrgTool:
     async def test_success(self, monkeypatch):
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
-        import config
-
+        import teardrop.config as config
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -240,8 +237,7 @@ class TestCreateOrgTool:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         monkeypatch.setenv("MAX_ORG_TOOLS", "2")
         org_tools_module._fernet = None
-        import config
-
+        import teardrop.config as config
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -267,8 +263,7 @@ class TestCreateOrgTool:
     async def test_with_auth_header_encrypts(self, monkeypatch):
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
-        import config
-
+        import teardrop.config as config
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -435,8 +430,7 @@ class TestWebhookExecution:
     async def test_auth_header_sent(self, monkeypatch):
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
-        import config
-
+        import teardrop.config as config
         config.get_settings.cache_clear()
 
         try:
@@ -498,8 +492,7 @@ class TestWebhookExecution:
     async def test_error_does_not_leak_secrets(self, monkeypatch):
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
-        import config
-
+        import teardrop.config as config
         config.get_settings.cache_clear()
 
         try:
@@ -746,7 +739,7 @@ class TestGetOrgToolsCached:
         monkeypatch.setattr(org_tools_module, "_pool", pool)
         monkeypatch.setattr("org_tools.get_redis", lambda: None)
         monkeypatch.setattr("org_tools.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
-        monkeypatch.setattr("cache.get_redis", lambda: None)
+        monkeypatch.setattr("teardrop.cache.get_redis", lambda: None)
 
         result = await org_tools_module.get_org_tools_cached("org-miss")
         assert len(result) == 1

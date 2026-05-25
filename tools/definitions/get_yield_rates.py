@@ -12,7 +12,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
-from cache import get_redis
+from teardrop.cache import get_redis
 from tools.definitions._http_session import get_defillama_session
 from tools.registry import ToolDefinition
 

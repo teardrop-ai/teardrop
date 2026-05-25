@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable
 import asyncpg
 import sentry_sdk
 
-from cache import TTLCache
+from teardrop.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import usage as usage_module
-from usage import UsageEvent, UsageSummary
+import teardrop.usage as usage_module
+from teardrop.usage import UsageEvent, UsageSummary
 
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ def _pool():
 @pytest.mark.anyio
 class TestRecordUsageEvent:
     async def test_inserts_event(self):
-        from usage import record_usage_event
+        from teardrop.usage import record_usage_event
 
         pool = _pool()
         event = UsageEvent(
@@ -48,7 +48,7 @@ class TestRecordUsageEvent:
         assert 100 in call_args
 
     async def test_db_error_is_swallowed(self):
-        from usage import record_usage_event
+        from teardrop.usage import record_usage_event
 
         pool = _pool()
         pool.execute = AsyncMock(side_effect=Exception("DB gone"))
@@ -64,7 +64,7 @@ class TestRecordUsageEvent:
 @pytest.mark.anyio
 class TestGetUsage:
     async def test_returns_summary_with_values(self):
-        from usage import get_usage_by_user
+        from teardrop.usage import get_usage_by_user
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=(5, 1000, 500, 10, 3000))
@@ -75,7 +75,7 @@ class TestGetUsage:
         assert summary.total_tokens_in == 1000
 
     async def test_returns_zero_summary_when_no_row(self):
-        from usage import get_usage_by_user
+        from teardrop.usage import get_usage_by_user
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -84,7 +84,7 @@ class TestGetUsage:
         assert summary.total_runs == 0
 
     async def test_date_range_params_included(self):
-        from usage import get_usage_by_user
+        from teardrop.usage import get_usage_by_user
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=(0, 0, 0, 0, 0))
@@ -97,7 +97,7 @@ class TestGetUsage:
         assert end in call_args
 
     async def test_get_usage_by_org(self):
-        from usage import get_usage_by_org
+        from teardrop.usage import get_usage_by_org
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=(3, 600, 300, 5, 1500))
@@ -112,21 +112,21 @@ class TestGetUsage:
 @pytest.mark.anyio
 class TestInitAndClose:
     async def test_close_usage_db_clears_pool(self):
-        from usage import close_usage_db
+        from teardrop.usage import close_usage_db
 
         with patch.object(usage_module, "_pool", MagicMock()):
             await close_usage_db()
         assert usage_module._pool is None
 
     def test_get_pool_raises_when_uninitialised(self):
-        from usage import _get_pool
+        from teardrop.usage import _get_pool
 
         with patch.object(usage_module, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):
                 _get_pool()
 
     async def test_init_usage_db_sets_pool_and_creates_tables(self):
-        from usage import init_usage_db
+        from teardrop.usage import init_usage_db
 
         pool = MagicMock()
         pool.execute = AsyncMock()

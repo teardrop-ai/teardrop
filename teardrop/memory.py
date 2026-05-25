@@ -29,7 +29,7 @@ from typing import Any
 import asyncpg
 from pydantic import BaseModel, Field
 
-from config import get_settings
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 

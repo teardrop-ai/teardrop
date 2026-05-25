@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import config
+import teardrop.config as config
 from marketplace import (
     MarketplaceTool,
     _invalidate_platform_tool_cache,
@@ -177,7 +177,7 @@ async def billing_client(test_settings, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
     config.get_settings.cache_clear()
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c

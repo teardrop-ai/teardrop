@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import wallets as wallets_module
-from wallets import Wallet
+import teardrop.wallets as wallets_module
+from teardrop.wallets import Wallet
 
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ def _wallet_row(**overrides):
 @pytest.mark.anyio
 class TestCreateWallet:
     async def test_returns_wallet_model(self):
-        from wallets import create_wallet
+        from teardrop.wallets import create_wallet
 
         pool = _pool()
         with patch.object(wallets_module, "_pool", pool):
@@ -56,7 +56,7 @@ class TestCreateWallet:
         pool.execute.assert_called_once()
 
     async def test_db_error_propagates(self):
-        from wallets import create_wallet
+        from teardrop.wallets import create_wallet
 
         pool = _pool()
         pool.execute = AsyncMock(side_effect=Exception("unique constraint"))
@@ -71,7 +71,7 @@ class TestCreateWallet:
 @pytest.mark.anyio
 class TestGetWalletByAddress:
     async def test_returns_wallet_when_found(self):
-        from wallets import get_wallet_by_address
+        from teardrop.wallets import get_wallet_by_address
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=_wallet_row())
@@ -81,7 +81,7 @@ class TestGetWalletByAddress:
         assert wallet.id == "w-1"
 
     async def test_returns_none_when_not_found(self):
-        from wallets import get_wallet_by_address
+        from teardrop.wallets import get_wallet_by_address
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -96,7 +96,7 @@ class TestGetWalletByAddress:
 @pytest.mark.anyio
 class TestGetWalletsByUser:
     async def test_returns_list_of_wallets(self):
-        from wallets import get_wallets_by_user
+        from teardrop.wallets import get_wallets_by_user
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[_wallet_row(), _wallet_row(id="w-2")])
@@ -106,7 +106,7 @@ class TestGetWalletsByUser:
         assert all(isinstance(w, Wallet) for w in wallets)
 
     async def test_returns_empty_when_none(self):
-        from wallets import get_wallets_by_user
+        from teardrop.wallets import get_wallets_by_user
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[])
@@ -121,7 +121,7 @@ class TestGetWalletsByUser:
 @pytest.mark.anyio
 class TestDeleteWallet:
     async def test_returns_true_when_deleted(self):
-        from wallets import delete_wallet
+        from teardrop.wallets import delete_wallet
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="DELETE 1")
@@ -130,7 +130,7 @@ class TestDeleteWallet:
         assert result is True
 
     async def test_returns_false_when_not_found(self):
-        from wallets import delete_wallet
+        from teardrop.wallets import delete_wallet
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="DELETE 0")
@@ -145,7 +145,7 @@ class TestDeleteWallet:
 @pytest.mark.anyio
 class TestNonces:
     async def test_create_nonce_returns_string(self):
-        from wallets import create_nonce
+        from teardrop.wallets import create_nonce
 
         pool = _pool()
         with patch.object(wallets_module, "_pool", pool):
@@ -155,7 +155,7 @@ class TestNonces:
         pool.execute.assert_called_once()
 
     async def test_consume_valid_nonce_returns_true(self):
-        from wallets import consume_nonce
+        from teardrop.wallets import consume_nonce
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value={"nonce": "valid-nonce"})
@@ -164,7 +164,7 @@ class TestNonces:
         assert result is True
 
     async def test_consume_expired_or_missing_nonce_returns_false(self):
-        from wallets import consume_nonce
+        from teardrop.wallets import consume_nonce
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -174,13 +174,13 @@ class TestNonces:
 
     async def test_create_nonce_uses_redis_when_available(self):
         """When Redis is available, create_nonce stores the nonce in Redis."""
-        from wallets import create_nonce
+        from teardrop.wallets import create_nonce
 
         mock_redis = AsyncMock()
         mock_redis.set = AsyncMock(return_value=True)
         pool = _pool()
 
-        with patch("wallets.get_redis", return_value=mock_redis):
+        with patch("teardrop.wallets.get_redis", return_value=mock_redis):
             with patch.object(wallets_module, "_pool", pool):
                 nonce = await create_nonce()
 
@@ -194,13 +194,13 @@ class TestNonces:
 
     async def test_create_nonce_falls_back_to_postgres_on_redis_failure(self):
         """When Redis fails, create_nonce falls back to Postgres."""
-        from wallets import create_nonce
+        from teardrop.wallets import create_nonce
 
         mock_redis = AsyncMock()
         mock_redis.set = AsyncMock(side_effect=Exception("Redis error"))
         pool = _pool()
 
-        with patch("wallets.get_redis", return_value=mock_redis):
+        with patch("teardrop.wallets.get_redis", return_value=mock_redis):
             with patch.object(wallets_module, "_pool", pool):
                 nonce = await create_nonce()
 
@@ -210,13 +210,13 @@ class TestNonces:
 
     async def test_consume_nonce_uses_redis_when_available(self):
         """When Redis is available, consume_nonce uses GETDEL."""
-        from wallets import consume_nonce
+        from teardrop.wallets import consume_nonce
 
         mock_redis = AsyncMock()
         mock_redis.getdel = AsyncMock(return_value="1")  # Nonce exists
         pool = _pool()
 
-        with patch("wallets.get_redis", return_value=mock_redis):
+        with patch("teardrop.wallets.get_redis", return_value=mock_redis):
             with patch.object(wallets_module, "_pool", pool):
                 result = await consume_nonce("test-nonce")
 
@@ -227,13 +227,13 @@ class TestNonces:
 
     async def test_consume_nonce_redis_already_consumed(self):
         """When Redis returns None (already consumed), consume_nonce returns False."""
-        from wallets import consume_nonce
+        from teardrop.wallets import consume_nonce
 
         mock_redis = AsyncMock()
         mock_redis.getdel = AsyncMock(return_value=None)  # Already consumed
         pool = _pool()
 
-        with patch("wallets.get_redis", return_value=mock_redis):
+        with patch("teardrop.wallets.get_redis", return_value=mock_redis):
             with patch.object(wallets_module, "_pool", pool):
                 result = await consume_nonce("used-nonce")
 
@@ -242,14 +242,14 @@ class TestNonces:
 
     async def test_consume_nonce_falls_back_to_postgres_on_redis_failure(self):
         """When Redis fails, consume_nonce falls back to Postgres."""
-        from wallets import consume_nonce
+        from teardrop.wallets import consume_nonce
 
         mock_redis = AsyncMock()
         mock_redis.getdel = AsyncMock(side_effect=Exception("Redis error"))
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value={"nonce": "fallback-nonce"})
 
-        with patch("wallets.get_redis", return_value=mock_redis):
+        with patch("teardrop.wallets.get_redis", return_value=mock_redis):
             with patch.object(wallets_module, "_pool", pool):
                 result = await consume_nonce("fallback-nonce")
 
@@ -264,14 +264,14 @@ class TestNonces:
 @pytest.mark.anyio
 class TestInitAndClose:
     async def test_close_wallets_db_clears_pool(self):
-        from wallets import close_wallets_db
+        from teardrop.wallets import close_wallets_db
 
         with patch.object(wallets_module, "_pool", MagicMock()):
             await close_wallets_db()
         assert wallets_module._pool is None
 
     def test_get_pool_raises_when_uninitialised(self):
-        from wallets import _get_pool
+        from teardrop.wallets import _get_pool
 
         with patch.object(wallets_module, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):

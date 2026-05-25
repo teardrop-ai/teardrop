@@ -9,8 +9,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-import config
-from auth import create_access_token, decode_access_token, require_auth
+import teardrop.config as config
+from teardrop.auth import create_access_token, decode_access_token, require_auth
 
 
 def test_encode_decode_roundtrip(test_settings):
@@ -23,8 +23,7 @@ def test_encode_decode_roundtrip(test_settings):
 
 def test_expired_token_raises(test_settings, monkeypatch):
     # Mint a token that expired 1 minute ago by patching timedelta in auth.
-    import auth
-
+    import teardrop.auth as auth
     original = auth.timedelta
 
     def fake_timedelta(**kwargs):

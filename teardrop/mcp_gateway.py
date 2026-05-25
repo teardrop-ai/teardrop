@@ -19,8 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from auth import decode_access_token
-from config import get_settings
+from teardrop.auth import decode_access_token
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if not mcp_org_id:
             return None
 
-        from app import _check_rate_limit  # lazy import — avoids circular dep at module level
+        from teardrop.main import _check_rate_limit  # lazy import — avoids circular dep at module level
 
         org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
             f"mcp:org:{mcp_org_id}", settings.rate_limit_org_mcp_rpm

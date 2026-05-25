@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import agent_wallets as aw_module
-import config
+import teardrop.agent_wallets as aw_module
+import teardrop.config as config
 
 
 @pytest.fixture(autouse=True)

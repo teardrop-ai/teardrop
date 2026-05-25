@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 from jsonschema import Draft7Validator
 from pydantic import BaseModel, Field, create_model
 
-from config import get_settings
+from teardrop.config import get_settings
 
 _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
     "object": dict,

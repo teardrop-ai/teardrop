@@ -10,8 +10,8 @@ import asyncpg
 import pytest
 
 import billing as billing_module
-import usage as usage_module
-import users as user_module
+import teardrop.usage as usage_module
+import teardrop.users as user_module
 from billing import (
     admin_topup_credit,
     debit_credit,
@@ -19,8 +19,8 @@ from billing import (
     get_invoice_by_run,
     get_invoices,
 )
-from usage import UsageEvent, record_usage_event
-from users import create_user
+from teardrop.usage import UsageEvent, record_usage_event
+from teardrop.users import create_user
 
 
 @pytest.fixture

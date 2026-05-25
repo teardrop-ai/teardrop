@@ -34,9 +34,9 @@ from pydantic import BaseModel, Field
 
 from billing.credit import BillingCreditService
 from billing.delegation import BillingDelegationService
-from cache import TTLCache, get_redis
-from config import get_settings
 from shared.db_pool import bind_pool, require_pool, unbind_pool
+from teardrop.cache import TTLCache, get_redis
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -520,7 +520,7 @@ async def verify_settlement_on_chain(
         return
 
     try:
-        from agent_wallets import verify_usdc_transfer  # noqa: PLC0415
+        from teardrop.agent_wallets import verify_usdc_transfer  # noqa: PLC0415
 
         confirmed = await verify_usdc_transfer(tx_hash=tx_hash, chain_id=chain_id)
         if confirmed:

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from usage import UsageSummary
+from teardrop.usage import UsageSummary
 
 _SUMMARY = UsageSummary(
     total_runs=5,
@@ -19,7 +19,7 @@ _SUMMARY = UsageSummary(
 
 @pytest.mark.anyio
 async def test_usage_me(api_client, monkeypatch):
-    monkeypatch.setattr("app.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.main.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
 
     resp = await api_client.get("/usage/me")
     assert resp.status_code == 200
@@ -36,7 +36,7 @@ async def test_usage_me_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_admin_usage_user(admin_api_client, monkeypatch):
-    monkeypatch.setattr("app.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.main.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
 
     resp = await admin_api_client.get("/admin/usage/some-user-id")
     assert resp.status_code == 200
@@ -51,7 +51,7 @@ async def test_admin_usage_user_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_admin_usage_org(admin_api_client, monkeypatch):
-    monkeypatch.setattr("app.get_usage_by_org", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.main.get_usage_by_org", AsyncMock(return_value=_SUMMARY))
 
     resp = await admin_api_client.get("/admin/usage/org/some-org-id")
     assert resp.status_code == 200
@@ -66,7 +66,7 @@ async def test_admin_usage_org_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_usage_me_with_date_range(api_client, monkeypatch):
-    monkeypatch.setattr("app.get_usage_by_user", AsyncMock(return_value=UsageSummary()))
+    monkeypatch.setattr("teardrop.main.get_usage_by_user", AsyncMock(return_value=UsageSummary()))
     resp = await api_client.get(
         "/usage/me",
         params={"start": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59"},

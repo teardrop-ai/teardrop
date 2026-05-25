@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import cache as cache_module
+import teardrop.cache as cache_module
 
 
 @pytest.mark.anyio

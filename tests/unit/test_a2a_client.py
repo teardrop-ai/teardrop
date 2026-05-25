@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from a2a_client import (
+from teardrop.a2a_client import (
     A2AAgentCard,
     A2AMessage,
     A2ASendMessageResponse,
@@ -63,7 +63,7 @@ class TestIsIpBlocked:
 
 class TestValidateUrl:
     def test_valid_https_url(self):
-        with patch("a2a_client.socket") as mock_socket:
+        with patch("teardrop.a2a_client.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("93.184.216.34", 0)),
             ]
@@ -88,7 +88,7 @@ class TestValidateUrl:
         assert "Blocked" in result
 
     def test_dns_resolves_to_private(self):
-        with patch("a2a_client.socket") as mock_socket:
+        with patch("teardrop.a2a_client.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("10.0.0.1", 0)),
             ]
@@ -101,7 +101,7 @@ class TestValidateUrl:
     def test_dns_failure(self):
         import socket
 
-        with patch("a2a_client.socket") as mock_socket:
+        with patch("teardrop.a2a_client.socket") as mock_socket:
             mock_socket.getaddrinfo.side_effect = socket.gaierror("Name or service not known")
             mock_socket.AF_UNSPEC = 0
             mock_socket.SOCK_STREAM = 1
@@ -116,7 +116,7 @@ class TestAsyncValidateUrl:
     loop remains responsive while validation is in flight."""
 
     async def test_returns_same_result_as_sync(self):
-        with patch("a2a_client.socket") as mock_socket:
+        with patch("teardrop.a2a_client.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("93.184.216.34", 0)),
             ]
@@ -142,7 +142,7 @@ class TestAsyncValidateUrl:
                 sibling_ticks.append(asyncio.get_running_loop().time())
                 await asyncio.sleep(0.05)
 
-        with patch("a2a_client.socket") as mock_socket:
+        with patch("teardrop.a2a_client.socket") as mock_socket:
             mock_socket.getaddrinfo.side_effect = slow_getaddrinfo
             mock_socket.AF_UNSPEC = 0
             mock_socket.SOCK_STREAM = 1
@@ -177,7 +177,10 @@ class TestDiscoverAgentCard:
         mock_resp.json.return_value = card_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -191,7 +194,7 @@ class TestDiscoverAgentCard:
         card = A2AAgentCard(name="Cached", description="cached agent")
         _agent_card_cache["https://cached.example.com"] = (card, __import__("time").monotonic())
 
-        with patch("a2a_client.validate_url", return_value=None):
+        with patch("teardrop.a2a_client.validate_url", return_value=None):
             result = await discover_agent_card("https://cached.example.com")
             assert result.name == "Cached"
 
@@ -200,7 +203,10 @@ class TestDiscoverAgentCard:
             await discover_agent_card("https://192.168.1.1")
 
     async def test_http_error(self):
-        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_resp = MagicMock()
             mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -240,7 +246,10 @@ class TestSendMessage:
         mock_resp.json.return_value = task_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -266,7 +275,10 @@ class TestSendMessage:
         mock_resp.json.return_value = task_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("a2a_client.validate_url", return_value=None), patch("a2a_client.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_resp
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -287,7 +299,7 @@ class TestSendMessage:
 
 class TestExtractResultText:
     def test_from_artifact(self):
-        from a2a_client import A2AArtifact, A2APart
+        from teardrop.a2a_client import A2AArtifact, A2APart
 
         response = A2ASendMessageResponse(
             task=A2ATask(
@@ -304,7 +316,7 @@ class TestExtractResultText:
         assert extract_result_text(response) == "Artifact text"
 
     def test_from_status_message(self):
-        from a2a_client import A2APart
+        from teardrop.a2a_client import A2APart
 
         response = A2ASendMessageResponse(
             task=A2ATask(

@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import memory as memory_module
-import users as user_module
-from memory import (
+import teardrop.memory as memory_module
+import teardrop.users as user_module
+from teardrop.memory import (
     count_memories,
     delete_all_org_memories,
     delete_memory,
@@ -20,7 +20,7 @@ from memory import (
     recall_memories,
     store_memory,
 )
-from users import create_org, create_user
+from teardrop.users import create_org, create_user
 
 
 @pytest.fixture(autouse=True)

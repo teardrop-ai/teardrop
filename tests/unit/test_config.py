@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-import config
-from config import Settings
+import teardrop.config as config
+from teardrop.config import Settings
 
 
 def test_default_env_is_development(monkeypatch):

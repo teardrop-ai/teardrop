@@ -167,7 +167,7 @@ python scripts/seed_users.py
 
 **8. Run the API server**
 ```powershell
-uvicorn app:app --reload
+uvicorn teardrop.main:app --reload
 ```
 
 Server starts at `http://localhost:8000`. Visit `http://localhost:8000/docs` for the interactive API explorer.

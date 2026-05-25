@@ -10,14 +10,14 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 @pytest.mark.anyio
 async def test_token_email_flow_success(anon_client, monkeypatch):
     from datetime import datetime, timezone
 
-    from users import User
+    from teardrop.users import User
 
     mock_user = User(
         id="user-123",
@@ -30,9 +30,9 @@ async def test_token_email_flow_success(anon_client, monkeypatch):
         created_at=datetime.now(timezone.utc),
     )
 
-    monkeypatch.setattr("app.get_user_by_email", AsyncMock(return_value=mock_user))
-    monkeypatch.setattr("app.verify_secret", lambda *a, **kw: True)
-    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="rt-test"))
+    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=mock_user))
+    monkeypatch.setattr("teardrop.main.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt-test"))
 
     resp = await anon_client.post(
         "/token",
@@ -44,7 +44,7 @@ async def test_token_email_flow_success(anon_client, monkeypatch):
     assert body["token_type"] == "bearer"
 
     # Verify auth_method claim is present in the JWT
-    from config import get_settings
+    from teardrop.config import get_settings
 
     settings = get_settings()
     claims = jwt.decode(
@@ -59,7 +59,7 @@ async def test_token_email_flow_success(anon_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_token_email_flow_wrong_credentials(anon_client, monkeypatch):
-    monkeypatch.setattr("app.get_user_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=None))
 
     resp = await anon_client.post(
         "/token",
@@ -71,8 +71,8 @@ async def test_token_email_flow_wrong_credentials(anon_client, monkeypatch):
 @pytest.mark.anyio
 async def test_token_client_credentials_success(anon_client, test_settings, monkeypatch):
     # DB lookup returns None → falls back to config credential
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
-    monkeypatch.setattr("app.settings", test_settings)
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.settings", test_settings)
     resp = await anon_client.post(
         "/token",
         json={
@@ -98,7 +98,7 @@ async def test_token_client_credentials_success(anon_client, test_settings, monk
 @pytest.mark.anyio
 async def test_token_client_credentials_wrong_secret(anon_client, test_settings, monkeypatch):
     # DB lookup returns None → falls back to config credential
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=None))
     resp = await anon_client.post(
         "/token",
         json={
@@ -130,7 +130,7 @@ async def test_token_db_client_credentials_success(anon_client, test_settings, m
     """DB-backed credential returns org_id from the DB row (not empty string)."""
     from datetime import datetime, timezone
 
-    from users import OrgClientCredential
+    from teardrop.users import OrgClientCredential
 
     mock_cred = OrgClientCredential(
         client_id="db-client-id",
@@ -139,8 +139,8 @@ async def test_token_db_client_credentials_success(anon_client, test_settings, m
         salt="ignored",
         created_at=datetime.now(timezone.utc),
     )
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=mock_cred))
-    monkeypatch.setattr("app.verify_secret", lambda secret, hashed, salt: True)
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=mock_cred))
+    monkeypatch.setattr("teardrop.main.verify_secret", lambda secret, hashed, salt: True)
 
     resp = await anon_client.post(
         "/token",
@@ -165,7 +165,7 @@ async def test_token_db_client_credentials_wrong_secret(anon_client, monkeypatch
     """DB-backed credential with wrong secret returns 401."""
     from datetime import datetime, timezone
 
-    from users import OrgClientCredential
+    from teardrop.users import OrgClientCredential
 
     mock_cred = OrgClientCredential(
         client_id="db-client-id",
@@ -174,8 +174,8 @@ async def test_token_db_client_credentials_wrong_secret(anon_client, monkeypatch
         salt="ignored",
         created_at=datetime.now(timezone.utc),
     )
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=mock_cred))
-    monkeypatch.setattr("app.verify_secret", lambda secret, hashed, salt: False)
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=mock_cred))
+    monkeypatch.setattr("teardrop.main.verify_secret", lambda secret, hashed, salt: False)
 
     resp = await anon_client.post(
         "/token",
@@ -187,8 +187,8 @@ async def test_token_db_client_credentials_wrong_secret(anon_client, monkeypatch
 @pytest.mark.anyio
 async def test_token_unknown_client_id_falls_back_to_config(anon_client, test_settings, monkeypatch):
     """Unknown client_id (not in DB) falls back to config-based check."""
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
-    monkeypatch.setattr("app.settings", test_settings)
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.settings", test_settings)
 
     resp = await anon_client.post(
         "/token",
@@ -212,7 +212,7 @@ async def test_token_unknown_client_id_falls_back_to_config(anon_client, test_se
 @pytest.mark.anyio
 async def test_token_unknown_client_id_wrong_config_secret(anon_client, test_settings, monkeypatch):
     """client_id not in DB and wrong config credential → 401."""
-    monkeypatch.setattr("app.get_client_credential_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.get_client_credential_by_id", AsyncMock(return_value=None))
 
     resp = await anon_client.post(
         "/token",
@@ -233,7 +233,7 @@ async def test_token_per_email_rate_limit_429(anon_client, monkeypatch):
             return (False, 0, 0)
         return (True, 59, 0)
 
-    monkeypatch.setattr("app._check_rate_limit", _rate_limit)
+    monkeypatch.setattr("teardrop.main._check_rate_limit", _rate_limit)
 
     resp = await anon_client.post(
         "/token",

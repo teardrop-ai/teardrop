@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.llm import create_llm_from_config, extract_usage
 from agent.nodes import _build_cached_planner_prefix
-from config import get_settings
+from teardrop.config import get_settings
 from tools import registry
 
 logger = logging.getLogger(__name__)

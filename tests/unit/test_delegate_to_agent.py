@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
-from a2a_client import (
+from teardrop.a2a_client import (
     A2AAgentCard,
     A2ASendMessageResponse,
     A2ATask,
@@ -22,7 +22,7 @@ from tools.definitions.delegate_to_agent import (
     delegate_to_agent,
 )
 
-_MOD = "a2a_client"
+_MOD = "teardrop.a2a_client"
 
 
 # ─── Input schema validation ──────────────────────────────────────────────────
@@ -85,7 +85,7 @@ class TestDelegateToAgentOutput:
 class TestDelegateToAgent:
     async def test_disabled_returns_error(self, test_settings, monkeypatch):
         """When A2A_DELEGATION_ENABLED is false, tool returns an error."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "false")
         _config.get_settings.cache_clear()
@@ -96,7 +96,7 @@ class TestDelegateToAgent:
 
     async def test_ssrf_blocked(self, test_settings, monkeypatch):
         """SSRF-blocked URLs return a tool error, not an exception."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         _config.get_settings.cache_clear()
@@ -107,7 +107,7 @@ class TestDelegateToAgent:
 
     async def test_agent_card_discovery_failure(self, test_settings, monkeypatch):
         """When agent card cannot be fetched, a descriptive error is returned."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         _config.get_settings.cache_clear()
@@ -128,7 +128,7 @@ class TestDelegateToAgent:
 
     async def test_happy_path(self, test_settings, monkeypatch):
         """Successful delegation returns agent name, status, and result text."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         _config.get_settings.cache_clear()
@@ -160,7 +160,7 @@ class TestDelegateToAgent:
 
     async def test_remote_agent_failure(self, test_settings, monkeypatch):
         """When remote agent returns a failed task, error field is populated."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         _config.get_settings.cache_clear()
@@ -190,7 +190,7 @@ class TestDelegateToAgent:
 
     async def test_send_message_exception(self, test_settings, monkeypatch):
         """HTTP-level failure during message send returns a tool error."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         _config.get_settings.cache_clear()

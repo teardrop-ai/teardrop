@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-import users as user_module
-from users import (
+import teardrop.users as user_module
+from teardrop.users import (
     Org,
     User,
     create_org,

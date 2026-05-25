@@ -6,8 +6,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-import config
-from auth import create_access_token
+import teardrop.config as config
+from teardrop.auth import create_access_token
 
 
 @pytest.fixture

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from cryptography.fernet import Fernet
 
-import llm_config
-from llm_config import (
+import teardrop.llm_config as llm_config
+from teardrop.llm_config import (
     _COOLDOWN_SECONDS,
     OrgLlmConfig,
     _decrypt_llm_key,
@@ -109,7 +109,7 @@ def _make_row(
 
 class TestEncryption:
     def test_round_trip(self, mock_settings):
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             encrypted = _encrypt_llm_key("sk-test-12345")
             assert encrypted != "sk-test-12345"
             assert _decrypt_llm_key(encrypted) == "sk-test-12345"
@@ -121,7 +121,7 @@ class TestEncryption:
             llm_config_encryption_key=fernet_key,
             org_tool_encryption_key=other_key,
         )
-        with patch("llm_config.get_settings", return_value=settings):
+        with patch("teardrop.llm_config.get_settings", return_value=settings):
             encrypted = _encrypt_llm_key("test")
             # Should decrypt with the LLM key, not the org_tool key
             f = Fernet(fernet_key.encode())
@@ -134,7 +134,7 @@ class TestEncryption:
             llm_config_encryption_key="",
             org_tool_encryption_key=fallback_key,
         )
-        with patch("llm_config.get_settings", return_value=settings):
+        with patch("teardrop.llm_config.get_settings", return_value=settings):
             encrypted = _encrypt_llm_key("test")
             f = Fernet(fallback_key.encode())
             assert f.decrypt(encrypted.encode()).decode() == "test"
@@ -144,13 +144,13 @@ class TestEncryption:
             llm_config_encryption_key="",
             org_tool_encryption_key="",
         )
-        with patch("llm_config.get_settings", return_value=settings):
+        with patch("teardrop.llm_config.get_settings", return_value=settings):
             with pytest.raises(RuntimeError, match="Cannot encrypt/decrypt"):
                 _encrypt_llm_key("test")
 
     def test_decrypt_with_wrong_key_raises(self, mock_settings):
         """Decrypting with a different key raises an error."""
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             encrypted = _encrypt_llm_key("test")
 
         # Reset and use a different key
@@ -159,7 +159,7 @@ class TestEncryption:
             llm_config_encryption_key=Fernet.generate_key().decode(),
             org_tool_encryption_key="",
         )
-        with patch("llm_config.get_settings", return_value=wrong_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=wrong_settings):
             with pytest.raises(Exception):
                 _decrypt_llm_key(encrypted)
 
@@ -196,7 +196,7 @@ class TestBuildLlmConfigDict:
         pool.fetchrow = AsyncMock(return_value=None)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await build_llm_config_dict("org-no-config")
         assert result is None
 
@@ -208,7 +208,7 @@ class TestBuildLlmConfigDict:
         pool.fetchrow = AsyncMock(return_value=row)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await build_llm_config_dict("org-1")
 
         assert result["provider"] == "openai"
@@ -219,7 +219,7 @@ class TestBuildLlmConfigDict:
     @pytest.mark.asyncio
     async def test_byok_decrypt_success(self, mock_settings):
         """BYOK org with valid encrypted key decrypts successfully."""
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             enc = _encrypt_llm_key("byok-real-key")
 
         row = _make_row(api_key_enc=enc, is_byok=True)
@@ -227,7 +227,7 @@ class TestBuildLlmConfigDict:
         pool.fetchrow = AsyncMock(return_value=row)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await build_llm_config_dict("org-1")
 
         assert result["api_key"] == "byok-real-key"
@@ -240,7 +240,7 @@ class TestBuildLlmConfigDict:
         pool.fetchrow = AsyncMock(return_value=row)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             with pytest.raises(RuntimeError, match="BYOK API key could not be decrypted"):
                 await build_llm_config_dict("org-1")
 
@@ -252,7 +252,7 @@ class TestBuildLlmConfigDict:
         pool.fetchrow = AsyncMock(return_value=row)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await build_llm_config_dict("org-1")
 
         assert result["api_key"] == "shared-google-key"
@@ -336,7 +336,7 @@ class TestSelectFastest:
             "openai:gpt-4o-mini": {"p95_latency_ms": 700.0, "avg_latency_ms": 500.0},
             "google:gemini-2.0-flash": {"p95_latency_ms": 500.0, "avg_latency_ms": 400.0},
         }
-        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
+        with patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
             result = await _select_fastest(models)
         assert result["model"] == "gemini-2.0-flash"
 
@@ -351,7 +351,7 @@ class TestSelectFastest:
             "anthropic:claude-haiku-4-5-20251001": {"avg_latency_ms": 600.0},
             "openai:gpt-4o-mini": {"avg_latency_ms": 450.0},
         }
-        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
+        with patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=live):
             result = await _select_fastest(models)
         assert result["model"] == "gpt-4o-mini"
 
@@ -363,14 +363,14 @@ class TestSelectFastest:
             {"provider": "openai", "model": "gpt-4o-mini"},  # 500ms
             {"provider": "google", "model": "gemini-2.0-flash"},  # 400ms
         ]
-        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
+        with patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
             result = await _select_fastest(models)
         assert result["model"] == "gemini-2.0-flash"
 
     @pytest.mark.asyncio
     async def test_single_model_returns_it(self):
         models = [{"provider": "openai", "model": "gpt-4o-mini"}]
-        with patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
+        with patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}):
             result = await _select_fastest(models)
         assert result["model"] == "gpt-4o-mini"
 
@@ -383,11 +383,11 @@ class TestSelectFastest:
         ]
         with (
             patch(
-                "benchmarks.get_model_benchmarks",
+                "teardrop.benchmarks.get_model_benchmarks",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("db down"),
             ),
-            patch("llm_config.logger") as mock_log,
+            patch("teardrop.llm_config.logger") as mock_log,
         ):
             result = await _select_fastest(models)
         # Static fallback: gpt-4o-mini (500ms) is faster than claude-haiku (600ms)
@@ -477,7 +477,10 @@ class TestResolveLlmConfig:
         pool.fetchrow = AsyncMock(return_value=None)
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             result = await resolve_llm_config("org-1")
         assert result is None
 
@@ -489,9 +492,9 @@ class TestResolveLlmConfig:
         llm_config._pool = pool
 
         with (
-            patch("llm_config.get_settings", return_value=mock_settings),
-            patch("llm_config.get_redis", return_value=None),
-            patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+            patch("teardrop.llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
         ):
             mock_route.return_value = {"provider": "openai", "model": "gpt-4o-mini"}
             await resolve_llm_config("org-1", routing_preference="cost")
@@ -500,7 +503,7 @@ class TestResolveLlmConfig:
     @pytest.mark.asyncio
     async def test_byok_always_uses_own_config(self, mock_settings):
         """BYOK org never smart-routes — always uses its own config."""
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             enc = _encrypt_llm_key("my-key")
 
         row = _make_row(api_key_enc=enc, is_byok=True)
@@ -517,9 +520,9 @@ class TestResolveLlmConfig:
         )
 
         with (
-            patch("llm_config.get_settings", return_value=mock_settings),
-            patch("llm_config.get_redis", return_value=None),
-            patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=byok_cfg),
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+            patch("teardrop.llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=byok_cfg),
         ):
             result = await resolve_llm_config("org-1", routing_preference="cost")
 
@@ -539,10 +542,10 @@ class TestResolveLlmConfig:
         )
 
         with (
-            patch("llm_config.get_settings", return_value=mock_settings),
-            patch("llm_config.get_redis", return_value=None),
-            patch("llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=cfg),
-            patch("llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+            patch("teardrop.llm_config.get_org_llm_config_cached", new_callable=AsyncMock, return_value=cfg),
+            patch("teardrop.llm_config._route_from_pool", new_callable=AsyncMock) as mock_route,
         ):
             mock_route.return_value = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
             await resolve_llm_config("org-1")
@@ -556,13 +559,13 @@ class TestRouteFromPool:
     @pytest.mark.asyncio
     async def test_empty_pool_returns_none(self):
         settings = MagicMock(default_model_pool=[])
-        with patch("llm_config.get_settings", return_value=settings):
+        with patch("teardrop.llm_config.get_settings", return_value=settings):
             result = await llm_config._route_from_pool("cost")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_default_routing_picks_first(self, mock_settings):
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
         assert result["provider"] == "anthropic"
         assert result["api_key"] == "shared-anthropic-key"
@@ -571,7 +574,7 @@ class TestRouteFromPool:
     async def test_cooled_down_models_filtered(self, mock_settings):
         """Cooled-down models are skipped."""
         record_provider_failure("anthropic", "claude-haiku-4-5-20251001")
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
         assert result["provider"] == "openai"
 
@@ -580,7 +583,7 @@ class TestRouteFromPool:
         """When all models are cooled down, use first as best-effort."""
         for m in mock_settings.default_model_pool:
             record_provider_failure(m["provider"], m["model"])
-        with patch("llm_config.get_settings", return_value=mock_settings):
+        with patch("teardrop.llm_config.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
         assert result["provider"] == "anthropic"  # first in pool
 
@@ -592,7 +595,7 @@ class TestCacheInvalidation:
     @pytest.mark.asyncio
     async def test_invalidate_clears_in_process(self):
         llm_config._config_cache["org-1"] = (None, time.monotonic() + 999)
-        with patch("llm_config.get_redis", return_value=None):
+        with patch("teardrop.llm_config.get_redis", return_value=None):
             await invalidate_llm_config_cache("org-1")
         assert "org-1" not in llm_config._config_cache
 
@@ -600,7 +603,7 @@ class TestCacheInvalidation:
     async def test_invalidate_clears_redis(self):
         llm_config._config_cache["org-1"] = (None, time.monotonic() + 999)
         mock_redis = AsyncMock()
-        with patch("llm_config.get_redis", return_value=mock_redis):
+        with patch("teardrop.llm_config.get_redis", return_value=mock_redis):
             await invalidate_llm_config_cache("org-1")
         mock_redis.delete.assert_called_once_with("teardrop:llm_config:org-1")
 
@@ -610,7 +613,7 @@ class TestCacheInvalidation:
         llm_config._config_cache["org-1"] = (None, time.monotonic() + 999)
         mock_redis = AsyncMock()
         mock_redis.delete.side_effect = Exception("Redis down")
-        with patch("llm_config.get_redis", return_value=mock_redis):
+        with patch("teardrop.llm_config.get_redis", return_value=mock_redis):
             await invalidate_llm_config_cache("org-1")
         # Should not raise — in-process cache still cleared
         assert "org-1" not in llm_config._config_cache
@@ -625,7 +628,10 @@ class TestUpsertOrgLlmConfig:
         pool = AsyncMock()
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             cfg = await upsert_org_llm_config(
                 "org-1",
                 provider="anthropic",
@@ -643,7 +649,10 @@ class TestUpsertOrgLlmConfig:
         pool.fetchrow = AsyncMock(return_value={"is_byok": False, "has_api_key": False})
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             cfg = await upsert_org_llm_config(
                 "org-1",
                 provider="openai",
@@ -661,7 +670,10 @@ class TestUpsertOrgLlmConfig:
         pool.fetchrow = AsyncMock(return_value={"is_byok": True, "has_api_key": True})
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             cfg = await upsert_org_llm_config(
                 "org-1",
                 provider="anthropic",
@@ -678,7 +690,10 @@ class TestUpsertOrgLlmConfig:
         pool = AsyncMock()
         llm_config._pool = pool
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             cfg = await upsert_org_llm_config(
                 "org-1",
                 provider="anthropic",
@@ -699,7 +714,10 @@ class TestUpsertOrgLlmConfig:
         llm_config._pool = pool
         llm_config._config_cache["org-1"] = (None, time.monotonic() + 999)
 
-        with patch("llm_config.get_settings", return_value=mock_settings), patch("llm_config.get_redis", return_value=None):
+        with (
+            patch("teardrop.llm_config.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.get_redis", return_value=None),
+        ):
             await upsert_org_llm_config(
                 "org-1",
                 provider="anthropic",

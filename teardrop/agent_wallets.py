@@ -22,7 +22,7 @@ import asyncpg
 import httpx
 from pydantic import BaseModel
 
-from config import get_settings
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 

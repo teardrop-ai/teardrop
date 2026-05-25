@@ -18,7 +18,7 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.nodes import planner_node, tool_executor_node, ui_generator_node
 from agent.state import AgentState, TaskStatus
-from config import get_settings
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 

@@ -36,12 +36,9 @@ from unittest.mock import AsyncMock, patch
 
 import asyncpg
 
-# Ensure the project root is importable when running from the repo root.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import marketplace
-from config import get_settings
 from marketplace import marketplace_sweep_once
+from teardrop.config import get_settings
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -170,7 +167,7 @@ async def test_happy_path(pool: asyncpg.Pool, run_id: str, verbose: bool) -> lis
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
     _settings = get_settings()
-    with patch.object(_settings, "agent_wallet_enabled", True), patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch.object(_settings, "agent_wallet_enabled", True), patch("teardrop.agent_wallets.transfer_usdc", mock_transfer):
         count = await marketplace_sweep_once()
 
     if count < 3:
@@ -211,7 +208,7 @@ async def test_idempotency(pool: asyncpg.Pool, org_ids: list[str]) -> None:
     print("\n[Test 2] Idempotency — re-running sweep in same epoch creates no duplicates")
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
-    with patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch("teardrop.agent_wallets.transfer_usdc", mock_transfer):
         await marketplace_sweep_once()
 
     for oid in org_ids:
@@ -247,7 +244,7 @@ async def test_cdp_failure(pool: asyncpg.Pool, run_id: str) -> list[str]:
 
     mock_transfer = AsyncMock(side_effect=RuntimeError("CDP network unreachable"))
     _settings = get_settings()
-    with patch.object(_settings, "agent_wallet_enabled", True), patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch.object(_settings, "agent_wallet_enabled", True), patch("teardrop.agent_wallets.transfer_usdc", mock_transfer):
         await marketplace_sweep_once()
 
     w = await pool.fetchrow(
@@ -282,7 +279,7 @@ async def test_below_minimum(pool: asyncpg.Pool, run_id: str) -> list[str]:
     _step(f"Seeded below-minimum org: {oid} ({_BELOW_MIN} atomic = ${_BELOW_MIN / 1_000_000:.5f})")
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
-    with patch("agent_wallets.transfer_usdc", mock_transfer):
+    with patch("teardrop.agent_wallets.transfer_usdc", mock_transfer):
         await marketplace_sweep_once()
 
     n = await pool.fetchval("SELECT COUNT(*) FROM tool_author_withdrawals WHERE org_id = $1", oid)

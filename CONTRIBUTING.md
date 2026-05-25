@@ -34,7 +34,7 @@ python -m migrations.runner
 python scripts/seed_users.py
 
 # 7. Start the API
-uvicorn app:app --reload
+uvicorn teardrop.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000`. Interactive docs at

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import a2a_client
+import teardrop.a2a_client as a2a_client
 
 
 @pytest.mark.asyncio

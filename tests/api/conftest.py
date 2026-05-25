@@ -29,8 +29,8 @@ async def api_client(test_settings):
     require_auth is overridden to return a fixed test payload.
     DB functions must be mocked per-test with monkeypatch.
     """
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     async def _mock_auth():
         return {
@@ -59,8 +59,8 @@ async def admin_api_client(test_settings):
 
     Both require_auth and require_admin are overridden.
     """
-    from app import app, require_admin
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app, require_admin
 
     admin_payload = {
         "sub": "admin-user-id",
@@ -87,7 +87,7 @@ async def admin_api_client(test_settings):
 @pytest.fixture
 async def anon_client(test_settings):
     """AsyncClient with NO auth overrides — tests that expect 401."""
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client

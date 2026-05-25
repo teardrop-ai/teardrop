@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import memory as memory_module
-from memory import MemoryEntry
+import teardrop.memory as memory_module
+from teardrop.memory import MemoryEntry
 
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ class TestHasMemoriesCached:
     async def test_uses_cached_value_before_ttl_expires(self, test_settings):
         with (
             patch.object(memory_module, "_memory_count_cache", {"org-1": (9999.0, True)}),
-            patch("memory.time.monotonic", return_value=1000.0),
+            patch("teardrop.memory.time.monotonic", return_value=1000.0),
             patch.object(memory_module, "count_memories", AsyncMock(return_value=0)) as count_mock,
         ):
             result = await memory_module.has_memories_cached("org-1")
@@ -203,7 +203,7 @@ class TestHasMemoriesCached:
     async def test_refreshes_cache_after_ttl_expiry(self, test_settings):
         with (
             patch.object(memory_module, "_memory_count_cache", {"org-1": (1000.0, False)}),
-            patch("memory.time.monotonic", return_value=2000.0),
+            patch("teardrop.memory.time.monotonic", return_value=2000.0),
             patch.object(memory_module, "count_memories", AsyncMock(return_value=3)) as count_mock,
         ):
             result = await memory_module.has_memories_cached("org-1")
@@ -481,8 +481,7 @@ class TestIsStatelessLookupRun:
 @pytest.mark.anyio
 class TestInitCloseGetPool:
     async def test_init_when_memory_disabled(self, test_settings, monkeypatch):
-        import config
-
+        import teardrop.config as config
         monkeypatch.setenv("MEMORY_ENABLED", "false")
         config.get_settings.cache_clear()
         pool = _pool()
@@ -492,8 +491,7 @@ class TestInitCloseGetPool:
         config.get_settings.cache_clear()
 
     async def test_init_when_no_openai_key(self, test_settings, monkeypatch):
-        import config
-
+        import teardrop.config as config
         monkeypatch.setenv("OPENAI_API_KEY", "")
         config.get_settings.cache_clear()
         pool = _pool()

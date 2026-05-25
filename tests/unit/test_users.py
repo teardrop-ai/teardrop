@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import users as users_module
-from users import Org, User, _hash_secret, verify_secret
+import teardrop.users as users_module
+from teardrop.users import Org, User, _hash_secret, verify_secret
 
 # ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ def _pool():
 @pytest.mark.anyio
 class TestCreateOrg:
     async def test_returns_org_model(self):
-        from users import create_org
+        from teardrop.users import create_org
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -59,7 +59,7 @@ class TestCreateOrg:
         pool.execute.assert_called_once()
 
     async def test_db_error_propagates(self):
-        from users import create_org
+        from teardrop.users import create_org
 
         pool = _pool()
         pool.execute = AsyncMock(side_effect=Exception("duplicate key"))
@@ -74,7 +74,7 @@ class TestCreateOrg:
 @pytest.mark.anyio
 class TestCreateUser:
     async def test_returns_user_model(self):
-        from users import create_user
+        from teardrop.users import create_user
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -86,7 +86,7 @@ class TestCreateUser:
         assert user.hashed_secret != "secret"
 
     async def test_admin_role(self):
-        from users import create_user
+        from teardrop.users import create_user
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -100,7 +100,7 @@ class TestCreateUser:
 @pytest.mark.anyio
 class TestGetUserByEmail:
     async def test_returns_user_when_found_and_active(self):
-        from users import get_user_by_email
+        from teardrop.users import get_user_by_email
 
         row = {
             "id": "u-1",
@@ -121,7 +121,7 @@ class TestGetUserByEmail:
         assert user.id == "u-1"
 
     async def test_returns_none_when_inactive(self):
-        from users import get_user_by_email
+        from teardrop.users import get_user_by_email
 
         row = {
             "id": "u-2",
@@ -141,7 +141,7 @@ class TestGetUserByEmail:
         assert user is None
 
     async def test_returns_none_when_not_found(self):
-        from users import get_user_by_email
+        from teardrop.users import get_user_by_email
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -156,21 +156,21 @@ class TestGetUserByEmail:
 @pytest.mark.anyio
 class TestInitAndClose:
     async def test_close_user_db_clears_pool(self):
-        from users import close_user_db
+        from teardrop.users import close_user_db
 
         with patch.object(users_module, "_pool", MagicMock()):
             await close_user_db()
         assert users_module._pool is None
 
     async def test_get_pool_raises_when_uninitialised(self):
-        from users import _get_pool
+        from teardrop.users import _get_pool
 
         with patch.object(users_module, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):
                 _get_pool()
 
     async def test_init_user_db_sets_pool(self):
-        from users import init_user_db
+        from teardrop.users import init_user_db
 
         pool = _pool()
         with patch.object(users_module, "_pool", None):
@@ -186,7 +186,7 @@ class TestInitAndClose:
 @pytest.mark.anyio
 class TestGetOrgById:
     async def test_returns_org_when_found(self):
-        from users import get_org_by_id
+        from teardrop.users import get_org_by_id
 
         row = {"id": "org-1", "name": "ACME", "created_at": datetime.now(timezone.utc)}
         pool = _pool()
@@ -198,7 +198,7 @@ class TestGetOrgById:
         assert org.name == "ACME"
 
     async def test_returns_none_when_not_found(self):
-        from users import get_org_by_id
+        from teardrop.users import get_org_by_id
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -213,7 +213,7 @@ class TestGetOrgById:
 @pytest.mark.anyio
 class TestGetOrgByName:
     async def test_returns_org_when_found(self):
-        from users import get_org_by_name
+        from teardrop.users import get_org_by_name
 
         row = {"id": "org-2", "name": "Globex", "created_at": datetime.now(timezone.utc)}
         pool = _pool()
@@ -224,7 +224,7 @@ class TestGetOrgByName:
         assert org.name == "Globex"
 
     async def test_returns_none_when_not_found(self):
-        from users import get_org_by_name
+        from teardrop.users import get_org_by_name
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -239,7 +239,7 @@ class TestGetOrgByName:
 @pytest.mark.anyio
 class TestGetUserByOrgId:
     async def test_returns_user_when_found(self):
-        from users import get_user_by_org_id
+        from teardrop.users import get_user_by_org_id
 
         row = {
             "id": "u-10",
@@ -260,7 +260,7 @@ class TestGetUserByOrgId:
         assert user.org_id == "org-1"
 
     async def test_returns_none_when_not_found(self):
-        from users import get_user_by_org_id
+        from teardrop.users import get_user_by_org_id
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -285,7 +285,7 @@ def _make_cred_row():
 @pytest.mark.anyio
 class TestClientCredentials:
     async def test_create_returns_cred_and_plaintext(self):
-        from users import create_client_credential
+        from teardrop.users import create_client_credential
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -295,7 +295,7 @@ class TestClientCredentials:
         pool.execute.assert_called_once()
 
     async def test_get_by_id_found(self):
-        from users import get_client_credential_by_id
+        from teardrop.users import get_client_credential_by_id
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=_make_cred_row())
@@ -305,7 +305,7 @@ class TestClientCredentials:
         assert cred.client_id == "cid-1"
 
     async def test_get_by_id_not_found(self):
-        from users import get_client_credential_by_id
+        from teardrop.users import get_client_credential_by_id
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -314,7 +314,7 @@ class TestClientCredentials:
         assert cred is None
 
     async def test_list_returns_creds(self):
-        from users import list_org_client_credentials
+        from teardrop.users import list_org_client_credentials
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[_make_cred_row()])
@@ -324,7 +324,7 @@ class TestClientCredentials:
         assert creds[0].org_id == "org-1"
 
     async def test_list_returns_empty(self):
-        from users import list_org_client_credentials
+        from teardrop.users import list_org_client_credentials
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[])
@@ -333,7 +333,7 @@ class TestClientCredentials:
         assert creds == []
 
     async def test_delete_executes(self):
-        from users import delete_org_client_credentials
+        from teardrop.users import delete_org_client_credentials
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -369,7 +369,7 @@ def _make_transactional_pool():
 @pytest.mark.anyio
 class TestRegisterOrgAndUser:
     async def test_creates_org_and_user(self):
-        from users import register_org_and_user
+        from teardrop.users import register_org_and_user
 
         pool, conn = _make_transactional_pool()
         with patch.object(users_module, "_pool", pool):
@@ -380,7 +380,7 @@ class TestRegisterOrgAndUser:
         assert conn.execute.call_count == 2  # INSERT orgs + INSERT users
 
     async def test_db_error_propagates(self):
-        from users import register_org_and_user
+        from teardrop.users import register_org_and_user
 
         pool, conn = _make_transactional_pool()
         conn.execute = AsyncMock(side_effect=Exception("unique violation"))
@@ -395,7 +395,7 @@ class TestRegisterOrgAndUser:
 @pytest.mark.anyio
 class TestVerificationTokens:
     async def test_create_returns_token_string(self):
-        from users import create_verification_token
+        from teardrop.users import create_verification_token
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -405,7 +405,7 @@ class TestVerificationTokens:
         pool.execute.assert_called_once()
 
     async def test_consume_valid_token_returns_user_id(self):
-        from users import consume_verification_token
+        from teardrop.users import consume_verification_token
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
@@ -424,7 +424,7 @@ class TestVerificationTokens:
         conn.execute.assert_called_once()  # UPDATE SET used=TRUE
 
     async def test_consume_expired_token_returns_none(self):
-        from users import consume_verification_token
+        from teardrop.users import consume_verification_token
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(
@@ -439,7 +439,7 @@ class TestVerificationTokens:
         assert uid is None
 
     async def test_consume_already_used_returns_none(self):
-        from users import consume_verification_token
+        from teardrop.users import consume_verification_token
 
         pool, conn = _make_transactional_pool()
         from datetime import timedelta
@@ -456,7 +456,7 @@ class TestVerificationTokens:
         assert uid is None
 
     async def test_consume_missing_token_returns_none(self):
-        from users import consume_verification_token
+        from teardrop.users import consume_verification_token
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
@@ -465,7 +465,7 @@ class TestVerificationTokens:
         assert uid is None
 
     async def test_mark_user_verified(self):
-        from users import mark_user_verified
+        from teardrop.users import mark_user_verified
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -479,7 +479,7 @@ class TestVerificationTokens:
 @pytest.mark.anyio
 class TestOrgInvites:
     async def test_create_returns_invite(self):
-        from users import create_org_invite
+        from teardrop.users import create_org_invite
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -492,7 +492,7 @@ class TestOrgInvites:
     async def test_get_valid_invite(self):
         from datetime import timedelta
 
-        from users import get_org_invite
+        from teardrop.users import get_org_invite
 
         pool = _pool()
         now = datetime.now(timezone.utc)
@@ -513,7 +513,7 @@ class TestOrgInvites:
         assert invite.token == "tok-1"
 
     async def test_get_missing_invite_returns_none(self):
-        from users import get_org_invite
+        from teardrop.users import get_org_invite
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
@@ -524,7 +524,7 @@ class TestOrgInvites:
     async def test_get_used_invite_returns_none(self):
         from datetime import timedelta
 
-        from users import get_org_invite
+        from teardrop.users import get_org_invite
 
         pool = _pool()
         now = datetime.now(timezone.utc)
@@ -546,7 +546,7 @@ class TestOrgInvites:
     async def test_consume_invite_success(self):
         from datetime import timedelta
 
-        from users import consume_org_invite
+        from teardrop.users import consume_org_invite
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
@@ -559,7 +559,7 @@ class TestOrgInvites:
     async def test_consume_invite_already_used(self):
         from datetime import timedelta
 
-        from users import consume_org_invite
+        from teardrop.users import consume_org_invite
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
@@ -569,7 +569,7 @@ class TestOrgInvites:
         assert result is False
 
     async def test_consume_invite_not_found(self):
-        from users import consume_org_invite
+        from teardrop.users import consume_org_invite
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
@@ -584,7 +584,7 @@ class TestOrgInvites:
 @pytest.mark.anyio
 class TestRefreshTokens:
     async def test_create_refresh_token_returns_string(self):
-        from users import create_refresh_token
+        from teardrop.users import create_refresh_token
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -596,7 +596,7 @@ class TestRefreshTokens:
     async def test_rotate_success(self):
         from datetime import timedelta
 
-        from users import rotate_refresh_token
+        from teardrop.users import rotate_refresh_token
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
@@ -622,7 +622,7 @@ class TestRefreshTokens:
     async def test_rotate_revoked_returns_none(self):
         from datetime import timedelta
 
-        from users import rotate_refresh_token
+        from teardrop.users import rotate_refresh_token
 
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
@@ -643,7 +643,7 @@ class TestRefreshTokens:
         assert result is None
 
     async def test_rotate_not_found_returns_none(self):
-        from users import rotate_refresh_token
+        from teardrop.users import rotate_refresh_token
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
@@ -652,7 +652,7 @@ class TestRefreshTokens:
         assert result is None
 
     async def test_revoke_refresh_token(self):
-        from users import revoke_refresh_token
+        from teardrop.users import revoke_refresh_token
 
         pool = _pool()
         with patch.object(users_module, "_pool", pool):
@@ -660,7 +660,7 @@ class TestRefreshTokens:
         pool.execute.assert_called_once()
 
     async def test_cleanup_expired_returns_count(self):
-        from users import cleanup_expired_refresh_tokens
+        from teardrop.users import cleanup_expired_refresh_tokens
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="DELETE 5")
@@ -669,7 +669,7 @@ class TestRefreshTokens:
         assert count == 5
 
     async def test_cleanup_handles_malformed_result(self):
-        from users import cleanup_expired_refresh_tokens
+        from teardrop.users import cleanup_expired_refresh_tokens
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="OK")
@@ -678,7 +678,7 @@ class TestRefreshTokens:
         assert count == 0
 
     async def test_get_refresh_token_successor_found(self):
-        from users import get_refresh_token_successor
+        from teardrop.users import get_refresh_token_successor
 
         pool = _pool()
         now = datetime.now(timezone.utc)
@@ -701,7 +701,7 @@ class TestRefreshTokens:
         assert rec.token == "new-tok"
 
     async def test_get_refresh_token_successor_not_found(self):
-        from users import get_refresh_token_successor
+        from teardrop.users import get_refresh_token_successor
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)

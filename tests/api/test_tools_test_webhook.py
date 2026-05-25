@@ -19,7 +19,7 @@ _BODY = {
 @pytest.fixture(autouse=True)
 def _reset_rate_limit():
     """Clear in-process rate-limit state between tests in this module."""
-    import app as app_module
+    import teardrop.main as app_module
 
     app_module._rate_counters.clear()
     yield
@@ -57,7 +57,7 @@ async def test_unauthenticated(anon_client):
 @pytest.mark.anyio
 async def test_success_2xx_json(api_client, monkeypatch):
     session = _mock_session(status=200, body=b'{"result": "ok"}')
-    monkeypatch.setattr("app.async_validate_url", AsyncMock(return_value=None), raising=False)
+    monkeypatch.setattr("teardrop.main.async_validate_url", AsyncMock(return_value=None), raising=False)
     with (
         patch("aiohttp.ClientSession", return_value=session),
         patch("tools.definitions.http_fetch.async_validate_url", new=AsyncMock(return_value=None)),
@@ -282,7 +282,7 @@ async def test_rate_limit_enforced(api_client, monkeypatch):
     async def _denied(_key, _limit):
         return False, 0, 9999999999
 
-    monkeypatch.setattr("app._check_rate_limit", _denied)
+    monkeypatch.setattr("teardrop.main._check_rate_limit", _denied)
     with patch("tools.definitions.http_fetch.async_validate_url", new=AsyncMock(return_value=None)):
         resp = await api_client.post("/tools/test-webhook", json=_BODY)
     assert resp.status_code == 429

@@ -13,7 +13,7 @@ import time
 from web3 import AsyncWeb3
 from web3.providers import AsyncHTTPProvider
 
-from config import get_settings
+from teardrop.config import get_settings
 from tools.definitions._rpc_semaphore import acquire_chain_semaphore, acquire_rpc_semaphore, set_chain_cooldown
 
 logger = logging.getLogger(__name__)

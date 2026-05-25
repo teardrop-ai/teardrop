@@ -61,20 +61,6 @@ from sse_starlette.sse import EventSourceResponse
 from agent.cache_prewarm import prewarm_org_prefix
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from agent.state import AgentState
-from agent_wallets import (
-    close_agent_wallets_db,
-    create_agent_wallet,
-    deactivate_agent_wallet,
-    get_agent_wallet,
-    get_agent_wallet_balance,
-    init_agent_wallets_db,
-)
-from auth import create_access_token, require_auth
-from benchmarks import (
-    build_benchmarks_response,
-    close_benchmarks_db,
-    init_benchmarks_db,
-)
 from billing import (
     BillingResult,
     admin_topup_credit,
@@ -115,19 +101,6 @@ from billing import (
     verify_payment,
     verify_settlement_on_chain,
 )
-from cache import close_redis, get_redis, init_redis
-from config import Settings, get_settings
-from llm_config import (
-    ALLOWED_ROUTING_PREFERENCES,
-    OrgLlmConfig,
-    close_llm_config_db,
-    delete_org_llm_config,
-    get_org_llm_config,
-    get_org_llm_config_cached,
-    init_llm_config_db,
-    resolve_llm_config,
-    upsert_org_llm_config,
-)
 from marketplace import (
     check_org_subscription,
     close_marketplace_db,
@@ -157,18 +130,6 @@ from mcp_client import (
     list_org_mcp_servers,
     update_org_mcp_server,
 )
-from memory import (
-    cleanup_expired_memories,
-    close_memory_db,
-    count_memories,
-    delete_all_org_memories,
-    delete_memory,
-    extract_and_store_memories,
-    init_memory_db,
-    list_memories,
-    recall_memories,
-    store_memory,
-)
 from org_tools import (
     OrgTool,
     build_org_langchain_tools,
@@ -186,11 +147,46 @@ from org_tools import (
 )
 from scripts.generate_keys import generate_keypair
 from shared.email import send_invite_email, send_verification_email
-from tools import registry
-from tools.definitions._rpc_semaphore import init_chain_rate_limiter, init_chain_semaphore, init_rpc_semaphore
-from tools.executor import execute_tool
-from tools.mcp_server import mcp as _mcp_server
-from usage import (
+from teardrop.agent_wallets import (
+    close_agent_wallets_db,
+    create_agent_wallet,
+    deactivate_agent_wallet,
+    get_agent_wallet,
+    get_agent_wallet_balance,
+    init_agent_wallets_db,
+)
+from teardrop.auth import create_access_token, require_auth
+from teardrop.benchmarks import (
+    build_benchmarks_response,
+    close_benchmarks_db,
+    init_benchmarks_db,
+)
+from teardrop.cache import close_redis, get_redis, init_redis
+from teardrop.config import Settings, get_settings
+from teardrop.llm_config import (
+    ALLOWED_ROUTING_PREFERENCES,
+    OrgLlmConfig,
+    close_llm_config_db,
+    delete_org_llm_config,
+    get_org_llm_config,
+    get_org_llm_config_cached,
+    init_llm_config_db,
+    resolve_llm_config,
+    upsert_org_llm_config,
+)
+from teardrop.memory import (
+    cleanup_expired_memories,
+    close_memory_db,
+    count_memories,
+    delete_all_org_memories,
+    delete_memory,
+    extract_and_store_memories,
+    init_memory_db,
+    list_memories,
+    recall_memories,
+    store_memory,
+)
+from teardrop.usage import (
     UsageEvent,
     close_usage_db,
     get_usage_by_org,
@@ -198,7 +194,7 @@ from usage import (
     init_usage_db,
     record_usage_event,
 )
-from users import (
+from teardrop.users import (
     User,
     cleanup_expired_refresh_tokens,
     close_user_db,
@@ -226,7 +222,7 @@ from users import (
     rotate_refresh_token,
     verify_secret,
 )
-from wallets import (
+from teardrop.wallets import (
     close_wallets_db,
     consume_nonce,
     create_nonce,
@@ -236,6 +232,10 @@ from wallets import (
     get_wallets_by_user,
     init_wallets_db,
 )
+from tools import registry
+from tools.definitions._rpc_semaphore import init_chain_rate_limiter, init_chain_semaphore, init_rpc_semaphore
+from tools.executor import execute_tool
+from tools.mcp_server import mcp as _mcp_server
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -649,7 +649,7 @@ async def lifespan(app: FastAPI):
     from migrations.runner import apply_pending
 
     # Ensure RSA keypair exists before config tries to read the key files.
-    generate_keypair(Path(__file__).resolve().parent / "keys")
+    generate_keypair(Path(__file__).resolve().parent.parent / "keys")
 
     # Warn on insecure defaults; raise on critical misconfigurations in production.
     _validate_production_config(settings)
@@ -794,7 +794,7 @@ async def add_security_headers(request: Request, call_next: Callable[[Request], 
 
 
 # ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
-from mcp_gateway import MCPGatewayMiddleware  # noqa: E402
+from teardrop.mcp_gateway import MCPGatewayMiddleware  # noqa: E402
 
 app.add_middleware(MCPGatewayMiddleware)
 
@@ -4230,7 +4230,7 @@ async def upsert_llm_config_endpoint(
 
     # Non-BYOK model name validation against known catalogue
     if body.api_key is None:
-        from benchmarks import MODEL_CATALOGUE
+        from teardrop.benchmarks import MODEL_CATALOGUE
 
         catalogue_key = f"{body.provider.lower()}:{body.model}"
         if catalogue_key not in MODEL_CATALOGUE:
@@ -5683,7 +5683,7 @@ async def admin_marketplace_settlement_balance(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Admin: query the USDC balance of the marketplace settlement CDP wallet."""
-    from agent_wallets import _chain_id_to_network, _get_cdp_client, _require_cdp_enabled
+    from teardrop.agent_wallets import _chain_id_to_network, _get_cdp_client, _require_cdp_enabled
 
     settings = get_settings()
     _require_cdp_enabled()
@@ -5715,13 +5715,13 @@ async def admin_marketplace_settlement_balance(
     )
 
 
-# ─── Entry point for `python app.py` ─────────────────────────────────────────
+# ─── Entry point for `python -m teardrop.main` ───────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "app:app",
+        "teardrop.main:app",
         host=settings.app_host,
         port=settings.app_port,
         log_level=settings.app_log_level,

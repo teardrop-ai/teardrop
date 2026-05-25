@@ -17,7 +17,7 @@ from typing import Any
 
 import asyncpg
 
-from cache import get_redis
+from teardrop.cache import get_redis
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent_wallets import AgentWallet
+from teardrop.agent_wallets import AgentWallet
 
 _WALLET = AgentWallet(
     id="aw-1234",
@@ -26,8 +26,7 @@ _WALLET = AgentWallet(
 
 @pytest.mark.anyio
 async def test_provision_returns_501_when_disabled(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "false")
     config.get_settings.cache_clear()
 
@@ -38,8 +37,7 @@ async def test_provision_returns_501_when_disabled(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_returns_501_when_disabled(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "false")
     config.get_settings.cache_clear()
 
@@ -53,15 +51,14 @@ async def test_get_returns_501_when_disabled(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_provision_agent_wallet(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("app.create_agent_wallet", AsyncMock(return_value=_WALLET))
+    monkeypatch.setattr("teardrop.main.create_agent_wallet", AsyncMock(return_value=_WALLET))
 
     resp = await api_client.post("/wallets/agent")
     assert resp.status_code == 201
@@ -76,15 +73,14 @@ async def test_provision_agent_wallet(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_agent_wallet(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("app.get_agent_wallet", AsyncMock(return_value=_WALLET))
+    monkeypatch.setattr("teardrop.main.get_agent_wallet", AsyncMock(return_value=_WALLET))
 
     resp = await api_client.get("/wallets/agent")
     assert resp.status_code == 200
@@ -95,15 +91,14 @@ async def test_get_agent_wallet(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_agent_wallet_not_found(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("app.get_agent_wallet", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.main.get_agent_wallet", AsyncMock(return_value=None))
 
     resp = await api_client.get("/wallets/agent")
     assert resp.status_code == 404
@@ -115,15 +110,14 @@ async def test_get_agent_wallet_not_found(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_deactivate_agent_wallet_admin(admin_api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("app.deactivate_agent_wallet", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.main.deactivate_agent_wallet", AsyncMock(return_value=True))
 
     resp = await admin_api_client.delete("/wallets/agent")
     assert resp.status_code == 200
@@ -133,8 +127,7 @@ async def test_deactivate_agent_wallet_admin(admin_api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_deactivate_requires_admin(api_client, monkeypatch):
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")

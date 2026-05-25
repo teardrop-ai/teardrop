@@ -11,7 +11,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field
 
-from config import get_settings
+from teardrop.config import get_settings
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)

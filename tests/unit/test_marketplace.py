@@ -321,8 +321,8 @@ class TestProcessWithdrawal:
         ]
         mock_pool, mock_conn = _make_conn_mock(withdrawal_row, earnings_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
-        monkeypatch.setattr("agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
-        monkeypatch.setattr("agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
+        monkeypatch.setattr("teardrop.agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
+        monkeypatch.setattr("teardrop.agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
 
         await process_withdrawal("w-1")
 
@@ -347,8 +347,8 @@ class TestProcessWithdrawal:
         earnings_rows = [{"id": "e1", "author_share_usdc": 300}]
         mock_pool, mock_conn = _make_conn_mock(withdrawal_row, earnings_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
-        monkeypatch.setattr("agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
-        monkeypatch.setattr("agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
+        monkeypatch.setattr("teardrop.agent_wallets.transfer_usdc", AsyncMock(return_value="0xtx"))
+        monkeypatch.setattr("teardrop.agent_wallets.verify_usdc_transfer", AsyncMock(return_value=True))
 
         result = await process_withdrawal("w-2")
 

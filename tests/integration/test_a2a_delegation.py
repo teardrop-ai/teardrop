@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from a2a_client import (
+from teardrop.a2a_client import (
     A2AAgentCard,
     A2ASendMessageResponse,
     A2ATask,
@@ -14,13 +14,13 @@ from a2a_client import (
 )
 from tools.definitions.delegate_to_agent import delegate_to_agent
 
-_MOD = "a2a_client"
+_MOD = "teardrop.a2a_client"
 
 
 @pytest.mark.anyio
 async def test_end_to_end_delegation(test_settings, monkeypatch):
     """Full tool invocation: card discovery → message send → result extraction."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()
@@ -61,7 +61,7 @@ async def test_end_to_end_delegation(test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_delegation_with_failed_remote_agent(test_settings, monkeypatch):
     """Remote agent returns failed state — error field is populated."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()
@@ -95,7 +95,7 @@ async def test_delegation_with_failed_remote_agent(test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_delegation_network_error(test_settings, monkeypatch):
     """Network-level failure is returned as a tool error, not an exception."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()
@@ -125,7 +125,7 @@ _DELEGATION_MOD = "tools.definitions.delegate_to_agent"
 @pytest.mark.anyio
 async def test_jwt_forwarded_when_rule_enabled(test_settings, monkeypatch):
     """When jwt_forward=True in allowlist rule, send_message receives the caller's JWT."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()
@@ -169,7 +169,7 @@ async def test_jwt_forwarded_when_rule_enabled(test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_jwt_not_forwarded_when_rule_disabled(test_settings, monkeypatch):
     """When jwt_forward=False in allowlist rule, send_message receives auth_header=None."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()
@@ -213,7 +213,7 @@ async def test_jwt_not_forwarded_when_rule_disabled(test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_jwt_forward_true_but_no_token_sends_no_auth(test_settings, monkeypatch):
     """When jwt_forward=True but no JWT present (non-user caller), auth_header is None."""
-    import config as _config
+    import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
     _config.get_settings.cache_clear()

@@ -20,8 +20,8 @@ import asyncpg
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
 
-from cache import get_redis
-from config import get_settings
+from teardrop.cache import get_redis
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -560,7 +560,7 @@ async def _select_cheapest(models: list[dict[str, str]]) -> dict[str, str]:
 
 async def _select_fastest(models: list[dict[str, str]]) -> dict[str, str]:
     """Select the fastest model by p95 latency (live benchmarks) with static fallback."""
-    from benchmarks import MODEL_CATALOGUE, get_model_benchmarks
+    from teardrop.benchmarks import MODEL_CATALOGUE, get_model_benchmarks
 
     try:
         live = await get_model_benchmarks()

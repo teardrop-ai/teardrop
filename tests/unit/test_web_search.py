@@ -86,7 +86,7 @@ class TestWebSearch:
 
     async def test_uses_tavily_when_api_key_present(self, test_settings, monkeypatch):
         """When TAVILY_API_KEY is set, _tavily_search is called."""
-        import config as _config
+        import teardrop.config as _config
 
         mock_tavily_result = {
             "query": "OpenAI",
@@ -121,7 +121,7 @@ class TestWebSearch:
 
     async def test_tavily_exception_propagates(self, test_settings, monkeypatch):
         """If Tavily raises, the exception is not silently swallowed by web_search."""
-        import config as _config
+        import teardrop.config as _config
 
         monkeypatch.setenv("TAVILY_API_KEY", "fake-key")
         _config.get_settings.cache_clear()

@@ -17,7 +17,7 @@ omit = [
     "scripts/*",
     ".venv/*",
     "venv/*",
-    "app.py",
+    "teardrop/main.py",
     "test_x402_payment.py",
     "tools/mcp_server.py",
 ]

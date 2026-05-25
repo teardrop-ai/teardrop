@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-import users as user_module
-import wallets as wallet_module
-from users import create_org, create_user
-from wallets import (
+import teardrop.users as user_module
+import teardrop.wallets as wallet_module
+from teardrop.users import create_org, create_user
+from teardrop.wallets import (
     Wallet,
     consume_nonce,
     create_nonce,

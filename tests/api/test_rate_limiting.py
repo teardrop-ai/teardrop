@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import app as app_module
+import teardrop.main as app_module
 
 
 def _make_settings(*, org_agent_rpm: int = 100) -> MagicMock:
@@ -50,14 +50,14 @@ def _clear_rate_counters():
 @pytest.mark.anyio
 async def test_org_rate_limit_returns_429_with_scope_header(test_settings, monkeypatch):
     """When the org bucket is full, /agent/run returns 429 with X-RateLimit-Scope: org."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     org_id = "org-rl-exhausted"
     org_agent_rpm = 3
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
 
     # Pre-fill the org bucket to capacity using real timestamps.
     now = time.time()
@@ -82,14 +82,14 @@ async def test_org_rate_limit_returns_429_with_scope_header(test_settings, monke
 @pytest.mark.anyio
 async def test_org_rate_limit_headers_contain_limit_and_remaining(test_settings, monkeypatch):
     """429 response from org limit must include X-RateLimit-Limit and X-RateLimit-Remaining."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     org_id = "org-rl-headers"
     org_agent_rpm = 2
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
 
     now = time.time()
     app_module._rate_counters[f"run:org:{org_id}"] = [now - 0.1, now - 0.2]
@@ -112,15 +112,15 @@ async def test_org_rate_limit_headers_contain_limit_and_remaining(test_settings,
 @pytest.mark.anyio
 async def test_exhausted_org_does_not_block_other_org(test_settings, monkeypatch):
     """Exhausting org-A's bucket must not produce a 429 for org-B users."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     org_a = "org-a-noisy"
     org_b = "org-b-innocent"
     org_agent_rpm = 2
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
 
     # Exhaust org-A.
     now = time.time()
@@ -151,8 +151,8 @@ async def test_exhausted_org_does_not_block_other_org(test_settings, monkeypatch
 @pytest.mark.anyio
 async def test_user_limit_checked_before_org_limit(test_settings, monkeypatch):
     """If per-user bucket is exhausted, 429 must NOT carry X-RateLimit-Scope: org."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     user_id = "user-fast"
     org_id = "org-has-capacity"
@@ -160,7 +160,7 @@ async def test_user_limit_checked_before_org_limit(test_settings, monkeypatch):
 
     mock_settings = _make_settings(org_agent_rpm=10_000)
     mock_settings.rate_limit_agent_rpm = user_rpm
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
 
     # Exhaust only the user bucket.
     now = time.time()
@@ -184,11 +184,11 @@ async def test_user_limit_checked_before_org_limit(test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_empty_org_id_skips_org_rate_limit(test_settings, monkeypatch):
     """JWTs without an org_id must not create a rate-limit bucket under the empty key."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     mock_settings = _make_settings(org_agent_rpm=1)
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
 
     # No org_id in JWT.
     app.dependency_overrides[require_auth] = lambda: {

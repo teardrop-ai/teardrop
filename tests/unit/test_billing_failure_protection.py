@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from billing import BillingResult
-from mcp_gateway import MCPGatewayMiddleware
+from teardrop.mcp_gateway import MCPGatewayMiddleware
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_settle_billing_x402_success_records_earnings():
         ) as settle_mock,
         patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value={"org_id": "author-org"})),
         patch("marketplace.record_tool_call_earnings", new=AsyncMock()),
-        patch("mcp_gateway.asyncio.create_task") as create_task_mock,
+        patch("teardrop.mcp_gateway.asyncio.create_task") as create_task_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 

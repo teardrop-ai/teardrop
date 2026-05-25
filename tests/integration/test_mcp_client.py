@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import mcp_client as mcp_module
-import users as user_module
+import teardrop.users as user_module
 from mcp_client import (
     OrgMcpServer,
     create_org_mcp_server,
@@ -23,7 +23,7 @@ from mcp_client import (
     list_org_mcp_servers,
     update_org_mcp_server,
 )
-from users import create_org  # noqa: I001
+from teardrop.users import create_org  # noqa: I001
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -39,8 +39,7 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
     from cryptography.fernet import Fernet
 
     monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    import config
-
+    import teardrop.config as config
     config.get_settings.cache_clear()
     import org_tools
 
@@ -222,8 +221,7 @@ async def test_duplicate_name_rejected(test_org, monkeypatch):
 async def test_quota_enforcement(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
-    import config
-
+    import teardrop.config as config
     monkeypatch.setenv("MAX_ORG_MCP_SERVERS", "2")
     config.get_settings.cache_clear()
 

@@ -13,7 +13,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, Field
 
-from config import get_settings
+from teardrop.config import get_settings
 from tools.definitions.get_token_price import _SYMBOL_TO_ID, _load_coins_list_index, _resolve_id
 from tools.registry import ToolDefinition
 

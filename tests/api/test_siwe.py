@@ -7,17 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from users import Org
+from teardrop.users import Org
 
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("app._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 @pytest.mark.anyio
 async def test_get_siwe_nonce(anon_client, monkeypatch):
-    monkeypatch.setattr("app.create_nonce", AsyncMock(return_value="test-nonce-abc"))
+    monkeypatch.setattr("teardrop.main.create_nonce", AsyncMock(return_value="test-nonce-abc"))
 
     resp = await anon_client.get("/auth/siwe/nonce")
     assert resp.status_code == 200
@@ -30,7 +30,7 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     """SIWE login with a valid signature should return a JWT."""
     from datetime import datetime, timezone
 
-    from wallets import Wallet
+    from teardrop.wallets import Wallet
 
     mock_wallet = Wallet(
         id="wallet-1",
@@ -51,9 +51,9 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     mock_siwe_cls = MagicMock()
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
-    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=True))
-    monkeypatch.setattr("app.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
-    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="siwe-rt"))
+    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.main.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
+    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="siwe-rt"))
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -80,7 +80,7 @@ async def test_siwe_login_expired_nonce(anon_client, monkeypatch, test_settings)
     mock_siwe_cls = MagicMock()
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
-    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=False))
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -108,7 +108,7 @@ async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings)
     mock_siwe_cls = MagicMock()
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
-    monkeypatch.setattr("app.consume_nonce", consume_mock)
+    monkeypatch.setattr("teardrop.main.consume_nonce", consume_mock)
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -132,7 +132,7 @@ async def test_siwe_login_valid_sig_consumes_nonce_with_address(anon_client, mon
     """After valid signature, consume_nonce is called with expected_address."""
     from datetime import datetime, timezone
 
-    from wallets import Wallet
+    from teardrop.wallets import Wallet
 
     mock_wallet = Wallet(
         id="wallet-1",
@@ -156,9 +156,9 @@ async def test_siwe_login_valid_sig_consumes_nonce_with_address(anon_client, mon
     mock_siwe_cls = MagicMock()
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
-    monkeypatch.setattr("app.consume_nonce", consume_mock)
-    monkeypatch.setattr("app.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
-    monkeypatch.setattr("app.create_refresh_token", AsyncMock(return_value="siwe-rt"))
+    monkeypatch.setattr("teardrop.main.consume_nonce", consume_mock)
+    monkeypatch.setattr("teardrop.main.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
+    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="siwe-rt"))
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -187,7 +187,7 @@ async def test_siwe_login_nonce_address_mismatch(anon_client, monkeypatch, test_
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
     # consume_nonce returns False (simulates address mismatch)
-    monkeypatch.setattr("app.consume_nonce", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=False))
 
     with patch("siwe.SiweMessage", mock_siwe_cls):
         resp = await anon_client.post(
@@ -211,7 +211,7 @@ async def test_auth_me_email_user(api_client, monkeypatch):
         slug="test-org",
         created_at=datetime.now(),
     )
-    monkeypatch.setattr("app.get_org_by_id", AsyncMock(return_value=mock_org))
+    monkeypatch.setattr("teardrop.main.get_org_by_id", AsyncMock(return_value=mock_org))
 
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
@@ -230,8 +230,8 @@ async def test_auth_me_siwe_user(test_settings, monkeypatch):
     """SIWE-authenticated user gets wallet fields in the response."""
     from httpx import ASGITransport, AsyncClient
 
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     # Mock get_org_by_id to avoid DB init error
     mock_org = Org(
@@ -240,7 +240,7 @@ async def test_auth_me_siwe_user(test_settings, monkeypatch):
         slug="siwe-org",
         created_at=datetime.now(),
     )
-    monkeypatch.setattr("app.get_org_by_id", AsyncMock(return_value=mock_org))
+    monkeypatch.setattr("teardrop.main.get_org_by_id", AsyncMock(return_value=mock_org))
 
     async def _mock_siwe_auth():
         return {

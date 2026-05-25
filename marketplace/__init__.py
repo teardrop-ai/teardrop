@@ -27,9 +27,9 @@ import sentry_sdk
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from cache import TTLCache
-from config import get_settings
 from shared.db_pool import bind_pool, require_pool, unbind_pool
+from teardrop.cache import TTLCache
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +424,7 @@ class _WithdrawalService:
             return "", False, ""
 
         try:
-            from agent_wallets import transfer_usdc, verify_usdc_transfer
+            from teardrop.agent_wallets import transfer_usdc, verify_usdc_transfer
 
             tx_hash = await transfer_usdc(
                 from_cdp_account=self._settings.marketplace_settlement_cdp_account,
@@ -1292,8 +1292,8 @@ async def notify_subscribers_of_deactivation(
     1-hour dedup guard prevents notification storms if a flapping tool re-trips
     the breaker after a manual re-enable.
     """
-    from cache import get_redis
     from shared.email import send_tool_deactivated_email
+    from teardrop.cache import get_redis
 
     settings = get_settings()
     redis = get_redis()
@@ -1624,7 +1624,7 @@ async def marketplace_sweep_once() -> int:
     # Warn operators if the settlement wallet is running low on USDC.
     if settings.agent_wallet_enabled:
         try:
-            from agent_wallets import get_settlement_wallet_balance_usdc
+            from teardrop.agent_wallets import get_settlement_wallet_balance_usdc
 
             balance = await get_settlement_wallet_balance_usdc(chain_id=settings.marketplace_settlement_chain_id)
             warn_threshold = settings.marketplace_settlement_warn_threshold_usdc

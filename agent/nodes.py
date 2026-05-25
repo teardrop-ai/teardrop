@@ -20,9 +20,9 @@ from agent.llm import create_llm_from_config, extract_usage, get_llm_for_request
 from agent.planner_ir import parse_plan_from_text, resolve_plan_references
 from agent.slots import render_slots_markdown, summarize_into_slots
 from agent.state import A2UIComponent, AgentState, TaskStatus
-from benchmarks import get_model_context_specs
-from config import get_settings
-from llm_config import is_provider_cooled_down, record_provider_failure
+from teardrop.benchmarks import get_model_context_specs
+from teardrop.config import get_settings
+from teardrop.llm_config import is_provider_cooled_down, record_provider_failure
 from tools import registry
 from tools.executor import execute_tool
 
@@ -1020,7 +1020,7 @@ async def _execute_single_tool(
 
     if tool_name == "delegate_to_agent" and metadata:
         # Enforce per-run delegation quota.
-        from config import get_settings as _get_settings
+        from teardrop.config import get_settings as _get_settings
 
         _s = _get_settings()
         usage = metadata.get("_usage", {})

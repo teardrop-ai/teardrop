@@ -468,7 +468,7 @@ async def test_prompt_includes_no_redundant_calculate_guidance():
 
 class TestGetModelContextSpecs:
     def test_known_anthropic_haiku_returns_correct_cutoff(self):
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs = get_model_context_specs("anthropic", "claude-haiku-4-5-20251001")
         assert specs["knowledge_cutoff"] == "2025-10"
@@ -476,21 +476,21 @@ class TestGetModelContextSpecs:
         assert specs["supports_tools"] is True
 
     def test_known_openai_gpt4o_returns_correct_cutoff(self):
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs = get_model_context_specs("openai", "gpt-4o")
         assert specs["knowledge_cutoff"] == "2024-04"
         assert specs["context_window"] == 128_000
 
     def test_known_google_gemini_flash_returns_correct_cutoff(self):
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs = get_model_context_specs("google", "gemini-2.0-flash")
         assert specs["knowledge_cutoff"] == "2025-01"
         assert specs["context_window"] == 1_000_000
 
     def test_unknown_model_returns_safe_defaults(self):
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs = get_model_context_specs("openai", "gpt-99-does-not-exist")
         assert specs["knowledge_cutoff"] == "Unknown"
@@ -499,7 +499,7 @@ class TestGetModelContextSpecs:
 
     def test_returns_independent_dict_per_call(self):
         """Mutating the returned dict must not affect subsequent calls."""
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs1 = get_model_context_specs("openai", "gpt-99-does-not-exist")
         specs1["knowledge_cutoff"] = "mutated"

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from benchmarks import MODEL_CATALOGUE, build_benchmarks_response
+from teardrop.benchmarks import MODEL_CATALOGUE, build_benchmarks_response
 
 
 class TestModelCatalogue:
@@ -37,7 +37,7 @@ class TestBuildBenchmarksResponse:
     @pytest.mark.asyncio
     async def test_returns_all_catalogue_models(self):
         with (
-            patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}),
+            patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}),
             patch("billing.get_live_pricing_for_model", new_callable=AsyncMock, return_value=None),
         ):
             result = await build_benchmarks_response()
@@ -57,7 +57,7 @@ class TestBuildBenchmarksResponse:
             }
         }
         with (
-            patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=benchmarks),
+            patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value=benchmarks),
             patch("billing.get_live_pricing_for_model", new_callable=AsyncMock, return_value=None),
         ):
             result = await build_benchmarks_response()
@@ -68,7 +68,7 @@ class TestBuildBenchmarksResponse:
     @pytest.mark.asyncio
     async def test_models_without_benchmarks_have_no_key(self):
         with (
-            patch("benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}),
+            patch("teardrop.benchmarks.get_model_benchmarks", new_callable=AsyncMock, return_value={}),
             patch("billing.get_live_pricing_for_model", new_callable=AsyncMock, return_value=None),
         ):
             result = await build_benchmarks_response()
@@ -88,7 +88,7 @@ def _pool():
 @pytest.mark.anyio
 class TestBenchmarksDbHelpers:
     async def test_init_sets_pool(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         pool = _pool()
         with patch.object(bm_module, "_pool", None):
@@ -96,14 +96,14 @@ class TestBenchmarksDbHelpers:
             assert bm_module._pool is pool
 
     async def test_close_clears_pool(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         with patch.object(bm_module, "_pool", _pool()):
             await bm_module.close_benchmarks_db()
         assert bm_module._pool is None
 
     def test_get_pool_raises_when_uninitialised(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         with patch.object(bm_module, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):
@@ -115,14 +115,14 @@ class TestBenchmarksDbHelpers:
 
 class TestGetModelContextSpecs:
     def test_known_model(self):
-        from benchmarks import get_model_context_specs
+        from teardrop.benchmarks import get_model_context_specs
 
         specs = get_model_context_specs("anthropic", "claude-sonnet-4-20250514")
         assert specs["context_window"] == 200_000
         assert specs["supports_tools"] is True
 
     def test_unknown_model_returns_defaults(self):
-        from benchmarks import _DEFAULT_MODEL_SPECS, get_model_context_specs
+        from teardrop.benchmarks import _DEFAULT_MODEL_SPECS, get_model_context_specs
 
         specs = get_model_context_specs("unknown", "mystery-model")
         assert specs["context_window"] == _DEFAULT_MODEL_SPECS["context_window"]
@@ -134,7 +134,7 @@ class TestGetModelContextSpecs:
 @pytest.mark.asyncio
 class TestGetModelBenchmarks:
     async def test_scoped_org_bypasses_cache(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[])
@@ -144,13 +144,13 @@ class TestGetModelBenchmarks:
         pool.fetch.assert_called_once()
 
     async def test_global_returns_empty_when_no_pool(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         with (
             patch.object(bm_module, "_pool", None),
             patch.object(bm_module, "_benchmark_cache", None),
             patch.object(bm_module, "_benchmark_cache_expires", 0.0),
-            patch("benchmarks.get_redis", return_value=None),
+            patch("teardrop.benchmarks.get_redis", return_value=None),
         ):
             result = await bm_module.get_model_benchmarks()
         assert result == {}
@@ -158,19 +158,19 @@ class TestGetModelBenchmarks:
     async def test_global_uses_in_process_cache(self):
         import time
 
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         cached = {"anthropic:test-model": {"total_runs_7d": 50}}
         with (
             patch.object(bm_module, "_benchmark_cache", cached),
             patch.object(bm_module, "_benchmark_cache_expires", time.monotonic() + 9999),
-            patch("benchmarks.get_redis", return_value=None),
+            patch("teardrop.benchmarks.get_redis", return_value=None),
         ):
             result = await bm_module.get_model_benchmarks()
         assert result == cached
 
     async def test_query_benchmarks_returns_result(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         pool = _pool()
         pool.fetch = AsyncMock(
@@ -192,7 +192,7 @@ class TestGetModelBenchmarks:
         assert result["anthropic:claude-sonnet-4-20250514"]["total_runs_7d"] == 100
 
     async def test_query_benchmarks_handles_null_metrics(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         pool = _pool()
         pool.fetch = AsyncMock(
@@ -214,7 +214,7 @@ class TestGetModelBenchmarks:
         assert entry["avg_latency_ms"] is None
 
     async def test_global_caches_result_from_db(self):
-        import benchmarks as bm_module
+        import teardrop.benchmarks as bm_module
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[])
@@ -222,7 +222,7 @@ class TestGetModelBenchmarks:
             patch.object(bm_module, "_pool", pool),
             patch.object(bm_module, "_benchmark_cache", None),
             patch.object(bm_module, "_benchmark_cache_expires", 0.0),
-            patch("benchmarks.get_redis", return_value=None),
+            patch("teardrop.benchmarks.get_redis", return_value=None),
         ):
             result = await bm_module.get_model_benchmarks()
         assert isinstance(result, dict)

@@ -12,13 +12,13 @@ import asyncpg
 import pytest
 
 import marketplace as marketplace_module
-import users as users_module
+import teardrop.users as users_module
 from marketplace import (
     marketplace_sweep_once,
     reset_withdrawal,
     set_author_config,
 )
-from users import create_org
+from teardrop.users import create_org
 
 _VALID_ADDR = "0x1234567890123456789012345678901234567890"
 
@@ -90,7 +90,7 @@ async def test_sweep_end_to_end_mock_cdp(sweep_db_pool):
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash")),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash")),
     ):
         settings = MagicMock()
         settings.marketplace_minimum_withdrawal_usdc = 100_000
@@ -132,7 +132,7 @@ async def test_sweep_cdp_failure_sets_backoff(sweep_db_pool):
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(side_effect=RuntimeError("CDP down"))),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(side_effect=RuntimeError("CDP down"))),
     ):
         settings = MagicMock()
         settings.marketplace_minimum_withdrawal_usdc = 100_000
@@ -202,7 +202,7 @@ async def test_sweep_is_idempotent_on_restart(sweep_db_pool):
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash2")),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash2")),
     ):
         settings = MagicMock()
         settings.marketplace_minimum_withdrawal_usdc = 100_000
@@ -239,9 +239,9 @@ async def test_sweep_tx_reverted_marks_failed(sweep_db_pool):
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xreverted")),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xreverted")),
         patch(
-            "agent_wallets.verify_usdc_transfer",
+            "teardrop.agent_wallets.verify_usdc_transfer",
             new=AsyncMock(return_value=False),
         ),
     ):
@@ -285,9 +285,9 @@ async def test_sweep_tx_verification_skipped_when_no_rpc_url(sweep_db_pool):
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash_norpc")),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash_norpc")),
         patch(
-            "agent_wallets.verify_usdc_transfer",
+            "teardrop.agent_wallets.verify_usdc_transfer",
             new=AsyncMock(side_effect=ValueError("No RPC URL available")),
         ),
     ):
@@ -326,10 +326,10 @@ async def test_sweep_balance_warning_logged_on_low_balance(sweep_db_pool, caplog
 
     with (
         patch("marketplace.get_settings") as mock_settings,
-        patch("agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash3")),
-        patch("agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash3")),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
         patch(
-            "agent_wallets.get_settlement_wallet_balance_usdc",
+            "teardrop.agent_wallets.get_settlement_wallet_balance_usdc",
             new=AsyncMock(return_value=500_000),  # $0.50 — below $5.00 threshold
         ),
     ):

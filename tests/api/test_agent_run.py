@@ -30,8 +30,8 @@ async def test_agent_run_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monkeypatch):
     """SIWE-authed call without X-Payment header must get 402 Payment Required."""
-    from app import app
-    from auth import require_auth
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     async def _siwe_auth():
         return {
@@ -50,16 +50,16 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     mock_settings.rate_limit_auth_rpm = 1_000
     mock_settings.app_env = "test"
 
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
     # SIWE with zero balance falls through to x402 path → no header → 402
-    monkeypatch.setattr("app.get_credit_balance", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.main.get_credit_balance", AsyncMock(return_value=0))
     # Mock build_* so the 402 response body can be constructed without a
     # live billing server (_requirements_cache would be None otherwise)
     monkeypatch.setattr(
-        "app.build_402_response_body",
+        "teardrop.main.build_402_response_body",
         lambda: {"error": "Payment required", "accepts": []},
     )
-    monkeypatch.setattr("app.build_402_headers", lambda: {})
+    monkeypatch.setattr("teardrop.main.build_402_headers", lambda: {})
 
     app.dependency_overrides[require_auth] = _siwe_auth
     try:
@@ -77,9 +77,9 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
 @pytest.mark.anyio
 async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypatch):
     """Email-authed call with insufficient credit must get 402 Payment Required."""
-    from app import app
-    from auth import require_auth
     from billing import BillingResult
+    from teardrop.auth import require_auth
+    from teardrop.main import app
 
     async def _email_auth():
         return {
@@ -100,13 +100,13 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
     mock_settings.credit_min_run_reserve_usdc = 0
     mock_settings.app_env = "test"
 
-    monkeypatch.setattr("app.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
     monkeypatch.setattr(
-        "app.get_current_pricing",
+        "teardrop.main.get_current_pricing",
         AsyncMock(return_value=MagicMock(run_price_usdc=10_000)),
     )
     monkeypatch.setattr(
-        "app.verify_credit",
+        "teardrop.main.verify_credit",
         AsyncMock(
             return_value=BillingResult(
                 verified=False,
@@ -154,13 +154,13 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monke
     mock_settings.agent_provider = "anthropic"
     mock_settings.agent_model = "claude-3-5-sonnet-20241022"
 
-    monkeypatch.setattr("app.settings", mock_settings)
-    monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
-    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("teardrop.main.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
     monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.record_usage_event", AsyncMock())
-    monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.main.record_usage_event", AsyncMock())
+    monkeypatch.setattr("teardrop.main.calculate_run_cost_usdc", AsyncMock(return_value=0))
 
     resp = await api_client.post("/agent/run", json={"message": "hello"})
     assert resp.status_code == 200
@@ -193,13 +193,13 @@ async def test_agent_run_thread_id_scoped_to_user(api_client, monkeypatch):
     mock_settings.agent_provider = "anthropic"
     mock_settings.agent_model = "claude-3-5-sonnet-20241022"
 
-    monkeypatch.setattr("app.settings", mock_settings)
-    monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
-    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("teardrop.main.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
     monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.record_usage_event", AsyncMock())
-    monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.main.record_usage_event", AsyncMock())
+    monkeypatch.setattr("teardrop.main.calculate_run_cost_usdc", AsyncMock(return_value=0))
 
     await api_client.post("/agent/run", json={"message": "hi", "thread_id": "my-thread"})
 
@@ -232,13 +232,13 @@ async def test_agent_run_tool_policy_normalizes_exclude_names(api_client, monkey
     mock_settings.agent_provider = "anthropic"
     mock_settings.agent_model = "claude-3-5-sonnet-20241022"
 
-    monkeypatch.setattr("app.settings", mock_settings)
-    monkeypatch.setattr("app.get_graph", AsyncMock(return_value=mock_graph))
-    monkeypatch.setattr("app.build_org_langchain_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.main.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("teardrop.main.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.main.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
     monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
-    monkeypatch.setattr("app.record_usage_event", AsyncMock())
-    monkeypatch.setattr("app.calculate_run_cost_usdc", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.main.record_usage_event", AsyncMock())
+    monkeypatch.setattr("teardrop.main.calculate_run_cost_usdc", AsyncMock(return_value=0))
 
     resp = await api_client.post(
         "/agent/run",

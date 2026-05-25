@@ -54,7 +54,7 @@ async def web_search(
     topic: Literal["general", "news", "finance"] = "general",
 ) -> dict[str, Any]:
     """Search the web via Tavily.  Falls back to a stub when no API key is set."""
-    from config import get_settings
+    from teardrop.config import get_settings
 
     settings = get_settings()
     api_key = settings.tavily_api_key

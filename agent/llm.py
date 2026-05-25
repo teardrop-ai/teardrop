@@ -19,7 +19,7 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
-from config import get_settings
+from teardrop.config import get_settings
 
 # ── Optional provider imports — None when package not installed ───────────────
 try:

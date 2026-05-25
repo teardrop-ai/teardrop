@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import config
+import teardrop.config as config
 
 
 @pytest.fixture(autouse=True)
@@ -37,9 +37,9 @@ async def test_jwt_forward_enabled():
     agent_url = "https://agent.example.com"
 
     with (
-        patch("a2a_client.validate_url", return_value=None),
+        patch("teardrop.a2a_client.validate_url", return_value=None),
         patch(
-            "a2a_client.check_delegation_allowed",
+            "teardrop.a2a_client.check_delegation_allowed",
             AsyncMock(
                 return_value=(
                     True,
@@ -51,9 +51,9 @@ async def test_jwt_forward_enabled():
                 )
             ),
         ),
-        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
-        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
-        patch("a2a_client.extract_result_text", return_value="ok"),
+        patch("teardrop.a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("teardrop.a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
+        patch("teardrop.a2a_client.extract_result_text", return_value="ok"),
     ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
@@ -81,9 +81,9 @@ async def test_jwt_forward_disabled():
     agent_url = "https://agent.example.com"
 
     with (
-        patch("a2a_client.validate_url", return_value=None),
+        patch("teardrop.a2a_client.validate_url", return_value=None),
         patch(
-            "a2a_client.check_delegation_allowed",
+            "teardrop.a2a_client.check_delegation_allowed",
             AsyncMock(
                 return_value=(
                     True,
@@ -95,9 +95,9 @@ async def test_jwt_forward_disabled():
                 )
             ),
         ),
-        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
-        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
-        patch("a2a_client.extract_result_text", return_value="ok"),
+        patch("teardrop.a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("teardrop.a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)) as mock_send,
+        patch("teardrop.a2a_client.extract_result_text", return_value="ok"),
     ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
@@ -127,8 +127,8 @@ async def test_allowlist_enforced(monkeypatch):
     agent_url = "https://agent.example.com"
 
     with (
-        patch("a2a_client.validate_url", return_value=None),
-        patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
+        patch("teardrop.a2a_client.validate_url", return_value=None),
+        patch("teardrop.a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
     ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 
@@ -157,11 +157,11 @@ async def test_allowlist_not_enforced(monkeypatch):
     agent_url = "https://agent.example.com"
 
     with (
-        patch("a2a_client.validate_url", return_value=None),
-        patch("a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
-        patch("a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
-        patch("a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)),
-        patch("a2a_client.extract_result_text", return_value="ok"),
+        patch("teardrop.a2a_client.validate_url", return_value=None),
+        patch("teardrop.a2a_client.check_delegation_allowed", AsyncMock(return_value=(False, None))),
+        patch("teardrop.a2a_client.discover_agent_card", AsyncMock(return_value=_MOCK_CARD)),
+        patch("teardrop.a2a_client.send_message", AsyncMock(return_value=_MOCK_RESPONSE)),
+        patch("teardrop.a2a_client.extract_result_text", return_value="ok"),
     ):
         from tools.definitions.delegate_to_agent import delegate_to_agent
 

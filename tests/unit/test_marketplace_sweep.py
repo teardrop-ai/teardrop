@@ -205,7 +205,7 @@ class TestMarketplaceSweepOnce:
     @pytest.mark.anyio
     async def test_exhausts_withdrawal_after_max_retries(self, monkeypatch):
         """At max_retries the status should flip to 'exhausted'."""
-        from config import get_settings
+        from teardrop.config import get_settings
 
         settings = get_settings()
         max_retries = settings.marketplace_max_sweep_retries

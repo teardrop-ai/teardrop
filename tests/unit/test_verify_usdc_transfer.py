@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from agent_wallets import get_settlement_wallet_balance_usdc, verify_usdc_transfer
+from teardrop.agent_wallets import get_settlement_wallet_balance_usdc, verify_usdc_transfer
 
 _TX_HASH = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 _RPC_URL = "https://sepolia.base.org"
@@ -51,7 +51,7 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_confirmed_success_returns_true(self, monkeypatch):
         """Mined tx with status 0x1 → True."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings())
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings())
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=_rpc_receipt_response("0x1"))
@@ -70,7 +70,7 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_reverted_tx_returns_false(self, monkeypatch):
         """Mined tx with status 0x0 → False."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings())
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings())
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=_rpc_receipt_response("0x0"))
@@ -89,7 +89,7 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_timeout_raises_timeout_error(self, monkeypatch):
         """No receipt within timeout → TimeoutError."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings(timeout=1))
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings(timeout=1))
         # Freeze time so the deadline is immediately exceeded after the first poll.
         call_count = 0
 
@@ -100,8 +100,8 @@ class TestVerifyUsdcTransfer:
             # (past the 1s deadline) so the loop exits quickly.
             return 0.0 if call_count == 1 else 2.0
 
-        monkeypatch.setattr("agent_wallets.time.monotonic", _fast_time)
-        monkeypatch.setattr("agent_wallets.asyncio.sleep", AsyncMock())
+        monkeypatch.setattr("teardrop.agent_wallets.time.monotonic", _fast_time)
+        monkeypatch.setattr("teardrop.agent_wallets.asyncio.sleep", AsyncMock())
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -122,7 +122,7 @@ class TestVerifyUsdcTransfer:
         """No base_rpc_url and unsupported chain → ValueError."""
         s = _mock_settings(base_rpc_url="")
         s.cdp_network = "base-sepolia"
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: s)
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: s)
 
         with pytest.raises(ValueError, match="No RPC URL available"):
             # chain_id=1 has no fallback in _FALLBACK_RPC
@@ -131,7 +131,7 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_uses_fallback_rpc_when_no_base_rpc_url(self, monkeypatch):
         """Falls back to public RPC when base_rpc_url is empty but chain is known."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings(base_rpc_url=""))
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings(base_rpc_url=""))
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=_rpc_receipt_response("0x1"))
@@ -153,8 +153,8 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_polls_until_receipt_appears(self, monkeypatch):
         """Returns True after receiving None then a mined receipt."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings(timeout=30))
-        monkeypatch.setattr("agent_wallets.asyncio.sleep", AsyncMock())
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings(timeout=30))
+        monkeypatch.setattr("teardrop.agent_wallets.asyncio.sleep", AsyncMock())
 
         responses = [_rpc_pending_response(), _rpc_pending_response(), _rpc_receipt_response("0x1")]
         resp_iter = iter(responses)
@@ -181,8 +181,8 @@ class TestVerifyUsdcTransfer:
     @pytest.mark.anyio
     async def test_http_error_retries(self, monkeypatch):
         """HTTPError on first poll → retries and succeeds on second."""
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: _mock_settings(timeout=30))
-        monkeypatch.setattr("agent_wallets.asyncio.sleep", AsyncMock())
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: _mock_settings(timeout=30))
+        monkeypatch.setattr("teardrop.agent_wallets.asyncio.sleep", AsyncMock())
 
         call_count = 0
 
@@ -217,7 +217,7 @@ class TestGetSettlementWalletBalanceUsdc:
     async def test_returns_usdc_balance(self, monkeypatch):
         """Returns atomic USDC balance from CDP SDK."""
         s = _mock_settings()
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: s)
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: s)
 
         usdc_token = MagicMock()
         usdc_token.symbol = "USDC"
@@ -232,7 +232,7 @@ class TestGetSettlementWalletBalanceUsdc:
         mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
         mock_cdp.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("agent_wallets._get_cdp_client", return_value=mock_cdp):
+        with patch("teardrop.agent_wallets._get_cdp_client", return_value=mock_cdp):
             balance = await get_settlement_wallet_balance_usdc(chain_id=84532)
 
         assert balance == 5_000_000
@@ -241,7 +241,7 @@ class TestGetSettlementWalletBalanceUsdc:
     async def test_returns_zero_when_no_usdc_token(self, monkeypatch):
         """Returns 0 if the CDP account holds no USDC."""
         s = _mock_settings()
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: s)
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: s)
 
         eth_token = MagicMock()
         eth_token.symbol = "ETH"
@@ -256,7 +256,7 @@ class TestGetSettlementWalletBalanceUsdc:
         mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
         mock_cdp.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("agent_wallets._get_cdp_client", return_value=mock_cdp):
+        with patch("teardrop.agent_wallets._get_cdp_client", return_value=mock_cdp):
             balance = await get_settlement_wallet_balance_usdc(chain_id=84532)
 
         assert balance == 0
@@ -266,7 +266,7 @@ class TestGetSettlementWalletBalanceUsdc:
         """RuntimeError if AGENT_WALLET_ENABLED=false."""
         s = _mock_settings()
         s.agent_wallet_enabled = False
-        monkeypatch.setattr("agent_wallets.get_settings", lambda: s)
+        monkeypatch.setattr("teardrop.agent_wallets.get_settings", lambda: s)
 
         with pytest.raises(RuntimeError, match="disabled"):
             await get_settlement_wallet_balance_usdc(chain_id=84532)

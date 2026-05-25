@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import config
+import teardrop.config as config
 from billing import BillingResult
 
 
@@ -19,7 +19,7 @@ async def x402_client(test_settings, monkeypatch):
     monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
     monkeypatch.setenv("MCP_X402_ENABLED", "true")
     config.get_settings.cache_clear()
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
@@ -111,7 +111,7 @@ async def test_x402_disabled_returns_401(test_settings, monkeypatch):
     monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
     monkeypatch.setenv("MCP_X402_ENABLED", "false")
     config.get_settings.cache_clear()
-    from app import app
+    from teardrop.main import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         resp = await c.post(

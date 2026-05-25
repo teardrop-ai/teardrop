@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-import usage as usage_module
-import users as user_module
-from usage import UsageEvent, get_usage_by_org, get_usage_by_user, record_usage_event
-from users import create_org, create_user
+import teardrop.usage as usage_module
+import teardrop.users as user_module
+from teardrop.usage import UsageEvent, get_usage_by_org, get_usage_by_user, record_usage_event
+from teardrop.users import create_org, create_user
 
 
 @pytest.fixture(autouse=True)
@@ -97,8 +97,7 @@ async def test_date_range_filtering(test_user):
 @pytest.mark.anyio
 async def test_fire_and_forget_logs_not_raises(test_user, monkeypatch):
     """record_usage_event must not propagate exceptions."""
-    import usage
-
+    import teardrop.usage as usage
     async def _boom(*args, **kwargs):
         raise RuntimeError("DB exploded")
 

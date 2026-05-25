@@ -88,7 +88,7 @@ async def get_status(pool: asyncpg.Pool) -> dict[str, list[str]]:
 
 
 async def _main(args: argparse.Namespace) -> None:
-    from config import get_settings
+    from teardrop.config import get_settings
 
     settings = get_settings()
     if not settings.pg_dsn:
