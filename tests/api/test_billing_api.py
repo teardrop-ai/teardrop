@@ -105,6 +105,7 @@ async def test_billing_history_returns_list(api_client, monkeypatch):
             "tokens_in": 100,
             "tokens_out": 50,
             "tool_calls": 0,
+            "tool_names": ["web_search"],
             "duration_ms": 200,
             "cost_usdc": 10_000,
             "settlement_tx": "0xabc",
@@ -119,6 +120,7 @@ async def test_billing_history_returns_list(api_client, monkeypatch):
     data = resp.json()
     assert len(data) == 1
     assert data[0]["run_id"] == "run-1"
+    assert data[0]["tool_names"] == ["web_search"]
     # created_at should be serialized to ISO string
     assert "2026-01-01" in data[0]["created_at"]
 

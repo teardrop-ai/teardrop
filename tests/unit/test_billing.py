@@ -518,6 +518,34 @@ class TestGetBillingHistory:
         call_args = pool.fetch.call_args.args
         assert cursor in call_args
 
+    async def test_decodes_tool_names_json(self):
+        from datetime import datetime, timezone
+
+        from billing import get_billing_history
+
+        pool = _pool_mock()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "evt-1",
+                    "run_id": "run-1",
+                    "tokens_in": 100,
+                    "tokens_out": 50,
+                    "tool_calls": 1,
+                    "tool_names": '["get_datetime"]',
+                    "duration_ms": 200,
+                    "cost_usdc": 10_000,
+                    "platform_fee_usdc": 0,
+                    "settlement_tx": "0xabc",
+                    "settlement_status": "settled",
+                    "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                }
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            history = await get_billing_history("user-1", limit=10)
+        assert history[0]["tool_names"] == ["get_datetime"]
+
 
 @pytest.mark.anyio
 class TestGetInvoices:
@@ -570,6 +598,31 @@ class TestGetInvoiceByRun:
         with patch.object(billing_module, "_pool", pool):
             result = await get_invoice_by_run("r1", "user-1")
         assert result["run_id"] == "r1"
+
+    async def test_decodes_tool_names_json_when_found(self):
+        from datetime import datetime, timezone
+
+        from billing import get_invoice_by_run
+
+        row = {
+            "id": "e1",
+            "run_id": "r1",
+            "thread_id": "t1",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "tool_calls": 1,
+            "tool_names": '["get_datetime"]',
+            "duration_ms": 200,
+            "cost_usdc": 10_000,
+            "settlement_tx": "0xfoo",
+            "settlement_status": "settled",
+            "created_at": datetime.now(timezone.utc),
+        }
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value=row)
+        with patch.object(billing_module, "_pool", pool):
+            result = await get_invoice_by_run("r1", "user-1")
+        assert result["tool_names"] == ["get_datetime"]
 
     async def test_returns_none_when_not_found(self):
         from billing import get_invoice_by_run

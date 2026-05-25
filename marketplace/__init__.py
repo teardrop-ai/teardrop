@@ -18,6 +18,7 @@ import marketplace.worker as _worker
 from marketplace.models import (
     AuthorConfig,
     AuthorEarning,
+    AuthorEarningByTool,
     AuthorWithdrawal,
     MarketplaceSubscription,
     MarketplaceTool,
@@ -47,6 +48,7 @@ _GET_ORG_TOOL_PRICE_BY_QUALIFIED_NAME_ORIG = _catalog.get_org_tool_price_by_qual
 _RECORD_TOOL_CALL_EARNINGS_ORIG = _earnings.record_tool_call_earnings
 _GET_AUTHOR_BALANCE_ORIG = _earnings.get_author_balance
 _GET_AUTHOR_EARNINGS_HISTORY_ORIG = _earnings.get_author_earnings_history
+_GET_AUTHOR_EARNINGS_BY_TOOL_ORIG = _earnings.get_author_earnings_by_tool
 
 _SUBSCRIBE_TO_TOOL_ORIG = _subscriptions.subscribe_to_tool
 _UNSUBSCRIBE_FROM_TOOL_ORIG = _subscriptions.unsubscribe_from_tool
@@ -222,6 +224,10 @@ async def get_author_earnings_history(
     return await _call_async(_GET_AUTHOR_EARNINGS_HISTORY_ORIG, org_id, limit, cursor, tool_name)
 
 
+async def get_author_earnings_by_tool(org_id: str) -> list[AuthorEarningByTool]:
+    return await _call_async(_GET_AUTHOR_EARNINGS_BY_TOOL_ORIG, org_id)
+
+
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
     return await _call_async(_SUBSCRIBE_TO_TOOL_ORIG, org_id, qualified_tool_name)
 
@@ -321,6 +327,7 @@ async def _marketplace_sweep_loop() -> None:
 __all__ = [
     "AuthorConfig",
     "AuthorEarning",
+    "AuthorEarningByTool",
     "AuthorWithdrawal",
     "MarketplaceTool",
     "MarketplaceSubscription",
@@ -344,6 +351,7 @@ __all__ = [
     "record_tool_call_earnings",
     "get_author_balance",
     "get_author_earnings_history",
+    "get_author_earnings_by_tool",
     "subscribe_to_tool",
     "unsubscribe_from_tool",
     "get_org_subscriptions",

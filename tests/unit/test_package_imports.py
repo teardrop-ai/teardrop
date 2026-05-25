@@ -51,6 +51,7 @@ BILLING_IMPORT_SURFACE = [
 ]
 
 MARKETPLACE_IMPORT_SURFACE = [
+    "AuthorEarningByTool",
     "AuthorWithdrawal",
     "_build_catalog_cursor",
     "_marketplace_sweep_loop",
@@ -60,6 +61,7 @@ MARKETPLACE_IMPORT_SURFACE = [
     "complete_withdrawal",
     "get_author_balance",
     "get_author_config",
+    "get_author_earnings_by_tool",
     "get_author_earnings_history",
     "get_marketplace_catalog",
     "get_marketplace_tool_by_name",

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 
@@ -12,6 +13,30 @@ import sentry_sdk
 from billing.context import _get_pool
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_tool_names(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(name) for name in value]
+    if not value:
+        return []
+    if not isinstance(value, str):
+        return []
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(name) for name in data]
+
+
+def _serialize_usage_event_row(row) -> dict:
+    payload = dict(row)
+    for key in ("tool_names", "billable_tool_names", "failed_tool_names"):
+        if key in payload:
+            payload[key] = _decode_tool_names(payload.get(key))
+    return payload
 
 
 async def record_settlement(
@@ -105,7 +130,7 @@ async def get_billing_history(
     args: list = [user_id, limit, *([cursor] if cursor is not None else [])]
     rows = await pool.fetch(
         f"""
-        SELECT id, run_id, tokens_in, tokens_out, tool_calls, duration_ms,
+                SELECT id, run_id, tokens_in, tokens_out, tool_calls, tool_names, duration_ms,
                cost_usdc, platform_fee_usdc, settlement_tx, settlement_status, created_at
         FROM usage_events
         WHERE user_id = $1 AND settlement_status != 'none'
@@ -115,7 +140,7 @@ async def get_billing_history(
         """,
         *args,
     )
-    return [dict(r) for r in rows]
+    return [_serialize_usage_event_row(r) for r in rows]
 
 
 async def get_revenue_summary(
@@ -169,7 +194,7 @@ async def get_invoices(
         """,
         *args,
     )
-    return [dict(r) for r in rows]
+    return [_serialize_usage_event_row(r) for r in rows]
 
 
 async def get_invoice_by_run(run_id: str, user_id: str) -> dict | None:
@@ -186,4 +211,4 @@ async def get_invoice_by_run(run_id: str, user_id: str) -> dict | None:
         run_id,
         user_id,
     )
-    return dict(row) if row is not None else None
+    return _serialize_usage_event_row(row) if row is not None else None

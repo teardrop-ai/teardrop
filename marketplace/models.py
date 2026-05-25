@@ -36,6 +36,18 @@ class AuthorEarning(BaseModel):
     created_at: datetime
 
 
+class AuthorEarningByTool(BaseModel):
+    """Aggregated earnings totals for a single published tool."""
+
+    tool_name: str
+    total_calls: int
+    total_amount_usdc: int
+    total_author_share_usdc: int
+    pending_author_share_usdc: int
+    settled_author_share_usdc: int
+    total_platform_share_usdc: int
+
+
 class AuthorWithdrawal(BaseModel):
     """Withdrawal request record."""
 

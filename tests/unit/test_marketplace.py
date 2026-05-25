@@ -13,9 +13,11 @@ import pytest
 
 from marketplace import (
     AuthorConfig,
+    AuthorEarningByTool,
     MarketplaceTool,
     complete_withdrawal,
     get_author_balance,
+    get_author_earnings_by_tool,
     list_pending_withdrawals,
     process_withdrawal,
     record_tool_call_earnings,
@@ -538,6 +540,50 @@ class TestGetAuthorEarningsHistory:
         results, next_cursor = await get_author_earnings_history("org-1")
         assert results == []
         assert next_cursor is None
+
+
+@pytest.mark.anyio
+class TestGetAuthorEarningsByTool:
+    async def test_returns_aggregated_rows(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "tool_name": "my_tool",
+                    "total_calls": 3,
+                    "total_amount_usdc": 30_000,
+                    "total_author_share_usdc": 21_000,
+                    "pending_author_share_usdc": 14_000,
+                    "settled_author_share_usdc": 7_000,
+                    "total_platform_share_usdc": 9_000,
+                }
+            ]
+        )
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        results = await get_author_earnings_by_tool("org-1")
+
+        assert results == [
+            AuthorEarningByTool(
+                tool_name="my_tool",
+                total_calls=3,
+                total_amount_usdc=30_000,
+                total_author_share_usdc=21_000,
+                pending_author_share_usdc=14_000,
+                settled_author_share_usdc=7_000,
+                total_platform_share_usdc=9_000,
+            )
+        ]
+        assert mock_pool.fetch.call_args.args[1] == "org-1"
+
+    async def test_returns_empty_list(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        results = await get_author_earnings_by_tool("org-1")
+
+        assert results == []
 
 
 # ─── list_org_withdrawals ─────────────────────────────────────────────────────

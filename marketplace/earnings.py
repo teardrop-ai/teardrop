@@ -12,7 +12,7 @@ import sentry_sdk
 
 from marketplace.catalog import get_author_config
 from marketplace.context import _get_pool
-from marketplace.models import AuthorEarning
+from marketplace.models import AuthorEarning, AuthorEarningByTool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -110,3 +110,27 @@ async def get_author_earnings_history(
     earnings = [AuthorEarning(**dict(r)) for r in rows]
     next_cursor = earnings[-1].created_at.isoformat() if len(earnings) == limit else None
     return earnings, next_cursor
+
+
+async def get_author_earnings_by_tool(org_id: str) -> list[AuthorEarningByTool]:
+    """Return per-tool earnings aggregates for an org."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT tool_name,
+               COUNT(*) AS total_calls,
+               COALESCE(SUM(amount_usdc), 0) AS total_amount_usdc,
+               COALESCE(SUM(author_share_usdc), 0) AS total_author_share_usdc,
+               COALESCE(SUM(author_share_usdc) FILTER (WHERE status = 'pending'), 0)
+                   AS pending_author_share_usdc,
+               COALESCE(SUM(author_share_usdc) FILTER (WHERE status = 'settled'), 0)
+                   AS settled_author_share_usdc,
+               COALESCE(SUM(platform_share_usdc), 0) AS total_platform_share_usdc
+        FROM tool_author_earnings
+        WHERE org_id = $1
+        GROUP BY tool_name
+        ORDER BY total_author_share_usdc DESC, tool_name ASC
+        """,
+        org_id,
+    )
+    return [AuthorEarningByTool(**dict(r)) for r in rows]

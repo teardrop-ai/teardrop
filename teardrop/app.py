@@ -107,6 +107,7 @@ from marketplace import (
     complete_withdrawal,
     get_author_balance,
     get_author_config,
+    get_author_earnings_by_tool,
     get_author_earnings_history,
     get_marketplace_catalog,
     get_marketplace_tool_by_name,
@@ -5314,6 +5315,35 @@ async def get_marketplace_earnings(
                 for e in earnings
             ],
             "next_cursor": next_cursor,
+        }
+    )
+
+
+@app.get("/marketplace/earnings/by-tool", tags=["Marketplace"])
+async def get_marketplace_earnings_by_tool_endpoint(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Return per-tool earnings aggregates for the authenticated org."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id = _require_org_id(payload)
+    tools = await get_author_earnings_by_tool(org_id)
+    return JSONResponse(
+        content={
+            "tools": [
+                {
+                    "tool_name": tool.tool_name,
+                    "total_calls": tool.total_calls,
+                    "total_amount_usdc": tool.total_amount_usdc,
+                    "total_author_share_usdc": tool.total_author_share_usdc,
+                    "pending_author_share_usdc": tool.pending_author_share_usdc,
+                    "settled_author_share_usdc": tool.settled_author_share_usdc,
+                    "total_platform_share_usdc": tool.total_platform_share_usdc,
+                }
+                for tool in tools
+            ]
         }
     )
 

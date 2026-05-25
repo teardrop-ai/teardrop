@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from billing import BillingResult
-from marketplace import AuthorConfig, AuthorEarning, AuthorWithdrawal, MarketplaceTool
+from marketplace import AuthorConfig, AuthorEarning, AuthorEarningByTool, AuthorWithdrawal, MarketplaceTool
 
 _NOW = datetime.now(timezone.utc)
 
@@ -130,6 +130,57 @@ async def test_get_earnings(api_client, monkeypatch):
     data = resp.json()
     assert len(data["earnings"]) == 1
     assert data["earnings"][0]["author_share_usdc"] == 7_000
+
+
+@pytest.mark.anyio
+async def test_get_earnings_by_tool(api_client, monkeypatch):
+    summary = AuthorEarningByTool(
+        tool_name="my_tool",
+        total_calls=3,
+        total_amount_usdc=30_000,
+        total_author_share_usdc=21_000,
+        pending_author_share_usdc=14_000,
+        settled_author_share_usdc=7_000,
+        total_platform_share_usdc=9_000,
+    )
+    monkeypatch.setattr(
+        "teardrop.main.get_author_earnings_by_tool",
+        AsyncMock(return_value=[summary]),
+    )
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+    config.get_settings.cache_clear()
+
+    resp = await api_client.get("/marketplace/earnings/by-tool")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tools"] == [
+        {
+            "tool_name": "my_tool",
+            "total_calls": 3,
+            "total_amount_usdc": 30_000,
+            "total_author_share_usdc": 21_000,
+            "pending_author_share_usdc": 14_000,
+            "settled_author_share_usdc": 7_000,
+            "total_platform_share_usdc": 9_000,
+        }
+    ]
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_get_earnings_by_tool_marketplace_disabled(api_client, monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
+
+    import teardrop.config as config
+    config.get_settings.cache_clear()
+
+    resp = await api_client.get("/marketplace/earnings/by-tool")
+    assert resp.status_code == 404
+
+    config.get_settings.cache_clear()
 
 
 # ─── POST /marketplace/withdraw ──────────────────────────────────────────────
