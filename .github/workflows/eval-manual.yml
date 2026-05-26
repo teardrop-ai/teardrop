@@ -1,0 +1,177 @@
+name: Eval Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Eval suite to run. marketplace is the lowest-friction option; smoke/wallet/defi/a2a may need RPC URLs."
+        required: true
+        default: "marketplace"
+        type: choice
+        options:
+          - marketplace
+          - smoke
+          - research
+          - wallet
+          - defi
+          - a2a
+      policy_file:
+        description: "Optional repo-relative policy JSON path, for example evals/policies/smoke.json"
+        required: false
+        default: ""
+        type: string
+      judge_model:
+        description: "Anthropic model used for llm_judge tasks"
+        required: false
+        default: "claude-haiku-4-5-20251001"
+        type: string
+      fail_on_regression:
+        description: "Fail the run when the supplied policy file reports violations"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TEARDROP_BASE_URL: http://127.0.0.1:8000
+      DATABASE_URL: postgresql://postgres:testpass@127.0.0.1:5432/teardrop_eval
+      APP_ENV: test
+      LANGSMITH_TRACING: "false"
+      JWT_CLIENT_ID: test-client
+      JWT_CLIENT_SECRET: ci-test-secret
+      BILLING_ENABLED: "false"
+      MARKETPLACE_ENABLED: "true"
+      MEMORY_ENABLED: "false"
+      AGENT_CACHE_PREWARM_ENABLED: "false"
+      MARKETPLACE_AUTO_SWEEP_ENABLED: "false"
+      AGENT_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ETHEREUM_RPC_URL: ${{ secrets.ETHEREUM_RPC_URL }}
+      BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: teardrop_eval
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "ANTHROPIC_API_KEY secret is required: /agent/run needs a real LLM provider key, not a dummy value." >&2
+            exit 1
+          fi
+
+      - name: Note optional RPC requirements
+        shell: bash
+        run: |
+          case "${{ inputs.suite }}" in
+            smoke|wallet|defi|a2a)
+              if [ -z "${ETHEREUM_RPC_URL}" ] || [ -z "${BASE_RPC_URL}" ]; then
+                echo "Selected suite may need ETHEREUM_RPC_URL and BASE_RPC_URL secrets for web3 tool calls." >> "$GITHUB_STEP_SUMMARY"
+              fi
+              ;;
+          esac
+
+      - name: Generate RSA test keys
+        run: python scripts/generate_keys.py
+
+      - name: Start Teardrop API
+        shell: bash
+        run: |
+          python -m teardrop.main > server.log 2>&1 &
+          echo $! > server.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS "${TEARDROP_BASE_URL}/health" > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Teardrop API failed to become healthy" >&2
+          tail -n 200 server.log >&2 || true
+          exit 1
+
+      - name: Register eval user
+        id: register
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          body = json.dumps(
+              {
+                  "org_name": "eval-org",
+                  "email": "eval@teardrop.local",
+                  "password": "Evalpass123",
+              }
+          ).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["TEARDROP_BASE_URL"] + "/register",
+              data=body,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              payload = json.load(resp)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"token={payload['access_token']}\n")
+          PY
+
+      - name: Run eval suite
+        shell: bash
+        run: |
+          args=(
+            --suite "${{ inputs.suite }}"
+            --base-url "${TEARDROP_BASE_URL}"
+            --token "${{ steps.register.outputs.token }}"
+            --judge-model "${{ inputs.judge_model }}"
+            --output eval-report.json
+          )
+
+          if [ -n "${{ inputs.policy_file }}" ]; then
+            args+=(--policy-file "${{ inputs.policy_file }}")
+            if [ "${{ inputs.fail_on_regression }}" = "false" ]; then
+              args+=(--no-fail-on-regression)
+            fi
+          fi
+
+          python -m evals.cli "${args[@]}" | tee eval-report.md
+          cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ inputs.suite }}-${{ github.run_id }}
+          path: |
+            eval-report.json
+            eval-report.md
+            server.log

@@ -1177,6 +1177,41 @@ async def jwks() -> JSONResponse:
 @app.get("/.well-known/agent-card.json", tags=["A2A"])
 async def agent_card() -> JSONResponse:
     """A2A agent card for discoverability and inter-agent communication."""
+    card_settings = get_settings()
+    capabilities: dict[str, Any] = {
+        "streaming": True,
+        "a2ui": True,
+        "mcp_tools": True,
+        "multi_turn": True,
+        "human_in_the_loop": True,
+        "billing": {
+            "enabled": card_settings.billing_enabled,
+            "scheme": card_settings.x402_scheme,
+            "network": card_settings.x402_network,
+            "payment_endpoint": "/agent/run",
+            "pricing_endpoint": "/billing/pricing",
+            **(
+                {
+                    "max_amount": card_settings.x402_upto_max_amount,
+                }
+                if card_settings.x402_scheme == "upto"
+                else {}
+            ),
+        },
+    }
+    endpoints = {
+        "agent_run": "/agent/run",
+        "health": "/health",
+        "docs": "/docs",
+        "mcp_tools": "/tools/mcp",
+    }
+    if card_settings.marketplace_enabled:
+        capabilities["marketplace"] = {
+            "enabled": True,
+            "catalog_endpoint": "/marketplace/catalog",
+            "mcp_gateway_endpoint": endpoints["mcp_tools"],
+        }
+        endpoints["marketplace_catalog"] = "/marketplace/catalog"
     return JSONResponse(
         content={
             "schema_version": "1.0",
@@ -1185,34 +1220,10 @@ async def agent_card() -> JSONResponse:
                 "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering."
             ),
             "version": app.version,
-            "url": f"http://{settings.app_host}:{settings.app_port}",
-            "capabilities": {
-                "streaming": True,
-                "a2ui": True,
-                "mcp_tools": True,
-                "multi_turn": True,
-                "human_in_the_loop": True,
-                "billing": {
-                    "enabled": settings.billing_enabled,
-                    "scheme": settings.x402_scheme,
-                    "network": settings.x402_network,
-                    "payment_endpoint": "/agent/run",
-                    "pricing_endpoint": "/billing/pricing",
-                    **(
-                        {
-                            "max_amount": settings.x402_upto_max_amount,
-                        }
-                        if settings.x402_scheme == "upto"
-                        else {}
-                    ),
-                },
-            },
+            "url": f"http://{card_settings.app_host}:{card_settings.app_port}",
+            "capabilities": capabilities,
             "protocols": ["ag-ui", "a2a", "mcp"],
-            "endpoints": {
-                "agent_run": "/agent/run",
-                "health": "/health",
-                "docs": "/docs",
-            },
+            "endpoints": endpoints,
             "skills": [
                 {
                     "name": "task_planning",

@@ -531,6 +531,8 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 - **Revenue sharing**: Collect payments from delegations and distribute to specialist agent operators
 - **Budget control**: Per-agent cost caps, global delegation spending limits, and org-level pause/daily spend checks
 
+The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace` and `endpoints.marketplace_catalog` so external A2A clients can discover the paid marketplace catalog without hard-coding Teardrop-specific URLs.
+
 ### How it works
 
 ```
@@ -673,7 +675,7 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `GET` | `/health` | — | Liveness probe |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
-| `GET` | `/.well-known/agent-card.json` | — | A2A agent card |
+| `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
 | `GET` | `/docs` | — | Swagger UI |
 | `GET` | `/redoc` | — | ReDoc UI |
 
