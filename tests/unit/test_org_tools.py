@@ -93,6 +93,7 @@ class TestEncryption:
         org_tools_module._fernet = None
         try:
             import teardrop.config as config
+
             config.get_settings.cache_clear()
             encrypted = _encrypt_header("Bearer my-secret-token")
             decrypted = _decrypt_header(encrypted)
@@ -106,6 +107,7 @@ class TestEncryption:
         org_tools_module._fernet = None
         try:
             import teardrop.config as config
+
             config.get_settings.cache_clear()
             encrypted = _encrypt_header("secret-value")
 
@@ -208,6 +210,7 @@ class TestCreateOrgTool:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
         import teardrop.config as config
+
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -238,6 +241,7 @@ class TestCreateOrgTool:
         monkeypatch.setenv("MAX_ORG_TOOLS", "2")
         org_tools_module._fernet = None
         import teardrop.config as config
+
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -264,6 +268,7 @@ class TestCreateOrgTool:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
         import teardrop.config as config
+
         config.get_settings.cache_clear()
 
         pool = _pool()
@@ -431,6 +436,7 @@ class TestWebhookExecution:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
         import teardrop.config as config
+
         config.get_settings.cache_clear()
 
         try:
@@ -493,6 +499,7 @@ class TestWebhookExecution:
         monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
         org_tools_module._fernet = None
         import teardrop.config as config
+
         config.get_settings.cache_clear()
 
         try:

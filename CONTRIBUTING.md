@@ -68,13 +68,15 @@ CI will reject PRs that fail `ruff check .`. Run it before pushing.
 pytest
 
 # Run with coverage
-pytest --cov --cov-report=term-missing
+pytest tests/unit/ --cov=. --cov-fail-under=0 --cov-report=
+pytest tests/api/ --cov=. --cov-append --cov-report=term-missing
 
 # Run a specific test file
 pytest tests/unit/test_auth.py -v
 ```
 
-Coverage must stay above 60% (`fail_under = 60` in `pyproject.toml`).
+Coverage must stay above 75% (`fail_under = 75` in `pyproject.toml`). CI
+appends coverage from the unit and API suites before enforcing the threshold.
 
 ---
 

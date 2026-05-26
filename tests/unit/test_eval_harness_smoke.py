@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from evals.runner import RunArtifact, load_tasks, run_suite
 
 
-@pytest.mark.anyio
 async def test_eval_harness_smoke_suite_runs():
     suite_path = Path(__file__).resolve().parents[2] / "evals" / "tasks" / "smoke.yaml"
     tasks = load_tasks(suite_path)
@@ -20,5 +17,6 @@ async def test_eval_harness_smoke_suite_runs():
         return RunArtifact(text="ETH price in USD is 3000.", tool_names_used=["get_token_price"], duration_ms=100)
 
     report = await run_suite(suite_name="smoke", tasks=tasks, run_task=_fake_runner)
+
     assert report.total_tasks == 3
     assert report.passed_tasks == 3

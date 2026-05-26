@@ -84,8 +84,7 @@ class BillingCreditService:
             if daily_spend + min_balance_usdc > spending_limit:
                 return self._billing_result_factory(
                     error=(
-                        f"Daily spending limit reached: {daily_spend} of {spending_limit} "
-                        "atomic USDC used in the last 24 hours."
+                        f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
                     )
                 )
 

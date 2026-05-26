@@ -1,0 +1,22 @@
+[
+  {
+    "id": "marketplace.platform_tools.001",
+    "messages": [{"role": "user", "content": "How do platform tools appear in the Teardrop marketplace, and do they require subscriptions?"}],
+    "expected_text_contains": ["platform", "marketplace", "subscription"],
+    "expected_text_not_contains": ["unknown"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "Explains that platform tools appear in the Teardrop marketplace catalog and are accessible without a subscription. Must not claim that subscriptions are required for platform tools. Org tools require subscriptions; platform tools do not."
+  },
+  {
+    "id": "marketplace.catalog.001",
+    "messages": [{"role": "user", "content": "What does the marketplace catalog expose for platform tools?"}],
+    "expected_text_contains": ["catalog", "platform", "tool", "platform/"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Describes the marketplace catalog surface for platform tools."
+  }
+]

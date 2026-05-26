@@ -482,6 +482,7 @@ class TestIsStatelessLookupRun:
 class TestInitCloseGetPool:
     async def test_init_when_memory_disabled(self, test_settings, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("MEMORY_ENABLED", "false")
         config.get_settings.cache_clear()
         pool = _pool()
@@ -492,6 +493,7 @@ class TestInitCloseGetPool:
 
     async def test_init_when_no_openai_key(self, test_settings, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("OPENAI_API_KEY", "")
         config.get_settings.cache_clear()
         pool = _pool()

@@ -8,11 +8,13 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from evals.policy import EvalPolicy, check_policy
 from evals.runner import EvalReport, EvalTask, RunArtifact, load_tasks, render_markdown_report, run_suite
 
 
@@ -84,30 +86,66 @@ def _load_report(path: Path) -> EvalReport:
     return EvalReport.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-async def _main() -> None:
+def _load_policy(path: Path) -> EvalPolicy:
+    return EvalPolicy.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _print_policy_violations(violations: list[Any]) -> None:
+    print("Policy violations:", file=sys.stderr)
+    for violation in violations:
+        print(
+            f"- {violation.rule}: expected {violation.expected}, actual {violation.actual}",
+            file=sys.stderr,
+        )
+
+
+async def _main() -> int:
     parser = argparse.ArgumentParser(description="Run Teardrop agent eval suite")
     parser.add_argument("--suite", required=True, help="Suite name under evals/tasks or an explicit path")
     parser.add_argument("--base-url", default="http://localhost:8000", help="Teardrop API base URL")
     parser.add_argument("--token", default=os.getenv("TEARDROP_EVAL_TOKEN", ""), help="Bearer token")
     parser.add_argument("--baseline-report", default="", help="Optional baseline report JSON path")
+    parser.add_argument("--policy-file", default="", help="Optional policy JSON path")
+    parser.add_argument(
+        "--fail-on-regression",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Exit non-zero on policy violations. Use --no-fail-on-regression to warn only.",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default="claude-haiku-4-5-20251001",
+        help="Anthropic model used for llm_judge eval tasks",
+    )
     parser.add_argument("--output", default="", help="Optional path to write report JSON")
     args = parser.parse_args()
 
     suite_path = _resolve_suite_path(args.suite)
     tasks = load_tasks(suite_path)
+    baseline = _load_report(Path(args.baseline_report)) if args.baseline_report else None
 
     report = await run_suite(
         suite_name=suite_path.stem,
         tasks=tasks,
         run_task=lambda task: _run_task_http(task, base_url=args.base_url, token=args.token or None),
+        judge_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        judge_model=args.judge_model,
     )
 
-    baseline = _load_report(Path(args.baseline_report)) if args.baseline_report else None
     print(render_markdown_report(report, baseline=baseline))
+
+    if args.policy_file:
+        violations = check_policy(report, _load_policy(Path(args.policy_file)), baseline=baseline)
+        if violations:
+            _print_policy_violations(violations)
+            if args.fail_on_regression:
+                return 1
 
     if args.output:
         Path(args.output).write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
+    return 0
+
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    raise SystemExit(asyncio.run(_main()))

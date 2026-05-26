@@ -132,6 +132,7 @@ async def test_refresh_replay_window_expired_returns_401(anon_client, test_setti
     monkeypatch.setenv("REFRESH_TOKEN_IDEMPOTENCY_WINDOW_SECONDS", "60")
     # Re-init settings so the env change is picked up.
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     successor = RefreshTokenRecord(

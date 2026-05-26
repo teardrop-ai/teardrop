@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from evals.scorer import score_task
+from evals.judge import score_task_async
 
 
 class EvalMessage(BaseModel):
@@ -123,16 +123,21 @@ async def run_suite(
     suite_name: str,
     tasks: list[EvalTask],
     run_task: RunTaskCallable,
+    judge_api_key: str = "",
+    judge_model: str = "claude-haiku-4-5-20251001",
 ) -> EvalReport:
     results: list[EvalTaskResult] = []
 
     for task in tasks:
         artifact = await run_task(task)
-        score = score_task(
+        score = await score_task_async(
             scorer=task.scorer,
+            rubric=task.rubric,
             expected_text_contains=task.expected_text_contains,
             expected_text_not_contains=task.expected_text_not_contains,
             actual_text=artifact.text,
+            api_key=judge_api_key,
+            judge_model=judge_model,
         )
         tool_call_ok = True
         if task.expected_tool_calls:

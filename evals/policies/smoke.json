@@ -1,0 +1,5 @@
+{
+  "min_pass_rate": 1.0,
+  "max_avg_cost_usdc": 600000,
+  "max_latency_regression_pct": 50.0
+}

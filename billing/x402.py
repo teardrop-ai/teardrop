@@ -92,8 +92,7 @@ async def init_billing(pool: asyncpg.Pool) -> None:
                 await asyncio.sleep(1)
             else:
                 logger.error(
-                    "Pricing DB query failed on startup after retry: %s — "
-                    "using config fallback price=%s",
+                    "Pricing DB query failed on startup after retry: %s — using config fallback price=%s",
                     exc,
                     settings.x402_run_price,
                 )

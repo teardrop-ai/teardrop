@@ -21,8 +21,8 @@
     "expected_text_contains": ["Aave", "Compound", "USDC", "%"],
     "max_duration_ms": 12000,
     "max_cost_usdc": 600000,
-    "scorer": "contains",
-    "rubric": "Calls get_lending_rates and cites APY percentages for both protocols."
+    "scorer": "llm_judge",
+    "rubric": "Lists concrete supply APY and borrow APY percentages for USDC on both Aave v3 and Compound v3 on Base mainnet. Cites specific numbers for both protocols so the user can compare them directly."
   },
   {
     "id": "defi.protocol_tvl.001",
@@ -46,10 +46,9 @@
     ],
     "expected_tool_calls": ["get_yield_rates"],
     "expected_text_contains": ["30d", "USDC", "%"],
-    "expected_text_not_contains": ["7-day trailing", "up to 14.5%", "Pendle"],
     "max_duration_ms": 15000,
     "max_cost_usdc": 700000,
-    "scorer": "contains",
-    "rubric": "Uses get_yield_rates with consistency framing and avoids short-term/spiky yield language."
+    "scorer": "llm_judge",
+    "rubric": "Recommends stablecoin yield based on 30-day or longer trailing return data. Avoids protocols or rates that are explicitly short-term, promotional, or spiky. The recommendation is actionable for a risk-averse user."
   }
 ]

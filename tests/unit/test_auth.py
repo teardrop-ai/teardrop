@@ -24,6 +24,7 @@ def test_encode_decode_roundtrip(test_settings):
 def test_expired_token_raises(test_settings, monkeypatch):
     # Mint a token that expired 1 minute ago by patching timedelta in auth.
     import teardrop.auth as auth
+
     original = auth.timedelta
 
     def fake_timedelta(**kwargs):

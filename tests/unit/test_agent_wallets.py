@@ -71,6 +71,7 @@ class TestCreateAgentWallet:
     def _enable_cdp(self, monkeypatch):
         """Enable agent wallets in settings."""
         import teardrop.config as config
+
         monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
         monkeypatch.setenv("CDP_API_KEY_ID", "test-key-id")
         monkeypatch.setenv("CDP_API_KEY_SECRET", "test-secret")
@@ -135,6 +136,7 @@ class TestCreateAgentWallet:
     @pytest.mark.asyncio
     async def test_feature_disabled_raises(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("AGENT_WALLET_ENABLED", "false")
         config.get_settings.cache_clear()
 
@@ -152,6 +154,7 @@ class TestGetAgentWallet:
     @pytest.mark.asyncio
     async def test_returns_wallet(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("CDP_NETWORK", "base-sepolia")
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -169,6 +172,7 @@ class TestGetAgentWallet:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_wallet(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("CDP_NETWORK", "base-sepolia")
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -190,6 +194,7 @@ class TestGetAgentWalletBalance:
     @pytest.fixture(autouse=True)
     def _enable_cdp(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
         monkeypatch.setenv("CDP_API_KEY_ID", "test-key-id")
         monkeypatch.setenv("CDP_API_KEY_SECRET", "test-secret")
@@ -242,6 +247,7 @@ class TestDeactivateAgentWallet:
     @pytest.mark.asyncio
     async def test_deactivates(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("CDP_NETWORK", "base-sepolia")
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -259,6 +265,7 @@ class TestDeactivateAgentWallet:
     @pytest.mark.asyncio
     async def test_returns_false_if_no_wallet(self, monkeypatch):
         import teardrop.config as config
+
         monkeypatch.setenv("CDP_NETWORK", "base-sepolia")
         monkeypatch.setenv("APP_ENV", "test")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")

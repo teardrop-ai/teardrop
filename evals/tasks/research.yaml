@@ -6,7 +6,7 @@
     "expected_text_contains": ["ETF", "Ethereum"],
     "max_duration_ms": 12000,
     "max_cost_usdc": 500000,
-    "scorer": "contains",
-    "rubric": "Uses web search and provides a concise summary."
+    "scorer": "llm_judge",
+    "rubric": "Provides a factual, concise summary of recent Ethereum ETF news using web search results. Includes at least two specific, concrete developments or facts. Does not fabricate events or sources."
   }
 ]

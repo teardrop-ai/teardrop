@@ -27,6 +27,7 @@ _WALLET = AgentWallet(
 @pytest.mark.anyio
 async def test_provision_returns_501_when_disabled(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "false")
     config.get_settings.cache_clear()
 
@@ -38,6 +39,7 @@ async def test_provision_returns_501_when_disabled(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_get_returns_501_when_disabled(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "false")
     config.get_settings.cache_clear()
 
@@ -52,6 +54,7 @@ async def test_get_returns_501_when_disabled(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_provision_agent_wallet(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
@@ -74,6 +77,7 @@ async def test_provision_agent_wallet(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_get_agent_wallet(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
@@ -92,6 +96,7 @@ async def test_get_agent_wallet(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_get_agent_wallet_not_found(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
@@ -111,6 +116,7 @@ async def test_get_agent_wallet_not_found(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_deactivate_agent_wallet_admin(admin_api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")
@@ -128,6 +134,7 @@ async def test_deactivate_agent_wallet_admin(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_deactivate_requires_admin(api_client, monkeypatch):
     import teardrop.config as config
+
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("CDP_API_KEY_ID", "k")
     monkeypatch.setenv("CDP_API_KEY_SECRET", "s")

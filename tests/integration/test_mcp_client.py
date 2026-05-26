@@ -40,6 +40,7 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
 
     monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     import teardrop.config as config
+
     config.get_settings.cache_clear()
     import org_tools
 
@@ -222,6 +223,7 @@ async def test_quota_enforcement(test_org, monkeypatch):
     monkeypatch.setattr("tools.definitions.http_fetch.validate_url", lambda u: None)
 
     import teardrop.config as config
+
     monkeypatch.setenv("MAX_ORG_MCP_SERVERS", "2")
     config.get_settings.cache_clear()
 

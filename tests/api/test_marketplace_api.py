@@ -31,6 +31,7 @@ async def test_set_author_config_success(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -54,6 +55,7 @@ async def test_set_author_config_invalid_wallet(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -150,6 +152,7 @@ async def test_get_earnings_by_tool(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.get("/marketplace/earnings/by-tool")
@@ -175,6 +178,7 @@ async def test_get_earnings_by_tool_marketplace_disabled(api_client, monkeypatch
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.get("/marketplace/earnings/by-tool")
@@ -236,6 +240,7 @@ async def test_catalog_success(anon_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await anon_client.get("/marketplace/catalog")
@@ -258,6 +263,7 @@ async def test_mcp_initialize(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -296,6 +302,7 @@ async def test_mcp_tools_list(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main.registry.list_latest", MagicMock(return_value=[]))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -324,6 +331,7 @@ async def test_mcp_tools_call_not_found(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main.get_marketplace_tool_by_name", AsyncMock(return_value=None))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -348,6 +356,7 @@ async def test_mcp_invalid_jsonrpc(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -371,6 +380,7 @@ async def test_mcp_unknown_method(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -394,6 +404,7 @@ async def test_mcp_rate_limited(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(False, 0, 0)))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -414,6 +425,7 @@ async def test_mcp_disabled(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -450,6 +462,7 @@ async def test_mcp_tools_call_success(api_client, monkeypatch):
     )
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -485,6 +498,7 @@ async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
     )
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -714,6 +728,7 @@ async def test_mcp_v1_unsubscribed_tool_blocked(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main.check_org_subscription", AsyncMock(return_value=False))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -749,6 +764,7 @@ async def test_mcp_v1_subscribed_tool_proceeds(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -781,6 +797,7 @@ async def test_mcp_v1_builtin_tool_skips_subscription_check(api_client, monkeypa
     )
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -932,6 +949,7 @@ async def test_mcp_tools_call_uses_author_price(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(
@@ -1003,6 +1021,7 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.main.record_tool_call_earnings", mock_earnings)
 
     import teardrop.config as config
+
     config.get_settings.cache_clear()
 
     resp = await api_client.post(

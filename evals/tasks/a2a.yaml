@@ -1,0 +1,22 @@
+[
+  {
+    "id": "a2a.delegation.001",
+    "messages": [{"role": "user", "content": "How does Teardrop handle agent-to-agent delegation?"}],
+    "expected_text_contains": ["delegation", "agent", "allowlist", "A2A"],
+    "expected_text_not_contains": ["disabled forever"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains A2A delegation, including allowlist or control mechanisms."
+  },
+  {
+    "id": "a2a.budget_controls.001",
+    "messages": [{"role": "user", "content": "What controls limit delegation spending in Teardrop?"}],
+    "expected_text_contains": ["cost", "limit", "delegation"],
+    "expected_text_not_contains": ["unlimited"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Mentions delegation spend controls such as per-run limits, caps, or budget checks."
+  }
+]

@@ -98,6 +98,7 @@ async def test_date_range_filtering(test_user):
 async def test_fire_and_forget_logs_not_raises(test_user, monkeypatch):
     """record_usage_event must not propagate exceptions."""
     import teardrop.usage as usage
+
     async def _boom(*args, **kwargs):
         raise RuntimeError("DB exploded")
 
