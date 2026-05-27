@@ -233,6 +233,8 @@ async def test_catalog_success(anon_client, monkeypatch):
         cost_usdc=1000,
         author_org_name="Acme",
         author_org_slug="acme",
+        category="defi",
+        total_calls=42,
     )
     monkeypatch.setattr("teardrop.main.get_marketplace_catalog", AsyncMock(return_value=[tool]))
     monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
@@ -248,8 +250,168 @@ async def test_catalog_success(anon_client, monkeypatch):
     data = resp.json()
     assert len(data["tools"]) == 1
     assert data["tools"][0]["name"] == "acme/my_tool"
+    assert data["tools"][0]["qualified_name"] == "acme/my_tool"
+    assert data["tools"][0]["tool_name"] == "my_tool"
     assert data["tools"][0]["tool_type"] == "community"
+    assert data["tools"][0]["category"] == "defi"
+    assert data["tools"][0]["total_calls"] == 42
+    assert data["tools"][0]["health_status"] == "healthy"
+    assert data["tools"][0]["is_healthy"] is True
     assert resp.headers["cache-control"] == "public, max-age=60"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_category_and_popularity_params(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="price_feed",
+        qualified_name="acme/price_feed",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1000,
+        author_org_name="Acme",
+        author_org_slug="acme",
+        category="defi",
+        total_calls=12,
+    )
+    catalog_mock = AsyncMock(return_value=[tool])
+    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", catalog_mock)
+    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/catalog?category=defi&sort=popularity")
+
+    assert resp.status_code == 200
+    catalog_mock.assert_awaited_once()
+    assert catalog_mock.call_args.kwargs["category"] == "defi"
+    assert catalog_mock.call_args.kwargs["sort"] == "popularity"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_rejects_invalid_category(anon_client, monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/catalog?category=bad")
+
+    assert resp.status_code == 400
+    assert "Invalid category" in resp.json()["detail"]
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_detail_success(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="my_tool",
+        qualified_name="acme/my_tool",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1000,
+        author_org_name="Acme",
+        author_org_slug="acme",
+        category="utility",
+        total_calls=7,
+    )
+    detail_mock = AsyncMock(return_value=tool)
+    monkeypatch.setattr("teardrop.main.get_marketplace_catalog_tool", detail_mock)
+    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/catalog/acme/my_tool")
+
+    assert resp.status_code == 200
+    assert resp.json()["tool"]["name"] == "acme/my_tool"
+    assert resp.json()["tool"]["total_calls"] == 7
+    detail_mock.assert_awaited_once()
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_author_profile_success(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="my_tool",
+        qualified_name="acme/my_tool",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1000,
+        author_org_name="Acme",
+        author_org_slug="acme",
+        total_calls=7,
+    )
+    monkeypatch.setattr(
+        "teardrop.main.get_marketplace_author_summary",
+        AsyncMock(return_value={"org_slug": "acme", "org_name": "Acme", "tool_count": 1, "total_calls": 7}),
+    )
+    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", AsyncMock(return_value=[tool]))
+    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/authors/acme")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["org_slug"] == "acme"
+    assert data["total_calls"] == 7
+    assert data["tools"][0]["name"] == "acme/my_tool"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_marketplace_llms_txt(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="my_tool",
+        qualified_name="acme/my_tool",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1234567,
+        author_org_name="Acme",
+        author_org_slug="acme",
+        category="utility",
+        total_calls=7,
+    )
+    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", AsyncMock(return_value=[tool]))
+    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/llms.txt")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "acme/my_tool" in resp.text
+    assert "$1.234567" in resp.text
 
     config.get_settings.cache_clear()
 

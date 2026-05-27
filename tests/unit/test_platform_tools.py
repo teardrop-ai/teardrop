@@ -27,23 +27,39 @@ class TestGetMarketplaceCatalogWithPlatformTools:
     async def test_empty_org_tools_returns_platform_tools(self, monkeypatch):
         """When no org tools are published, catalog still returns platform tools."""
         mock_pool = MagicMock()
-        # First fetch: org_tools → empty
-        # Second fetch: marketplace_platform_tools → two rows
         platform_rows = [
             {
-                "tool_name": "web_search",
+                "tool_id": None,
+                "name": "web_search",
+                "qualified_name": "platform/web_search",
                 "display_name": "Web Search",
                 "description": "Real-time web search",
+                "marketplace_description": "Real-time web search",
+                "input_schema": {},
                 "base_price_usdc": 10000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "search",
+                "total_calls": 9,
             },
             {
-                "tool_name": "http_fetch",
+                "tool_id": None,
+                "name": "http_fetch",
+                "qualified_name": "platform/http_fetch",
                 "display_name": "HTTP Fetch",
                 "description": "SSRF-protected fetch",
+                "marketplace_description": "SSRF-protected fetch",
+                "input_schema": {},
                 "base_price_usdc": 2000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "search",
+                "total_calls": 3,
             },
         ]
-        mock_pool.fetch = AsyncMock(side_effect=[[], platform_rows])
+        mock_pool.fetch = AsyncMock(return_value=platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         catalog = await get_marketplace_catalog()
@@ -58,6 +74,9 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert by_name["platform/http_fetch"].display_name == "HTTP Fetch"
         assert by_name["platform/http_fetch"].author_org_slug == "platform"
         assert by_name["platform/http_fetch"].tool_type == "platform"
+        assert by_name["platform/http_fetch"].category == "search"
+        assert by_name["platform/http_fetch"].total_calls == 3
+        assert by_name["platform/http_fetch"].health_status == "healthy"
         assert by_name["platform/web_search"].cost_usdc == 10000
         assert by_name["platform/web_search"].tool_type == "platform"
 
@@ -66,25 +85,40 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         """Both org and platform tools appear in the catalog."""
         org_rows = [
             {
+                "tool_id": None,
                 "name": "weather",
+                "qualified_name": "acme/weather",
+                "display_name": "weather",
                 "description": "Get weather",
                 "marketplace_description": "Weather lookup",
                 "input_schema": '{"properties": {}}',
                 "base_price_usdc": 5000,
-                "org_name": "Acme",
-                "org_slug": "acme",
+                "author_org_name": "Acme",
+                "author_org_slug": "acme",
+                "tool_type": "community",
+                "category": "utility",
+                "total_calls": 12,
             },
         ]
         platform_rows = [
             {
-                "tool_name": "get_token_price",
+                "tool_id": None,
+                "name": "get_token_price",
+                "qualified_name": "platform/get_token_price",
                 "display_name": "Token Price",
                 "description": "Live token prices",
+                "marketplace_description": "Live token prices",
+                "input_schema": {},
                 "base_price_usdc": 2000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "defi",
+                "total_calls": 5,
             },
         ]
         mock_pool = MagicMock()
-        mock_pool.fetch = AsyncMock(side_effect=[org_rows, platform_rows])
+        mock_pool.fetch = AsyncMock(return_value=org_rows + platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         catalog = await get_marketplace_catalog()
@@ -95,6 +129,8 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert "platform/get_token_price" in names
         by_name = {t.qualified_name: t for t in catalog}
         assert by_name["acme/weather"].tool_type == "community"
+        assert by_name["acme/weather"].category == "utility"
+        assert by_name["acme/weather"].total_calls == 12
         assert by_name["platform/get_token_price"].tool_type == "platform"
 
     @pytest.mark.anyio
@@ -102,20 +138,44 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         """Admin override prices take precedence over base_price_usdc."""
         platform_rows = [
             {
-                "tool_name": "web_search",
+                "tool_id": None,
+                "name": "web_search",
+                "qualified_name": "platform/web_search",
                 "display_name": "Web Search",
                 "description": "Search",
+                "marketplace_description": "Search",
+                "input_schema": {},
                 "base_price_usdc": 10000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "search",
+                "total_calls": 1,
             },
         ]
         mock_pool = MagicMock()
-        mock_pool.fetch = AsyncMock(side_effect=[[], platform_rows])
+        mock_pool.fetch = AsyncMock(return_value=platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         catalog = await get_marketplace_catalog(tool_overrides={"web_search": 15000})
 
         assert len(catalog) == 1
         assert catalog[0].cost_usdc == 15000
+
+    @pytest.mark.anyio
+    async def test_catalog_popularity_sort_and_category_filter(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(category="defi", sort="popularity")
+
+        sql = mock_pool.fetch.call_args.args[0]
+        args = mock_pool.fetch.call_args.args[1:]
+        assert "total_calls DESC" in sql
+        assert "COALESCE(t.category, '')" in sql
+        assert "COALESCE(p.category, '')" in sql
+        assert "defi" in args
 
 
 # ─── get_platform_tool_price ─────────────────────────────────────────────────
@@ -327,13 +387,69 @@ class TestWeb3MarketplaceToolsMigration046:
     async def test_catalog_includes_all_four_web3_tools(self, monkeypatch):
         """All four tools appear in get_marketplace_catalog with correct qualified names."""
         platform_rows = [
-            {"tool_name": "get_eth_balance", "display_name": "ETH Balance", "description": "...", "base_price_usdc": 1000},
-            {"tool_name": "get_erc20_balance", "display_name": "ERC-20 Balance", "description": "...", "base_price_usdc": 2000},
-            {"tool_name": "get_block", "display_name": "Block Details", "description": "...", "base_price_usdc": 1000},
-            {"tool_name": "get_transaction", "display_name": "Transaction", "description": "...", "base_price_usdc": 2000},
+            {
+                "tool_id": None,
+                "name": "get_eth_balance",
+                "qualified_name": "platform/get_eth_balance",
+                "display_name": "ETH Balance",
+                "description": "...",
+                "marketplace_description": "...",
+                "input_schema": {},
+                "base_price_usdc": 1000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "data",
+                "total_calls": 0,
+            },
+            {
+                "tool_id": None,
+                "name": "get_erc20_balance",
+                "qualified_name": "platform/get_erc20_balance",
+                "display_name": "ERC-20 Balance",
+                "description": "...",
+                "marketplace_description": "...",
+                "input_schema": {},
+                "base_price_usdc": 2000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "data",
+                "total_calls": 0,
+            },
+            {
+                "tool_id": None,
+                "name": "get_block",
+                "qualified_name": "platform/get_block",
+                "display_name": "Block Details",
+                "description": "...",
+                "marketplace_description": "...",
+                "input_schema": {},
+                "base_price_usdc": 1000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "data",
+                "total_calls": 0,
+            },
+            {
+                "tool_id": None,
+                "name": "get_transaction",
+                "qualified_name": "platform/get_transaction",
+                "display_name": "Transaction",
+                "description": "...",
+                "marketplace_description": "...",
+                "input_schema": {},
+                "base_price_usdc": 2000,
+                "author_org_name": "Teardrop",
+                "author_org_slug": "platform",
+                "tool_type": "platform",
+                "category": "data",
+                "total_calls": 0,
+            },
         ]
         mock_pool = MagicMock()
-        mock_pool.fetch = AsyncMock(side_effect=[[], platform_rows])
+        mock_pool.fetch = AsyncMock(return_value=platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         catalog = await get_marketplace_catalog()

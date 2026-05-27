@@ -62,19 +62,21 @@ earnings are always settled to the wallet recorded **at withdrawal time**.
 
 ## Publishing: Author Tools vs Platform Tools
 
-Teardrop maintains two categories of tools in the marketplace catalog:
+Teardrop maintains two kinds of tools in the marketplace catalog:
 
 - **Author tools**: Custom tools you publish via this guide. Each has an `author_org_slug` and appears with `qualified_name = "<your-org-slug>/<tool-name>"`.
 - **Platform tools**: Built-in Teardrop tools (e.g., `web_search`, `http_fetch`) maintained by Teardrop itself. These appear with `qualified_name = "platform/<tool-name>"` and are always available.
 
-When a caller retrieves the catalog via `GET /marketplace/catalog`, they can optionally filter by author using the `org_slug` query parameter to see only your tools or only platform tools.
+When a caller retrieves the catalog via `GET /marketplace/catalog`, they can optionally filter by author using the `org_slug` query parameter to see only your tools or only platform tools. Tools can also be tagged with one public catalog category: `defi`, `search`, `data`, `communication`, or `utility`.
 
 ---
 
 ## Step 3 — Create the Tool
 
 Create your webhook-backed tool via `POST /tools`.  The `input_schema` field
-must be a valid JSON Schema object describing the tool's parameters.
+must be a valid JSON Schema object describing the tool's parameters. Published
+marketplace tools also need an `output_schema` so callers and SDKs can render the
+result contract before subscribing.
 
 ```bash
 curl -X POST https://api.teardrop.ai/tools \
@@ -90,9 +92,18 @@ curl -X POST https://api.teardrop.ai/tools \
       },
       "required": ["city"]
     },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "temperature": {"type": "number"},
+        "summary": {"type": "string"}
+      },
+      "required": ["temperature", "summary"]
+    },
     "webhook_url": "https://your-service.example.com/weather",
-    "webhook_method": "POST",
+    "webhook_method": "GET",
     "base_price_usdc": 10000,
+    "category": "data",
     "publish_as_mcp": false
   }'
 ```
@@ -121,11 +132,14 @@ curl -X PATCH https://api.teardrop.ai/tools/$TOOL_ID \
   -H "Content-Type: application/json" \
   -d '{
     "publish_as_mcp": true,
+    "category": "data",
     "marketplace_description": "Real-time weather data for any city worldwide."
   }'
 ```
 
-Your tool now appears in the public catalog at `GET /marketplace/catalog`.
+Your tool now appears in the public catalog at `GET /marketplace/catalog`, its
+detail page is available at `GET /marketplace/catalog/<your-org-slug>/weather_lookup`,
+and your author profile is available at `GET /marketplace/authors/<your-org-slug>`.
 
 > Soft-deleting (`DELETE /tools/<id>`) a published tool automatically
 > deactivates all subscriber subscriptions so callers are not left with
@@ -176,15 +190,31 @@ curl "https://api.teardrop.ai/marketplace/catalog?org_slug=<your-org-slug>"
 curl "https://api.teardrop.ai/marketplace/catalog?sort=price_asc"
 curl "https://api.teardrop.ai/marketplace/catalog?sort=price_desc"
 
+# Sort by successful paid calls
+curl "https://api.teardrop.ai/marketplace/catalog?sort=popularity"
+
+# Filter by public category
+curl "https://api.teardrop.ai/marketplace/catalog?category=data"
+
+# Fetch one tool detail or one public author profile
+curl "https://api.teardrop.ai/marketplace/catalog/<your-org-slug>/weather_lookup"
+curl "https://api.teardrop.ai/marketplace/authors/<your-org-slug>"
+
+# Plain-text marketplace index for LLM/SEO discovery
+curl https://api.teardrop.ai/marketplace/llms.txt
+
 # Paginate results (default limit 100, max 200)
 curl "https://api.teardrop.ai/marketplace/catalog?limit=50&cursor=<next_cursor>"
 ```
 
 Query parameters:
 - `org_slug`: Filter to a specific author org, or `"platform"` for Teardrop tools only
-- `sort`: `name` (default), `price_asc`, `price_desc`
+- `category`: Filter by `defi`, `search`, `data`, `communication`, or `utility`
+- `sort`: `name` (default), `price_asc`, `price_desc`, `popularity`
 - `limit`: Results per page (1–200, default 100)
 - `cursor`: Opaque pagination token from previous response's `next_cursor`
+
+Catalog tool objects include `qualified_name`, `tool_name`, `display_name`, `description`, `short_description`, `input_schema`, `cost_usdc`, `tool_type`, `category`, `total_calls`, `health_status`, `is_healthy`, `author`, and `author_slug`. `total_calls` is a public aggregate recorded after successful paid executions; earnings and settlement still use the immutable financial ledger.
 
 ---
 

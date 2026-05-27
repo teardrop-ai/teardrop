@@ -8,7 +8,10 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+MarketplaceCategory = Literal["", "defi", "search", "data", "communication", "utility"]
+MarketplaceHealthStatus = Literal["healthy", "degraded", "unavailable"]
 
 _EIP55_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -77,6 +80,11 @@ class MarketplaceTool(BaseModel):
     author_org_name: str
     author_org_slug: str
     tool_type: Literal["platform", "community"] = "community"
+    total_calls: int = 0
+    health_status: MarketplaceHealthStatus = "healthy"
+    is_healthy: bool = True
+    category: MarketplaceCategory = ""
+    sort_key: Any | None = Field(default=None, exclude=True)
 
 
 class MarketplaceSubscription(BaseModel):

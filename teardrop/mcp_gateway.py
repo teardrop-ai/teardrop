@@ -371,4 +371,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             except Exception:
                 logger.debug("Failed to record MCP author earnings", exc_info=True)
 
+        try:
+            from marketplace import record_marketplace_tool_usage_many
+
+            asyncio.create_task(record_marketplace_tool_usage_many([tool_name]))
+        except Exception:
+            logger.debug("Failed to record MCP marketplace stats", exc_info=True)
+
         return response

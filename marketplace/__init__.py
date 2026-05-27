@@ -12,6 +12,7 @@ import asyncpg
 import marketplace.catalog as _catalog
 import marketplace.context as _ctx
 import marketplace.earnings as _earnings
+import marketplace.stats as _stats
 import marketplace.subscriptions as _subscriptions
 import marketplace.withdrawals as _withdrawals
 import marketplace.worker as _worker
@@ -36,6 +37,8 @@ _GET_POOL_ORIG = _ctx._get_pool
 _SET_AUTHOR_CONFIG_ORIG = _catalog.set_author_config
 _GET_AUTHOR_CONFIG_ORIG = _catalog.get_author_config
 _GET_MARKETPLACE_CATALOG_ORIG = _catalog.get_marketplace_catalog
+_GET_MARKETPLACE_CATALOG_TOOL_ORIG = _catalog.get_marketplace_catalog_tool
+_GET_MARKETPLACE_AUTHOR_SUMMARY_ORIG = _catalog.get_marketplace_author_summary
 _BUILD_CATALOG_CURSOR_ORIG = _catalog._build_catalog_cursor
 _GET_MARKETPLACE_TOOL_BY_NAME_ORIG = _catalog.get_marketplace_tool_by_name
 _GET_PLATFORM_TOOL_CACHE_ORIG = _catalog._get_platform_tool_cache
@@ -49,6 +52,10 @@ _RECORD_TOOL_CALL_EARNINGS_ORIG = _earnings.record_tool_call_earnings
 _GET_AUTHOR_BALANCE_ORIG = _earnings.get_author_balance
 _GET_AUTHOR_EARNINGS_HISTORY_ORIG = _earnings.get_author_earnings_history
 _GET_AUTHOR_EARNINGS_BY_TOOL_ORIG = _earnings.get_author_earnings_by_tool
+
+_RECORD_MARKETPLACE_TOOL_CALL_ORIG = _stats.record_marketplace_tool_call
+_RECORD_MARKETPLACE_TOOL_USAGE_ORIG = _stats.record_marketplace_tool_usage
+_RECORD_MARKETPLACE_TOOL_USAGE_MANY_ORIG = _stats.record_marketplace_tool_usage_many
 
 _SUBSCRIBE_TO_TOOL_ORIG = _subscriptions.subscribe_to_tool
 _UNSUBSCRIBE_FROM_TOOL_ORIG = _subscriptions.unsubscribe_from_tool
@@ -87,6 +94,7 @@ def _sync_to_modules() -> None:
     _ctx._pool = _pool
     _catalog._get_pool = _get_pool
     _earnings._get_pool = _get_pool
+    _stats._get_pool = _get_pool
     _subscriptions._get_pool = _get_pool
     _withdrawals._get_pool = _get_pool
     _worker._get_pool = _get_pool
@@ -99,6 +107,9 @@ def _sync_to_modules() -> None:
 
     _subscriptions.get_marketplace_tool_by_name = get_marketplace_tool_by_name
     _subscriptions.get_org_subscriptions = get_org_subscriptions
+
+    _stats.get_marketplace_tool_by_name = get_marketplace_tool_by_name
+    _stats.get_platform_tool_price = get_platform_tool_price
 
     _earnings.get_author_config = get_author_config
     _withdrawals.get_author_config = get_author_config
@@ -155,19 +166,42 @@ async def get_marketplace_catalog(
     default_tool_cost: int = 0,
     *,
     org_slug: str | None = None,
+    category: str | None = None,
     sort: str = "name",
     limit: int = 100,
     cursor: str | None = None,
+    tool_name: str | None = None,
 ) -> list[MarketplaceTool]:
     return await _call_async(
         _GET_MARKETPLACE_CATALOG_ORIG,
         tool_overrides,
         default_tool_cost,
         org_slug=org_slug,
+        category=category,
         sort=sort,
         limit=limit,
         cursor=cursor,
+        tool_name=tool_name,
     )
+
+
+async def get_marketplace_catalog_tool(
+    tool_name: str,
+    org_slug: str,
+    tool_overrides: dict[str, int] | None = None,
+    default_tool_cost: int = 0,
+) -> MarketplaceTool | None:
+    return await _call_async(
+        _GET_MARKETPLACE_CATALOG_TOOL_ORIG,
+        tool_name,
+        org_slug,
+        tool_overrides,
+        default_tool_cost,
+    )
+
+
+async def get_marketplace_author_summary(org_slug: str) -> dict[str, Any] | None:
+    return await _call_async(_GET_MARKETPLACE_AUTHOR_SUMMARY_ORIG, org_slug)
 
 
 def _build_catalog_cursor(tool: MarketplaceTool, sort: str) -> str:
@@ -226,6 +260,30 @@ async def get_author_earnings_history(
 
 async def get_author_earnings_by_tool(org_id: str) -> list[AuthorEarningByTool]:
     return await _call_async(_GET_AUTHOR_EARNINGS_BY_TOOL_ORIG, org_id)
+
+
+async def record_marketplace_tool_call(
+    qualified_tool_name: str,
+    *,
+    tool_type: str,
+    author_org_id: str | None = None,
+    increment: int = 1,
+) -> None:
+    await _call_async(
+        _RECORD_MARKETPLACE_TOOL_CALL_ORIG,
+        qualified_tool_name,
+        tool_type=tool_type,
+        author_org_id=author_org_id,
+        increment=increment,
+    )
+
+
+async def record_marketplace_tool_usage(tool_name: str) -> bool:
+    return await _call_async(_RECORD_MARKETPLACE_TOOL_USAGE_ORIG, tool_name)
+
+
+async def record_marketplace_tool_usage_many(tool_names: list[str]) -> None:
+    await _call_async(_RECORD_MARKETPLACE_TOOL_USAGE_MANY_ORIG, tool_names)
 
 
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
@@ -340,6 +398,8 @@ __all__ = [
     "set_author_config",
     "get_author_config",
     "get_marketplace_catalog",
+    "get_marketplace_catalog_tool",
+    "get_marketplace_author_summary",
     "_build_catalog_cursor",
     "get_marketplace_tool_by_name",
     "_get_platform_tool_cache",
@@ -352,6 +412,9 @@ __all__ = [
     "get_author_balance",
     "get_author_earnings_history",
     "get_author_earnings_by_tool",
+    "record_marketplace_tool_call",
+    "record_marketplace_tool_usage",
+    "record_marketplace_tool_usage_many",
     "subscribe_to_tool",
     "unsubscribe_from_tool",
     "get_org_subscriptions",

@@ -109,12 +109,15 @@ from marketplace import (
     get_author_config,
     get_author_earnings_by_tool,
     get_author_earnings_history,
+    get_marketplace_author_summary,
     get_marketplace_catalog,
+    get_marketplace_catalog_tool,
     get_marketplace_tool_by_name,
     get_subscribed_tools_catalog,
     init_marketplace_db,
     list_pending_withdrawals,
     process_withdrawal,
+    record_marketplace_tool_usage_many,
     record_tool_call_earnings,
     request_withdrawal,
     set_author_config,
@@ -241,6 +244,9 @@ from tools.mcp_server import mcp as _mcp_server
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
 settings = get_settings()
+MarketplaceCategory = Literal["", "defi", "search", "data", "communication", "utility"]
+_MARKETPLACE_VALID_CATEGORIES = {"", "defi", "search", "data", "communication", "utility"}
+
 logging.basicConfig(
     level=getattr(logging, settings.app_log_level.upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s – %(message)s",
@@ -2616,6 +2622,7 @@ async def agent_run(
 
         # ── Settlement / credit debit (after usage recorded) ─────────────
         delegation_spend = usage_data.get("delegation_spend_usdc", 0)
+        marketplace_stats_billable = False
 
         if billing.verified:
             # Determine what to charge BYOK orgs.
@@ -2640,6 +2647,7 @@ async def agent_run(
                 # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
                 success, deducted_amount = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
                 if success:
+                    marketplace_stats_billable = True
                     if deducted_amount < debit_amount:
                         logger.warning(
                             "billing_shortfall run_id=%s org_id=%s cost_usdc_atomic=%d actual_deducted=%d shortfall=%d",
@@ -2707,6 +2715,7 @@ async def agent_run(
                         org_id,
                     )
                 if not settlement_timed_out and billing_settled.settled:
+                    marketplace_stats_billable = True
                     await record_settlement(
                         usage_event.id,
                         billing_settled.amount_usdc,
@@ -2762,6 +2771,11 @@ async def agent_run(
             tool_names_used=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
             caller_org_id=org_id,
         )
+
+        if marketplace_stats_billable:
+            billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+            if isinstance(billable_tool_names, list):
+                asyncio.create_task(record_marketplace_tool_usage_many([str(name) for name in billable_tool_names]))
 
         yield _sse_event(
             _EV_USAGE_SUMMARY,
@@ -3632,6 +3646,7 @@ class CreateOrgToolRequest(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=30)
     publish_as_mcp: bool = False
     marketplace_description: str | None = Field(default=None, max_length=1000)
+    category: MarketplaceCategory = ""
     base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
 
 
@@ -3646,6 +3661,7 @@ class UpdateOrgToolRequest(BaseModel):
     is_active: bool | None = None
     publish_as_mcp: bool | None = None
     marketplace_description: str | None = Field(default=None, max_length=1000)
+    category: MarketplaceCategory | None = None
     base_price_usdc: int | None = Field(default=None, ge=0, le=100_000_000)
 
 
@@ -3663,6 +3679,7 @@ class OrgToolResponse(BaseModel):
     is_active: bool
     publish_as_mcp: bool
     marketplace_description: str
+    category: str
     base_price_usdc: int
     created_at: str
     updated_at: str
@@ -3727,6 +3744,7 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "is_active": tool.is_active,
         "publish_as_mcp": tool.publish_as_mcp,
         "marketplace_description": tool.marketplace_description,
+        "category": tool.category,
         "base_price_usdc": tool.base_price_usdc,
         "created_at": tool.created_at.isoformat(),
         "updated_at": tool.updated_at.isoformat(),
@@ -3811,6 +3829,7 @@ async def create_tool(
             actor_id=user_id,
             publish_as_mcp=body.publish_as_mcp,
             marketplace_description=body.marketplace_description or "",
+            category=body.category,
             base_price_usdc=body.base_price_usdc,
         )
     except asyncpg.UniqueViolationError:
@@ -3988,6 +4007,7 @@ async def patch_tool(
         "is_active",
         "publish_as_mcp",
         "marketplace_description",
+        "category",
         "base_price_usdc",
     )
     for field_name in _updatable:
@@ -5186,6 +5206,12 @@ async def mcp_jsonrpc_handler(
             except Exception:
                 logger.debug("Failed to record author earnings", exc_info=True)
 
+        if debited:
+            try:
+                asyncio.create_task(record_marketplace_tool_usage_many([tool_name]))
+            except Exception:
+                logger.debug("Failed to record marketplace tool stats", exc_info=True)
+
         # Format MCP-spec tool result
         if isinstance(result, dict) and "error" in result:
             return JSONResponse(
@@ -5422,15 +5448,47 @@ async def get_marketplace_withdrawals(
     )
 
 
-_CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc"})
+_CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc", "popularity"})
+
+
+def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
+    return {
+        "name": tool.qualified_name,
+        "qualified_name": tool.qualified_name,
+        "tool_name": tool.name,
+        "display_name": tool.display_name,
+        "description": tool.marketplace_description,
+        "short_description": tool.description,
+        "input_schema": tool.input_schema,
+        "cost_usdc": tool.cost_usdc,
+        "tool_type": tool.tool_type,
+        "category": tool.category,
+        "total_calls": tool.total_calls,
+        "health_status": tool.health_status,
+        "is_healthy": tool.is_healthy,
+        # author_slug is the canonical filter key; author is kept for
+        # backward compatibility and human display.
+        "author": tool.author_org_name,
+        "author_slug": tool.author_org_slug,
+    }
+
+
+def _format_atomic_usdc(amount_usdc: int) -> str:
+    whole, fractional = divmod(max(0, int(amount_usdc)), 1_000_000)
+    return f"${whole}.{fractional:06d}"
+
+
+def _escape_llms_text(value: Any) -> str:
+    return str(value or "").replace("\r", " ").replace("\n", " ").replace("|", "-").strip()
 
 
 @app.get("/marketplace/catalog", tags=["Marketplace"])
 async def get_marketplace_catalog_endpoint(
     request: Request,
     org_slug: str | None = None,
+    category: str | None = Query(default=None, max_length=32),
     sort: str = "name",
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=200),
     cursor: str | None = None,
 ) -> JSONResponse:
     """Public: browse available marketplace tools with pricing.
@@ -5438,7 +5496,10 @@ async def get_marketplace_catalog_endpoint(
     Query parameters:
     - **org_slug**: Filter to a single author org (use ``"platform"`` for
       Teardrop-owned tools). Omit for all tools.
-    - **sort**: ``name`` (default), ``price_asc``, or ``price_desc``.
+        - **category**: Optional category filter (``defi``, ``search``, ``data``,
+            ``communication``, or ``utility``).
+        - **sort**: ``name`` (default), ``price_asc``, ``price_desc``, or
+            ``popularity``.
     - **limit**: Maximum results to return (1–200, default 100).
     - **cursor**: Pagination token from a previous response's ``next_cursor``
       field. Omit for the first page.
@@ -5452,8 +5513,13 @@ async def get_marketplace_catalog_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid sort '{sort}'. Allowed: {', '.join(sorted(_CATALOG_VALID_SORTS))}",
         )
+    if category is not None and category not in _MARKETPLACE_VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid category '{category}'. Allowed: {', '.join(sorted(_MARKETPLACE_VALID_CATEGORIES))}",
+        )
 
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+    client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
 
     from marketplace import _build_catalog_cursor
@@ -5466,6 +5532,7 @@ async def get_marketplace_catalog_endpoint(
         overrides,
         default_cost,
         org_slug=org_slug,
+        category=category,
         sort=sort,
         limit=limit,
         cursor=cursor,
@@ -5478,23 +5545,148 @@ async def get_marketplace_catalog_endpoint(
 
     return JSONResponse(
         content={
-            "tools": [
-                {
-                    "name": t.qualified_name,
-                    "description": t.marketplace_description,
-                    "input_schema": t.input_schema,
-                    "cost_usdc": t.cost_usdc,
-                    "tool_type": t.tool_type,
-                    # author_slug is the canonical filter key; author is kept for
-                    # backward compatibility and human display.
-                    "author": t.author_org_name,
-                    "author_slug": t.author_org_slug,
-                }
-                for t in catalog
-            ],
+            "tools": [_serialize_marketplace_tool(t) for t in catalog],
             "next_cursor": next_cursor,
         },
         headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
+@app.get("/marketplace/catalog/{org_slug}/{tool_name}", tags=["Marketplace"])
+async def get_marketplace_catalog_detail(
+    request: Request,
+    org_slug: str,
+    tool_name: str,
+) -> JSONResponse:
+    """Public: return one marketplace catalog tool by qualified name parts."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    overrides = await get_tool_pricing_overrides()
+    pricing = await get_current_pricing()
+    default_cost = pricing.tool_call_cost if pricing else 0
+    tool = await get_marketplace_catalog_tool(tool_name, org_slug, overrides, default_cost)
+    if tool is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace tool not found.")
+
+    return JSONResponse(content={"tool": _serialize_marketplace_tool(tool)}, headers={"Cache-Control": "public, max-age=60"})
+
+
+@app.get("/marketplace/authors/{org_slug}", tags=["Marketplace"])
+async def get_marketplace_author_profile(
+    request: Request,
+    org_slug: str,
+    sort: str = "popularity",
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
+) -> JSONResponse:
+    """Public: return marketplace author metadata and published tools."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+    if sort not in _CATALOG_VALID_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid sort '{sort}'. Allowed: {', '.join(sorted(_CATALOG_VALID_SORTS))}",
+        )
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    summary = await get_marketplace_author_summary(org_slug)
+    if summary is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace author not found.")
+
+    from marketplace import _build_catalog_cursor
+
+    overrides = await get_tool_pricing_overrides()
+    pricing = await get_current_pricing()
+    default_cost = pricing.tool_call_cost if pricing else 0
+    catalog = await get_marketplace_catalog(
+        overrides,
+        default_cost,
+        org_slug=org_slug,
+        sort=sort,
+        limit=limit,
+        cursor=cursor,
+    )
+
+    next_cursor: str | None = None
+    if len(catalog) == limit:
+        next_cursor = _build_catalog_cursor(catalog[-1], sort)
+
+    return JSONResponse(
+        content={
+            **summary,
+            "tools": [_serialize_marketplace_tool(t) for t in catalog],
+            "next_cursor": next_cursor,
+        },
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
+@app.get("/marketplace/llms.txt", include_in_schema=False)
+async def marketplace_llms_txt(request: Request) -> Response:
+    """Public: LLM-friendly marketplace catalog index."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    from marketplace import _build_catalog_cursor
+
+    overrides = await get_tool_pricing_overrides()
+    pricing = await get_current_pricing()
+    default_cost = pricing.tool_call_cost if pricing else 0
+    base_url = str(request.base_url).rstrip("/")
+    lines = [
+        "# Teardrop Marketplace",
+        "",
+        "Public MCP tools available through Teardrop.",
+        "",
+        "| Tool | Author | Category | Health | Calls | Price | URL |",
+        "| --- | --- | --- | --- | ---: | ---: | --- |",
+    ]
+
+    cursor: str | None = None
+    seen = 0
+    while True:
+        catalog = await get_marketplace_catalog(
+            overrides,
+            default_cost,
+            sort="name",
+            limit=200,
+            cursor=cursor,
+        )
+        if not catalog:
+            break
+        for tool in catalog:
+            seen += 1
+            detail_url = f"{base_url}/marketplace/catalog/{tool.author_org_slug}/{tool.name}"
+            lines.append(
+                "| "
+                f"{_escape_llms_text(tool.qualified_name)} | "
+                f"{_escape_llms_text(tool.author_org_name)} | "
+                f"{_escape_llms_text(tool.category or 'uncategorized')} | "
+                f"{_escape_llms_text(tool.health_status)} | "
+                f"{tool.total_calls} | "
+                f"{_format_atomic_usdc(tool.cost_usdc)} | "
+                f"{detail_url} |"
+            )
+        if len(catalog) < 200 or seen >= 10_000:
+            break
+        cursor = _build_catalog_cursor(catalog[-1], "name")
+
+    return Response(
+        content="\n".join(lines) + "\n",
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
     )
 
 

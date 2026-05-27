@@ -64,6 +64,8 @@ Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
+- Public catalog responses include `category`, `total_calls`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
+- Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages at `GET /marketplace/catalog/{org_slug}/{tool_name}`, author profiles at `GET /marketplace/authors/{org_slug}`, and LLM-friendly discovery at `GET /marketplace/llms.txt`
 - Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`
 - Agent runs that call these tools incur their marketplace prices (in addition to token costs)
 - Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls
@@ -719,6 +721,27 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 
 `GET /billing/balance` returns atomic USDC fields. A `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`).
 
+### Marketplace
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/marketplace/catalog` | — | Public catalog with optional `org_slug`, `category`, `sort`, `limit`, and `cursor` query params |
+| `GET` | `/marketplace/catalog/{org_slug}/{tool_name}` | — | Public detail for one published catalog tool |
+| `GET` | `/marketplace/authors/{org_slug}` | — | Public author profile with aggregate calls and paginated tools |
+| `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and SEO surfaces |
+| `POST` | `/marketplace/author-config` | Bearer | Create or update author settlement wallet |
+| `GET` | `/marketplace/author-config` | Bearer | Get author settlement wallet config |
+| `GET` | `/marketplace/balance` | Bearer | Author earnings balance |
+| `GET` | `/marketplace/earnings` | Bearer | Author earnings history |
+| `GET` | `/marketplace/earnings/by-tool` | Bearer | Author earnings grouped by tool |
+| `POST` | `/marketplace/withdraw` | Bearer | Request an author payout |
+| `GET` | `/marketplace/withdrawals` | Bearer | Withdrawal history |
+| `POST` | `/marketplace/subscriptions` | Bearer | Subscribe to a community marketplace tool |
+| `GET` | `/marketplace/subscriptions` | Bearer | List active marketplace subscriptions |
+| `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unsubscribe from a marketplace tool |
+
+`GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, or `popularity`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls` is sourced from non-financial aggregate stats and is recorded only after successful paid tool calls, not from the immutable earnings ledger.
+
 ### Wallets
 
 #### User Wallets (SIWE-linked)
@@ -1023,6 +1046,7 @@ python -m migrations.runner
 | `038_org_llm_config_allow_openrouter.sql` | Expands provider CHECK constraint to allow `openrouter` in `org_llm_config` |
 | `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2 (superseded), Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
 | `040_v4_flash_pricing.sql` | Replaces DeepSeek V3.2 pricing with V4 Flash (same Teardrop rates, lower provider cost) |
+| `058_marketplace_dashboard_catalog.sql` | Public marketplace dashboard metadata: tool categories, aggregate call stats, catalog indexes, and platform category seeds |
 
 ### Neon (production)
 

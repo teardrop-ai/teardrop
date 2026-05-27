@@ -94,7 +94,7 @@ async def test_settle_billing_x402_success_records_earnings():
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     settle_mock.assert_awaited_once()
-    create_task_mock.assert_called_once()
+    assert create_task_mock.call_count == 2
     assert result is response
 
 

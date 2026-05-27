@@ -49,6 +49,7 @@ _ORG_TOOL_EVENT_INSERT_SQL = (
     " (id, org_id, tool_id, tool_name, event_type, actor_id, detail)"
     " VALUES ($1, $2, $3, $4, $5, $6, $7)"
 )
+_VALID_MARKETPLACE_CATEGORIES = {"", "defi", "search", "data", "communication", "utility"}
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ class OrgTool(BaseModel):
     is_active: bool
     publish_as_mcp: bool = False
     marketplace_description: str = ""
+    category: str = ""
     base_price_usdc: int = 0
     schema_hash: str = ""
     last_schema_changed_at: datetime | None = None
@@ -165,6 +167,7 @@ async def create_org_tool(
     output_schema: dict[str, Any] | None = None,
     publish_as_mcp: bool = False,
     marketplace_description: str = "",
+    category: str = "",
     base_price_usdc: int = 0,
 ) -> OrgTool:
     """Insert a new custom tool.  Raises on duplicate name or quota exceeded."""
@@ -196,6 +199,9 @@ async def create_org_tool(
                 "Cannot publish tool to marketplace — register a settlement wallet first via POST /marketplace/author-config"
             )
 
+    if category not in _VALID_MARKETPLACE_CATEGORIES:
+        raise ValueError("Invalid marketplace category")
+
     try:
         await pool.execute(
             "INSERT INTO org_tools"
@@ -203,9 +209,9 @@ async def create_org_tool(
             "  webhook_url, webhook_method,"
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
-            "  publish_as_mcp, marketplace_description, base_price_usdc,"
+            "  publish_as_mcp, marketplace_description, category, base_price_usdc,"
             "  created_at, updated_at, last_schema_changed_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12, $13, $14, $15, $15, $15)",
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12, $13, $14, $15, $16, $16, $16)",
             tool_id,
             org_id,
             name,
@@ -219,6 +225,7 @@ async def create_org_tool(
             timeout_seconds,
             publish_as_mcp,
             marketplace_description,
+            category,
             base_price_usdc,
             now,
         )
@@ -244,6 +251,7 @@ async def create_org_tool(
         is_active=True,
         publish_as_mcp=publish_as_mcp,
         marketplace_description=marketplace_description,
+        category=category,
         base_price_usdc=base_price_usdc,
         last_schema_changed_at=now,
         created_at=now,
@@ -273,6 +281,7 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         is_active=row["is_active"],
         publish_as_mcp=row.get("publish_as_mcp", False),
         marketplace_description=row.get("marketplace_description", ""),
+        category=row.get("category", ""),
         base_price_usdc=row.get("base_price_usdc", 0),
         schema_hash=row.get("schema_hash") or "",
         last_schema_changed_at=row.get("last_schema_changed_at"),
@@ -320,6 +329,7 @@ async def update_org_tool(
     is_active: bool | None = None,
     publish_as_mcp: bool | None = None,
     marketplace_description: str | None = None,
+    category: str | None = None,
     base_price_usdc: int | None = None,
 ) -> OrgTool | None:
     """Partial-update a tool.  Returns updated OrgTool or None if not found."""
@@ -368,6 +378,10 @@ async def update_org_tool(
         _add("publish_as_mcp", publish_as_mcp)
     if marketplace_description is not None:
         _add("marketplace_description", marketplace_description)
+    if category is not None:
+        if category not in _VALID_MARKETPLACE_CATEGORIES:
+            raise ValueError("Invalid marketplace category")
+        _add("category", category)
     if base_price_usdc is not None:
         _add("base_price_usdc", base_price_usdc)
 
@@ -393,7 +407,7 @@ async def update_org_tool(
     await _record_event(org_id, tool_id, row["name"], "updated", actor_id)
     await invalidate_org_tools_cache(org_id)
     # Invalidate marketplace/pricing caches if publication, visibility, or price changed.
-    if publish_as_mcp is not None or is_active is not None or base_price_usdc is not None:
+    if publish_as_mcp is not None or is_active is not None or base_price_usdc is not None or category is not None:
         await invalidate_marketplace_cache()
 
     # Clear circuit breaker state on FALSE → TRUE transition so the tool

@@ -15,11 +15,14 @@ from marketplace import (
     AuthorConfig,
     AuthorEarningByTool,
     MarketplaceTool,
+    _invalidate_platform_tool_cache,
     complete_withdrawal,
     get_author_balance,
     get_author_earnings_by_tool,
     list_pending_withdrawals,
     process_withdrawal,
+    record_marketplace_tool_call,
+    record_marketplace_tool_usage,
     record_tool_call_earnings,
     request_withdrawal,
     set_author_config,
@@ -164,6 +167,61 @@ class TestRecordToolCallEarnings:
         # platform_share = 10000 - 7000 = 3000
         assert args[6] == 7000  # author_share_usdc
         assert args[7] == 3000  # platform_share_usdc
+
+
+# ─── record_marketplace_tool_call ────────────────────────────────────────────
+
+
+class TestRecordMarketplaceToolCallStats:
+    @pytest.mark.anyio
+    async def test_records_public_stats_upsert(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await record_marketplace_tool_call(
+            "acme/my_tool",
+            tool_type="community",
+            author_org_id="author-org",
+        )
+
+        mock_pool.execute.assert_called_once()
+        args = mock_pool.execute.call_args.args
+        assert "marketplace_tool_call_stats" in args[0]
+        assert args[1] == "acme/my_tool"
+        assert args[2] == "community"
+        assert args[3] == "author-org"
+        assert args[4] == 1
+
+    @pytest.mark.anyio
+    async def test_record_usage_resolves_platform_tool(self, monkeypatch):
+        await _invalidate_platform_tool_cache()
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": 1000})
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        recorded = await record_marketplace_tool_usage("web_search")
+
+        assert recorded is True
+        args = mock_pool.execute.call_args.args
+        assert args[1] == "platform/web_search"
+        assert args[2] == "platform"
+
+    @pytest.mark.anyio
+    async def test_record_usage_resolves_community_tool(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"org_id": "author-org", "name": "my_tool"})
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        recorded = await record_marketplace_tool_usage("acme/my_tool")
+
+        assert recorded is True
+        args = mock_pool.execute.call_args.args
+        assert args[1] == "acme/my_tool"
+        assert args[2] == "community"
+        assert args[3] == "author-org"
 
 
 # ─── get_author_balance ───────────────────────────────────────────────────────
