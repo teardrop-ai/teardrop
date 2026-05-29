@@ -194,15 +194,13 @@ async def get_marketplace_catalog(
             key_ref = _add_param(int(cursor_sort_key))
             name_ref = _add_param(str(cursor_name))
             cursor_clause = (
-                f"WHERE (base_price_usdc > {key_ref} "
-                f"OR (base_price_usdc = {key_ref} AND qualified_name > {name_ref}))"
+                f"WHERE (base_price_usdc > {key_ref} OR (base_price_usdc = {key_ref} AND qualified_name > {name_ref}))"
             )
         elif sort == "price_desc":
             key_ref = _add_param(int(cursor_sort_key))
             name_ref = _add_param(str(cursor_name))
             cursor_clause = (
-                f"WHERE (base_price_usdc < {key_ref} "
-                f"OR (base_price_usdc = {key_ref} AND qualified_name > {name_ref}))"
+                f"WHERE (base_price_usdc < {key_ref} OR (base_price_usdc = {key_ref} AND qualified_name > {name_ref}))"
             )
         elif sort == "popularity":
             key_ref = _add_param(int(cursor_sort_key))
