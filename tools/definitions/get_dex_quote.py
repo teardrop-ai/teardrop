@@ -38,8 +38,8 @@ from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 from web3.exceptions import ContractLogicError
 
-from tools.definitions._rpc_semaphore import acquire_rpc_semaphore
-from tools.definitions._web3_helpers import get_web3, rpc_call
+from tools._internals._rpc_semaphore import acquire_rpc_semaphore
+from tools._internals._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)

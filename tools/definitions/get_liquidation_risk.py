@@ -24,7 +24,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._web3_helpers import get_web3, rpc_call
+from tools._internals._web3_helpers import get_web3, rpc_call
 from tools.definitions.get_defi_positions import (
     _AAVE_V3_POOL,
     _AAVE_V3_POOL_ABI,

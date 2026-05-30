@@ -282,7 +282,7 @@ async def test_rate_limit_enforced(api_client, monkeypatch):
     async def _denied(_key, _limit):
         return False, 0, 9999999999
 
-    monkeypatch.setattr("teardrop.main._check_rate_limit", _denied)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", _denied)
     with patch("tools.definitions.http_fetch.async_validate_url", new=AsyncMock(return_value=None)):
         resp = await api_client.post("/tools/test-webhook", json=_BODY)
     assert resp.status_code == 429

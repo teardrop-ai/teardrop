@@ -11,8 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Import the rate limiter internals from app module.
-import teardrop.main as app_module
+# _validate_production_config and settings remain in the app module.
+import teardrop.main as main_module
+
+# Import the rate limiter internals from their dedicated module.
+import teardrop.rate_limit as app_module
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -221,7 +224,7 @@ class TestOrgRateLimitKeying:
 
 class TestProductionConfigValidation:
     def _base_prod_settings(self):
-        s = MagicMock(wraps=app_module.settings)
+        s = MagicMock(wraps=main_module.settings)
         s.app_env = "production"
         s.jwt_client_secret = "prod-secret"
         s.cors_origins = "https://app.example.com"
@@ -250,11 +253,11 @@ class TestProductionConfigValidation:
         s = self._base_prod_settings()
         s.cors_origins = "*"
         with pytest.raises(RuntimeError, match="CORS_ORIGINS"):
-            app_module._validate_production_config(s)
+            main_module._validate_production_config(s)
 
     def test_restricted_cors_passes_in_production(self):
         s = self._base_prod_settings()
-        app_module._validate_production_config(s)
+        main_module._validate_production_config(s)
 
     async def test_org_mcp_key_format(self):
         """MCP org keys use 'mcp:org:{org_id}' format."""

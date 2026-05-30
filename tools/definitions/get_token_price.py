@@ -13,7 +13,7 @@ import aiohttp
 from pydantic import BaseModel, Field
 
 from teardrop.config import get_settings
-from tools.definitions._http_session import get_coingecko_session
+from tools._internals._http_session import get_coingecko_session
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)

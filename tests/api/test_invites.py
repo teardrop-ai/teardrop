@@ -12,7 +12,7 @@ from teardrop.users import OrgInvite, User
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 def _mock_invite(
@@ -56,8 +56,8 @@ def _mock_user(org_id: str = "org-1") -> User:
 @pytest.mark.anyio
 async def test_create_invite_happy_path(api_client, monkeypatch):
     invite = _mock_invite(email="newbie@example.com")
-    monkeypatch.setattr("teardrop.main.create_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.send_invite_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.send_invite_email", AsyncMock())
 
     resp = await api_client.post("/org/invite", json={"email": "newbie@example.com", "role": "user"})
 
@@ -77,8 +77,8 @@ async def test_create_invite_no_auth_401(anon_client):
 async def test_create_invite_no_email(api_client, monkeypatch):
     """Invite without a pre-filled email should still succeed."""
     invite = _mock_invite(email=None)
-    monkeypatch.setattr("teardrop.main.create_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.send_invite_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.send_invite_email", AsyncMock())
 
     resp = await api_client.post("/org/invite", json={"role": "user"})
 
@@ -92,10 +92,10 @@ async def test_create_invite_no_email(api_client, monkeypatch):
 async def test_accept_invite_happy_path(anon_client, monkeypatch):
     invite = _mock_invite(email=None)
     user = _mock_user()
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.create_user", AsyncMock(return_value=user))
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt-xyz"))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt-xyz"))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -110,7 +110,7 @@ async def test_accept_invite_happy_path(anon_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_accept_invite_invalid_token_410(anon_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=None))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -124,8 +124,8 @@ async def test_accept_invite_invalid_token_410(anon_client, monkeypatch):
 async def test_accept_invite_race_condition_410(anon_client, monkeypatch):
     """If get_org_invite passes but consume_org_invite fails (race), return 410."""
     invite = _mock_invite(email=None)
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=False))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -139,7 +139,7 @@ async def test_accept_invite_race_condition_410(anon_client, monkeypatch):
 async def test_accept_invite_email_mismatch_422(anon_client, monkeypatch):
     """Invite with pre-filled email must reject a different accepting email."""
     invite = _mock_invite(email="specific@example.com")
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -154,10 +154,10 @@ async def test_accept_invite_email_match_case_insensitive(anon_client, monkeypat
     """Email match must be case-insensitive."""
     invite = _mock_invite(email="Specific@Example.com")
     user = _mock_user()
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.create_user", AsyncMock(return_value=user))
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -176,10 +176,10 @@ async def test_accept_invite_no_email_restriction_any_email_ok(anon_client, monk
     """Open invite (no email) must accept any email address."""
     invite = _mock_invite(email=None)
     user = _mock_user()
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.create_user", AsyncMock(return_value=user))
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -198,9 +198,9 @@ async def test_accept_invite_duplicate_email_409(anon_client, monkeypatch):
     import asyncpg
 
     invite = _mock_invite(email=None)
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.create_user", AsyncMock(side_effect=asyncpg.UniqueViolationError()))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(side_effect=asyncpg.UniqueViolationError()))
 
     resp = await anon_client.post(
         "/register/invite",
@@ -215,10 +215,10 @@ async def test_accept_invite_invited_user_is_verified(anon_client, monkeypatch):
     """User created via invite must have is_verified=True (invite is the trust signal)."""
     invite = _mock_invite(email=None)
     create_user_mock = AsyncMock(return_value=_mock_user())
-    monkeypatch.setattr("teardrop.main.get_org_invite", AsyncMock(return_value=invite))
-    monkeypatch.setattr("teardrop.main.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.create_user", create_user_mock)
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
+    monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", create_user_mock)
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     await anon_client.post(
         "/register/invite",

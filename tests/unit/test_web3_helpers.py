@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tools.definitions import _web3_helpers as web3_helpers
+from tools._internals import _web3_helpers as web3_helpers
 
 
 @pytest.mark.asyncio

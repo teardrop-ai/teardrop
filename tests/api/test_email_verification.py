@@ -12,7 +12,7 @@ from teardrop.users import User
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 def _mock_user(is_verified: bool = False) -> User:
@@ -34,8 +34,8 @@ def _mock_user(is_verified: bool = False) -> User:
 
 @pytest.mark.anyio
 async def test_verify_email_happy_path(anon_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.consume_verification_token", AsyncMock(return_value="user-123"))
-    monkeypatch.setattr("teardrop.main.mark_user_verified", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value="user-123"))
+    monkeypatch.setattr("teardrop.routers.auth.mark_user_verified", AsyncMock())
 
     resp = await anon_client.get("/auth/verify-email?token=valid-token")
 
@@ -45,7 +45,7 @@ async def test_verify_email_happy_path(anon_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_verify_email_invalid_token(anon_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.consume_verification_token", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value=None))
 
     resp = await anon_client.get("/auth/verify-email?token=bad-token")
 
@@ -55,8 +55,8 @@ async def test_verify_email_invalid_token(anon_client, monkeypatch):
 @pytest.mark.anyio
 async def test_verify_email_calls_mark_verified(anon_client, monkeypatch):
     mark_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.main.consume_verification_token", AsyncMock(return_value="user-abc"))
-    monkeypatch.setattr("teardrop.main.mark_user_verified", mark_mock)
+    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value="user-abc"))
+    monkeypatch.setattr("teardrop.routers.auth.mark_user_verified", mark_mock)
 
     await anon_client.get("/auth/verify-email?token=tok")
 
@@ -69,10 +69,10 @@ async def test_verify_email_calls_mark_verified(anon_client, monkeypatch):
 @pytest.mark.anyio
 async def test_resend_verification_unverified_user(anon_client, monkeypatch):
     user = _mock_user(is_verified=False)
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=user))
     create_vt = AsyncMock(return_value="tok")
-    monkeypatch.setattr("teardrop.main.create_verification_token", create_vt)
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", create_vt)
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
 
     resp = await anon_client.post("/auth/resend-verification", json={"email": "user@example.com"})
 
@@ -84,10 +84,10 @@ async def test_resend_verification_unverified_user(anon_client, monkeypatch):
 async def test_resend_verification_already_verified_is_noop(anon_client, monkeypatch):
     """Verified users: resend should silently do nothing but still return 200."""
     user = _mock_user(is_verified=True)
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=user))
     create_vt = AsyncMock(return_value="tok")
-    monkeypatch.setattr("teardrop.main.create_verification_token", create_vt)
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", create_vt)
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
 
     resp = await anon_client.post("/auth/resend-verification", json={"email": "user@example.com"})
 
@@ -98,7 +98,7 @@ async def test_resend_verification_already_verified_is_noop(anon_client, monkeyp
 @pytest.mark.anyio
 async def test_resend_verification_unknown_email_no_oracle(anon_client, monkeypatch):
     """Unknown email must still return 200 — no disclosure of account existence."""
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=None))
 
     resp = await anon_client.post("/auth/resend-verification", json={"email": "ghost@example.com"})
 
@@ -115,13 +115,13 @@ async def test_token_gate_blocks_unverified_user(anon_client, test_settings, mon
 
     monkeypatch.setenv("REQUIRE_EMAIL_VERIFICATION", "true")
     _config.get_settings.cache_clear()
-    import teardrop.main as _app
+    import teardrop.routers.auth as _app
 
     monkeypatch.setattr(_app, "settings", _config.get_settings())
 
     user = _mock_user(is_verified=False)
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=user))
-    monkeypatch.setattr("teardrop.main.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.verify_secret", lambda *a, **kw: True)
 
     resp = await anon_client.post("/token", json={"email": "user@example.com", "secret": "correctpass"})
     assert resp.status_code == 403
@@ -134,14 +134,14 @@ async def test_token_gate_passes_verified_user(anon_client, test_settings, monke
 
     monkeypatch.setenv("REQUIRE_EMAIL_VERIFICATION", "true")
     _config.get_settings.cache_clear()
-    import teardrop.main as _app
+    import teardrop.routers.auth as _app
 
     monkeypatch.setattr(_app, "settings", _config.get_settings())
 
     user = _mock_user(is_verified=True)
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=user))
-    monkeypatch.setattr("teardrop.main.verify_secret", lambda *a, **kw: True)
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     resp = await anon_client.post("/token", json={"email": "user@example.com", "secret": "correctpass"})
     assert resp.status_code == 200

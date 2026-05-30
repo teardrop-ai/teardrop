@@ -166,7 +166,7 @@ class TestInputValidation:
         # otherwise we bypass the semaphore inside _web3_helpers.rpc_call.
 
         # Mock acquire_rpc_semaphore at its actual source
-        monkeypatch.setattr("tools.definitions._web3_helpers.acquire_rpc_semaphore", lambda: _DummySem())
+        monkeypatch.setattr("tools._internals._web3_helpers.acquire_rpc_semaphore", lambda: _DummySem())
 
         await get_liquidation_risk(wallet_addresses=[_WALLET_A], chain_id=1)
         assert call_count >= 1

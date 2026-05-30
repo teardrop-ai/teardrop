@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from web3 import AsyncWeb3, Web3
 
-from tools.definitions._web3_helpers import get_web3
+from tools._internals._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
 # ─── TTL cache (per-chain) ────────────────────────────────────────────────────

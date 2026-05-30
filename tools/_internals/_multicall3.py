@@ -31,7 +31,7 @@ from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
 from web3 import AsyncWeb3
 
-from tools.definitions._web3_helpers import rpc_call
+from tools._internals._web3_helpers import rpc_call
 
 logger = logging.getLogger(__name__)
 

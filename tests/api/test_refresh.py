@@ -12,7 +12,7 @@ from teardrop.users import RefreshTokenRecord
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 def _mock_record(auth_method: str = "email") -> RefreshTokenRecord:
@@ -40,7 +40,7 @@ def _mock_record(auth_method: str = "email") -> RefreshTokenRecord:
 async def test_refresh_happy_path(anon_client, test_settings, monkeypatch):
     """Valid refresh token issues new access token + new (rotated) refresh token."""
     record = _mock_record()
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", AsyncMock(return_value=(record, "new-rt")))
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", AsyncMock(return_value=(record, "new-rt")))
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "old-rt"})
 
@@ -54,8 +54,8 @@ async def test_refresh_happy_path(anon_client, test_settings, monkeypatch):
 @pytest.mark.anyio
 async def test_refresh_invalid_token_401(anon_client, monkeypatch):
     """Token unknown / truly expired and outside replay window → 401."""
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.main.get_refresh_token_successor", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.get_refresh_token_successor", AsyncMock(return_value=None))
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "bad-token"})
 
@@ -67,7 +67,7 @@ async def test_refresh_rotation_preserves_claims(anon_client, test_settings, mon
     """rotate_refresh_token is called with the correct expire_days from settings."""
     record = _mock_record()
     rotate_mock = AsyncMock(return_value=(record, "new-rt"))
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", rotate_mock)
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", rotate_mock)
 
     await anon_client.post("/auth/refresh", json={"refresh_token": "old-rt"})
 
@@ -81,7 +81,7 @@ async def test_refresh_rotation_preserves_claims(anon_client, test_settings, mon
 async def test_refresh_siwe_token_happy_path(anon_client, test_settings, monkeypatch):
     """Refresh token issued from a SIWE session must work the same way."""
     record = _mock_record(auth_method="siwe")
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", AsyncMock(return_value=(record, "new-siwe-rt")))
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", AsyncMock(return_value=(record, "new-siwe-rt")))
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "siwe-old-rt"})
 
@@ -111,8 +111,8 @@ async def test_refresh_idempotent_replay_within_window(anon_client, test_setting
         created_at=datetime.now(timezone.utc),
         expires_at=datetime.now(timezone.utc) + timedelta(days=30),
     )
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.main.get_refresh_token_successor", AsyncMock(return_value=successor))
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.get_refresh_token_successor", AsyncMock(return_value=successor))
     monkeypatch.setenv("REFRESH_TOKEN_IDEMPOTENCY_WINDOW_SECONDS", "60")
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "old-rt"})
@@ -145,8 +145,8 @@ async def test_refresh_replay_window_expired_returns_401(anon_client, test_setti
         created_at=datetime.now(timezone.utc) - timedelta(seconds=61),
         expires_at=datetime.now(timezone.utc) + timedelta(days=29),
     )
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.main.get_refresh_token_successor", AsyncMock(return_value=successor))
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.auth.get_refresh_token_successor", AsyncMock(return_value=successor))
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "old-rt"})
 
@@ -163,8 +163,8 @@ async def test_refresh_rotate_called_before_successor_lookup(anon_client, test_s
     record = _mock_record()
     rotate_mock = AsyncMock(return_value=(record, "new-rt"))
     successor_mock = AsyncMock(return_value=None)
-    monkeypatch.setattr("teardrop.main.rotate_refresh_token", rotate_mock)
-    monkeypatch.setattr("teardrop.main.get_refresh_token_successor", successor_mock)
+    monkeypatch.setattr("teardrop.routers.auth.rotate_refresh_token", rotate_mock)
+    monkeypatch.setattr("teardrop.routers.auth.get_refresh_token_successor", successor_mock)
 
     resp = await anon_client.post("/auth/refresh", json={"refresh_token": "old-rt"})
 
@@ -178,7 +178,7 @@ async def test_refresh_rotate_called_before_successor_lookup(anon_client, test_s
 @pytest.mark.anyio
 async def test_logout_revokes_token(api_client, monkeypatch):
     revoke_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.main.revoke_refresh_token", revoke_mock)
+    monkeypatch.setattr("teardrop.routers.auth.revoke_refresh_token", revoke_mock)
 
     resp = await api_client.post("/auth/logout", json={"refresh_token": "some-rt"})
 
@@ -213,9 +213,9 @@ async def test_token_email_flow_returns_refresh_token(anon_client, test_settings
         is_verified=True,
         created_at=datetime.now(timezone.utc),
     )
-    monkeypatch.setattr("teardrop.main.get_user_by_email", AsyncMock(return_value=mock_user))
-    monkeypatch.setattr("teardrop.main.verify_secret", lambda *a, **kw: True)
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt-from-token"))
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=mock_user))
+    monkeypatch.setattr("teardrop.routers.auth.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt-from-token"))
 
     resp = await anon_client.post("/token", json={"email": "alice@example.com", "secret": "correctpass"})
 

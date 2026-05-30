@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from tools.definitions._rpc_semaphore import (
+from tools._internals._rpc_semaphore import (
     acquire_chain_semaphore,
     acquire_rpc_semaphore,
     get_chain_cooldown_wait,
@@ -93,7 +93,7 @@ async def test_acquire_chain_semaphore_honors_shared_cooldown(monkeypatch):
     async def _fake_sleep(seconds: float):
         slept_for.append(seconds)
 
-    monkeypatch.setattr("tools.definitions._rpc_semaphore.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("tools._internals._rpc_semaphore.asyncio.sleep", _fake_sleep)
 
     async with acquire_chain_semaphore(8453):
         pass

@@ -54,7 +54,7 @@ def test_settings(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def initialize_rpc_semaphore(test_settings):
     """Automatically initialize the RPC semaphore for all tests."""
-    from tools.definitions._rpc_semaphore import init_rpc_semaphore
+    from tools._internals._rpc_semaphore import init_rpc_semaphore
 
     init_rpc_semaphore(test_settings.agent_rpc_semaphore_limit)
 

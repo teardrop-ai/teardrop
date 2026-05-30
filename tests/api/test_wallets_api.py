@@ -22,7 +22,7 @@ _WALLET = Wallet(
 
 @pytest.mark.anyio
 async def test_list_wallets_empty(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_wallets_by_user", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.wallets.get_wallets_by_user", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/wallets/me")
     assert resp.status_code == 200
@@ -31,7 +31,7 @@ async def test_list_wallets_empty(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_wallets_returns_wallets(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_wallets_by_user", AsyncMock(return_value=[_WALLET]))
+    monkeypatch.setattr("teardrop.routers.wallets.get_wallets_by_user", AsyncMock(return_value=[_WALLET]))
 
     resp = await api_client.get("/wallets/me")
     assert resp.status_code == 200
@@ -48,7 +48,7 @@ async def test_list_wallets_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_delete_wallet_success(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_wallet", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.wallets.delete_wallet", AsyncMock(return_value=True))
 
     resp = await api_client.delete(f"/wallets/{_WALLET.id}")
     assert resp.status_code == 200
@@ -57,7 +57,7 @@ async def test_delete_wallet_success(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_wallet_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_wallet", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.wallets.delete_wallet", AsyncMock(return_value=False))
 
     resp = await api_client.delete("/wallets/nonexistent-id")
     assert resp.status_code == 404
@@ -115,7 +115,7 @@ async def test_link_wallet_expired_nonce_returns_401(api_client, monkeypatch):
             return mock_msg
 
     monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
-    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=False))
 
     resp = await api_client.post(
         "/wallets/link",
@@ -142,7 +142,7 @@ async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch
             return mock_msg
 
     monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
-    monkeypatch.setattr("teardrop.main.consume_nonce", consume_mock)
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", consume_mock)
 
     resp = await api_client.post(
         "/wallets/link",
@@ -169,8 +169,8 @@ async def test_link_wallet_already_linked_returns_409(api_client, monkeypatch):
             return mock_msg
 
     monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
-    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.get_wallet_by_address", AsyncMock(return_value=_WALLET))
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.wallets.get_wallet_by_address", AsyncMock(return_value=_WALLET))
 
     resp = await api_client.post(
         "/wallets/link",
@@ -205,9 +205,9 @@ async def test_link_wallet_success_returns_201(api_client, monkeypatch):
             return mock_msg
 
     monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
-    monkeypatch.setattr("teardrop.main.consume_nonce", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.get_wallet_by_address", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.main.create_wallet", AsyncMock(return_value=new_wallet))
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.wallets.get_wallet_by_address", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.wallets.create_wallet", AsyncMock(return_value=new_wallet))
 
     resp = await api_client.post(
         "/wallets/link",

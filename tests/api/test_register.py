@@ -12,7 +12,7 @@ from teardrop.users import Org, User
 
 @pytest.fixture(autouse=True)
 def _bypass_rate_limit(monkeypatch):
-    monkeypatch.setattr("teardrop.main._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
 
 def _mock_org(org_id: str = "org-new") -> Org:
@@ -36,10 +36,10 @@ def _mock_user(org_id: str = "org-new") -> User:
 @pytest.mark.anyio
 async def test_register_happy_path(anon_client, monkeypatch):
     org, user = _mock_org(), _mock_user()
-    monkeypatch.setattr("teardrop.main.register_org_and_user", AsyncMock(return_value=(org, user)))
-    monkeypatch.setattr("teardrop.main.create_verification_token", AsyncMock(return_value="tok123"))
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt-abc"))
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", AsyncMock(return_value=(org, user)))
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", AsyncMock(return_value="tok123"))
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt-abc"))
 
     resp = await anon_client.post(
         "/register",
@@ -57,11 +57,11 @@ async def test_register_happy_path(anon_client, monkeypatch):
 async def test_register_issues_verification_token(anon_client, monkeypatch):
     """register() must call create_verification_token to fire the verification flow."""
     org, user = _mock_org(), _mock_user()
-    monkeypatch.setattr("teardrop.main.register_org_and_user", AsyncMock(return_value=(org, user)))
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", AsyncMock(return_value=(org, user)))
     create_vt = AsyncMock(return_value="tok-xyz")
-    monkeypatch.setattr("teardrop.main.create_verification_token", create_vt)
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", create_vt)
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     await anon_client.post(
         "/register",
@@ -76,7 +76,7 @@ async def test_register_duplicate_raises_409(anon_client, monkeypatch):
     import asyncpg
 
     monkeypatch.setattr(
-        "teardrop.main.register_org_and_user",
+        "teardrop.routers.auth.register_org_and_user",
         AsyncMock(side_effect=asyncpg.UniqueViolationError()),
     )
 
@@ -113,10 +113,10 @@ async def test_register_missing_org_name_422(anon_client):
 async def test_register_no_auth_required(anon_client, monkeypatch):
     """Public endpoint — must not return 401 even without a Bearer token."""
     org, user = _mock_org(), _mock_user()
-    monkeypatch.setattr("teardrop.main.register_org_and_user", AsyncMock(return_value=(org, user)))
-    monkeypatch.setattr("teardrop.main.create_verification_token", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", AsyncMock(return_value=(org, user)))
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     resp = await anon_client.post(
         "/register",
@@ -147,10 +147,10 @@ async def test_register_email_normalized_to_lowercase(anon_client, monkeypatch):
         captured["email"] = email
         return org, user
 
-    monkeypatch.setattr("teardrop.main.register_org_and_user", fake_register)
-    monkeypatch.setattr("teardrop.main.create_verification_token", AsyncMock(return_value="tok"))
-    monkeypatch.setattr("teardrop.main.send_verification_email", AsyncMock())
-    monkeypatch.setattr("teardrop.main.create_refresh_token", AsyncMock(return_value="rt"))
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", fake_register)
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
 
     resp = await anon_client.post(
         "/register",
@@ -179,7 +179,7 @@ async def test_register_per_email_rate_limit_429(anon_client, monkeypatch):
             return (False, 0, 0)
         return (True, 59, 0)
 
-    monkeypatch.setattr("teardrop.main._check_rate_limit", _rate_limit)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", _rate_limit)
 
     resp = await anon_client.post(
         "/register",

@@ -61,7 +61,7 @@ async def test_provision_agent_wallet(api_client, monkeypatch):
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.create_agent_wallet", AsyncMock(return_value=_WALLET))
+    monkeypatch.setattr("teardrop.routers.wallets.create_agent_wallet", AsyncMock(return_value=_WALLET))
 
     resp = await api_client.post("/wallets/agent")
     assert resp.status_code == 201
@@ -84,7 +84,7 @@ async def test_get_agent_wallet(api_client, monkeypatch):
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_agent_wallet", AsyncMock(return_value=_WALLET))
+    monkeypatch.setattr("teardrop.routers.wallets.get_agent_wallet", AsyncMock(return_value=_WALLET))
 
     resp = await api_client.get("/wallets/agent")
     assert resp.status_code == 200
@@ -103,7 +103,7 @@ async def test_get_agent_wallet_not_found(api_client, monkeypatch):
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_agent_wallet", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.wallets.get_agent_wallet", AsyncMock(return_value=None))
 
     resp = await api_client.get("/wallets/agent")
     assert resp.status_code == 404
@@ -123,7 +123,7 @@ async def test_deactivate_agent_wallet_admin(admin_api_client, monkeypatch):
     monkeypatch.setenv("CDP_WALLET_SECRET", "w")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.deactivate_agent_wallet", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.wallets.deactivate_agent_wallet", AsyncMock(return_value=True))
 
     resp = await admin_api_client.delete("/wallets/agent")
     assert resp.status_code == 200

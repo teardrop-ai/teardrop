@@ -18,8 +18,8 @@ from eth_abi import encode as abi_encode
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._multicall3 import multicall3_batch
-from tools.definitions._web3_helpers import get_web3, rpc_call
+from tools._internals._multicall3 import multicall3_batch
+from tools._internals._web3_helpers import get_web3, rpc_call
 from tools.definitions.get_defi_positions import (
     _AAVE_V3_DATA_PROVIDER,
     _AAVE_V3_TRACKED_RESERVES,

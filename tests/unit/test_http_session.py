@@ -1,11 +1,11 @@
-"""Unit tests for tools/definitions/_http_session.py."""
+"""Unit tests for tools/_internals/_http_session.py."""
 
 from __future__ import annotations
 
 
 class TestHttpSession:
     async def test_coingecko_session_uses_keepalive_connector(self, test_settings, monkeypatch):
-        from tools.definitions import _http_session
+        from tools._internals import _http_session
 
         monkeypatch.setattr(_http_session, "_coingecko_session", None)
         monkeypatch.setattr(_http_session, "_defillama_session", None)
@@ -19,7 +19,7 @@ class TestHttpSession:
             await _http_session.close_http_sessions()
 
     async def test_defillama_session_same_instance(self, test_settings, monkeypatch):
-        from tools.definitions import _http_session
+        from tools._internals import _http_session
 
         monkeypatch.setattr(_http_session, "_coingecko_session", None)
         monkeypatch.setattr(_http_session, "_defillama_session", None)
@@ -35,7 +35,7 @@ class TestHttpSession:
             await _http_session.close_http_sessions()
 
     async def test_close_http_sessions_closes_defillama(self, test_settings, monkeypatch):
-        from tools.definitions import _http_session
+        from tools._internals import _http_session
 
         monkeypatch.setattr(_http_session, "_coingecko_session", None)
         monkeypatch.setattr(_http_session, "_defillama_session", None)

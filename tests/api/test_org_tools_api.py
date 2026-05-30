@@ -49,9 +49,9 @@ _CREATE_BODY = {
 
 @pytest.mark.anyio
 async def test_create_tool_success(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.create_org_tool", AsyncMock(return_value=_TOOL))
-    monkeypatch.setattr("teardrop.main.invalidate_org_tools_cache", AsyncMock())
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.create_org_tool", AsyncMock(return_value=_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
 
     resp = await api_client.post("/tools", json=_CREATE_BODY)
     assert resp.status_code == 201
@@ -68,7 +68,7 @@ async def test_create_tool_unauthenticated(anon_client):
 
 @pytest.mark.anyio
 async def test_create_tool_name_collision_global(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=MagicMock()))  # non-None
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=MagicMock()))  # non-None
 
     resp = await api_client.post("/tools", json=_CREATE_BODY)
     assert resp.status_code == 409
@@ -77,9 +77,9 @@ async def test_create_tool_name_collision_global(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_create_tool_name_collision_org(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
-        "teardrop.main.create_org_tool",
+        "teardrop.routers.org.tools.create_org_tool",
         AsyncMock(side_effect=ValueError("Tool 'my_tool' already exists")),
     )
 
@@ -89,7 +89,7 @@ async def test_create_tool_name_collision_org(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_create_tool_invalid_schema(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
 
     # jsonschema.Draft7Validator.check_schema may or may not reject this;
     # test with clearly invalid schema
@@ -100,7 +100,7 @@ async def test_create_tool_invalid_schema(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_create_tool_rejects_post_method(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
 
     body = {**_CREATE_BODY, "webhook_method": "POST"}
     resp = await api_client.post("/tools", json=body)
@@ -109,7 +109,7 @@ async def test_create_tool_rejects_post_method(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_create_tool_ssrf_url(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
 
     body = {**_CREATE_BODY, "webhook_url": "http://169.254.169.254/metadata"}
     resp = await api_client.post("/tools", json=body)
@@ -122,7 +122,7 @@ async def test_create_tool_ssrf_url(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_tools_empty(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.org.tools.list_org_tools", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/tools")
     assert resp.status_code == 200
@@ -131,7 +131,7 @@ async def test_list_tools_empty(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_tools_returns_own_org(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[_TOOL]))
+    monkeypatch.setattr("teardrop.routers.org.tools.list_org_tools", AsyncMock(return_value=[_TOOL]))
 
     resp = await api_client.get("/tools")
     assert resp.status_code == 200
@@ -145,7 +145,7 @@ async def test_list_tools_returns_own_org(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_tool_by_id(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_org_tool", AsyncMock(return_value=_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=_TOOL))
 
     resp = await api_client.get("/tools/tool-abc")
     assert resp.status_code == 200
@@ -154,7 +154,7 @@ async def test_get_tool_by_id(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_tool_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_org_tool", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=None))
 
     resp = await api_client.get("/tools/nonexistent")
     assert resp.status_code == 404
@@ -166,8 +166,8 @@ async def test_get_tool_not_found(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_update_tool(api_client, monkeypatch):
     updated = OrgTool(**{**_TOOL.model_dump(), "description": "Updated desc"})
-    monkeypatch.setattr("teardrop.main.update_org_tool", AsyncMock(return_value=updated))
-    monkeypatch.setattr("teardrop.main.invalidate_org_tools_cache", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", AsyncMock(return_value=updated))
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
 
     resp = await api_client.patch("/tools/tool-abc", json={"description": "Updated desc"})
     assert resp.status_code == 200
@@ -176,7 +176,7 @@ async def test_update_tool(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_update_tool_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.update_org_tool", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", AsyncMock(return_value=None))
 
     resp = await api_client.patch("/tools/bad-id", json={"description": "new"})
     assert resp.status_code == 404
@@ -193,8 +193,8 @@ async def test_update_tool_no_fields(api_client):
 
 @pytest.mark.anyio
 async def test_delete_tool(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_org_tool", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.main.invalidate_org_tools_cache", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.org.tools.delete_org_tool", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
 
     resp = await api_client.delete("/tools/tool-abc")
     assert resp.status_code == 200
@@ -203,7 +203,7 @@ async def test_delete_tool(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_tool_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_org_tool", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.org.tools.delete_org_tool", AsyncMock(return_value=False))
 
     resp = await api_client.delete("/tools/bad-id")
     assert resp.status_code == 404
@@ -214,7 +214,7 @@ async def test_delete_tool_not_found(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_admin_list_tools(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[_TOOL]))
+    monkeypatch.setattr("teardrop.routers.admin.list_org_tools", AsyncMock(return_value=[_TOOL]))
 
     resp = await admin_api_client.get("/admin/tools/test-org-id")
     assert resp.status_code == 200
@@ -224,7 +224,7 @@ async def test_admin_list_tools(admin_api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_admin_list_tools_requires_admin(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.admin.list_org_tools", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/admin/tools/test-org-id")
     assert resp.status_code == 403
@@ -236,9 +236,9 @@ async def test_admin_list_tools_requires_admin(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_create_tool_publish_requires_author_config(api_client, monkeypatch):
     """POST /tools with publish_as_mcp=true must reject when no settlement wallet is registered."""
-    monkeypatch.setattr("teardrop.main.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
-        "teardrop.main.create_org_tool",
+        "teardrop.routers.org.tools.create_org_tool",
         AsyncMock(
             side_effect=ValueError(
                 "Cannot publish tool to marketplace — register a settlement wallet first via POST /marketplace/author-config"

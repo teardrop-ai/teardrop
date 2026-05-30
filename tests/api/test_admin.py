@@ -13,7 +13,7 @@ from teardrop.users import Org, User
 @pytest.mark.anyio
 async def test_admin_create_org(admin_api_client, monkeypatch):
     mock_org = Org(id="org-new", name="New Org", created_at=datetime.now(timezone.utc))
-    monkeypatch.setattr("teardrop.main.create_org", AsyncMock(return_value=mock_org))
+    monkeypatch.setattr("teardrop.routers.admin.create_org", AsyncMock(return_value=mock_org))
 
     resp = await admin_api_client.post("/admin/orgs", json={"name": "New Org"})
     assert resp.status_code == 201
@@ -47,7 +47,7 @@ async def test_admin_create_user(admin_api_client, monkeypatch):
         is_active=True,
         created_at=datetime.now(timezone.utc),
     )
-    monkeypatch.setattr("teardrop.main.create_user", AsyncMock(return_value=mock_user))
+    monkeypatch.setattr("teardrop.routers.admin.create_user", AsyncMock(return_value=mock_user))
 
     resp = await admin_api_client.post(
         "/admin/users",

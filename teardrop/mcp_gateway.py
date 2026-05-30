@@ -165,7 +165,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if not mcp_org_id:
             return None
 
-        from teardrop.main import _check_rate_limit  # lazy import — avoids circular dep at module level
+        from teardrop.rate_limit import _check_rate_limit  # lazy import — avoids circular dep at module level
 
         org_allowed, org_remaining, org_reset_at = await _check_rate_limit(
             f"mcp:org:{mcp_org_id}", settings.rate_limit_org_mcp_rpm

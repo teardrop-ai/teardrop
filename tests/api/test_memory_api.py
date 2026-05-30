@@ -26,8 +26,8 @@ _ENTRY = MemoryEntry(
 
 @pytest.mark.anyio
 async def test_list_memories(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_memories", AsyncMock(return_value=[_ENTRY]))
-    monkeypatch.setattr("teardrop.main.count_memories", AsyncMock(return_value=1))
+    monkeypatch.setattr("teardrop.routers.org.memory.list_memories", AsyncMock(return_value=[_ENTRY]))
+    monkeypatch.setattr("teardrop.routers.org.memory.count_memories", AsyncMock(return_value=1))
 
     resp = await api_client.get("/memories")
     assert resp.status_code == 200
@@ -40,8 +40,8 @@ async def test_list_memories(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_memories_with_cursor(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_memories", AsyncMock(return_value=[]))
-    monkeypatch.setattr("teardrop.main.count_memories", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.routers.org.memory.list_memories", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.org.memory.count_memories", AsyncMock(return_value=0))
 
     resp = await api_client.get("/memories", params={"cursor": _NOW.isoformat()})
     assert resp.status_code == 200
@@ -59,7 +59,7 @@ async def test_list_memories_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_store_memory(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.store_memory", AsyncMock(return_value=_ENTRY))
+    monkeypatch.setattr("teardrop.routers.org.memory.store_memory", AsyncMock(return_value=_ENTRY))
 
     resp = await api_client.post("/memories", json={"content": "user prefers dark mode"})
     assert resp.status_code == 201
@@ -69,7 +69,7 @@ async def test_store_memory(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_store_memory_returns_422_on_limit(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.store_memory", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.memory.store_memory", AsyncMock(return_value=None))
 
     resp = await api_client.post("/memories", json={"content": "some fact"})
     assert resp.status_code == 422
@@ -92,7 +92,7 @@ async def test_store_memory_validates_content(api_client):
 
 @pytest.mark.anyio
 async def test_delete_memory(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_memory", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.org.memory.delete_memory", AsyncMock(return_value=True))
 
     resp = await api_client.delete("/memories/mem-1")
     assert resp.status_code == 200
@@ -101,7 +101,7 @@ async def test_delete_memory(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_memory_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_memory", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.org.memory.delete_memory", AsyncMock(return_value=False))
 
     resp = await api_client.delete("/memories/mem-999")
     assert resp.status_code == 404
@@ -118,8 +118,8 @@ async def test_delete_memory_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_admin_list_org_memories(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_memories", AsyncMock(return_value=[_ENTRY]))
-    monkeypatch.setattr("teardrop.main.count_memories", AsyncMock(return_value=1))
+    monkeypatch.setattr("teardrop.routers.admin.list_memories", AsyncMock(return_value=[_ENTRY]))
+    monkeypatch.setattr("teardrop.routers.admin.count_memories", AsyncMock(return_value=1))
 
     resp = await admin_api_client.get("/admin/memories/org/test-org-id")
     assert resp.status_code == 200
@@ -139,7 +139,7 @@ async def test_admin_list_org_memories_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_admin_purge_org_memories(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_all_org_memories", AsyncMock(return_value=5))
+    monkeypatch.setattr("teardrop.routers.admin.delete_all_org_memories", AsyncMock(return_value=5))
 
     resp = await admin_api_client.delete("/admin/memories/org/test-org-id")
     assert resp.status_code == 200

@@ -36,7 +36,7 @@ def _sample_server(**overrides: object) -> OrgMcpServer:
 @pytest.mark.anyio
 async def test_create_mcp_server(api_client, monkeypatch):
     mock_create = AsyncMock(return_value=_sample_server())
-    monkeypatch.setattr("teardrop.main.create_org_mcp_server", mock_create)
+    monkeypatch.setattr("teardrop.routers.org.mcp.create_org_mcp_server", mock_create)
 
     resp = await api_client.post(
         "/mcp/servers",
@@ -51,7 +51,7 @@ async def test_create_mcp_server(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_create_mcp_server_with_auth(api_client, monkeypatch):
     mock_create = AsyncMock(return_value=_sample_server(auth_type="bearer", has_auth=True))
-    monkeypatch.setattr("teardrop.main.create_org_mcp_server", mock_create)
+    monkeypatch.setattr("teardrop.routers.org.mcp.create_org_mcp_server", mock_create)
 
     resp = await api_client.post(
         "/mcp/servers",
@@ -96,7 +96,7 @@ async def test_create_mcp_server_auth_type_no_token(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_create_mcp_server_value_error(api_client, monkeypatch):
     mock_create = AsyncMock(side_effect=ValueError("MCP server limit reached"))
-    monkeypatch.setattr("teardrop.main.create_org_mcp_server", mock_create)
+    monkeypatch.setattr("teardrop.routers.org.mcp.create_org_mcp_server", mock_create)
 
     resp = await api_client.post(
         "/mcp/servers",
@@ -121,7 +121,7 @@ async def test_create_mcp_server_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_list_mcp_servers(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.list_org_mcp_servers",
+        "teardrop.routers.org.mcp.list_org_mcp_servers",
         AsyncMock(return_value=[_sample_server()]),
     )
 
@@ -134,7 +134,7 @@ async def test_list_mcp_servers(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_mcp_servers_empty(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.list_org_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.org.mcp.list_org_mcp_servers", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/mcp/servers")
     assert resp.status_code == 200
@@ -147,7 +147,7 @@ async def test_list_mcp_servers_empty(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_get_mcp_server(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.get_org_mcp_server",
+        "teardrop.routers.org.mcp.get_org_mcp_server",
         AsyncMock(return_value=_sample_server()),
     )
 
@@ -158,7 +158,7 @@ async def test_get_mcp_server(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_get_mcp_server_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_org_mcp_server", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.mcp.get_org_mcp_server", AsyncMock(return_value=None))
 
     resp = await api_client.get("/mcp/servers/nonexistent")
     assert resp.status_code == 404
@@ -170,7 +170,7 @@ async def test_get_mcp_server_not_found(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_patch_mcp_server(api_client, monkeypatch):
     updated = _sample_server(name="renamed")
-    monkeypatch.setattr("teardrop.main.update_org_mcp_server", AsyncMock(return_value=updated))
+    monkeypatch.setattr("teardrop.routers.org.mcp.update_org_mcp_server", AsyncMock(return_value=updated))
 
     resp = await api_client.patch("/mcp/servers/srv-1", json={"name": "renamed"})
     assert resp.status_code == 200
@@ -179,7 +179,7 @@ async def test_patch_mcp_server(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_patch_mcp_server_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.update_org_mcp_server", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.mcp.update_org_mcp_server", AsyncMock(return_value=None))
 
     resp = await api_client.patch("/mcp/servers/srv-1", json={"name": "renamed"})
     assert resp.status_code == 404
@@ -196,7 +196,7 @@ async def test_patch_mcp_server_no_fields(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_mcp_server(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_org_mcp_server", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.org.mcp.delete_org_mcp_server", AsyncMock(return_value=True))
 
     resp = await api_client.delete("/mcp/servers/srv-1")
     assert resp.status_code == 200
@@ -205,7 +205,7 @@ async def test_delete_mcp_server(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_mcp_server_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.delete_org_mcp_server", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.org.mcp.delete_org_mcp_server", AsyncMock(return_value=False))
 
     resp = await api_client.delete("/mcp/servers/nonexistent")
     assert resp.status_code == 404
@@ -217,11 +217,11 @@ async def test_delete_mcp_server_not_found(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_discover_mcp_tools(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.get_org_mcp_server",
+        "teardrop.routers.org.mcp.get_org_mcp_server",
         AsyncMock(return_value=_sample_server()),
     )
     monkeypatch.setattr(
-        "teardrop.main.discover_mcp_tools",
+        "teardrop.routers.org.mcp.discover_mcp_tools",
         AsyncMock(
             return_value=[
                 {"name": "add", "description": "Add numbers", "input_schema": {}},
@@ -239,7 +239,7 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_discover_mcp_tools_server_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_org_mcp_server", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.org.mcp.get_org_mcp_server", AsyncMock(return_value=None))
 
     resp = await api_client.post("/mcp/servers/nonexistent/discover")
     assert resp.status_code == 404
@@ -248,11 +248,11 @@ async def test_discover_mcp_tools_server_not_found(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_discover_mcp_tools_connection_error(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.get_org_mcp_server",
+        "teardrop.routers.org.mcp.get_org_mcp_server",
         AsyncMock(return_value=_sample_server()),
     )
     monkeypatch.setattr(
-        "teardrop.main.discover_mcp_tools",
+        "teardrop.routers.org.mcp.discover_mcp_tools",
         AsyncMock(side_effect=ConnectionError("refused")),
     )
 
@@ -266,7 +266,7 @@ async def test_discover_mcp_tools_connection_error(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_list_mcp_servers(admin_api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.list_org_mcp_servers",
+        "teardrop.routers.admin.list_org_mcp_servers",
         AsyncMock(return_value=[_sample_server()]),
     )
 

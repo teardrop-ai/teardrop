@@ -15,7 +15,7 @@ import aiohttp
 from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools.definitions._web3_helpers import get_web3
+from tools._internals._web3_helpers import get_web3
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)

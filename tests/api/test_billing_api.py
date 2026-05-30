@@ -28,7 +28,7 @@ from billing import PricingRule
 @pytest.mark.anyio
 async def test_billing_pricing_when_disabled(api_client, monkeypatch):
     """When billing is disabled the endpoint returns {billing_enabled: false}."""
-    import teardrop.main as app_module
+    import teardrop.routers.billing as app_module
 
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = False
@@ -43,14 +43,14 @@ async def test_billing_pricing_when_disabled(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_billing_pricing_when_enabled_with_rule(api_client, monkeypatch):
     """When billing is enabled and a pricing rule exists the rule is returned."""
-    import teardrop.main as app_module
+    import teardrop.routers.billing as app_module
 
     mock_rule = PricingRule(id="default", name="Default", run_price_usdc=10_000)
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = True
     mock_settings.x402_network = "base-sepolia"
     monkeypatch.setattr(app_module, "settings", mock_settings)
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=mock_rule))
+    monkeypatch.setattr("teardrop.routers.billing.get_current_pricing", AsyncMock(return_value=mock_rule))
 
     resp = await api_client.get("/billing/pricing")
     assert resp.status_code == 200
@@ -65,12 +65,12 @@ async def test_billing_pricing_when_enabled_with_rule(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_billing_pricing_enabled_no_rule(api_client, monkeypatch):
     """When billing is enabled but DB has no pricing rule, pricing is null."""
-    import teardrop.main as app_module
+    import teardrop.routers.billing as app_module
 
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = True
     monkeypatch.setattr(app_module, "settings", mock_settings)
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.billing.get_current_pricing", AsyncMock(return_value=None))
 
     resp = await api_client.get("/billing/pricing")
     assert resp.status_code == 200
@@ -83,7 +83,7 @@ async def test_billing_pricing_enabled_no_rule(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_billing_pricing_no_auth_required(anon_client, monkeypatch):
     """The pricing endpoint is public — unauthenticated requests succeed."""
-    import teardrop.main as app_module
+    import teardrop.routers.billing as app_module
 
     mock_settings = MagicMock(wraps=app_module.settings)
     mock_settings.billing_enabled = False
@@ -113,7 +113,7 @@ async def test_billing_history_returns_list(api_client, monkeypatch):
             "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
     ]
-    monkeypatch.setattr("teardrop.main.get_billing_history", AsyncMock(return_value=mock_history))
+    monkeypatch.setattr("teardrop.routers.billing.get_billing_history", AsyncMock(return_value=mock_history))
 
     resp = await api_client.get("/billing/history")
     assert resp.status_code == 200
@@ -127,7 +127,7 @@ async def test_billing_history_returns_list(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_billing_history_empty_list(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_billing_history", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.billing.get_billing_history", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/billing/history")
     assert resp.status_code == 200
@@ -144,7 +144,7 @@ async def test_billing_history_requires_auth(anon_client):
 async def test_billing_history_scoped_to_authenticated_user(api_client, monkeypatch):
     """The endpoint must call get_billing_history with the authenticated user's sub."""
     mock_fn = AsyncMock(return_value=[])
-    monkeypatch.setattr("teardrop.main.get_billing_history", mock_fn)
+    monkeypatch.setattr("teardrop.routers.billing.get_billing_history", mock_fn)
 
     await api_client.get("/billing/history")
 
@@ -157,7 +157,7 @@ async def test_billing_history_scoped_to_authenticated_user(api_client, monkeypa
 async def test_billing_history_limit_capped_at_200(api_client, monkeypatch):
     """Requesting more than 200 rows should be silently capped to 200."""
     mock_fn = AsyncMock(return_value=[])
-    monkeypatch.setattr("teardrop.main.get_billing_history", mock_fn)
+    monkeypatch.setattr("teardrop.routers.billing.get_billing_history", mock_fn)
 
     await api_client.get("/billing/history?limit=999")
 
@@ -186,7 +186,7 @@ async def test_admin_billing_revenue_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_admin_billing_revenue_returns_summary(admin_api_client, monkeypatch):
     mock_summary = {"total_settlements": 5, "total_revenue_usdc": 50_000}
-    monkeypatch.setattr("teardrop.main.get_revenue_summary", AsyncMock(return_value=mock_summary))
+    monkeypatch.setattr("teardrop.routers.admin.get_revenue_summary", AsyncMock(return_value=mock_summary))
 
     resp = await admin_api_client.get("/admin/billing/revenue")
     assert resp.status_code == 200
@@ -198,7 +198,7 @@ async def test_admin_billing_revenue_returns_summary(admin_api_client, monkeypat
 @pytest.mark.anyio
 async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypatch):
     mock_fn = AsyncMock(return_value={"total_settlements": 2, "total_revenue_usdc": 20_000})
-    monkeypatch.setattr("teardrop.main.get_revenue_summary", mock_fn)
+    monkeypatch.setattr("teardrop.routers.admin.get_revenue_summary", mock_fn)
 
     resp = await admin_api_client.get("/admin/billing/revenue?start=2026-01-01&end=2026-12-31")
     assert resp.status_code == 200
@@ -215,7 +215,7 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
 @pytest.mark.anyio
 async def test_billing_balance_returns_balance(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.main.get_org_spending_config",
+        "teardrop.routers.billing.get_org_spending_config",
         AsyncMock(
             return_value={
                 "org_id": "test-org-id",
@@ -288,7 +288,7 @@ async def test_billing_invoices_returns_items(api_client, monkeypatch):
             "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
     ]
-    monkeypatch.setattr("teardrop.main.get_invoices", AsyncMock(return_value=mock_invoices))
+    monkeypatch.setattr("teardrop.routers.billing.get_invoices", AsyncMock(return_value=mock_invoices))
 
     resp = await api_client.get("/billing/invoices")
     assert resp.status_code == 200
@@ -301,7 +301,7 @@ async def test_billing_invoices_returns_items(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_billing_invoices_empty_returns_null_cursor(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_invoices", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.billing.get_invoices", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/billing/invoices")
     assert resp.status_code == 200
@@ -313,7 +313,7 @@ async def test_billing_invoices_empty_returns_null_cursor(api_client, monkeypatc
 @pytest.mark.anyio
 async def test_billing_invoices_passes_cursor(api_client, monkeypatch):
     mock_fn = AsyncMock(return_value=[])
-    monkeypatch.setattr("teardrop.main.get_invoices", mock_fn)
+    monkeypatch.setattr("teardrop.routers.billing.get_invoices", mock_fn)
 
     await api_client.get("/billing/invoices?cursor=2026-01-01T00:00:00")
 
@@ -347,7 +347,7 @@ async def test_billing_invoice_by_run_found(api_client, monkeypatch):
         "settlement_status": "none",
         "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
     }
-    monkeypatch.setattr("teardrop.main.get_invoice_by_run", AsyncMock(return_value=mock_invoice))
+    monkeypatch.setattr("teardrop.routers.billing.get_invoice_by_run", AsyncMock(return_value=mock_invoice))
 
     resp = await api_client.get("/billing/invoice/run-abc")
     assert resp.status_code == 200
@@ -358,7 +358,7 @@ async def test_billing_invoice_by_run_found(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_billing_invoice_by_run_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_invoice_by_run", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.billing.get_invoice_by_run", AsyncMock(return_value=None))
 
     resp = await api_client.get("/billing/invoice/nonexistent")
     assert resp.status_code == 404
@@ -374,7 +374,7 @@ async def test_billing_invoice_by_run_requires_auth(anon_client):
 async def test_billing_invoice_scoped_to_authenticated_user(api_client, monkeypatch):
     """The endpoint must scope the lookup to the authenticated user's sub."""
     mock_fn = AsyncMock(return_value=None)
-    monkeypatch.setattr("teardrop.main.get_invoice_by_run", mock_fn)
+    monkeypatch.setattr("teardrop.routers.billing.get_invoice_by_run", mock_fn)
 
     await api_client.get("/billing/invoice/run-xyz")
 
@@ -386,7 +386,7 @@ async def test_billing_invoice_scoped_to_authenticated_user(api_client, monkeypa
 
 @pytest.mark.anyio
 async def test_admin_credits_topup_success(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.admin_topup_credit", AsyncMock(return_value=1_500_000))
+    monkeypatch.setattr("teardrop.routers.admin.admin_topup_credit", AsyncMock(return_value=1_500_000))
 
     resp = await admin_api_client.post(
         "/admin/credits/topup",
@@ -450,7 +450,7 @@ async def test_billing_credit_history_returns_items(api_client, monkeypatch):
             "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
         }
     ]
-    monkeypatch.setattr("teardrop.main.get_credit_history", AsyncMock(return_value=mock_entries))
+    monkeypatch.setattr("teardrop.routers.billing.get_credit_history", AsyncMock(return_value=mock_entries))
 
     resp = await api_client.get("/billing/credit-history")
     assert resp.status_code == 200
@@ -463,7 +463,7 @@ async def test_billing_credit_history_returns_items(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_billing_credit_history_empty(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_credit_history", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.billing.get_credit_history", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/billing/credit-history")
     assert resp.status_code == 200
@@ -475,7 +475,7 @@ async def test_billing_credit_history_empty(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_billing_credit_history_operation_filter(api_client, monkeypatch):
     mock_fn = AsyncMock(return_value=[])
-    monkeypatch.setattr("teardrop.main.get_credit_history", mock_fn)
+    monkeypatch.setattr("teardrop.routers.billing.get_credit_history", mock_fn)
 
     await api_client.get("/billing/credit-history?operation=debit")
 
@@ -485,7 +485,7 @@ async def test_billing_credit_history_operation_filter(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_billing_credit_history_invalid_operation(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.get_credit_history", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.billing.get_credit_history", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/billing/credit-history?operation=unknown")
     assert resp.status_code == 400
@@ -510,7 +510,7 @@ async def test_usdc_requirements_returns_accepts_array(api_client, monkeypatch):
         "max_amount_required": 1_000_000,
         "pay_to": "0xTREASURY",
     }
-    monkeypatch.setattr("teardrop.main.build_usdc_topup_requirements", MagicMock(return_value=[mock_req]))
+    monkeypatch.setattr("teardrop.routers.billing.build_usdc_topup_requirements", MagicMock(return_value=[mock_req]))
 
     resp = await api_client.get("/billing/topup/usdc/requirements?amount_usdc=1000000")
     assert resp.status_code == 200
@@ -526,7 +526,7 @@ async def test_usdc_requirements_returns_accepts_array(api_client, monkeypatch):
 async def test_usdc_requirements_billing_disabled_returns_503(api_client, monkeypatch):
     """Returns 503 when billing is not initialised (RuntimeError from _get_server)."""
     monkeypatch.setattr(
-        "teardrop.main.build_usdc_topup_requirements",
+        "teardrop.routers.billing.build_usdc_topup_requirements",
         MagicMock(side_effect=RuntimeError("Billing not initialised")),
     )
 
@@ -556,8 +556,8 @@ async def test_usdc_topup_success_credits_org(api_client, monkeypatch):
     from billing import BillingResult
 
     mock_result = BillingResult(settled=True, tx_hash="0xABC123", amount_usdc=1_000_000)
-    monkeypatch.setattr("teardrop.main.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
-    monkeypatch.setattr("teardrop.main.credit_usdc_topup", AsyncMock(return_value=2_000_000))
+    monkeypatch.setattr("teardrop.routers.billing.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+    monkeypatch.setattr("teardrop.routers.billing.credit_usdc_topup", AsyncMock(return_value=2_000_000))
 
     resp = await api_client.post(
         "/billing/topup/usdc",
@@ -577,8 +577,8 @@ async def test_usdc_topup_duplicate_tx_returns_409(api_client, monkeypatch):
     from billing import BillingResult
 
     mock_result = BillingResult(settled=True, tx_hash="0xDUPE", amount_usdc=1_000_000)
-    monkeypatch.setattr("teardrop.main.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
-    monkeypatch.setattr("teardrop.main.credit_usdc_topup", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.billing.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+    monkeypatch.setattr("teardrop.routers.billing.credit_usdc_topup", AsyncMock(return_value=None))
 
     resp = await api_client.post(
         "/billing/topup/usdc",
@@ -593,7 +593,7 @@ async def test_usdc_topup_failed_verification_returns_402(api_client, monkeypatc
     from billing import BillingResult
 
     mock_result = BillingResult(settled=False, error="Invalid signature")
-    monkeypatch.setattr("teardrop.main.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
+    monkeypatch.setattr("teardrop.routers.billing.verify_and_settle_usdc_topup", AsyncMock(return_value=mock_result))
 
     resp = await api_client.post(
         "/billing/topup/usdc",
@@ -606,7 +606,7 @@ async def test_usdc_topup_failed_verification_returns_402(api_client, monkeypatc
 async def test_usdc_topup_billing_disabled_returns_503(api_client, monkeypatch):
     """RuntimeError from verify_and_settle → 503 when billing is disabled."""
     monkeypatch.setattr(
-        "teardrop.main.verify_and_settle_usdc_topup",
+        "teardrop.routers.billing.verify_and_settle_usdc_topup",
         AsyncMock(side_effect=RuntimeError("Billing not initialised")),
     )
 
@@ -642,7 +642,7 @@ async def test_usdc_topup_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_billing_pricing_includes_tool_overrides(api_client, monkeypatch):
     """GET /billing/pricing response includes tool_overrides dict."""
-    import teardrop.main as app_module
+    import teardrop.routers.billing as app_module
 
     mock_rule = PricingRule(
         id="usage-based-v1",
@@ -656,9 +656,9 @@ async def test_billing_pricing_includes_tool_overrides(api_client, monkeypatch):
     mock_settings.billing_enabled = True
     mock_settings.x402_network = "eip155:8453"
     monkeypatch.setattr(app_module, "settings", mock_settings)
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=mock_rule))
+    monkeypatch.setattr("teardrop.routers.billing.get_current_pricing", AsyncMock(return_value=mock_rule))
     monkeypatch.setattr(
-        "teardrop.main.get_tool_pricing_overrides",
+        "teardrop.routers.billing.get_tool_pricing_overrides",
         AsyncMock(return_value={"web_search": 15000, "get_token_price": 2000}),
     )
 
@@ -674,7 +674,7 @@ async def test_billing_pricing_includes_tool_overrides(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_upsert_tool_pricing_success(admin_api_client, monkeypatch):
     """POST /admin/pricing/tools with a known tool name succeeds."""
-    monkeypatch.setattr("teardrop.main.upsert_tool_pricing_override", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.admin.upsert_tool_pricing_override", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post(
         "/admin/pricing/tools",
@@ -721,7 +721,7 @@ async def test_admin_upsert_cost_above_max_rejected(admin_api_client):
 @pytest.mark.anyio
 async def test_admin_delete_tool_pricing_success(admin_api_client, monkeypatch):
     """DELETE /admin/pricing/tools/{tool_name} returns {deleted: true}."""
-    monkeypatch.setattr("teardrop.main.delete_tool_pricing_override", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.admin.delete_tool_pricing_override", AsyncMock(return_value=True))
 
     resp = await admin_api_client.delete("/admin/pricing/tools/web_search")
     assert resp.status_code == 200
@@ -733,7 +733,7 @@ async def test_admin_delete_tool_pricing_success(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_client, monkeypatch):
     """DELETE for a tool with no override → 404."""
-    monkeypatch.setattr("teardrop.main.delete_tool_pricing_override", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.admin.delete_tool_pricing_override", AsyncMock(return_value=False))
 
     resp = await admin_api_client.delete("/admin/pricing/tools/nonexistent_tool")
     assert resp.status_code == 404
@@ -745,7 +745,7 @@ async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_clien
 
 @pytest.mark.anyio
 async def test_admin_billing_retry_x402_returns_422(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.reset_exhausted_settlement", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.admin.reset_exhausted_settlement", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
     assert resp.status_code == 422
@@ -754,7 +754,7 @@ async def test_admin_billing_retry_x402_returns_422(admin_api_client, monkeypatc
 
 @pytest.mark.anyio
 async def test_admin_billing_retry_credit_returns_pending(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.main.reset_exhausted_settlement", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.admin.reset_exhausted_settlement", AsyncMock(return_value=True))
 
     resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
     assert resp.status_code == 200
