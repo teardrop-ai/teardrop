@@ -28,6 +28,7 @@ async def test_create_org(db_pool):
     org = await create_org("Test Org")
     assert isinstance(org, Org)
     assert org.name == "Test Org"
+    assert org.slug == "test-org"
     assert len(org.id) == 36  # UUID
 
 
