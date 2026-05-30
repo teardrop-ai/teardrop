@@ -161,21 +161,28 @@ def _get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def _generate_org_slug(org_name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-")[:40]
+
+
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 
 async def create_org(name: str) -> Org:
     """Create a new organisation."""
     pool = _get_pool()
+    slug = _generate_org_slug(name)
     org = Org(
         id=str(uuid.uuid4()),
         name=name,
+        slug=slug,
         created_at=datetime.now(timezone.utc),
     )
     await pool.execute(
-        "INSERT INTO orgs (id, name, created_at) VALUES ($1, $2, $3)",
+        "INSERT INTO orgs (id, name, slug, created_at) VALUES ($1, $2, $3, $4)",
         org.id,
         org.name,
+        org.slug,
         org.created_at,
     )
     return org
@@ -405,7 +412,7 @@ async def register_org_and_user(
     now = datetime.now(timezone.utc)
     org_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
-    slug = re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-")[:40]
+    slug = _generate_org_slug(org_name)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(

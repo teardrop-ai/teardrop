@@ -56,7 +56,9 @@ class TestCreateOrg:
             org = await create_org("ACME")
         assert isinstance(org, Org)
         assert org.name == "ACME"
+        assert org.slug == "acme"
         pool.execute.assert_called_once()
+        assert "slug" in pool.execute.call_args.args[0]
 
     async def test_db_error_propagates(self):
         from teardrop.users import create_org
