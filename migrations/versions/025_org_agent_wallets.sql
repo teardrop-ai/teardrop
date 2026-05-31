@@ -1,4 +1,6 @@
 -- 025: Per-org CDP-backed agent wallets
+-- Domain: billing
+-- Invariant: CDP wallet secrets are never stored in plaintext or logged
 -- Enables organisations to hold USDC via Coinbase Developer Platform managed wallets
 -- for A2A delegation payments and MCP marketplace earnings.
 

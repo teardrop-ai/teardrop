@@ -1,4 +1,6 @@
 -- Migration 009: A2A delegation allowlist (per-org trusted remote agents)
+-- Domain: delegation
+-- Invariant: UNIQUE per org prevents duplicate allowlist entries; only allowlisted agents receive delegations
 -- Each row authorises an org to delegate tasks to a specific A2A agent URL.
 -- The UNIQUE constraint prevents duplicate entries per org.
 

@@ -1,4 +1,6 @@
 -- Migration 003: usage-based pricing rule
+-- Domain: billing
+-- Invariant: Per-unit rates in atomic USDC (6-decimal BIGINT); 1_000_000 = $1.00
 -- Adds a usage-based pricing rule alongside the existing flat-rate default.
 -- Per-unit rates are in atomic USDC (6-decimal integer):
 --   1_000_000 = $1.00,  10_000 = $0.01,  1_000 = $0.001

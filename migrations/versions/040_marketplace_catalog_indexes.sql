@@ -1,4 +1,6 @@
 -- Migration 040: Indexes for marketplace catalog filtering and sorting.
+-- Domain: marketplace
+-- Invariant: Index-only change; no data mutation
 -- Supports the new GET /marketplace/catalog?org_slug=&sort= query parameters.
 -- The composite index on (publish_as_mcp, is_active, name) covers the common
 -- catalog scan with ORDER BY name.  The price index covers price_asc/price_desc sorts.

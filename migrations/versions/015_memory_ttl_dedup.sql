@@ -1,4 +1,6 @@
 -- Migration 015: memory deduplication + TTL expiry
+-- Domain: memory
+-- Invariant: UNIQUE(org_id, content_hash) prevents duplicate facts per org
 -- Adds content_hash for exact-match dedup and expires_at for TTL enforcement.
 
 ALTER TABLE org_memories

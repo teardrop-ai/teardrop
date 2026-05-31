@@ -1,4 +1,6 @@
 -- Migration 043: Add subscribed_schema_hash to org_marketplace_subscriptions.
+-- Domain: marketplace
+-- Invariant: Tracks subscribed schema version to detect upstream tool schema changes
 --
 -- Captures the md5(input_schema::text) hash of the tool at the moment a
 -- subscriber org subscribes.  The application compares this against the

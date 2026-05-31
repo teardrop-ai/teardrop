@@ -1,4 +1,6 @@
 -- Migration 018: refresh tokens
+-- Domain: auth
+-- Invariant: Tokens rotated on every use (OWASP); reuse of a rotated token must be rejected
 -- Long-lived tokens (default 30 days) exchanged for short-lived access tokens
 -- (30 min). Tokens are rotated on every use per OWASP best practice.
 -- Covers email and SIWE auth flows.

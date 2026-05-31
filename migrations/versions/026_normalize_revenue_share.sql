@@ -1,4 +1,6 @@
 -- Migration 026: Normalize revenue_share_bps to default
+-- Domain: marketplace
+-- Invariant: All authors use the platform default 7000 bps (70/30 author/platform split)
 --
 -- Resets all tool_author_config.revenue_share_bps values to the platform default (7000 = 70%).
 -- The column is NOT dropped — it is preserved for future automatic volume-based tier systems.

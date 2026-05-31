@@ -1,4 +1,6 @@
 -- Add persisted output schema contract for webhook tools.
+-- Domain: tools
+-- Invariant: Output schema is org-scoped per webhook tool
 ALTER TABLE org_tools
 ADD COLUMN IF NOT EXISTS output_schema JSONB;
 

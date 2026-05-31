@@ -190,6 +190,27 @@ class TestDiscoverAgentCard:
             card = await discover_agent_card("https://test.example.com")
             assert card.name == "TestAgent"
 
+    async def test_discovery_disables_redirects(self):
+        """Agent-card discovery must not auto-follow redirects (SSRF guard)."""
+        card_data = {"name": "TestAgent", "description": "A test agent", "url": "https://test.example.com"}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = card_data
+        mock_resp.raise_for_status = MagicMock()
+
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_resp
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await discover_agent_card("https://test.example.com")
+
+            assert mock_client_cls.call_args.kwargs["follow_redirects"] is False
+
     async def test_cache_hit(self):
         card = A2AAgentCard(name="Cached", description="cached agent")
         _agent_card_cache["https://cached.example.com"] = (card, __import__("time").monotonic())

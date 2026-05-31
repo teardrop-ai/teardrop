@@ -1,4 +1,6 @@
 -- Migration 024: A2A delegation billing — per-agent cost caps and delegation event ledger
+-- Domain: delegation
+-- Invariant: Per-agent spend caps enforced; delegation events recorded with BIGINT atomic USDC cost
 --
 -- Adds billing-related columns to a2a_allowed_agents so orgs can control
 -- per-agent spend caps and opt in to x402 payment mode.

@@ -1,4 +1,6 @@
 -- Migration 002: billing schema
+-- Domain: billing
+-- Invariant: usage_events cost/settlement columns + pricing_rules; USDC stored as BIGINT atomic units
 -- Extends usage_events with settlement columns and adds pricing_rules table.
 
 -- ── Extend usage_events ───────────────────────────────────────────────────────

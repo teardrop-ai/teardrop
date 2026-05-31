@@ -1,4 +1,6 @@
 -- Migration 009: per-tool pricing overrides
+-- Domain: billing
+-- Invariant: cost_usdc is BIGINT atomic USDC; overrides the flat tool_call_cost
 -- Adds tool_pricing_overrides table that lets admins set a custom cost_usdc
 -- for individual tools, overriding the flat tool_call_cost from pricing_rules.
 --

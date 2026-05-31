@@ -1,4 +1,6 @@
 -- Migration 008: USDC on-chain top-up events (idempotency + audit)
+-- Domain: billing
+-- Invariant: PRIMARY KEY on tx_hash prevents double-credit on duplicate tx submission
 -- Stores each settled USDC top-up transaction exactly once.
 -- The PRIMARY KEY on tx_hash is the idempotency guard:
 -- duplicate submissions of the same on-chain tx → ON CONFLICT DO NOTHING → no double-credit.

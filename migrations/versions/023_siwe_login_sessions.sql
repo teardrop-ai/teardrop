@@ -1,4 +1,6 @@
 -- 023_siwe_login_sessions.sql
+-- Domain: auth
+-- Invariant: Nonce is single-use; access/refresh tokens populated only when status='complete'
 -- SIWE QR login sessions for the CLI → browser → wallet sign flow.
 --
 -- A session ties a single-use nonce to a session_id so that:

@@ -1,4 +1,6 @@
 -- 047: Add get_protocol_tvl to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC
 --
 -- DeFiLlama-backed TVL lookup for DeFi protocols. Returns current TVL in USD,
 -- 7-day and 30-day percentage change, per-chain breakdown, and an optional

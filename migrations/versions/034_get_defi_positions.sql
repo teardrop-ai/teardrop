@@ -1,4 +1,6 @@
 -- 034: Add get_defi_positions to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC ($0.013/call)
 --
 -- DeFi position aggregator across Aave v3, Compound v3, and Uniswap v3 LP on
 -- Ethereum mainnet and Base. Aggregates account-level health (collateral,

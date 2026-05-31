@@ -239,7 +239,7 @@ async def discover_agent_card(
     async with httpx.AsyncClient(
         timeout=timeout,
         headers={"User-Agent": _USER_AGENT},
-        follow_redirects=True,
+        follow_redirects=False,
     ) as client:
         resp = await client.get(card_url)
         resp.raise_for_status()

@@ -1,4 +1,6 @@
 -- 027: Add author-controlled per-tool pricing to org_tools.
+-- Domain: marketplace
+-- Invariant: base_price_usdc is BIGINT atomic USDC; 0 = platform default; capped at $100.00
 --
 -- Allows tool authors to set a base price for each published tool.
 -- 0 = use platform default pricing.  Max $100.00 (100_000_000 atomic USDC).

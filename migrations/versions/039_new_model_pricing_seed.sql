@@ -1,4 +1,6 @@
 -- Seed pricing rules for the new shared-pool models (April 2026 pool refresh).
+-- Domain: billing
+-- Invariant: Rates in BIGINT atomic USDC; ON CONFLICT DO NOTHING keeps the seed idempotent
 -- Rates in atomic USDC (1_000_000 = $1.00). All costs include ~25% margin over
 -- provider list price.
 --

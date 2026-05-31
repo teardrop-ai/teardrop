@@ -1,4 +1,6 @@
 -- Migration 012: Per-org MCP server connections
+-- Domain: tools
+-- Invariant: MCP server connections are org-scoped
 -- Allows organisations to register external MCP servers whose tools are
 -- dynamically discovered and injected into the agent at run time.
 --

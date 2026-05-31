@@ -1,4 +1,6 @@
 -- Migration 004: org credit ledger
+-- Domain: billing
+-- Invariant: balance_usdc is BIGINT atomic USDC; prepaid balance for non-SIWE callers
 -- Adds a prepaid USDC credit balance per organisation, used by non-SIWE callers
 -- (client_credentials, email) as an alternative to per-request x402 payments.
 --

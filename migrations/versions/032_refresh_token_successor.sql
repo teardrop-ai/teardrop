@@ -1,4 +1,6 @@
 -- Migration 032: refresh token successor column for idempotent rotation
+-- Domain: auth
+-- Invariant: successor column makes refresh-token rotation idempotent under retries
 -- Adds successor_token so that a rotated-but-undelivered refresh token can be
 -- replayed within the idempotency window (see refresh_token_idempotency_window_seconds).
 -- The column is self-referential: each revoked token points to its replacement.

@@ -1,4 +1,6 @@
 -- 026: Add jwt_forward flag to a2a_allowed_agents
+-- Domain: delegation
+-- Invariant: Caller-JWT forwarding is per-agent opt-in only
 -- Allows per-agent opt-in to forward caller JWT as Authorization header.
 
 ALTER TABLE a2a_allowed_agents

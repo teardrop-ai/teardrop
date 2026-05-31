@@ -1,4 +1,6 @@
 -- 029: Platform tools in the marketplace catalog.
+-- Domain: marketplace
+-- Invariant: base_price_usdc is BIGINT atomic USDC; platform tools are owned by the platform, not an org
 --
 -- Platform-built tools (tools/definitions/) are distinct from org-published
 -- tools (org_tools).  They execute in-process, have no webhook URL, and are

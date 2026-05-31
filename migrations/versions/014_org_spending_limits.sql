@@ -1,4 +1,6 @@
 -- Migration 014: org spending limits + admin pause
+-- Domain: billing
+-- Invariant: spending_limit_usdc is a 24h rolling cap; is_paused blocks billable runs
 -- Adds spending_limit_usdc (24h rolling window cap) and is_paused flag
 -- to org_credits. Default values preserve existing behaviour.
 

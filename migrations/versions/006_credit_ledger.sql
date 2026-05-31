@@ -1,4 +1,6 @@
 -- Migration 006: org credit ledger
+-- Domain: billing
+-- Invariant: Append-only audit trail; one immutable row per debit/top-up
 -- Adds an immutable audit trail for all credit operations (debits and top-ups).
 --
 -- Every debit_credit() and admin_topup_credit() call inserts one row.

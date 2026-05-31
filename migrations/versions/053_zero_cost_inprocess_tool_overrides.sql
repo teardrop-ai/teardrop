@@ -1,4 +1,6 @@
 -- Migration 053: enforce zero-cost pricing for in-process utility tools
+-- Domain: billing
+-- Invariant: In-process utility tools priced at 0 atomic USDC
 --
 -- These tools do not rely on external paid APIs and should never consume the
 -- default per-tool billing rate from pricing_rules.tool_call_cost.

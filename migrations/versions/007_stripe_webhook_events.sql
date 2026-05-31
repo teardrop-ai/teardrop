@@ -1,4 +1,6 @@
 -- Migration 007: Stripe webhook events (idempotency + audit)
+-- Domain: billing
+-- Invariant: PRIMARY KEY on stripe_event_id prevents double-topup on webhook replay
 -- Stores each processed checkout.session.completed event exactly once.
 -- The PRIMARY KEY on stripe_event_id is the idempotency guard:
 -- duplicate webhook deliveries → ON CONFLICT DO NOTHING → no double-topup.

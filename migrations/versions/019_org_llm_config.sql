@@ -1,4 +1,6 @@
 -- Per-org LLM configuration for multi-model gateway + BYOK support.
+-- Domain: auth
+-- Invariant: BYOK API keys are org-scoped and must never be logged
 
 CREATE TABLE IF NOT EXISTS org_llm_config (
     org_id              TEXT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,

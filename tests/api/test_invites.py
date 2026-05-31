@@ -85,6 +85,44 @@ async def test_create_invite_no_email(api_client, monkeypatch):
     assert resp.status_code == 201
 
 
+@pytest.mark.anyio
+async def test_create_invite_rejects_admin_role(api_client, monkeypatch):
+    """Granting the privileged admin role via invite must be rejected (422)."""
+    create_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth.create_org_invite", create_mock)
+    monkeypatch.setattr("teardrop.routers.auth.send_invite_email", AsyncMock())
+
+    resp = await api_client.post("/org/invite", json={"email": "x@x.com", "role": "admin"})
+
+    assert resp.status_code == 422
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_create_invite_rejects_unknown_role(api_client, monkeypatch):
+    """Unknown roles must be rejected (422)."""
+    monkeypatch.setattr("teardrop.routers.auth.create_org_invite", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.send_invite_email", AsyncMock())
+
+    resp = await api_client.post("/org/invite", json={"email": "x@x.com", "role": "superuser"})
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_create_invite_normalizes_member_to_user(api_client, monkeypatch):
+    """The backward-compatible 'member' alias is normalised to 'user'."""
+    invite = _mock_invite(email="newbie@example.com")
+    create_mock = AsyncMock(return_value=invite)
+    monkeypatch.setattr("teardrop.routers.auth.create_org_invite", create_mock)
+    monkeypatch.setattr("teardrop.routers.auth.send_invite_email", AsyncMock())
+
+    resp = await api_client.post("/org/invite", json={"email": "newbie@example.com", "role": "member"})
+
+    assert resp.status_code == 201
+    assert create_mock.await_args.kwargs["role"] == "user"
+
+
 # ─── POST /register/invite ───────────────────────────────────────────────────
 
 

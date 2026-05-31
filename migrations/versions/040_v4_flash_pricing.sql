@@ -1,4 +1,6 @@
 -- Replace DeepSeek V3.2 pricing with V4 Flash (April 2026 cost-tier upgrade).
+-- Domain: billing
+-- Invariant: Per-model rates in BIGINT atomic USDC; no usage_events reference the deleted rule (pre-launch)
 -- V4 Flash: $0.14/M input, $0.28/M output (provider list) — same Teardrop rates
 -- as V3.2 ($0.175/$0.35 per 1M), improving platform margin.
 -- No usage_events reference the V3.2 pricing rule (pre-launch), so hard DELETE is safe.

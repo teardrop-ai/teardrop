@@ -1,4 +1,6 @@
 -- 052: Add get_lending_rates to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC
 --
 -- On-chain lending-rate snapshot for Aave v3 and Compound v3 across Ethereum
 -- and Base. The tool fans out via Multicall3 and returns per-asset supply and

@@ -42,7 +42,7 @@ from marketplace import (
 )
 from teardrop._meta import APP_VERSION
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_auth
+from teardrop.dependencies import _require_org_id, require_auth, require_org_admin
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.executor import execute_tool
@@ -431,9 +431,14 @@ class SetAuthorConfigRequest(BaseModel):
 @router.post("/marketplace/author-config", tags=["Marketplace"])
 async def set_marketplace_author_config(
     body: SetAuthorConfigRequest,
-    payload: dict = Depends(require_auth),
+    payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:
-    """Configure or update the marketplace author settings for the org."""
+    """Configure or update the marketplace author settings for the org.
+
+    Admin-only: the settlement wallet is the destination for all marketplace
+    payouts, so changing it is a financial control and must not be available to
+    ordinary members.
+    """
     s = get_settings()
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
@@ -447,6 +452,13 @@ async def set_marketplace_author_config(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    logger.info(
+        "marketplace_settlement_wallet_set org=%s by=%s wallet=%s",
+        org_id,
+        payload["sub"],
+        f"{config.settlement_wallet[:6]}...{config.settlement_wallet[-4:]}",
+    )
 
     return JSONResponse(
         content={
@@ -570,15 +582,27 @@ class WithdrawRequest(BaseModel):
 @router.post("/marketplace/withdraw", tags=["Marketplace"])
 async def request_marketplace_withdrawal(
     body: WithdrawRequest,
-    payload: dict = Depends(require_auth),
+    payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:
-    """Request a withdrawal of earnings to the settlement wallet."""
+    """Request a withdrawal of earnings to the settlement wallet.
+
+    Admin-only: moving funds out of the org balance is a financial control and
+    must not be available to ordinary members.
+    """
     org_id = _require_org_id(payload)
 
     try:
         withdrawal = await request_withdrawal(org_id, body.amount_usdc)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    logger.info(
+        "marketplace_withdrawal_requested org=%s by=%s id=%s amount_usdc=%s",
+        org_id,
+        payload["sub"],
+        withdrawal.id,
+        withdrawal.amount_usdc,
+    )
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,

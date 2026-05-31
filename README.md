@@ -7,7 +7,7 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using yo
 
 ### Agent-to-Agent (A2A) Delegation
 
-Agents can securely delegate tasks to other agents via `POST /delegate` or the `delegate_to_agent` tool. Features:
+Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features:
 - **Allowlist control**: Restrict which agents your org can delegate to
 - **JWT forwarding**: Automatically forward authentication context when delegating (set `jwt_forward: true` on agent rules)
 - **Per-run quotas**: Limit delegation calls per agent run (configurable via `A2A_DELEGATION_MAX_PER_RUN`)
@@ -16,20 +16,12 @@ Agents can securely delegate tasks to other agents via `POST /delegate` or the `
 **Environment variables:**
 ```
 A2A_DELEGATION_ENABLED=true                      # Enable agent-to-agent delegation
-A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: false)
+A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: true)
 A2A_DELEGATION_MAX_PER_RUN=3                     # Max delegations per run (default: 3)
 A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
 A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
 A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
-AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner→tool cycles before forced synthesis (default: 4)
-AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
-AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
-AGENT_PLANNER_PROVIDER=google                    # Optional initial planning-turn override provider
-AGENT_PLANNER_MODEL=gemini-3-flash-preview       # Optional initial planning-turn override model
-AGENT_SYNTHESIS_FAST_PATH_ENABLED=true            # Skip tool-schema bind on clearly final synthesis turns
-AGENT_COMPILER_MODE_ENABLED=false                 # Enable optional staged <plan>{...}</plan> execution mode
-AGENT_CACHE_PREWARM_ENABLED=true                  # Warm provider prompt caches at startup
-AGENT_CACHE_PREWARM_TOP_N=50                      # Max active org/model prefixes to prewarm
+A2A_DELEGATION_TIMEOUT_SECONDS=120               # HTTP timeout for delegation calls
 ```
 
 ### Platform Tool Marketplace
@@ -55,6 +47,12 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_erc20_balance` | $0.002 (2,000 atomic) |
 | `get_block` | $0.001 (1,000 atomic) |
 | `get_transaction` | $0.002 (2,000 atomic) |
+| `get_token_approvals` | $0.004 (4,000 atomic) |
+| `get_defi_positions` | $0.013 (13,000 atomic) |
+| `get_liquidation_risk` | $0.010 (10,000 atomic) |
+| `get_dex_quote` | $0.005 (5,000 atomic) |
+| `get_gas_price` | $0.002 (2,000 atomic) |
+| `resolve_ens` | $0.003 (3,000 atomic) |
 
 In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
 
@@ -79,7 +77,7 @@ Organizations can monetize their agents via a Marketplace. Earned fees are settl
 **Auto-sweep settings** (configure in `.env`):
 ```
 MARKETPLACE_SETTLEMENT_CDP_ACCOUNT=td-marketplace   # CDP account for settlement transfers
-MARKETPLACE_SETTLEMENT_CHAIN_ID=8453                # Chain ID: 8453=Base mainnet, 84532=Base Sepolia (testnet)
+MARKETPLACE_SETTLEMENT_CHAIN_ID=84532               # Chain ID: 84532=Base Sepolia (testnet), 8453=Base mainnet (production)
 MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS=90          # Timeout for on-chain tx receipt (90s for mainnet congestion tolerance)
 MARKETPLACE_AUTO_SWEEP_ENABLED=true                # Enable automatic earnings sweep
 MARKETPLACE_SWEEP_INTERVAL_SECONDS=86400           # Sweep cadence (86400 = 1 day)
@@ -182,10 +180,11 @@ Server starts at `http://localhost:8000`. Visit `http://localhost:8000/docs` for
 ### Docker (local full stack)
 
 ```powershell
-docker-compose up --build
+docker compose build --pull
+docker compose up
 ```
 
-Starts Postgres + Teardrop API. Migrations run automatically at startup. Keys are generated at build time and mounted from `./keys/`.
+Starts Postgres + Teardrop API. Migrations run automatically at startup. Keys are generated at build time and mounted from `./keys/`. Use `docker compose build --pull` before rebuilds so refreshed base images are picked up, and add `--no-cache` when you want a fully fresh rebuild.
 
 ### Render (production)
 
@@ -198,10 +197,16 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `AGENT_SYNTHESIS_MAX_TOKENS` | Max output tokens for post-tool synthesis turns (`tool_iterations >= 1`). Default: `4096`. |
 | `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
 | `AGENT_PLANNER_MODEL` | Optional model override paired with `AGENT_PLANNER_PROVIDER` for first-pass tool selection speed tuning. |
+| `AGENT_SYNTHESIS_PROVIDER` | Optional provider override for post-tool synthesis turns (`tool_iterations >= 1`). When unset, uses `AGENT_PROVIDER`. |
+| `AGENT_SYNTHESIS_MODEL` | Optional model override for synthesis turns, paired with `AGENT_SYNTHESIS_PROVIDER`. |
+| `AGENT_UI_GENERATOR_PROVIDER` | Provider for UI generation turns (default: `google`). **Important**: requires `GOOGLE_API_KEY` even if main provider is OpenRouter. |
+| `AGENT_UI_GENERATOR_MODEL` | Model for UI generation turns (default: `gemini-3-flash-preview`). |
 | `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
 | `AGENT_COMPILER_MODE_ENABLED` | Enables optional staged planner IR (`<plan>{...}</plan>`) execution. Default: `false` (safe rollout). |
 | `AGENT_CACHE_PREWARM_ENABLED` | Enables one-time startup prompt-cache prewarm for top active org/provider/model prefixes. Default: `true`. |
 | `AGENT_CACHE_PREWARM_TOP_N` | Max number of active prefixes warmed per startup batch. Default: `50`. |
+| `AGENT_LLM_TIMEOUT_SECONDS` | Timeout in seconds for the planner LLM call (default: `180`). |
+| `AGENT_TOOL_EXECUTOR_TIMEOUT_SECONDS` | Timeout in seconds for the overall tool execution node (default: `120`). |
 | `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
@@ -233,6 +238,12 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `BYOK_TIER_PRICING_ENABLED` | `true` to use per-token orchestration pricing for BYOK orgs (seeded by migration 041). When `false`, uses legacy flat `byok_platform_fee_usdc`. Default: `false` for backward compatibility. |
 | `OPENROUTER_API_KEY` | Required if `AGENT_PROVIDER=openrouter` |
 | `COINGECKO_API_KEY` | CoinGecko API key for live price data (optional; rate-limited without key) |
+| `TAVILY_API_KEY` | Tavily API key for the `web_search` tool (optional; web search disabled without it) |
+| `ETHEREUM_RPC_URL` | Ethereum mainnet JSON-RPC URL (required by Ethereum-based tools) |
+| `BASE_RPC_URL` | Base L2 JSON-RPC URL (required by Base-based tools and marketplace auto-sweep) |
+| `LANGSMITH_TRACING` | Enable LangSmith tracing (default: `false`) |
+| `LANGSMITH_API_KEY` | LangSmith API key for tracing |
+| `LANGSMITH_PROJECT` | LangSmith project name (default: `teardrop`) |
 | `ORG_TOOL_ENCRYPTION_KEY` | Fernet key for encrypting webhook `auth_header_value` at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `LLM_CONFIG_ENCRYPTION_KEY` | Fernet key for encrypting BYOK API keys at rest (same format as above) |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` to require email verification before login (default: `false`) |
@@ -244,6 +255,16 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `MCP_AUTH_AUDIENCE` | JWT audience for MCP gateway tokens (default: `teardrop-mcp`) |
 | `MCP_BILLING_ENABLED` | `true` to enable credit billing for MCP tool calls |
 | `MCP_X402_ENABLED` | `true` to accept x402 payments on the MCP gateway |
+| `MEMORY_ENABLED` | Enable persistent agent memory (default: `true`). Auto-disabled if `OPENAI_API_KEY` is unset. |
+| `SENTRY_DSN` | Sentry error tracking DSN (optional; leave empty to disable) |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token validity window in days (default: `30`) |
+| `RATE_LIMIT_AUTH_RPM` | Per-IP rate limit for `/token` and `/auth/siwe/nonce` (default: `20`) |
+| `RATE_LIMIT_REGISTER_RPM` | Per-IP rate limit for `POST /register` (default: `5`) |
+| `RATE_LIMIT_AGENT_RPM` | Per-user rate limit for `/agent/run` (default: `30`) |
+| `RATE_LIMIT_ORG_AGENT_RPM` | Per-org aggregate rate limit for `/agent/run` (default: `100`) |
+| `RATE_LIMIT_ORG_MCP_RPM` | Per-org rate limit for MCP gateway (default: `200`) |
+| `RATE_LIMIT_WEBHOOK_RPM` | Per-IP rate limit for Stripe webhook (default: `120`) |
+| `RATE_LIMIT_TEST_WEBHOOK_RPM` | Per-org rate limit for test-webhook endpoint (default: `10`) |
 
 ---
 
@@ -285,6 +306,31 @@ SIWE lets Ethereum wallet holders authenticate without a password. The JWT issue
 ```
 
 SIWE tokens are the only auth method that can use x402 on-chain payments. New wallet addresses are auto-registered on first login.
+
+### Token expiry and refresh tokens
+
+All three auth methods issue access tokens with a **30-minute expiry** (`expires_in: 1800` seconds in the token response). For applications that need sessions longer than 30 minutes, use refresh tokens:
+
+- **Refresh tokens** expire after **30 days** and can be exchanged for a new access token + rotated refresh token.
+- **Refresh token rotation** is atomic with idempotency replay protection — if the same refresh token is submitted twice within the replay window, you'll receive the same new token pair instead of creating duplicates.
+- **Single logout** via `POST /auth/logout` revokes your refresh token, ending the session immediately.
+
+```powershell
+# 1. Exchange refresh token for new access token + rotated refresh token
+$resp = Invoke-RestMethod -Uri "http://localhost:8000/auth/refresh" `
+    -Method Post -ContentType "application/json" `
+    -Headers @{ "Cookie" = "refresh_token=<your-refresh-token>" }
+    # OR pass as body: -Body '{"refresh_token":"<your-refresh-token>"}'
+
+# New access token and rotated refresh token are in the response
+$newAccessToken = $resp.access_token
+$newRefreshToken = $resp.refresh_token  # Use this on your next refresh
+
+# 2. Logout (revoke refresh token)
+Invoke-RestMethod -Uri "http://localhost:8000/auth/logout" `
+    -Method Post -ContentType "application/json" `
+    -Headers @{ Authorization = "Bearer $accessToken" }
+```
 
 ---
 
@@ -562,11 +608,6 @@ Local Agent                     Teardrop                          Remote Agent
 A2A_DELEGATION_ENABLED=true
 A2A_DELEGATION_TIMEOUT_SECONDS=120
 A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
-AGENT_MAX_TOOL_ITERATIONS=4                       # Max planner?tool cycles before forced synthesis (default: 4)
-AGENT_TOOL_BILLING_ENABLED=true                # Only bill successful/complete tool calls (True/False)
-AGENT_TOOL_MAX_CALLS_PER_RUN={"get_yield_rates":1,"resolve_ens":1}
-AGENT_PLANNER_PROVIDER=google                    # Optional initial planning-turn override provider
-AGENT_PLANNER_MODEL=gemini-3-flash-preview       # Optional initial planning-turn override model
 
 # Enable billing for delegations
 A2A_DELEGATION_BILLING_ENABLED=true
@@ -678,6 +719,7 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
+| `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
 | `GET` | `/docs` | — | Swagger UI |
 | `GET` | `/redoc` | — | ReDoc UI |
 
@@ -700,9 +742,18 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE) |
+| `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE); returns `access_token` + `refresh_token` |
 | `GET` | `/auth/me` | Bearer | Return the authenticated user's identity |
 | `GET` | `/auth/siwe/nonce` | — | Generate single-use SIWE nonce |
+| `POST` | `/register` | — | Self-serve org + user registration |
+| `GET` | `/auth/verify-email` | — | Consume one-time email verification token |
+| `POST` | `/auth/resend-verification` | Bearer | Re-send verification email |
+| `POST` | `/auth/refresh` | — | Exchange refresh token for new access + rotated refresh token |
+| `POST` | `/auth/logout` | Bearer | Revoke refresh token (end session) |
+| `POST` | `/org/invite` | Bearer | Create org invite link (any authenticated member) |
+| `POST` | `/register/invite` | — | Accept invite token + create user account |
+| `GET` | `/org/credentials` | Bearer | List org M2M client credentials |
+| `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin-only) |
 
 ### Billing
 
@@ -808,6 +859,13 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `GET` | `/admin/memories/org/{org_id}` | Admin | List memories for an org |
 | `DELETE` | `/admin/memories/org/{org_id}` | Admin | Delete all memories for an org |
 | `GET` | `/admin/mcp/servers/{org_id}` | Admin | List MCP servers for an org |
+| `GET` | `/admin/billing/pending` | Admin | List pending settlements |
+| `POST` | `/admin/billing/pending/{id}/retry` | Admin | Retry a specific failed settlement |
+| `GET` | `/admin/orgs/{org_id}/spending` | Admin | Get org spending config (caps, pause status) |
+| `PATCH` | `/admin/orgs/{org_id}/spending` | Admin | Update org spending caps and pause status |
+| `GET` | `/admin/marketplace/sweep-status` | Admin | Status of all pending withdrawals |
+| `POST` | `/admin/marketplace/sweep-retry/{id}` | Admin | Reset an exhausted withdrawal for retry |
+| `POST` | `/admin/marketplace/process-withdrawal/{id}` | Admin | Manually process a single withdrawal |
 
 ### Custom Tools
 
@@ -821,6 +879,7 @@ Custom webhook tools are currently read-only and must use the `GET` HTTP method.
 | `GET` | `/tools/{tool_id}` | Bearer | Get a specific custom tool |
 | `PATCH` | `/tools/{tool_id}` | Bearer | Update a custom tool |
 | `DELETE` | `/tools/{tool_id}` | Bearer | Delete a custom tool |
+| `POST` | `/tools/test-webhook` | Bearer | Fire a test request to a webhook URL |
 
 ### Memory
 
@@ -962,7 +1021,7 @@ Twenty-five tools are available to the agent and served via MCP:
 | `get_token_price` | Crypto asset price in USD (or any supported currency) via CoinGecko. |
 | `get_transaction` | Transaction details and status by hash. |
 | `get_wallet_portfolio` | Aggregated token holdings and USD value for an Ethereum or Base wallet. |
-| `http_fetch` | Fetches and extracts content from a URL. Includes SSRF protection — private/cloud-metadata IPs are blocked. |
+| `http_fetch` | Fetches and extracts content from a URL. Includes SSRF protection — private/cloud-metadata IPs are blocked, and every redirect hop is re-validated before being followed. |
 | `read_contract` | Calls `view`/`pure` functions on any smart contract by ABI fragment. |
 | `resolve_ens` | Resolves ENS name → address or address → ENS primary name. |
 | `count_text_stats` | Returns character, word, sentence, and paragraph counts for a given text. |
@@ -1050,6 +1109,23 @@ python -m migrations.runner
 | `038_org_llm_config_allow_openrouter.sql` | Expands provider CHECK constraint to allow `openrouter` in `org_llm_config` |
 | `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2 (superseded), Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
 | `040_v4_flash_pricing.sql` | Replaces DeepSeek V3.2 pricing with V4 Flash (same Teardrop rates, lower provider cost) |
+| `041_byok_tier_pricing.sql` | BYOK tier pricing: adds `is_byok BOOLEAN` to `pricing_rules`; seeds 5 provider-level BYOK rows at 50 atomic USDC/1k tokens |
+| `042_org_tool_schema_hash.sql` | Org tool schema_hash + last_schema_changed_at tracking for change detection |
+| `043_marketplace_subscription_schema_hash.sql` | Adds `subscribed_schema_hash TEXT` to `org_marketplace_subscriptions` |
+| `044_gemini_3_flash_pricing_fix.sql` | Corrects `google-gemini-3-flash-preview-v1` from 125in/500out → 625in/3750out |
+| `045_get_token_price_historical_seed.sql` | Seeds `get_token_price_historical` into marketplace_platform_tools at 4,000 atomic USDC ($0.004) |
+| `046_web3_marketplace_seed.sql` | Marketplace seeding for web3 tools: `get_eth_balance`, `get_erc20_balance`, `get_block`, `get_transaction` |
+| `047_get_protocol_tvl_seed.sql` | Seeds `get_protocol_tvl` into marketplace_platform_tools at 3,000 atomic USDC ($0.003) |
+| `048_get_yield_rates_seed.sql` | Seeds `get_yield_rates` into marketplace_platform_tools at 4,000 atomic USDC ($0.004) |
+| `049_org_tool_output_schema_validation.sql` | Org tool output schema validation support |
+| `050_billable_tool_calls_accounting.sql` | Adds `billable_tool_calls`, `billable_tool_names`, `failed_tool_calls`, `failed_tool_names` to `usage_events` |
+| `051_gpt54_mini_pricing_seed.sql` | Seeds `openai-gpt54-mini-v1`: 938in/5625out per 1k tokens, run_price=10000 atomic USDC |
+| `052_get_lending_rates_marketplace_seed.sql` | `get_lending_rates` added to marketplace platform tools ($0.003) |
+| `053_zero_cost_tool_overrides.sql` | Zero-cost `tool_pricing_overrides` for `calculate`, `get_datetime`, `count_text_stats` |
+| `054_usage_events_cache_tokens.sql` | Adds `cache_read_tokens`, `cache_creation_tokens` to `usage_events` for telemetry |
+| `055_org_tool_get_only_constraint.sql` | Enforces GET-only active org webhook tools (`chk_active_tool_get_only` constraint) |
+| `056_web_search_price_alignment.sql` | Aligns `web_search` marketplace price to 15,000 atomic USDC ($0.015) |
+| `057_credit_ledger_debit_index.sql` | Partial index `idx_credit_ledger_debit_time` on `org_credit_ledger(org_id, created_at DESC) WHERE operation='debit'` |
 | `058_marketplace_dashboard_catalog.sql` | Public marketplace dashboard metadata: tool categories, aggregate call stats, catalog indexes, and platform category seeds |
 
 ### Neon (production)
@@ -1064,7 +1140,7 @@ Set `DATABASE_URL` to your Neon connection string (no `+asyncpg` prefix needed �
 app.py              # FastAPI app, lifespan, middleware, background workers, router registration
 routers/            # APIRouter modules (agent.py: POST /agent/run SSE + GET /agent/tools)
 agent_stream.py     # AG-UI SSE framing and A2UI stream-filter helpers
-auth.py             # RS256 JWT: create_access_token, require_auth dependency
+auth.py             # RS256 JWT & refresh tokens (auth methods: email, client_credentials, SIWE)
 billing/            # x402 billing layer, pricing, invoice queries, credit system
 cache.py            # Redis cache helpers
 config.py           # Settings via pydantic-settings (reads .env)

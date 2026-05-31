@@ -1,4 +1,6 @@
 -- Migration 013: pending settlements retry queue
+-- Domain: billing
+-- Invariant: Failed settlements retried with exponential backoff; amounts BIGINT atomic USDC
 -- Stores failed settlements for asynchronous retry with exponential backoff.
 -- Both x402 on-chain and credit debit failures are enqueued here.
 

@@ -1,4 +1,6 @@
 -- Migration 005: org-scoped M2M client credentials
+-- Domain: auth
+-- Invariant: Client secrets stored only as PBKDF2-SHA256 hashes; plaintext returned once at creation
 -- Allows per-org machine-to-machine credentials stored in the database,
 -- separate from the environment-variable-based fallback credential.
 --

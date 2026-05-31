@@ -8,6 +8,19 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
+# USDC uses 6 decimal places; amounts are stored as atomic BIGINT integers
+# (1_000_000 atomic = $1.00). Defined here for documentation/reference; existing
+# literals are intentionally left in place to avoid behavioural changes.
+USDC_DECIMALS: int = 6
+
+# BillingResult.billing_method values — selects the settlement rail.
+BILLING_METHOD_CREDIT = "credit"  # off-chain prepaid credit ledger debit
+BILLING_METHOD_X402 = "x402"  # on-chain USDC settlement via x402 facilitator
+
+# BillingResult.scheme values — x402 payment scheme.
+BILLING_SCHEME_EXACT = "exact"  # charge the exact signed amount
+BILLING_SCHEME_UPTO = "upto"  # charge metered actual_cost_usdc up to a signed ceiling
+
 
 class PricingRule(BaseModel):
     id: str

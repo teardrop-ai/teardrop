@@ -228,12 +228,22 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         return None  # success — continue to billing / FastMCP
 
     async def _billing_gate(self, request: Request) -> tuple | Response | None:
-        """Pre-request credit verification.
+        """Pre-request billing gate for ``tools/call`` requests.
+
+        Resolves the per-call tool cost for both rails, then routes by auth
+        method:
+
+        * x402 callers — return the pending tuple so the post-response hook can
+          settle on-chain via ``settle_payment``. No credit verification or
+          subscription gate applies (access is payment-gated, not org-gated).
+        * credit callers — enforce the marketplace subscription gate and verify
+          the org's credit balance before allowing execution.
 
         Returns:
-            None — billing disabled or not a tools/call request.
-            tuple(org_id, tool_cost, tool_name, req_id) — verified, ready for post-debit.
-            Response — billing rejected (insufficient credits).
+            None — billing disabled or not a billable ``tools/call`` request.
+            tuple(org_id, tool_cost, tool_name, req_id) — ready for post-settle.
+                ``org_id`` is None for anonymous x402 callers.
+            Response — billing rejected (subscription or insufficient credits).
         """
         settings = get_settings()
         if not settings.mcp_billing_enabled:
@@ -242,9 +252,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         org_id: str | None = getattr(request.state, "mcp_org_id", None)
         is_x402 = getattr(request.state, "x402_billing", None) is not None
 
-        # x402 callers are billed via on-chain settlement, not credits.
-        # Anonymous callers with no org can't be credit-billed.
-        if is_x402 or org_id is None:
+        # Anonymous, non-x402 callers can't be billed on either rail.
+        if not is_x402 and org_id is None:
             return None
 
         if request.method != "POST":
@@ -276,6 +285,12 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         default_cost = pricing.tool_call_cost if pricing else 0
 
         tool_cost = await resolve_tool_cost(tool_name, overrides, default_cost, settings.marketplace_enabled)
+
+        # x402 callers are billed via on-chain settlement after execution. The
+        # subscription gate and credit verification are credit-rail concepts and
+        # do not apply to anonymous per-call x402 payments.
+        if is_x402:
+            return (org_id, tool_cost, tool_name, req_id)
 
         # Subscription gate: marketplace tools require an active subscription.
         if "/" in tool_name and settings.marketplace_enabled:

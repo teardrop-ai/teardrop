@@ -1,4 +1,6 @@
 -- 036: Add get_dex_quote to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC
 --
 -- On-chain Uniswap v3 swap quote via direct QuoterV2 calls on Ethereum
 -- mainnet and Base. Queries all four fee tiers (100/500/3000/10000 bps)

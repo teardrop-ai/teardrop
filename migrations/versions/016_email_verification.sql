@@ -1,4 +1,6 @@
 -- Migration 016: email verification
+-- Domain: auth
+-- Invariant: Verification tokens are single-use and time-limited
 -- Adds is_verified flag to existing users (TRUE = pre-verified for all
 -- admin-created accounts) and creates the email_verification_tokens table
 -- used by self-registered users.

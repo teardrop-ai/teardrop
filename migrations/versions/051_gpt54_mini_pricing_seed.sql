@@ -1,4 +1,6 @@
 -- Seed GPT-5.4 mini pricing for synthesis-turn cost attribution.
+-- Domain: billing
+-- Invariant: Per-1k-token rates in BIGINT atomic USDC
 -- OpenAI list price: $0.75/M input, $4.50/M output.
 -- Teardrop rate (+25% margin): $0.9375/M input, $5.625/M output.
 -- Stored in atomic USDC per 1k tokens:

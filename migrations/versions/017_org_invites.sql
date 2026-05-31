@@ -1,4 +1,6 @@
 -- Migration 017: org member invites
+-- Domain: auth
+-- Invariant: Invite tokens are single-use and scoped to one org
 -- Token-authenticated invitation flow for adding users to an existing org
 -- without requiring a Teardrop platform admin.
 

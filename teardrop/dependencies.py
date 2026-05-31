@@ -13,7 +13,7 @@ from fastapi import Depends, HTTPException, status
 
 from teardrop.auth import require_auth
 
-__all__ = ["require_auth", "require_admin", "_require_org_id"]
+__all__ = ["require_auth", "require_admin", "require_org_admin", "_require_org_id"]
 
 
 async def require_admin(
@@ -24,6 +24,30 @@ async def require_admin(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
+        )
+    return payload
+
+
+async def require_org_admin(
+    payload: dict = Depends(require_auth),
+) -> dict:
+    """FastAPI dependency — requires an admin user bound to an org.
+
+    Used for org-scoped financial mutations (marketplace settlement wallet,
+    payout withdrawals, M2M credential rotation) where ordinary members must
+    not act. Reuses the existing ``role=admin`` JWT model — there is no
+    separate org-owner role — but additionally requires an ``org_id`` claim so
+    the action is unambiguously scoped to a single org.
+    """
+    if payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    if not payload.get("org_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No org_id in token.",
         )
     return payload
 

@@ -137,3 +137,94 @@ async def test_response_indicates_failure_handles_unparseable_body():
     response.body_iterator = _iter()
     failed = await MCPGatewayMiddleware._response_indicates_failure(response)
     assert failed is False
+
+
+# ─── _billing_gate: x402 callers must produce a pending settlement tuple ──────
+
+
+def _gate_request(body: bytes, *, is_x402: bool, org_id):
+    request = MagicMock()
+    request.method = "POST"
+    request.body = AsyncMock(return_value=body)
+    request.state = MagicMock()
+    request.state.mcp_org_id = org_id
+    request.state.x402_billing = MagicMock() if is_x402 else None
+    return request
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_x402_returns_pending_tuple():
+    """x402 tools/call must return a pending tuple (org_id=None) so settlement runs.
+
+    Regression: the gate previously short-circuited to None for x402, which meant
+    the post-response settlement hook never fired and callers were never charged.
+    """
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-1","method":"tools/call","params":{"name":"get_price"}}'
+    request = _gate_request(body, is_x402=True, org_id=None)
+
+    settings = MagicMock()
+    settings.mcp_billing_enabled = True
+    settings.marketplace_enabled = False
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=250)),
+        patch("billing.verify_credit", new=AsyncMock()) as verify_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result == (None, 250, "get_price", "req-1")
+    # x402 callers are not credit-verified.
+    verify_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_x402_skips_subscription_gate():
+    """Marketplace subscription gate is a credit-rail concept; x402 must skip it."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-2","method":"tools/call","params":{"name":"acme/tool"}}'
+    request = _gate_request(body, is_x402=True, org_id=None)
+
+    settings = MagicMock()
+    settings.mcp_billing_enabled = True
+    settings.marketplace_enabled = True
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("marketplace.check_org_subscription", new=AsyncMock()) as sub_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result == (None, 500, "acme/tool", "req-2")
+    sub_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_credit_path_still_verifies():
+    """Non-x402 org callers must still be credit-verified before execution."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-3","method":"tools/call","params":{"name":"get_price"}}'
+    request = _gate_request(body, is_x402=False, org_id="org-7")
+
+    settings = MagicMock()
+    settings.mcp_billing_enabled = True
+    settings.marketplace_enabled = False
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=100)),
+        patch("billing.verify_credit", new=AsyncMock(return_value=BillingResult(verified=True))) as verify_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result == ("org-7", 100, "get_price", "req-3")
+    verify_mock.assert_awaited_once()
+

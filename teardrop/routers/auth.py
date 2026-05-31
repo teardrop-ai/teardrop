@@ -18,7 +18,7 @@ from shared.email import send_invite_email, send_verification_email
 from teardrop import rate_limit as _rate_limit
 from teardrop.auth import create_access_token, require_auth
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id
+from teardrop.dependencies import _require_org_id, require_org_admin
 from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.siwe import _handle_siwe_login
 from teardrop.users import (
@@ -392,10 +392,25 @@ async def logout(
 
 # ─── Org invites ───────────────────────────────────────────────────────────────
 
+# Invite roles a member may grant. ``org_invites`` exist (migration 017) so org
+# members can add users WITHOUT involving a platform admin, so the privileged
+# ``admin`` role is deliberately not grantable here — that would be a privilege
+# escalation path. ``member`` is accepted as a backward-compatible alias (the
+# SDK documents it) and normalised to the canonical ``user`` role.
+_ALLOWED_INVITE_ROLES = frozenset({"user", "member"})
+
 
 class CreateInviteRequest(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     role: str = "user"
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in _ALLOWED_INVITE_ROLES:
+            raise ValueError(f"role must be one of: {sorted(_ALLOWED_INVITE_ROLES)}")
+        # Normalise the SDK-facing alias to the canonical stored role.
+        return "user" if v == "member" else v
 
 
 @router.post("/org/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED)
@@ -493,15 +508,19 @@ async def get_org_credentials(
 
 @router.post("/org/credentials/regenerate", tags=["Credentials"])
 async def regenerate_org_credentials(
-    payload: dict = Depends(require_auth),
+    payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:
     """Rotate org M2M credentials: delete all existing and issue a new pair.
 
-    The new client_secret is returned exactly once — store it immediately.
+    Admin-only: this destroys every existing machine credential for the org and
+    reveals the replacement secret, so it must not be available to ordinary
+    members. The new client_secret is returned exactly once — store it
+    immediately.
     """
     org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     await delete_org_client_credentials(org_id)
     cred, plaintext_secret = await create_client_credential(org_id)
+    logger.info("org_credentials_rotated org=%s rotated_by=%s", org_id, payload["sub"])
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={

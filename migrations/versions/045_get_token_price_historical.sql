@@ -1,4 +1,6 @@
 -- 045: Add get_token_price_historical to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC
 --
 -- Historical crypto price tool wrapping CoinGecko /coins/{id}/market_chart.
 -- Returns period statistics (start, end, % change, high, low) plus a

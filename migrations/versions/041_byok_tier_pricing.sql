@@ -1,4 +1,6 @@
 -- Migration 041: BYOK orchestration pricing tier.
+-- Domain: billing
+-- Invariant: Orchestration tier rate stored in BIGINT atomic USDC
 --
 -- Adds is_byok column to pricing_rules so the billing engine can resolve a
 -- separate rate for BYOK orgs (token-based orchestration fee) vs. standard

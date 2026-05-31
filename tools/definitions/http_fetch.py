@@ -9,7 +9,7 @@ import ipaddress
 import logging
 import socket
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 from pydantic import BaseModel, Field
@@ -119,6 +119,7 @@ class HttpFetchOutput(BaseModel):
 _MAX_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB
 _REQUEST_TIMEOUT = 10  # seconds
 _USER_AGENT = "Teardrop/1.0 (AI Agent; +https://teardrop.dev)"
+_MAX_REDIRECTS = 5  # hop cap for the SSRF-validated redirect loop
 
 
 def _extract_content(html: str) -> tuple[str | None, str]:
@@ -165,44 +166,83 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
 
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
+        # Follow redirects manually so every hop is re-validated against the
+        # SSRF guard. aiohttp's built-in redirect handling would resolve a
+        # public URL that 3xx-redirects to an internal/metadata target before
+        # we ever see it, defeating async_validate_url.
+        current_url = url
         async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                timeout=timeout,
-                headers={"User-Agent": _USER_AGENT},
-                max_field_size=8190,
-                allow_redirects=True,
-            ) as resp:
-                if resp.status != 200:
-                    return {
-                        "url": url,
-                        "title": None,
-                        "content": f"HTTP {resp.status}",
-                        "content_length": 0,
-                        "truncated": False,
-                    }
+            for _hop in range(_MAX_REDIRECTS + 1):
+                async with session.get(
+                    current_url,
+                    timeout=timeout,
+                    headers={"User-Agent": _USER_AGENT},
+                    max_field_size=8190,
+                    allow_redirects=False,
+                ) as resp:
+                    if resp.status in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("Location")
+                        if not location:
+                            return {
+                                "url": url,
+                                "title": None,
+                                "content": "Redirect missing Location header",
+                                "content_length": 0,
+                                "truncated": False,
+                            }
+                        # Resolve relative redirects against the current URL.
+                        next_url = urljoin(current_url, location)
+                        redirect_error = await async_validate_url(next_url)
+                        if redirect_error:
+                            return {
+                                "url": url,
+                                "title": None,
+                                "content": f"Redirect blocked: {redirect_error}",
+                                "content_length": 0,
+                                "truncated": False,
+                            }
+                        current_url = next_url
+                        continue
 
-                # Enforce size limit
-                content_length = resp.content_length
-                if content_length and content_length > _MAX_RESPONSE_BYTES:
-                    return {
-                        "url": url,
-                        "title": None,
-                        "content": f"Response too large: {content_length} bytes",
-                        "content_length": 0,
-                        "truncated": False,
-                    }
+                    if resp.status != 200:
+                        return {
+                            "url": url,
+                            "title": None,
+                            "content": f"HTTP {resp.status}",
+                            "content_length": 0,
+                            "truncated": False,
+                        }
 
-                body = await resp.read()
-                if len(body) > _MAX_RESPONSE_BYTES:
-                    body = body[:_MAX_RESPONSE_BYTES]
+                    # Enforce size limit
+                    content_length = resp.content_length
+                    if content_length and content_length > _MAX_RESPONSE_BYTES:
+                        return {
+                            "url": url,
+                            "title": None,
+                            "content": f"Response too large: {content_length} bytes",
+                            "content_length": 0,
+                            "truncated": False,
+                        }
 
-                # Detect encoding
-                encoding = resp.charset or "utf-8"
-                try:
-                    html = body.decode(encoding, errors="replace")
-                except (UnicodeDecodeError, LookupError):
-                    html = body.decode("utf-8", errors="replace")
+                    body = await resp.read()
+                    if len(body) > _MAX_RESPONSE_BYTES:
+                        body = body[:_MAX_RESPONSE_BYTES]
+
+                    # Detect encoding
+                    encoding = resp.charset or "utf-8"
+                    try:
+                        html = body.decode(encoding, errors="replace")
+                    except (UnicodeDecodeError, LookupError):
+                        html = body.decode("utf-8", errors="replace")
+                    break
+            else:
+                return {
+                    "url": url,
+                    "title": None,
+                    "content": "Too many redirects",
+                    "content_length": 0,
+                    "truncated": False,
+                }
 
     except aiohttp.ClientError as exc:
         return {

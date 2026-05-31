@@ -1,4 +1,6 @@
 -- 029: Sweep retry columns — add backoff metadata to tool_author_withdrawals
+-- Domain: marketplace
+-- Invariant: Sweep retries bounded by max_retries; exhausted withdrawals need manual reconciliation
 -- so the background sweep worker can track per-org retry state without a
 -- separate dead-letter table.
 --

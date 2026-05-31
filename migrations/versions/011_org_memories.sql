@@ -1,4 +1,6 @@
 -- Migration 011: org memories (persistent agent memory / RAG per org)
+-- Domain: memory
+-- Invariant: Memories are org-scoped; recall must filter by org_id
 -- Enables pgvector extension and creates org_memories table for storing
 -- per-org embedding-backed factual memories recalled during agent runs.
 

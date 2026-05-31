@@ -1,4 +1,6 @@
 -- Migration 010: per-org custom tools
+-- Domain: tools
+-- Invariant: Custom tools are org-scoped; never exposed in the public A2A card or MCP server
 -- Allows organisations to register webhook-backed tools that are injected
 -- into the agent at run time.  Tools are org-scoped and never appear in
 -- the public A2A agent card or MCP server.

@@ -1,4 +1,6 @@
 -- 033: Add get_token_approvals to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC ($0.004/call)
 --
 -- ERC-20 allowance audit tool — returns all non-zero approvals for a wallet
 -- across curated DeFi protocol spenders with unlimited-approval risk flags.

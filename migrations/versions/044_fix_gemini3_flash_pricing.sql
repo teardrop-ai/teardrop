@@ -1,4 +1,6 @@
 -- Migration 044: Correct Gemini 3 Flash Preview pricing.
+-- Domain: billing
+-- Invariant: Per-model rates in BIGINT atomic USDC; does not touch immutable usage_events
 --
 -- Migration 039 seeded this model using Gemini 2.0 Flash provider rates
 -- (~$0.10/M input, ~$0.40/M output), but Gemini 3 Flash Preview is priced

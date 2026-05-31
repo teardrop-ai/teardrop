@@ -1,4 +1,6 @@
 -- 031: Activate four bench tools in the marketplace catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC; ON CONFLICT(tool_name) DO NOTHING keeps the seed idempotent
 --
 -- get_gas_price, resolve_ens, read_contract, and decode_transaction were
 -- previously implemented (tools/definitions/) but not exposed as billed

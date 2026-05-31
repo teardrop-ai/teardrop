@@ -1,4 +1,6 @@
 -- 058: Marketplace dashboard catalog support.
+-- Domain: marketplace
+-- Invariant: Supports dashboard catalog views; no monetary change
 --
 -- Adds public-safe catalog metadata for O4 dashboard/SEO pages:
 --   - category filters for community and platform marketplace tools

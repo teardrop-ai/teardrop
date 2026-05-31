@@ -1,4 +1,6 @@
 -- 035: Add get_liquidation_risk to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC ($0.010/call)
 --
 -- Per-wallet DeFi liquidation risk assessment across Aave v3 and Compound v3
 -- on Ethereum mainnet and Base. Accepts up to 50 wallet addresses per call

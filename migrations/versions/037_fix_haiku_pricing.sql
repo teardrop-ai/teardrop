@@ -1,4 +1,6 @@
 -- Correct Claude Haiku 4.5 pricing seed (migration 022 used Haiku 3 rates).
+-- Domain: billing
+-- Invariant: Per-model rates in BIGINT atomic USDC; WHERE guard idempotent; does not touch immutable usage_events
 -- Anthropic list price: $1.00/M input, $5.00/M output.
 -- Teardrop rate (+25% margin): $1.25/M input = 1250 atomic, $6.25/M output = 6250 atomic.
 -- Idempotent: WHERE guard prevents double-apply.

@@ -1,4 +1,6 @@
 -- Separate attempt metrics from billable/failure metrics in usage accounting.
+-- Domain: billing
+-- Invariant: Distinguishes billable from attempt/failure metrics; monetary amounts remain BIGINT atomic USDC
 ALTER TABLE usage_events
 ADD COLUMN IF NOT EXISTS billable_tool_calls INTEGER NOT NULL DEFAULT 0;
 

@@ -1,4 +1,6 @@
 -- 048: Add get_yield_rates to the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC
 --
 -- DeFiLlama /pools aggregator — returns yield pools filtered by protocol,
 -- chain, minimum TVL, and minimum APY, sorted by APY descending. Covers

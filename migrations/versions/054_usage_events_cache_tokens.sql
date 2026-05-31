@@ -1,4 +1,6 @@
 -- Add provider cache-token telemetry columns for usage benchmarking.
+-- Domain: billing
+-- Invariant: Adds cache_read/creation token columns for accurate per-token billing
 
 ALTER TABLE usage_events
     ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER NOT NULL DEFAULT 0,

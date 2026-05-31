@@ -26,7 +26,7 @@ _AUTHOR_CONFIG = AuthorConfig(
 
 
 @pytest.mark.anyio
-async def test_set_author_config_success(api_client, monkeypatch):
+async def test_set_author_config_success(admin_api_client, monkeypatch):
     monkeypatch.setattr("teardrop.routers.marketplace.set_author_config", AsyncMock(return_value=_AUTHOR_CONFIG))
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
@@ -34,7 +34,7 @@ async def test_set_author_config_success(api_client, monkeypatch):
 
     config.get_settings.cache_clear()
 
-    resp = await api_client.post(
+    resp = await admin_api_client.post(
         "/marketplace/author-config",
         json={
             "settlement_wallet": _VALID_ADDR,
@@ -47,7 +47,28 @@ async def test_set_author_config_success(api_client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_set_author_config_invalid_wallet(api_client, monkeypatch):
+async def test_set_author_config_forbidden_for_member(api_client, monkeypatch):
+    """Non-admin members cannot change the settlement wallet (financial control)."""
+    set_mock = AsyncMock(return_value=_AUTHOR_CONFIG)
+    monkeypatch.setattr("teardrop.routers.marketplace.set_author_config", set_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={"settlement_wallet": _VALID_ADDR},
+    )
+    assert resp.status_code == 403
+    set_mock.assert_not_awaited()
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_set_author_config_invalid_wallet(admin_api_client, monkeypatch):
     monkeypatch.setattr(
         "teardrop.routers.marketplace.set_author_config",
         AsyncMock(side_effect=ValueError("Invalid wallet address")),
@@ -58,7 +79,7 @@ async def test_set_author_config_invalid_wallet(api_client, monkeypatch):
 
     config.get_settings.cache_clear()
 
-    resp = await api_client.post(
+    resp = await admin_api_client.post(
         "/marketplace/author-config",
         json={
             "settlement_wallet": "0x" + "00" * 20,  # zero address
@@ -191,7 +212,7 @@ async def test_get_earnings_by_tool_marketplace_disabled(api_client, monkeypatch
 
 
 @pytest.mark.anyio
-async def test_request_withdrawal_success(api_client, monkeypatch):
+async def test_request_withdrawal_success(admin_api_client, monkeypatch):
     withdrawal = AuthorWithdrawal(
         id="w-1",
         org_id="test-org-id",
@@ -203,19 +224,30 @@ async def test_request_withdrawal_success(api_client, monkeypatch):
     )
     monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", AsyncMock(return_value=withdrawal))
 
-    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    resp = await admin_api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
     assert resp.status_code == 201
     assert resp.json()["status"] == "pending"
 
 
 @pytest.mark.anyio
-async def test_request_withdrawal_insufficient(api_client, monkeypatch):
+async def test_request_withdrawal_forbidden_for_member(api_client, monkeypatch):
+    """Non-admin members cannot move funds out of the org balance."""
+    withdraw_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", withdraw_mock)
+
+    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    assert resp.status_code == 403
+    withdraw_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_request_withdrawal_insufficient(admin_api_client, monkeypatch):
     monkeypatch.setattr(
         "teardrop.routers.marketplace.request_withdrawal",
         AsyncMock(side_effect=ValueError("Insufficient balance")),
     )
 
-    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    resp = await admin_api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
     assert resp.status_code == 422
 
 

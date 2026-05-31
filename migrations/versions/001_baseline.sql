@@ -1,4 +1,6 @@
 -- Migration 001: baseline schema
+-- Domain: auth
+-- Invariant: Core tables (orgs, users, usage_events, wallets, SIWE nonces); idempotent via IF NOT EXISTS
 -- Creates all core tables that are also created imperatively by init_*_db().
 -- Idempotent via IF NOT EXISTS — safe to run against an existing Neon database.
 

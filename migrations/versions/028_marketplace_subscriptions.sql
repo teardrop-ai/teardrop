@@ -1,4 +1,6 @@
 -- 028: Marketplace subscriptions — let orgs subscribe to marketplace tools
+-- Domain: marketplace
+-- Invariant: Subscriptions keyed by qualified name (org_slug/tool); survive unpublish/republish
 -- for automatic injection into /agent/run.
 --
 -- Subscriptions use qualified names (e.g. "acme/weather") so they survive

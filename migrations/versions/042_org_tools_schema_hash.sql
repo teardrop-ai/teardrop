@@ -1,4 +1,6 @@
 -- Migration 042: Add schema_hash and last_schema_changed_at to org_tools.
+-- Domain: tools
+-- Invariant: schema_hash detects tool schema drift for subscribers
 --
 -- schema_hash is a GENERATED STORED column computed as md5(input_schema::text).
 -- JSONB-to-text cast is deterministic (Postgres normalises key ordering in the

@@ -1,4 +1,6 @@
 -- 046: Seed four web3 primitives into the marketplace platform tools catalog.
+-- Domain: tools
+-- Invariant: base_price_usdc BIGINT atomic USDC; ON CONFLICT(tool_name) DO NOTHING keeps the seed idempotent
 --
 -- These tools are fully implemented in the agent registry (tools/definitions/)
 -- and have been in production use since the baseline migration, but were never

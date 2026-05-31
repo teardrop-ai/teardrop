@@ -1,4 +1,6 @@
 -- Migration 013: MCP Marketplace
+-- Domain: marketplace
+-- Invariant: USDC amounts BIGINT atomic; revenue share in bps (7000 = 70% author)
 -- Adds slug to orgs, publishing flags to org_tools, and marketplace
 -- revenue-share tables (author config, earnings ledger, withdrawals).
 --
