@@ -174,7 +174,38 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
         }
 
     # ── Send message (with x402 payment if required) ──────────────────────
+    # Pre-debit: charge the org BEFORE dispatching to the remote agent so a
+    # post-execution debit failure (e.g. a concurrent debit draining the
+    # balance below the non-locking budget snapshot) cannot yield a free
+    # delegation. The charge is refunded below if dispatch fails or the remote
+    # does not complete.
     cost_usdc = 0
+    if billing_enabled:
+        from billing import fund_delegation
+
+        funded = await fund_delegation(org_id, estimated_cost, run_id, agent_url)
+        if not funded:
+            from billing import record_delegation_event
+
+            logger.warning("delegate_to_agent: pre-debit failed org=%s cost=%s", org_id, estimated_cost)
+            await record_delegation_event(
+                org_id=org_id,
+                run_id=run_id,
+                agent_url=agent_url,
+                agent_name=card.name,
+                task_status="failed",
+                cost_usdc=0,
+                error="Insufficient credit for delegation at debit time.",
+            )
+            return {
+                "agent_name": card.name,
+                "status": "failed",
+                "result": "",
+                "error": "Insufficient credit for delegation. Top up via POST /admin/credits/topup.",
+                "cost_usdc": 0,
+            }
+        cost_usdc = estimated_cost
+
     try:
         if use_x402:
             from billing import get_treasury_signer
@@ -197,10 +228,12 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
             )
     except Exception as exc:
         logger.warning("delegate_to_agent: message send failed for %s: %s", agent_url, exc)
-        # Record failed event if billing is enabled.
+        # Refund the pre-debit and record the failed event if billing is enabled.
         if billing_enabled:
-            from billing import record_delegation_event
+            from billing import record_delegation_event, refund_delegation
 
+            await refund_delegation(org_id, cost_usdc, run_id)
+            cost_usdc = 0
             await record_delegation_event(
                 org_id=org_id,
                 run_id=run_id,
@@ -225,25 +258,9 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
 
     result_text = extract_result_text(response)
 
-    # ── Post-delegation billing: debit credits + audit ────────────────────
+    # ── Post-delegation audit (charge already taken pre-dispatch) ──────────
     if billing_enabled and task_state == "completed":
-        from billing import apply_platform_fee, fund_delegation, record_delegation_event
-
-        # Use per-agent cap (or global default) as the cost for now.
-        raw_cost = (
-            agent_rule["max_cost_usdc"]
-            if agent_rule and agent_rule.get("max_cost_usdc", 0) > 0
-            else settings.a2a_delegation_max_cost_usdc
-        )
-        cost_usdc = apply_platform_fee(raw_cost)
-        funded = await fund_delegation(org_id, cost_usdc, run_id, agent_url)
-        if not funded:
-            cost_usdc = 0
-            logger.warning(
-                "delegate_to_agent: fund_delegation failed org=%s cost=%s",
-                org_id,
-                cost_usdc,
-            )
+        from billing import record_delegation_event
 
         await record_delegation_event(
             org_id=org_id,
@@ -255,8 +272,11 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
             billing_method="x402" if use_x402 else "credit",
         )
     elif billing_enabled:
-        from billing import record_delegation_event
+        # Remote agent did not complete — refund the pre-debit.
+        from billing import record_delegation_event, refund_delegation
 
+        await refund_delegation(org_id, cost_usdc, run_id)
+        cost_usdc = 0
         await record_delegation_event(
             org_id=org_id,
             run_id=run_id,

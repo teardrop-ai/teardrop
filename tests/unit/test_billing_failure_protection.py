@@ -228,3 +228,99 @@ async def test_billing_gate_credit_path_still_verifies():
     assert result == ("org-7", 100, "get_price", "req-3")
     verify_mock.assert_awaited_once()
 
+
+# ─── Settlement recovery: failed MCP settlements must be enqueued for retry ────
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_credit_debit_fail_enqueues_recovery():
+    """A failed credit debit (post-execution) must enqueue a recovery row."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock(spec=[])  # no x402_billing
+    response = MagicMock()
+    pending = ("org-1", 100, "test_tool", "req-1")
+
+    with (
+        patch("billing.debit_credit", new=AsyncMock(return_value=(False, 0))),
+        patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    enqueue_mock.assert_awaited_once()
+    args = enqueue_mock.await_args.args
+    # (usage_event_id, org_id, run_id, billing_method, amount_usdc)
+    assert args[1] == "org-1"
+    assert args[3] == "credit"
+    assert args[4] == 100
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_x402_exception_enqueues_recovery():
+    """An exception during x402 settlement must enqueue a recovery row."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock()
+    request.state.x402_billing = MagicMock()
+    request.state.x402_billing.payment_payload = "b64-payload"
+    response = MagicMock()
+    pending = ("org-1", 100, "acme/test_tool", "req-1")
+
+    with (
+        patch("billing.settle_payment", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    enqueue_mock.assert_awaited_once()
+    args = enqueue_mock.await_args.args
+    assert args[3] == "x402"
+    assert args[4] == 100
+    assert enqueue_mock.await_args.kwargs["payment_payload"] == "b64-payload"
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_x402_rejected_enqueues_recovery():
+    """A rejected x402 settlement must enqueue a recovery row."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock()
+    request.state.x402_billing = MagicMock()
+    request.state.x402_billing.payment_payload = None
+    response = MagicMock()
+    pending = ("org-1", 100, "acme/test_tool", "req-1")
+
+    with (
+        patch(
+            "billing.settle_payment",
+            new=AsyncMock(return_value=BillingResult(verified=True, settled=False, error="rejected")),
+        ),
+        patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    enqueue_mock.assert_awaited_once()
+    assert enqueue_mock.await_args.args[3] == "x402"
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_credit_success_does_not_enqueue():
+    """Regression: a successful credit debit must NOT enqueue recovery."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock(spec=[])
+    response = MagicMock()
+    pending = ("org-1", 100, "test_tool", "req-1")
+
+    with (
+        patch("billing.debit_credit", new=AsyncMock(return_value=(True, 100))),
+        patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    enqueue_mock.assert_not_called()
+    assert result is response
+

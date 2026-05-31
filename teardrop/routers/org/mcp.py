@@ -22,6 +22,7 @@ from mcp_client import (
 )
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
+from teardrop.rate_limit import _enforce_rate_limit
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -191,6 +192,12 @@ async def discover_mcp_server_tools(
 ) -> JSONResponse:
     """Connect to an MCP server and return its available tools."""
     org_id = _require_org_id(payload)
+    s = get_settings()
+    await _enforce_rate_limit(
+        f"mcp:discover:{org_id}",
+        s.rate_limit_mcp_discover_rpm,
+        detail="Rate limit exceeded for MCP server discovery.",
+    )
     srv = await get_org_mcp_server(server_id, org_id)
     if srv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found.")

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 
 import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -316,6 +317,32 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         return (org_id, tool_cost, tool_name, req_id)
 
+    @staticmethod
+    async def _enqueue_mcp_recovery(org_id, tool_cost: int, billing_method: str, billing) -> None:
+        """Enqueue a failed MCP settlement for asynchronous retry.
+
+        The MCP gateway has no usage_event row, so a synthetic UUID anchors both
+        the usage_event_id and run_id (``pending_settlements`` has no FK). Mirrors
+        the recovery path in ``agent_post_run.dispatch_settlement``.
+        """
+        from billing.settlement import enqueue_failed_settlement
+
+        payment_payload = None
+        if billing is not None and getattr(billing, "payment_payload", None):
+            payment_payload = str(billing.payment_payload)
+        try:
+            call_id = str(uuid.uuid4())
+            await enqueue_failed_settlement(
+                call_id,
+                org_id or "",
+                call_id,
+                billing_method,
+                tool_cost,
+                payment_payload=payment_payload,
+            )
+        except Exception:
+            logger.exception("Failed to enqueue MCP settlement recovery org=%s method=%s", org_id, billing_method)
+
     async def _settle_billing(
         self,
         request: Request,
@@ -348,10 +375,12 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 settled = await settle_payment(billing, actual_cost_usdc=tool_cost)
             except Exception:
                 logger.warning("x402 MCP settlement failed", exc_info=True)
+                await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
                 return response  # Settlement failed — do not record phantom earnings
 
             if not settled.settled:
                 logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
+                await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
                 return response
 
             if settled.tx_hash:
@@ -363,6 +392,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
             if not debited:
                 logger.warning("MCP debit failed org=%s tool=%s", org_id, tool_name)
+                await self._enqueue_mcp_recovery(org_id, tool_cost, "credit", None)
                 return response
 
         # Record marketplace earnings (fire-and-forget).

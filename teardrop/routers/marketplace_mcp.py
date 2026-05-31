@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -373,6 +374,23 @@ async def mcp_jsonrpc_handler(
         debited = False
         if billing.verified and billing.billing_method == "credit" and not execution_failed:
             debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            if not debited and tool_cost > 0:
+                # Tool already executed but the credit debit failed (e.g. a
+                # concurrent debit drained the balance below the preflight
+                # snapshot). Enqueue for asynchronous retry so the org is still
+                # charged — mirrors agent_post_run.dispatch_settlement. The
+                # gateway has no usage_event row, so a synthetic UUID anchors
+                # both ids (pending_settlements has no FK).
+                logger.warning("MCP debit failed org=%s tool=%s — enqueuing recovery", org_id, tool_name)
+                try:
+                    from billing.settlement import enqueue_failed_settlement
+
+                    call_id = str(uuid.uuid4())
+                    await enqueue_failed_settlement(
+                        call_id, org_id or "", call_id, "credit", tool_cost
+                    )
+                except Exception:
+                    logger.exception("Failed to enqueue MCP settlement recovery org=%s", org_id)
 
         # ── Record author earnings (fire-and-forget) ──────────────────
         # Only record earnings when the caller was actually charged to prevent

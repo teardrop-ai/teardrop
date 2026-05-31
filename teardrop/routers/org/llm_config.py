@@ -130,6 +130,21 @@ async def upsert_llm_config_endpoint(
 
     # SSRF validation for api_base
     if body.api_base:
+        # A custom api_base with no BYOK key would forward the platform's shared
+        # provider key to an arbitrary org-controlled endpoint (key exfiltration).
+        # Require BYOK: a key set in this request, or an existing stored key that
+        # this request preserves (api_key omitted, not explicitly cleared).
+        api_key_omitted = "api_key" not in body.model_fields_set
+        will_have_byok = body.api_key is not None
+        if not will_have_byok and api_key_omitted:
+            existing = await get_org_llm_config(org_id)
+            will_have_byok = existing is not None and existing.has_api_key
+        if not will_have_byok:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="api_base requires api_key (BYOK). Custom base URLs are not supported with the shared platform key.",
+            )
+
         if body.provider.lower() not in {"openai", "openrouter"}:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

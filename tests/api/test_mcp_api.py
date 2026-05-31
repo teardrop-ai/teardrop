@@ -246,6 +246,23 @@ async def test_discover_mcp_tools_server_not_found(api_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_discover_mcp_tools_rate_limited(api_client, monkeypatch):
+    from fastapi import HTTPException
+
+    async def _raise_rate_limit(*args, **kwargs):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for MCP server discovery.")
+
+    monkeypatch.setattr("teardrop.routers.org.mcp._enforce_rate_limit", _raise_rate_limit)
+    # get_org_mcp_server must NOT be reached once rate limited.
+    get_server = AsyncMock(return_value=_sample_server())
+    monkeypatch.setattr("teardrop.routers.org.mcp.get_org_mcp_server", get_server)
+
+    resp = await api_client.post("/mcp/servers/srv-1/discover")
+    assert resp.status_code == 429
+    get_server.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_discover_mcp_tools_connection_error(api_client, monkeypatch):
     monkeypatch.setattr(
         "teardrop.routers.org.mcp.get_org_mcp_server",

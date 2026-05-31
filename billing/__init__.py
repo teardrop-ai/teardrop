@@ -292,6 +292,17 @@ async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: s
     return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url)
 
 
+async def refund_delegation(org_id: str, cost_usdc: int, run_id: str) -> None:
+    """Refund a pre-debited delegation when dispatch fails or the remote did not complete.
+
+    Reuses ``admin_topup_credit`` so the reversal is recorded as an immutable
+    ``topup`` ledger entry; the ``reason`` preserves the delegation audit trail.
+    """
+    if cost_usdc <= 0:
+        return
+    await admin_topup_credit(org_id, cost_usdc, reason=f"a2a:refund run={run_id}")
+
+
 async def record_delegation_event(
     org_id: str,
     run_id: str,
@@ -629,6 +640,7 @@ __all__ = [
     "get_byok_platform_fee",
     "calculate_byok_orchestration_cost",
     "fund_delegation",
+    "refund_delegation",
     "record_delegation_event",
     "get_delegation_events",
     # spending limits
