@@ -9,7 +9,7 @@ and mcp_client so those modules can avoid cross-importing private helpers.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet
 from jsonschema import Draft7Validator
@@ -77,7 +77,14 @@ def build_pydantic_model(
     schema: dict[str, Any],
     model_name: str | None = None,
 ) -> type[BaseModel]:
-    """Create a Pydantic model from a JSON Schema 'properties' dict."""
+    """Create a Pydantic model from a JSON Schema 'properties' dict.
+
+    JSON Schema validation keywords (``enum``, ``minimum``/``maximum``,
+    ``minLength``/``maxLength``, ``pattern``) are translated into the
+    equivalent Pydantic ``Field`` constraints so they are enforced at tool
+    invocation time. Schemas that omit these keywords are unaffected, keeping
+    the builder backward-compatible for existing tools.
+    """
     properties = schema.get("properties", {})
     required_set = set(schema.get("required", []))
     fields: dict[str, Any] = {}
@@ -97,13 +104,47 @@ def build_pydantic_model(
             else:
                 py_type = list[str]
 
+        # enum constrains the value to a fixed set; model it as a Literal so the
+        # constraint is enforced regardless of the declared base type.
+        enum_values = field_def.get("enum")
+        if isinstance(enum_values, list) and enum_values:
+            py_type = Literal[tuple(enum_values)]  # type: ignore[valid-type]
+
+        field_kwargs = _build_field_constraints(field_def, json_type)
+
         if field_name in required_set:
-            fields[field_name] = (py_type, Field(..., description=description))
+            fields[field_name] = (py_type, Field(..., description=description, **field_kwargs))
         else:
-            fields[field_name] = (py_type | None, Field(default=None, description=description))
+            fields[field_name] = (py_type | None, Field(default=None, description=description, **field_kwargs))
 
     cls_name = model_name if model_name is not None else f"OrgTool_{name}_Input"
     return create_model(cls_name, **fields)
+
+
+def _build_field_constraints(field_def: dict[str, Any], json_type: str) -> dict[str, Any]:
+    """Translate JSON Schema validation keywords into Pydantic Field kwargs.
+
+    Only keywords present in ``field_def`` are emitted, so fields without
+    constraints get an empty kwargs dict and behave exactly as before.
+    Numeric bounds apply to integer/number types; length/pattern apply to
+    strings.
+    """
+    kwargs: dict[str, Any] = {}
+
+    if json_type in ("integer", "number"):
+        if "minimum" in field_def:
+            kwargs["ge"] = field_def["minimum"]
+        if "maximum" in field_def:
+            kwargs["le"] = field_def["maximum"]
+    elif json_type == "string":
+        if "minLength" in field_def:
+            kwargs["min_length"] = field_def["minLength"]
+        if "maxLength" in field_def:
+            kwargs["max_length"] = field_def["maxLength"]
+        if field_def.get("pattern"):
+            kwargs["pattern"] = field_def["pattern"]
+
+    return kwargs
 
 
 def validate_safe_schema_subset(schema: dict[str, Any]) -> list[str]:

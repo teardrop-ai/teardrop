@@ -184,6 +184,92 @@ class TestBuildPydanticModel:
         assert instance is not None
 
 
+# ─── Dynamic Pydantic Model — JSON Schema constraint enforcement ─────────────
+
+
+class TestBuildPydanticModelConstraints:
+    def test_enum_constraint_rejects_invalid_value(self):
+        from pydantic import ValidationError
+
+        schema = {
+            "properties": {"side": {"type": "string", "enum": ["buy", "sell"]}},
+            "required": ["side"],
+        }
+        model = _build_pydantic_model("enum_tool", schema)
+        assert model(side="buy").side == "buy"
+        with pytest.raises(ValidationError):
+            model(side="hold")
+
+    def test_integer_enum_constraint(self):
+        from pydantic import ValidationError
+
+        schema = {
+            "properties": {"level": {"type": "integer", "enum": [1, 2, 3]}},
+            "required": ["level"],
+        }
+        model = _build_pydantic_model("int_enum", schema)
+        assert model(level=2).level == 2
+        with pytest.raises(ValidationError):
+            model(level=9)
+
+    def test_minimum_maximum_constraint(self):
+        from pydantic import ValidationError
+
+        schema = {
+            "properties": {"qty": {"type": "integer", "minimum": 0, "maximum": 100}},
+            "required": ["qty"],
+        }
+        model = _build_pydantic_model("bounds", schema)
+        assert model(qty=50).qty == 50
+        with pytest.raises(ValidationError):
+            model(qty=-1)
+        with pytest.raises(ValidationError):
+            model(qty=101)
+
+    def test_min_max_length_constraint(self):
+        from pydantic import ValidationError
+
+        schema = {
+            "properties": {"code": {"type": "string", "minLength": 2, "maxLength": 5}},
+            "required": ["code"],
+        }
+        model = _build_pydantic_model("lengths", schema)
+        assert model(code="abc").code == "abc"
+        with pytest.raises(ValidationError):
+            model(code="x")
+        with pytest.raises(ValidationError):
+            model(code="toolong")
+
+    def test_pattern_constraint(self):
+        from pydantic import ValidationError
+
+        schema = {
+            "properties": {"slug": {"type": "string", "pattern": "^[a-z]+$"}},
+            "required": ["slug"],
+        }
+        model = _build_pydantic_model("pattern", schema)
+        assert model(slug="abc").slug == "abc"
+        with pytest.raises(ValidationError):
+            model(slug="ABC")
+
+    def test_no_constraints_backward_compatible(self):
+        schema = {
+            "properties": {"free": {"type": "string", "description": "anything goes"}},
+            "required": ["free"],
+        }
+        model = _build_pydantic_model("free", schema)
+        assert model(free="literally anything 123 !@#").free == "literally anything 123 !@#"
+
+    def test_optional_field_with_constraint_allows_none(self):
+        schema = {
+            "properties": {"qty": {"type": "integer", "minimum": 0, "maximum": 10}},
+            "required": [],
+        }
+        model = _build_pydantic_model("opt_bound", schema)
+        assert model().qty is None
+        assert model(qty=5).qty == 5
+
+
 # ─── Build LangChain Tool ────────────────────────────────────────────────────
 
 

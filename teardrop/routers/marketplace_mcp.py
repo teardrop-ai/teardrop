@@ -312,6 +312,27 @@ async def mcp_jsonrpc_handler(
         # Price resolution: admin override (qualified) > admin override (bare) > author price > default
         tool_cost = overrides.get(tool_name, overrides.get(actual_tool_name, default_cost))
 
+        # ── Resolve marketplace tool + final price BEFORE the billing gate ──
+        # The author's base_price_usdc may exceed the default cost, so the row
+        # must be fetched and the price settled before verify_credit; otherwise
+        # the preflight would approve the wrong (lower) amount and the tool
+        # would execute against a balance that cannot cover the real cost.
+        result: Any
+        author_org_id: str | None = None
+        tool_row: dict | None = None
+
+        if is_marketplace_tool:
+            tool_row = await get_marketplace_tool_by_name(actual_tool_name, tool_org_slug)
+            if tool_row is None:
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
+                )
+            author_org_id = tool_row.get("org_id")
+            # Refine cost with author base_price_usdc if no admin override exists
+            author_price = tool_row.get("base_price_usdc", 0)
+            if tool_name not in overrides and actual_tool_name not in overrides and author_price:
+                tool_cost = author_price
+
         # ── Billing gate (credit-only for MCP calls) ──────────────────
         billing = BillingResult()
         if s.billing_enabled:
@@ -325,21 +346,9 @@ async def mcp_jsonrpc_handler(
                     )
                 )
 
-        # ── Resolve and execute tool ──────────────────────────────────
-        result: Any
-        author_org_id: str | None = None
-
+        # ── Execute tool ──────────────────────────────────────────────
         if is_marketplace_tool:
-            tool_row = await get_marketplace_tool_by_name(actual_tool_name, tool_org_slug)
-            if tool_row is None:
-                return JSONResponse(
-                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
-                )
-            author_org_id = tool_row.get("org_id")
-            # Refine cost with author base_price_usdc if no admin override exists
-            author_price = tool_row.get("base_price_usdc", 0)
-            if tool_name not in overrides and actual_tool_name not in overrides and author_price:
-                tool_cost = author_price
+            assert tool_row is not None  # resolved above for marketplace tools
             result = await _execute_marketplace_tool(tool_row, arguments)
         else:
             # Built-in tool execution
@@ -386,9 +395,7 @@ async def mcp_jsonrpc_handler(
                     from billing.settlement import enqueue_failed_settlement
 
                     call_id = str(uuid.uuid4())
-                    await enqueue_failed_settlement(
-                        call_id, org_id or "", call_id, "credit", tool_cost
-                    )
+                    await enqueue_failed_settlement(call_id, org_id or "", call_id, "credit", tool_cost)
                 except Exception:
                     logger.exception("Failed to enqueue MCP settlement recovery org=%s", org_id)
 

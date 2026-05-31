@@ -687,6 +687,16 @@ async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
+        AsyncMock(
+            return_value={
+                "org_id": "author-org-id",
+                "name": "my_tool",
+                "base_price_usdc": 1_000,
+            }
+        ),
+    )
+    monkeypatch.setattr(
         "teardrop.routers.marketplace_mcp.verify_credit",
         AsyncMock(return_value=BillingResult(verified=False, error="Insufficient balance")),
     )
@@ -1157,6 +1167,117 @@ async def test_mcp_tools_call_uses_author_price(api_client, monkeypatch):
     )
     assert resp.status_code == 200
     assert "result" in resp.json()
+
+    config.get_settings.cache_clear()
+
+
+# ─── /mcp/v1 author price verified BEFORE execution (preflight order) ─────────
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_call_verifies_author_price_before_execution(api_client, monkeypatch):
+    """verify_credit must receive the author price, not the default cost.
+
+    Regression guard: previously the credit preflight ran with the default
+    tool cost before the author's higher base_price_usdc was resolved, so a
+    tool whose price exceeded the org's balance could still execute.
+    """
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    # default cost is small; author price is large.
+    pricing = MagicMock()
+    pricing.tool_call_cost = 1_000
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=pricing))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
+        AsyncMock(
+            return_value={
+                "org_id": "author-org-id",
+                "name": "my_tool",
+                "base_price_usdc": 2_000_000,
+            }
+        ),
+    )
+    verify_mock = AsyncMock(return_value=BillingResult(verified=True, billing_method="credit"))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.verify_credit", verify_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, 2_000_000)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
+    assert resp.status_code == 200
+    # verify_credit must have been called with the author price, not 1_000.
+    verify_mock.assert_awaited_once()
+    assert verify_mock.await_args.args[1] == 2_000_000
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_call_skips_execution_when_author_price_unaffordable(api_client, monkeypatch):
+    """When the org cannot afford the author price, the tool must NOT execute."""
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    pricing = MagicMock()
+    pricing.tool_call_cost = 1_000
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=pricing))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
+        AsyncMock(
+            return_value={
+                "org_id": "author-org-id",
+                "name": "my_tool",
+                "base_price_usdc": 2_000_000,
+            }
+        ),
+    )
+    # Balance covers default (1_000) but not author price (2_000_000): reject.
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.verify_credit",
+        AsyncMock(return_value=BillingResult(error="Insufficient credit")),
+    )
+    exec_mock = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", exec_mock)
+    debit_mock = AsyncMock(return_value=(True, 0))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", debit_mock)
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {"name": "acme/my_tool", "arguments": {}},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "error" in body
+    assert body["error"]["code"] == -32000
+    # The tool must not have run and no debit attempted.
+    exec_mock.assert_not_awaited()
+    debit_mock.assert_not_awaited()
 
     config.get_settings.cache_clear()
 

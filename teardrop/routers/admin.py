@@ -39,6 +39,7 @@ from org_tools import list_org_tools
 from teardrop.config import get_settings
 from teardrop.dependencies import require_admin
 from teardrop.memory import count_memories, delete_all_org_memories, list_memories
+from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.routers.org.mcp import _mcp_server_to_response
 from teardrop.routers.org.tools import _org_tool_to_response
 from teardrop.usage import get_usage_by_org, get_usage_by_user
@@ -169,6 +170,11 @@ async def admin_upsert_tool_pricing(
 
     Accepts built-in tool names or qualified marketplace names (e.g. 'acme/weather').
     """
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     known_names = {t.name for t in registry.list_latest(include_deprecated=True)}
     tool_valid = body.tool_name in known_names
 
@@ -235,6 +241,11 @@ async def admin_credits_topup(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Top up an org's prepaid credit balance (admin only)."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     # Record the acting admin in the immutable credit ledger ``reason`` so the
     # financial audit trail attributes the top-up to a specific operator.
     reason = f"admin_topup by {_admin.get('sub', 'unknown')}"
@@ -483,6 +494,11 @@ async def admin_process_withdrawal(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Admin: process a pending withdrawal (mark earnings as settled)."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     try:
         withdrawal = await process_withdrawal(withdrawal_id)
     except ValueError as exc:
@@ -511,6 +527,11 @@ async def admin_complete_withdrawal(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Admin: record the on-chain tx_hash for a processed withdrawal."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     try:
         await complete_withdrawal(withdrawal_id, body.tx_hash)
     except ValueError as exc:
@@ -549,6 +570,11 @@ async def admin_marketplace_sweep(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Admin: manually trigger a marketplace withdrawal sweep."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     from marketplace import marketplace_sweep_once
 
     count = await marketplace_sweep_once()

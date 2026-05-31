@@ -139,6 +139,20 @@ async def init_billing(pool: asyncpg.Pool) -> None:
         settings.x402_scheme,
     )
 
+    # Operational calibration check: the x402 "exact" scheme settles the signed
+    # authorization amount (run_price_usdc) and cannot settle a different per-tool
+    # cost. If a tool's flat call cost exceeds run_price_usdc, exact-scheme MCP
+    # calls undercharge by the delta. Warn so operators raise run_price_usdc or
+    # switch the MCP endpoint to the "upto" scheme.
+    if settings.x402_scheme == "exact" and rule is not None and rule.tool_call_cost > rule.run_price_usdc:
+        logger.warning(
+            "x402 exact scheme: tool_call_cost=%d exceeds run_price_usdc=%d — "
+            "MCP tool calls priced above run_price_usdc will undercharge by the "
+            "delta. Raise run_price_usdc or set x402_scheme=upto.",
+            rule.tool_call_cost,
+            rule.run_price_usdc,
+        )
+
 
 async def close_billing() -> None:
     """Release billing resources."""
