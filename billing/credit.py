@@ -118,8 +118,17 @@ class BillingCreditService:
                         if daily_spend + amount_usdc > spending_limit:
                             return False, 0
 
-                    new_balance = max(0, original_balance - amount_usdc)
-                    actual_deducted = original_balance - new_balance
+                    # Strict debit: never partially settle. If the balance cannot
+                    # cover the full amount, reject so the caller routes the run to
+                    # the failed-settlement recovery queue instead of recording a
+                    # phantom "settled" event for less than the owed amount. This
+                    # closes the concurrent-debit race where two runs both pass the
+                    # non-locking preflight and the second drains to zero.
+                    if original_balance < amount_usdc:
+                        return False, 0
+
+                    new_balance = original_balance - amount_usdc
+                    actual_deducted = amount_usdc
                     await conn.execute(
                         """
                         UPDATE org_credits

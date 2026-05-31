@@ -50,11 +50,20 @@ class WebhookCaller:
         *,
         params: dict[str, Any],
         decrypt_header: Callable[[str], str],
-        validate_url: Callable[[str], Awaitable[str | None]],
+        validate_url: Callable[[str], Awaitable[tuple[str | None, list[str]]]],
         client_session_factory: Callable[..., Any] | None = None,
+        connector_factory: Callable[[str, list[str]], Any] | None = None,
     ) -> WebhookCallResult:
-        """Execute a GET webhook call and return raw response details."""
-        url_error = await validate_url(self._url)
+        """Execute a GET webhook call and return raw response details.
+
+        ``validate_url`` returns ``(error, resolved_ips)``. When ``error`` is
+        None the call proceeds and, if ``connector_factory`` is supplied, the
+        connection is pinned to ``resolved_ips`` — closing the DNS-rebinding
+        TOCTOU window between validation and the actual TCP connect.
+        """
+        from urllib.parse import urlparse
+
+        url_error, resolved_ips = await validate_url(self._url)
         if url_error is not None:
             raise WebhookCallError(f"Webhook URL blocked: {url_error}", "ssrf_blocked")
 
@@ -67,8 +76,12 @@ class WebhookCaller:
 
         timeout = aiohttp.ClientTimeout(total=self._timeout_seconds)
         session_factory = client_session_factory or aiohttp.ClientSession
+        session_kwargs: dict[str, Any] = {"timeout": timeout}
+        if connector_factory is not None and resolved_ips:
+            hostname = urlparse(self._url).hostname or ""
+            session_kwargs["connector"] = connector_factory(hostname, resolved_ips)
         try:
-            async with session_factory(timeout=timeout) as session:
+            async with session_factory(**session_kwargs) as session:
                 resp = await session.get(self._url, headers=headers, params=params)
                 body = await resp.read()
                 if len(body) > self._max_response_bytes:
@@ -84,3 +97,4 @@ class WebhookCaller:
         except aiohttp.ClientError as exc:
             error_name = type(exc).__name__
             raise WebhookCallError(f"Webhook request failed: {error_name}", error_name)
+

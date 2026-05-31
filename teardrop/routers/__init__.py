@@ -14,7 +14,7 @@ from fastapi import FastAPI
 
 def register_routers(app: FastAPI) -> None:
     """Attach all domain routers to *app*. Order preserves OpenAPI grouping."""
-    from teardrop.routers import admin, agent, auth, billing, marketplace, system, wallets
+    from teardrop.routers import admin, agent, auth, billing, marketplace, marketplace_mcp, system, wallets
     from teardrop.routers.org import a2a as org_a2a
     from teardrop.routers.org import llm_config as org_llm_config
     from teardrop.routers.org import mcp as org_mcp
@@ -32,4 +32,5 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(org_memory.router)
     app.include_router(org_llm_config.router)
     app.include_router(admin.router)
+    app.include_router(marketplace_mcp.router)
     app.include_router(marketplace.router)

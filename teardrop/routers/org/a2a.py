@@ -40,6 +40,14 @@ async def add_a2a_agent(
 ) -> JSONResponse:
     """Add a trusted A2A agent to the authenticated org's allowlist."""
     org_id: str = payload.get("org_id", payload["sub"])
+    # jwt_forward causes the caller's JWT to be replayed to an arbitrary external
+    # agent — a credential-exfiltration risk. Restrict it to org admins so a
+    # low-privilege member cannot register an allowlist entry that leaks tokens.
+    if body.jwt_forward and payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="jwt_forward=True requires org admin role",
+        )
     pool: asyncpg.Pool = request.app.state.pool
     agent_id = str(uuid.uuid4())
     try:

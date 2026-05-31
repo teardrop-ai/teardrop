@@ -273,6 +273,10 @@ class Settings(BaseSettings):
         default=10,
         description="Per-org rate limit for POST /tools/test-webhook (requests per minute).",
     )
+    rate_limit_topup_rpm: int = Field(
+        default=10,
+        description="Per-org rate limit for POST /billing/topup/stripe and /billing/topup/usdc (requests per minute).",
+    )
 
     # ── JWT Authentication ─────────────────────────────────────────────────────
     jwt_private_key_path: str = Field(

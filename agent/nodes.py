@@ -3,7 +3,31 @@
 """Graph node implementations for the Teardrop LangGraph agent.
 
 Node pipeline:
-  planner  →  (tool_executor ↩)  →  ui_generator  →  END
+  planner_node  →  (tool_executor_node ↩)  →  ui_generator_node  →  END
+
+─── planner_node ─────────────────────────────────────────────────────────────
+Calls the LLM with all bound tools (platform + org + MCP + marketplace).
+Reads: messages, slots, plan, _org_tools, _llm_config, _usage, _excluded_tool_names.
+Writes: task_status, plan, _usage (token counts via _accumulate_usage, per-turn
+attribution for multi-provider turns), _synthesis_forced.
+Handles provider cooldown and fallback routing, compiler mode, and forced
+synthesis when all tool calls were suppressed.
+
+─── tool_executor_node ───────────────────────────────────────────────────────
+Executes all pending tool calls from the latest AIMessage in parallel.
+Writes: billable_tool_calls, billable_tool_names (used for marketplace earnings
+and the USAGE_SUMMARY SSE event), failed_tool_calls, tool_iterations,
+delegation_spend_usdc. Within-run deduplication: identical (tool_name, args)
+calls are suppressed. Per-tool call-count guards (agent_tool_max_calls_per_run)
+enforced here.
+
+─── ui_generator_node ────────────────────────────────────────────────────────
+Parses or generates A2UI components from the agent's final AIMessage content.
+Emits SURFACE_UPDATE events (separate from TEXT_MESSAGE_CONTENT).
+
+─── _accumulate_usage ────────────────────────────────────────────────────────
+Adds per-turn token counts (tokens_in, tokens_out, cache_read_tokens,
+cache_creation_tokens) to the running _usage dict for USAGE_SUMMARY reporting.
 """
 
 from __future__ import annotations
@@ -17,14 +41,24 @@ from typing import Any
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
 from agent.llm import create_llm_from_config, extract_usage, get_llm_for_request
-from agent.planner_ir import parse_plan_from_text, resolve_plan_references
-from agent.slots import render_slots_markdown, summarize_into_slots
+from agent.node_executor import (
+    _call_signature,  # noqa: F401  (re-exported for backward compatibility)
+    _execute_single_tool,  # noqa: F401  (re-exported for backward compatibility)
+    _execute_single_tool_safe,  # noqa: F401  (re-exported for backward compatibility)
+    _get_liquidation_risk_targets,  # noqa: F401  (re-exported for backward compatibility)
+    tool_executor_node,  # noqa: F401  (re-exported; used by agent.graph)
+)
+from agent.node_usage import (
+    _accumulate_usage,
+    _covered_defi_keys_from_result,  # noqa: F401  (re-exported for backward compatibility)
+)
+from agent.planner_ir import parse_plan_from_text
+from agent.slots import render_slots_markdown
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from teardrop.benchmarks import get_model_context_specs
 from teardrop.config import get_settings
 from teardrop.llm_config import is_provider_cooled_down, record_provider_failure
 from tools import registry
-from tools.executor import execute_tool
 
 logger = logging.getLogger(__name__)
 
@@ -621,73 +655,23 @@ async def _invoke_planner_llm(
         }
 
 
-def _accumulate_usage(state: AgentState, response: AIMessage, *, provider: str, model: str) -> dict[str, Any]:
-    """Add this turn's token counts to running usage and keep per-turn attribution."""
-    usage = dict(state.metadata.get("_usage", {}))
-    extracted = extract_usage(response)
-    delta_in = int(extracted.get("tokens_in", 0))
-    delta_out = int(extracted.get("tokens_out", 0))
-    delta_cache_read = int(extracted.get("cache_read_input_tokens", 0))
-    delta_cache_creation = int(extracted.get("cache_creation_input_tokens", 0))
-    usage["tokens_in"] = int(usage.get("tokens_in", 0)) + delta_in
-    usage["tokens_out"] = int(usage.get("tokens_out", 0)) + delta_out
-    usage["cache_read_tokens"] = int(usage.get("cache_read_tokens", 0)) + delta_cache_read
-    usage["cache_creation_tokens"] = int(usage.get("cache_creation_tokens", 0)) + delta_cache_creation
-
-    turns = usage.get("turns")
-    if not isinstance(turns, list):
-        turns = []
-    turns.append(
-        {
-            "provider": str(provider or ""),
-            "model": str(model or ""),
-            "tokens_in": delta_in,
-            "tokens_out": delta_out,
-            "cache_read_tokens": delta_cache_read,
-            "cache_creation_tokens": delta_cache_creation,
-        }
-    )
-    usage["turns"] = turns
-    return usage
-
-
-def _covered_defi_keys_from_result(content: str) -> set[str]:
-    """Return wallet+chain keys that have DeFi risk coverage from get_defi_positions.
-
-    Coverage is recorded only when both Aave and Compound risk fetches did not
-    fail for that wallet/chain. This avoids blocking get_liquidation_risk when
-    risk-relevant protocol data is partial or unavailable.
-    """
-    try:
-        payload = json.loads(content)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return set()
-
-    wallet = payload.get("wallet_address")
-    chain_id = payload.get("chain_id")
-    if not wallet or chain_id is None:
-        return set()
-
-    errors = payload.get("errors") or []
-    failed_protocols = {str(err.get("protocol", "")).lower() for err in errors if isinstance(err, dict) and err.get("protocol")}
-    # get_defi_positions risk coverage requires both Aave and Compound fetches.
-    if "aave_v3" in failed_protocols or "compound_v3" in failed_protocols:
-        return set()
-
-    return {f"{int(chain_id)}:{str(wallet).lower()}"}
-
-
-def _get_liquidation_risk_targets(call_args: dict[str, Any]) -> set[str]:
-    """Build wallet+chain keys targeted by a get_liquidation_risk call."""
-    chain_id = call_args.get("chain_id")
-    wallets = call_args.get("wallet_addresses") or []
-    if chain_id is None or not isinstance(wallets, list):
-        return set()
-    return {f"{int(chain_id)}:{str(addr).lower()}" for addr in wallets if addr}
-
-
 async def planner_node(state: AgentState) -> dict[str, Any]:
-    """Reasoning / planning node.  Calls the LLM with bound tools."""
+    """Run the LangGraph planner stage for one turn.
+
+    Reads ``state.metadata._org_tools``, ``_llm_config``, ``_usage``,
+    ``_excluded_tool_names``, ``_synthesis_forced`` and ``state.plan`` (compiler mode).
+    Resolves and invokes the LLM (with provider cooldown fallback if not BYOK).
+    Binds all tools for non-synthesis turns; skips bind_tools on forced synthesis
+    to reduce prompt size.
+
+    Updates ``state.metadata._usage`` via ``_accumulate_usage`` for token billing:
+    per-turn ``tokens_in``, ``tokens_out``, ``cache_read_tokens``,
+    ``cache_creation_tokens``, and per-turn attribution in ``_usage.turns``.
+
+    Returns a state patch with ``messages``, ``task_status``, ``metadata``, and
+    ``plan``. Sets ``task_status = EXECUTING`` when tool calls are present;
+    ``GENERATING_UI`` when the response is final.
+    """
     logger.debug("planner_node: entry, %d messages", len(state.messages))
     settings = get_settings()
     if len(state.messages) > settings.agent_thread_warning_message_count:
@@ -969,432 +953,6 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         "messages": [response],
         "task_status": next_status,
         "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
-        "plan": next_plan,
-    }
-
-
-def _call_signature(tool_name: str, tool_args: dict) -> str:
-    """Stable hash for a (tool_name, args) pair — used for within-run dedup.
-
-    sort_keys ensures key-ordering differences never produce a false miss.
-    The 16-char prefix is sufficient for dedup at this scale and avoids
-    storing full SHA-256 digests in state metadata.
-    """
-    import hashlib
-
-    args_hash = hashlib.sha256(json.dumps(tool_args, sort_keys=True).encode()).hexdigest()[:16]
-    return f"{tool_name}:{args_hash}"
-
-
-async def _execute_single_tool(
-    call: dict[str, Any], tools_by_name: dict, metadata: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    """Execute one tool call; returns result dict with metadata and ToolMessage.
-
-    Errors are caught per-tool so a single failure does not abort sibling calls.
-    For ``delegate_to_agent``, injects org context from *metadata* so billing
-    and allowlist enforcement can operate.
-    """
-    import time
-
-    tool_name: str = call["name"]
-    tool_args: dict[str, Any] = call["args"]
-    call_id: str = call["id"]
-    start_mono = time.monotonic()
-
-    tool = tools_by_name.get(tool_name)
-
-    async def _delegate_invoke(**kwargs: Any) -> Any:
-        from billing import _get_pool as _get_billing_pool
-        from tools.definitions.delegate_to_agent import delegate_to_agent
-
-        config = {
-            "configurable": {
-                "org_id": metadata.get("org_id", "") if metadata else "",
-                "run_id": metadata.get("run_id", "") if metadata else "",
-                "db_pool": _get_billing_pool(),
-                "jwt_token": metadata.get("_jwt_token") if metadata else None,
-            }
-        }
-        return await delegate_to_agent(config=config, **kwargs)
-
-    if tool_name == "delegate_to_agent" and metadata:
-        # Enforce per-run delegation quota.
-        from teardrop.config import get_settings as _get_settings
-
-        _s = _get_settings()
-        usage = metadata.get("_usage", {})
-        delegation_count = usage.get("delegation_count", 0)
-        if delegation_count >= _s.a2a_delegation_max_per_run:
-            content = json.dumps(
-                {
-                    "agent_name": "unknown",
-                    "status": "failed",
-                    "result": "",
-                    "error": f"Delegation quota exceeded: max {_s.a2a_delegation_max_per_run} per run",
-                    "cost_usdc": 0,
-                }
-            )
-            return {
-                "message": ToolMessage(content=content, tool_call_id=call_id),
-                "name": tool_name,
-                "elapsed_ms": 0,
-                "content": content,
-                "billable": False,
-            }
-
-        result = await execute_tool(
-            tool_name=tool_name,
-            tool_call_id=call_id,
-            tool_args=tool_args,
-            invoke=_delegate_invoke,
-        )
-    else:
-        result = await execute_tool(
-            tool_name=tool_name,
-            tool_call_id=call_id,
-            tool_args=tool_args,
-            tool=tool,
-        )
-
-    elapsed = int((time.monotonic() - start_mono) * 1000)
-    content = result.content
-    max_chars = get_settings().agent_max_tool_result_chars
-    if max_chars > 0 and len(content) > max_chars:
-        content = f"{content[:max_chars]}...[TRUNCATED: {len(result.content)} chars total]"
-    logger.info("tool_executor: %s completed in %dms (result_len=%d)", tool_name, elapsed, len(content))
-    return {
-        "message": ToolMessage(content=content, tool_call_id=call_id),
-        "name": tool_name,
-        "elapsed_ms": elapsed,
-        "content": content,
-        "billable": result.billable,
-        "error_class": result.error_class,
-    }
-
-
-async def _execute_single_tool_safe(
-    call: dict,
-    tools_by_name: dict,
-    metadata: dict | None,
-    per_tool_timeout_seconds: float | None,
-) -> dict[str, Any]:
-    """Run a single tool with a per-tool timeout and convert failures to ToolMessages."""
-    import time
-
-    start_mono = time.monotonic()
-    tool_name = call.get("name", "unknown_tool")
-    call_id = call.get("id", "unknown_call")
-    try:
-        if per_tool_timeout_seconds is None:
-            return await _execute_single_tool(call, tools_by_name, metadata)
-        return await asyncio.wait_for(
-            _execute_single_tool(call, tools_by_name, metadata),
-            timeout=per_tool_timeout_seconds,
-        )
-    except asyncio.TimeoutError:
-        elapsed = int((time.monotonic() - start_mono) * 1000)
-        content = (
-            f"[TOOL_TIMEOUT] '{tool_name}' exceeded the {per_tool_timeout_seconds}s per-tool timeout. "
-            "Continue synthesis with available data."
-        )
-        logger.warning("tool_executor: %s per-tool timeout after %ss", tool_name, per_tool_timeout_seconds)
-        return {
-            "message": ToolMessage(content=content, tool_call_id=call_id),
-            "name": tool_name,
-            "elapsed_ms": elapsed,
-            "content": content,
-            "billable": False,
-            "error_class": "timeout",
-        }
-    except Exception as exc:
-        elapsed = int((time.monotonic() - start_mono) * 1000)
-        content = (
-            f"[TOOL_ERROR] '{tool_name}' failed unexpectedly ({type(exc).__name__}). Continue synthesis with available data."
-        )
-        logger.exception("tool_executor: %s unexpected failure", tool_name)
-        return {
-            "message": ToolMessage(content=content, tool_call_id=call_id),
-            "name": tool_name,
-            "elapsed_ms": elapsed,
-            "content": content,
-            "billable": False,
-            "error_class": "unexpected_error",
-        }
-
-
-async def tool_executor_node(state: AgentState) -> dict[str, Any]:
-    """Execute all pending tool calls in the latest AI message, in parallel."""
-    logger.debug("tool_executor_node: entry")
-    plan = state.plan
-    plan_outputs = dict(state.metadata.get("_plan_outputs", {}))
-    using_plan = bool(plan is not None and not plan.is_done())
-
-    incoming_calls: list[dict[str, Any]] = []
-    stage_call_ids: list[str] = []
-    if using_plan and plan is not None:
-        stage = plan.stages[plan.current_stage_index]
-        completed = set(plan.completed_call_ids)
-        for call in stage.calls:
-            if any(dep not in completed for dep in call.depends_on):
-                continue
-            resolved_args = resolve_plan_references(call.args, plan_outputs)
-            incoming_calls.append({"id": call.call_id, "name": call.tool, "args": resolved_args})
-            stage_call_ids.append(call.call_id)
-    else:
-        last_msg = state.messages[-1]
-        if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
-            return {"task_status": TaskStatus.GENERATING_UI}
-        incoming_calls = list(last_msg.tool_calls)
-        stage_call_ids = [str(c.get("id", "")) for c in incoming_calls if isinstance(c, dict)]
-
-    platform_tools_by_name = _get_cached_tools_by_name()
-    tools_by_name = {
-        **platform_tools_by_name,
-        **state.metadata.get("_org_tools_by_name", {}),
-    }
-    excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
-    if excluded_tool_names:
-        tools_by_name = {name: tool for name, tool in tools_by_name.items() if name not in excluded_tool_names}
-    platform_tool_names = set(platform_tools_by_name.keys())
-
-    # ── Accumulate tool usage ─────────────────────────────────────────────
-    usage = dict(state.metadata.get("_usage", {}))
-    tool_names_acc: list[str] = list(usage.get("tool_names", []))
-    failed_tool_names_acc: list[str] = list(usage.get("failed_tool_names", []))
-    tool_call_counts: dict[str, int] = dict(usage.get("_tool_call_counts", {}))
-    custom_tool_calls = int(usage.get("custom_tool_calls", 0))
-    defi_positions_covered: set[str] = set(usage.get("_defi_positions_covered", []))
-    tool_max_calls = dict(get_settings().agent_tool_max_calls_per_run)
-    max_custom_tool_calls = int(get_settings().max_custom_tool_calls_per_run)
-
-    # ── Within-run deduplication ──────────────────────────────────────────
-    # Calls with identical (tool_name, args) are suppressed so a re-entering
-    # planner cannot re-fetch data that is already in the conversation.
-    completed_sigs: list[str] = list(usage.get("_completed_calls", []))
-    dedup_calls: list[dict] = []
-    skipped_messages: list[ToolMessage] = []
-    seen_this_batch: set[str] = set()
-    for call in incoming_calls:
-        if call["name"] not in platform_tool_names:
-            accepted_custom_in_batch = sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
-            if (custom_tool_calls + accepted_custom_in_batch) >= max_custom_tool_calls:
-                skipped_messages.append(
-                    ToolMessage(
-                        content=(f"[CUSTOM_TOOL_CAP_EXCEEDED] custom tool calls exceeded per-run cap ({max_custom_tool_calls})."),
-                        tool_call_id=call["id"],
-                    )
-                )
-                continue
-            dedup_calls.append(call)
-            continue
-
-        max_calls = tool_max_calls.get(call["name"])
-        tool_meta = getattr(tools_by_name.get(call["name"]), "metadata", None)
-        if isinstance(tool_meta, dict):
-            meta_cap = tool_meta.get("max_calls_per_run")
-            if isinstance(meta_cap, int) and meta_cap > 0:
-                max_calls = meta_cap
-        current_calls = int(tool_call_counts.get(call["name"], 0))
-        # Account for same-tool calls already accepted in this batch.
-        accepted_in_batch = sum(1 for c in dedup_calls if c["name"] == call["name"])
-        if max_calls is not None and (current_calls + accepted_in_batch) >= int(max_calls):
-            logger.debug("cap: suppressing capped call '%s'", call["name"])
-            skipped_messages.append(
-                ToolMessage(
-                    content=(
-                        f"[TOOL_CALL_CAP_EXCEEDED] '{call['name']}' exceeded the per-run cap "
-                        f"({max_calls}). Reuse prior results already in the conversation."
-                    ),
-                    tool_call_id=call["id"],
-                )
-            )
-            continue
-
-        if call["name"] == "get_liquidation_risk":
-            targets = _get_liquidation_risk_targets(call.get("args", {}))
-            if targets and targets.issubset(defi_positions_covered):
-                logger.debug("semantic: suppressing redundant call '%s'", call["name"])
-                skipped_messages.append(
-                    ToolMessage(
-                        content=(
-                            "[SEMANTIC_REDUNDANCY_BLOCKED] get_defi_positions already returned "
-                            "risk-relevant data for the requested wallet(s)/chain. "
-                            "Use those results instead of re-calling get_liquidation_risk."
-                        ),
-                        tool_call_id=call["id"],
-                    )
-                )
-                continue
-
-        if call["name"] == "get_token_price":
-            tokens = (call.get("args") or {}).get("tokens") or []
-            if isinstance(tokens, list) and tokens:
-                normalized = [t.strip().lower() for t in tokens if isinstance(t, str) and t.strip()]
-                if normalized and all(t.startswith("0x") for t in normalized):
-                    logger.debug("semantic: suppressing unsupported get_token_price address-only call")
-                    skipped_messages.append(
-                        ToolMessage(
-                            content=(
-                                "[GET_TOKEN_PRICE_BLOCKED] All requested tokens are bare 0x addresses. "
-                                "CoinGecko cannot resolve address-only identifiers. "
-                                "Report these as unrecognized (address-only) and continue synthesis."
-                            ),
-                            tool_call_id=call["id"],
-                        )
-                    )
-                    continue
-
-        sig = _call_signature(call["name"], call["args"])
-        if sig in completed_sigs or sig in seen_this_batch:
-            logger.debug("dedup: suppressing duplicate call '%s'", call["name"])
-            skipped_messages.append(
-                ToolMessage(
-                    content=(
-                        f"[DUPLICATE_CALL_BLOCKED] '{call['name']}' was already called "
-                        "with identical arguments this session. "
-                        "Use the prior result already present in the conversation."
-                    ),
-                    tool_call_id=call["id"],
-                )
-            )
-        else:
-            seen_this_batch.add(sig)
-            dedup_calls.append(call)
-
-    if not dedup_calls:
-        usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
-        if using_plan and plan is not None:
-            for call_id in stage_call_ids:
-                if call_id and call_id not in plan.completed_call_ids:
-                    plan.completed_call_ids.append(call_id)
-            plan.current_stage_index += 1
-            logger.info("tool_executor: plan stage had no executable calls, advancing stage")
-            return {
-                "messages": skipped_messages,
-                "task_status": TaskStatus.PLANNING,
-                "metadata": {
-                    **state.metadata,
-                    "_usage": usage,
-                    "_synthesis_forced": False,
-                    "_plan_outputs": plan_outputs,
-                },
-                "slots": state.slots,
-                "plan": plan,
-            }
-
-        logger.info("tool_executor: all calls suppressed, routing to PLANNING for forced synthesis")
-        return {
-            "messages": skipped_messages,
-            "task_status": TaskStatus.PLANNING,
-            "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": True},
-        }
-
-    try:
-        import time
-
-        per_tool_timeout_seconds = float(get_settings().agent_single_tool_timeout_seconds)
-        if per_tool_timeout_seconds <= 0:
-            per_tool_timeout_seconds = None
-
-        batch_start_mono = time.monotonic()
-        results = await asyncio.wait_for(
-            asyncio.gather(
-                *[
-                    _execute_single_tool_safe(call, tools_by_name, state.metadata, per_tool_timeout_seconds)
-                    for call in dedup_calls
-                ]
-            ),
-            timeout=get_settings().agent_tool_executor_timeout_seconds,
-        )
-        batch_elapsed = int((time.monotonic() - batch_start_mono) * 1000)
-        durations = [r["elapsed_ms"] for r in results]
-        slowest = max(durations) if durations else 0
-        logger.info(
-            "tool_executor: batch completed in %dms (num_tools=%d, slowest_tool=%dms)",
-            batch_elapsed,
-            len(results),
-            slowest,
-        )
-    except asyncio.TimeoutError:
-        logger.error("tool_executor_node timeout after %ss", get_settings().agent_tool_executor_timeout_seconds)
-        return {
-            "messages": [AIMessage(content="Tool execution timed out. Some tools took too long to respond.")],
-            "task_status": TaskStatus.FAILED,
-            "metadata": {**state.metadata, "_usage": usage},
-        }
-
-    tool_messages = skipped_messages + [r["message"] for r in results]
-
-    billable_results = [r for r in results if bool(r.get("billable", True))]
-    failed_results = [r for r in results if not bool(r.get("billable", True))]
-    tool_names_acc.extend(r["name"] for r in billable_results)
-    failed_tool_names_acc.extend(r["name"] for r in failed_results)
-
-    # Record newly executed signatures so future iterations can dedup them.
-    completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls if c["name"] in platform_tool_names)
-    usage["_completed_calls"] = completed_sigs
-
-    for result in results:
-        name = result["name"]
-        tool_call_counts[name] = int(tool_call_counts.get(name, 0)) + 1
-        if name == "get_defi_positions":
-            defi_positions_covered.update(_covered_defi_keys_from_result(result.get("content", "")))
-
-    usage["_tool_call_counts"] = tool_call_counts
-    usage["_defi_positions_covered"] = sorted(defi_positions_covered)
-
-    usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
-    usage["custom_tool_calls"] = custom_tool_calls + sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
-    usage["billable_tool_calls"] = usage.get("billable_tool_calls", 0) + len(billable_results)
-    usage["failed_tool_calls"] = usage.get("failed_tool_calls", 0) + len(failed_results)
-    usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
-    usage["tool_names"] = tool_names_acc
-    usage["billable_tool_names"] = tool_names_acc
-    usage["failed_tool_names"] = failed_tool_names_acc
-
-    # ── Accumulate delegation spend from delegate_to_agent results ────────
-    delegation_spend = usage.get("delegation_spend_usdc", 0)
-    delegation_count = usage.get("delegation_count", 0)
-    for res in results:
-        msg = res["message"]
-        name = res["name"]
-        if name == "delegate_to_agent":
-            delegation_count += 1
-            try:
-                result_data = json.loads(msg.content)
-                delegation_spend += int(result_data.get("cost_usdc", 0))
-            except (json.JSONDecodeError, ValueError, TypeError):
-                pass
-    usage["delegation_spend_usdc"] = delegation_spend
-    usage["delegation_count"] = delegation_count
-
-    slots = dict(state.slots)
-    for res in results:
-        slots = summarize_into_slots(res["name"], str(res.get("content", "")), slots)
-
-    next_plan = plan
-    if using_plan and plan is not None:
-        for call_id in stage_call_ids:
-            if call_id and call_id not in plan.completed_call_ids:
-                plan.completed_call_ids.append(call_id)
-
-        for call, res in zip(dedup_calls, results):
-            raw = res.get("content", "")
-            try:
-                parsed = json.loads(raw)
-            except Exception:
-                parsed = raw
-            plan_outputs[str(call.get("id", ""))] = parsed
-
-        plan.current_stage_index += 1
-        next_plan = plan
-
-    return {
-        "messages": tool_messages,
-        "task_status": TaskStatus.PLANNING,
-        "metadata": {**state.metadata, "_usage": usage, "_plan_outputs": plan_outputs},
-        "slots": slots,
         "plan": next_plan,
     }
 

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
+import httpx
 from pydantic import BaseModel, Field
 
 from tools.registry import ToolDefinition
@@ -93,6 +94,149 @@ async def async_validate_url(url: str) -> str | None:
     return await asyncio.to_thread(validate_url, url)
 
 
+def validate_url_with_ips(url: str) -> tuple[str | None, list[str]]:
+    """Validate a URL for SSRF safety and return the validated resolved IPs.
+
+    Returns ``(error, ips)``. When ``error`` is ``None`` the request may proceed
+    and ``ips`` holds every address the hostname resolved to (all verified safe).
+    Callers MUST connect only to these exact IPs (via ``make_ssrf_safe_connector``)
+    to close the DNS-rebinding TOCTOU window between validation and connection.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "Invalid URL", []
+
+    if parsed.scheme not in ("http", "https"):
+        return f"Blocked scheme: {parsed.scheme} (only http/https allowed)", []
+
+    hostname = parsed.hostname
+    if not hostname:
+        return "No hostname in URL", []
+
+    # Raw IP literal in the URL — validate directly, no DNS needed.
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if _is_ip_blocked(str(addr)):
+            return f"Blocked IP address: {hostname}", []
+        return None, [str(addr)]
+    except ValueError:
+        pass  # Not a raw IP — resolve via DNS below.
+
+    try:
+        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return f"DNS resolution failed for: {hostname}", []
+
+    ips: list[str] = []
+    for _family, _, _, _, sockaddr in infos:
+        ip_str = sockaddr[0]
+        if _is_ip_blocked(ip_str):
+            return f"Hostname {hostname} resolves to blocked IP: {ip_str}", []
+        if ip_str not in ips:
+            ips.append(ip_str)
+
+    if not ips:
+        return f"DNS resolution failed for: {hostname}", []
+    return None, ips
+
+
+async def async_validate_url_with_ips(url: str) -> tuple[str | None, list[str]]:
+    """Async wrapper around ``validate_url_with_ips`` (DNS runs in a thread)."""
+    return await asyncio.to_thread(validate_url_with_ips, url)
+
+
+class _PinnedResolver(aiohttp.abc.AbstractResolver):
+    """aiohttp resolver that pins a hostname to pre-validated IP addresses.
+
+    The IPs were already checked against the SSRF blocklist by
+    ``validate_url_with_ips``. Pinning forces the actual TCP connection to use
+    exactly those addresses, so a DNS record that changes to a private/metadata
+    IP between validation and connection (DNS rebinding) cannot be exploited.
+    Any host other than the pinned one is refused.
+    """
+
+    def __init__(self, hostname: str, ips: list[str]) -> None:
+        self._hostname = hostname
+        self._ips = ips
+
+    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> list[dict[str, Any]]:
+        if host != self._hostname:
+            raise OSError(f"SSRF guard: refusing to resolve unexpected host {host!r}")
+        results: list[dict[str, Any]] = []
+        for ip in self._ips:
+            try:
+                ip_family = socket.AF_INET6 if ipaddress.ip_address(ip).version == 6 else socket.AF_INET
+            except ValueError:
+                continue
+            if family not in (socket.AF_UNSPEC, ip_family):
+                continue
+            results.append(
+                {
+                    "hostname": host,
+                    "host": ip,
+                    "port": port,
+                    "family": ip_family,
+                    "proto": 0,
+                    "flags": socket.AI_NUMERICHOST,
+                }
+            )
+        if not results:
+            raise OSError(f"SSRF guard: no pinned IP for host {host!r} family {family}")
+        return results
+
+    async def close(self) -> None:
+        return None
+
+
+def make_ssrf_safe_connector(hostname: str, ips: list[str]) -> aiohttp.TCPConnector:
+    """Build an aiohttp connector that only connects to ``ips`` for ``hostname``.
+
+    Use together with ``validate_url_with_ips`` to eliminate the DNS-rebinding
+    TOCTOU window: validation and connection both target the same pinned IPs.
+    """
+    return aiohttp.TCPConnector(resolver=_PinnedResolver(hostname, ips))
+
+
+class _SSRFGuardHTTPXTransport(httpx.AsyncHTTPTransport):
+    """httpx transport that re-validates and pins every connection (incl. redirects).
+
+    httpx resolves DNS inside httpcore at connect time, so a URL validated by
+    the caller can still rebind to a private/metadata IP before the socket
+    opens. This transport intercepts each outgoing request (httpx invokes it
+    per redirect hop too), re-resolves the host, rejects any address on the
+    SSRF blocklist, and rewrites the connection to the validated IP while
+    preserving the original Host header and TLS SNI — closing the rebinding
+    window for httpx-based clients (a2a, MCP).
+    """
+
+    async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
+        original_host = request.url.host
+        if not original_host:
+            raise httpx.ConnectError("SSRF guard: missing host", request=request)
+
+        error, ips = await async_validate_url_with_ips(str(request.url))
+        if error:
+            raise httpx.ConnectError(f"SSRF guard: {error}", request=request)
+
+        pinned_ip = ips[0]
+        request.url = request.url.copy_with(host=pinned_ip)
+        # Preserve virtual-host routing and certificate validation against the
+        # real hostname even though we connect to the pinned IP.
+        request.headers["host"] = (
+            f"{original_host}:{request.url.port}" if request.url.port else original_host
+        )
+        request.extensions = {**request.extensions, "sni_hostname": original_host}
+        return await super().handle_async_request(request)
+
+
+def make_ssrf_safe_httpx_transport() -> httpx.AsyncHTTPTransport:
+    """Build an httpx transport that pins connections to SSRF-validated IPs."""
+    return _SSRFGuardHTTPXTransport()
+
+
+
+
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 
@@ -152,8 +296,10 @@ def _extract_content(html: str) -> tuple[str | None, str]:
 
 async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
     """Fetch a URL and return extracted text content."""
-    # SSRF validation (async DNS to avoid blocking event loop)
-    error = await async_validate_url(url)
+    # SSRF validation (async DNS to avoid blocking event loop). We pin the
+    # connection to the exact IPs we just validated to close the DNS-rebinding
+    # TOCTOU window between this check and the TCP connect.
+    error, pinned_ips = await async_validate_url_with_ips(url)
     if error:
         return {
             "url": url,
@@ -171,8 +317,11 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
         # public URL that 3xx-redirects to an internal/metadata target before
         # we ever see it, defeating async_validate_url.
         current_url = url
-        async with aiohttp.ClientSession() as session:
-            for _hop in range(_MAX_REDIRECTS + 1):
+        current_ips = pinned_ips
+        for _hop in range(_MAX_REDIRECTS + 1):
+            current_host = urlparse(current_url).hostname or ""
+            connector = make_ssrf_safe_connector(current_host, current_ips)
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(
                     current_url,
                     timeout=timeout,
@@ -192,7 +341,7 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
                             }
                         # Resolve relative redirects against the current URL.
                         next_url = urljoin(current_url, location)
-                        redirect_error = await async_validate_url(next_url)
+                        redirect_error, next_ips = await async_validate_url_with_ips(next_url)
                         if redirect_error:
                             return {
                                 "url": url,
@@ -202,6 +351,7 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
                                 "truncated": False,
                             }
                         current_url = next_url
+                        current_ips = next_ips
                         continue
 
                     if resp.status != 200:
@@ -235,14 +385,14 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
                     except (UnicodeDecodeError, LookupError):
                         html = body.decode("utf-8", errors="replace")
                     break
-            else:
-                return {
-                    "url": url,
-                    "title": None,
-                    "content": "Too many redirects",
-                    "content_length": 0,
-                    "truncated": False,
-                }
+        else:
+            return {
+                "url": url,
+                "title": None,
+                "content": "Too many redirects",
+                "content_length": 0,
+                "truncated": False,
+            }
 
     except aiohttp.ClientError as exc:
         return {

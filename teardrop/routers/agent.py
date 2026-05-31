@@ -754,15 +754,6 @@ async def agent_run(
                 success, deducted_amount = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
                 if success:
                     marketplace_stats_billable = True
-                    if deducted_amount < debit_amount:
-                        logger.warning(
-                            "billing_shortfall run_id=%s org_id=%s cost_usdc_atomic=%d actual_deducted=%d shortfall=%d",
-                            run_id,
-                            org_id,
-                            debit_amount,
-                            deducted_amount,
-                            debit_amount - deducted_amount,
-                        )
                     await record_settlement(usage_event.id, deducted_amount, "", "settled")
                     yield _sse_event(
                         _EV_BILLING_SETTLEMENT,

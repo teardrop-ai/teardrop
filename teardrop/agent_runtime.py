@@ -245,22 +245,29 @@ async def _run_billing_gate(
     is_byok: bool,
     platform_fee: int,
 ) -> tuple[BillingResult, JSONResponse | None]:
-    """Pre-run billing gate for ``/agent/run``.
+    """Pre-run billing gate for ``/agent/run`` (POST /agent/run, agent streaming endpoint).
 
-    Dispatches based on ``auth_method``:
-      * ``siwe`` with prepaid balance → org credit (verify_credit, actual cost)
-      * ``siwe`` no balance           → x402 on-chain payment header (exact)
-      * ``client_credentials`` / ``email`` → org prepaid credit balance
+    Dispatches based on ``auth_method`` from the JWT payload:
+      * ``siwe`` with prepaid credit balance > 0
+          → org credit rail (``verify_credit``, debit post-run via ``debit_credit``)
+      * ``siwe`` with zero credit balance
+          → x402 on-chain payment required; returns a ``JSONResponse(402)`` with
+            ``X-PAYMENT-REQUIRED`` header so the caller can sign and re-POST
+      * ``client_credentials`` / ``email``
+          → org prepaid credit rail only (``verify_credit``)
+      * billing disabled OR auth_method not in ``billable_auth_methods``
+          → returns an unverified ``BillingResult()`` (free pass)
 
-    Returns ``(billing, gate_response)``. ``gate_response`` is non-None when
-    the request must short-circuit (402 from the x402 path) — caller returns
-    it directly. Credit-failure paths raise ``HTTPException(402)`` so callers
+    BYOK orgs use ``platform_fee`` (a flat orchestration fee from
+    ``get_byok_platform_fee``) instead of the full LLM passthrough cost. Non-BYOK
+    orgs pay the run floor from pricing or ``credit_min_run_reserve_usdc``.
+
+    Returns ``(billing, gate_response)``. ``gate_response`` is non-None only on
+    the x402 path, when the request must short-circuit with a 402 the caller
+    returns directly. Credit-failure paths raise ``HTTPException(402)`` so callers
     don't need to handle them. ``billing.verified`` may be ``False`` only when
-    billing is disabled or auth_method is non-billable; in that case the
-    caller proceeds with the default unverified ``BillingResult``.
-
-    BYOK orgs are charged a per-token orchestration fee (or a flat floor) instead
-    of the full LLM passthrough cost.
+    billing is disabled or auth_method is non-billable; in that case the caller
+    proceeds with the default unverified ``BillingResult``.
     """
     auth_method = payload.get("auth_method", "")
 

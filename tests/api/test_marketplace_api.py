@@ -490,10 +490,10 @@ async def test_mcp_tools_list(api_client, monkeypatch):
         author_org_name="Acme",
         author_org_slug="acme",
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog", AsyncMock(return_value=[tool]))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.list_latest", MagicMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_catalog", AsyncMock(return_value=[tool]))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.registry.list_latest", MagicMock(return_value=[]))
 
     import teardrop.config as config
 
@@ -519,10 +519,10 @@ async def test_mcp_tools_list(api_client, monkeypatch):
 async def test_mcp_tools_call_not_found(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_tool_by_name", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name", AsyncMock(return_value=None))
 
     import teardrop.config as config
 
@@ -643,15 +643,15 @@ async def test_mcp_tools_call_success(api_client, monkeypatch):
     """Marketplace tool call executes webhook and returns isError:false."""
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_marketplace_tool_by_name",
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
         AsyncMock(return_value={"org_id": "author-org-id", "name": "my_tool"}),
     )
     monkeypatch.setattr(
-        "teardrop.routers.marketplace._execute_marketplace_tool",
+        "teardrop.routers.marketplace_mcp._execute_marketplace_tool",
         AsyncMock(return_value={"answer": 42}),
     )
 
@@ -683,11 +683,11 @@ async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setenv("BILLING_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.verify_credit",
+        "teardrop.routers.marketplace_mcp.verify_credit",
         AsyncMock(return_value=BillingResult(verified=False, error="Insufficient balance")),
     )
 
@@ -917,9 +917,9 @@ async def test_mcp_v1_unsubscribed_tool_blocked(api_client, monkeypatch):
     """Calling a marketplace tool without a subscription returns -32001."""
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=False))
 
     import teardrop.config as config
 
@@ -948,14 +948,14 @@ async def test_mcp_v1_subscribed_tool_proceeds(api_client, monkeypatch):
     """Subscribed org bypasses the subscription gate and reaches tool execution."""
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_marketplace_tool_by_name",
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
         AsyncMock(return_value={"org_id": "author-org", "name": "my_tool", "base_price_usdc": 0}),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import teardrop.config as config
 
@@ -981,12 +981,12 @@ async def test_mcp_v1_builtin_tool_skips_subscription_check(api_client, monkeypa
     """Built-in tools (no '/') never hit the subscription check."""
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
     check_sub_mock = AsyncMock(return_value=False)  # would block if called
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", check_sub_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", check_sub_mock)
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.registry.get",
+        "teardrop.routers.marketplace_mcp.registry.get",
         MagicMock(return_value=None),  # built-in not found → -32601
     )
 
@@ -1127,11 +1127,11 @@ async def test_mcp_tools_call_uses_author_price(api_client, monkeypatch):
     """When no admin override exists, the tool's base_price_usdc is used."""
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_marketplace_tool_by_name",
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
         AsyncMock(
             return_value={
                 "org_id": "author-org-id",
@@ -1140,7 +1140,7 @@ async def test_mcp_tools_call_uses_author_price(api_client, monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
 
     import teardrop.config as config
 
@@ -1192,11 +1192,11 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setenv("BILLING_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_marketplace_tool_by_name",
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
         AsyncMock(
             return_value={
                 "org_id": "author-org-id",
@@ -1206,13 +1206,13 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.verify_credit",
+        "teardrop.routers.marketplace_mcp.verify_credit",
         AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.debit_credit", AsyncMock(return_value=(True, 1_000)))
-    monkeypatch.setattr("teardrop.routers.marketplace._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, 1_000)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
     mock_earnings = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.record_tool_call_earnings", mock_earnings)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_tool_call_earnings", mock_earnings)
 
     import teardrop.config as config
 

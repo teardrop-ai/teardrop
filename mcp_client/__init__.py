@@ -419,6 +419,34 @@ _sessions: dict[str, tuple[Any, AsyncExitStack, float]] = {}
 # Key: server_id → (ClientSession, exit_stack, expires_at_monotonic)
 
 
+def _ssrf_safe_mcp_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
+    """httpx client factory for ``streamablehttp_client`` that pins SSRF-safe IPs.
+
+    Re-validates and pins every connection (including redirects) to an IP that
+    passed the SSRF blocklist, closing the DNS-rebinding TOCTOU window for
+    outbound MCP traffic.
+    """
+    import httpx
+
+    from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
+
+    kwargs: dict[str, Any] = {
+        "follow_redirects": True,
+        "transport": make_ssrf_safe_httpx_transport(),
+    }
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if headers is not None:
+        kwargs["headers"] = headers
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
+
+
 class _SessionPool:
     """Manages cached Streamable-HTTP MCP sessions per server."""
 
@@ -463,6 +491,7 @@ class _SessionPool:
                     url=server.url,
                     headers=headers or None,
                     timeout=float(settings.mcp_client_connect_timeout_seconds),
+                    httpx_client_factory=_ssrf_safe_mcp_http_client,
                 )
             )
             read_stream, write_stream, _ = transport
@@ -641,11 +670,24 @@ def _get_tools_lock() -> asyncio.Lock:
 async def build_mcp_langchain_tools(
     org_id: str,
 ) -> tuple[list[StructuredTool], dict[str, StructuredTool]]:
-    """Build LangChain tools from all active MCP servers for an org.
+    """Build LangChain ``StructuredTool`` wrappers for all active MCP servers for an org.
 
-    Returns ``(tools_list, tools_by_name_dict)``.
-    Tools whose prefixed names collide with a global registry tool are skipped.
-    Results are cached with a TTL.
+    Connects to each org MCP server over Streamable HTTP, calls ``list_tools()``,
+    and wraps each remote tool as a LangChain ``StructuredTool`` with a prefixed
+    name: ``{server.name}{_NAME_SEPARATOR}{mcp_tool.name}`` (double-underscore
+    separator ``__``). This prevents collisions across multi-server orgs.
+
+    Collision rules:
+      * Any prefixed name that matches a global registry tool is silently skipped.
+      * Duplicate prefixed names within the same aggregation pass are skipped.
+
+    Results are cached per ``org_id`` with a TTL (``mcp_client_tool_cache_ttl_seconds``).
+    Unreachable servers are skipped with a warning — tool discovery is best-effort.
+    Returns ``(tools_list, tools_by_name_dict)``; both are empty when the org has no
+    active servers.
+
+    See also: ``_wrap_mcp_tool`` (wraps a single server tool) and
+    ``discover_mcp_tools`` (raw tool listing for the /mcp/servers/{id}/discover endpoint).
     """
     settings = get_settings()
 

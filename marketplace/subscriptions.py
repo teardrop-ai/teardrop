@@ -237,7 +237,7 @@ def _build_marketplace_langchain_tool(
     import json as _json
 
     from shared.webhook import WebhookCaller, WebhookCallError
-    from tools.definitions.http_fetch import async_validate_url
+    from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
     from tools.shared import build_pydantic_model, decrypt_header_value
 
     raw_schema = tool_row.get("input_schema", {})
@@ -274,7 +274,8 @@ def _build_marketplace_langchain_tool(
             call_result = await caller.call_get(
                 params=kwargs,
                 decrypt_header=decrypt_header_value,
-                validate_url=async_validate_url,
+                validate_url=async_validate_url_with_ips,
+                connector_factory=make_ssrf_safe_connector,
             )
         except WebhookCallError as exc:
             if _tool_id and exc.error_type not in {"ssrf_blocked", "decrypt_failure"}:

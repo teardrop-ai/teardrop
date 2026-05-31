@@ -84,6 +84,19 @@ async def isolated_mcp_client_state(monkeypatch):
     monkeypatch.setattr(mcp_client, "_server_caches", {})
     monkeypatch.setattr(mcp_client, "_record_event", AsyncMock())
 
+    # The SSRF guard pins outbound MCP connections to public IPs and blocks
+    # loopback. These transport tests talk to a real local 127.0.0.1 server, so
+    # allow the loopback through the pin (the guard itself is covered by
+    # tests/unit/test_ssrf_pinning.py).
+    import tools.definitions.http_fetch as _http_fetch
+
+    async def _allow_loopback(url: str):
+        from urllib.parse import urlparse
+
+        return None, [urlparse(url).hostname or "127.0.0.1"]
+
+    monkeypatch.setattr(_http_fetch, "async_validate_url_with_ips", _allow_loopback)
+
     def make_server(url: str, *, name: str = "echo") -> OrgMcpServer:
         now = datetime.now(timezone.utc)
         return OrgMcpServer(

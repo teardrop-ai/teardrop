@@ -236,10 +236,13 @@ async def discover_agent_card(
     card_url = f"{base_url}/.well-known/agent-card.json"
     logger.info("discover_agent_card: fetching %s", card_url)
 
+    from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
+
     async with httpx.AsyncClient(
         timeout=timeout,
         headers={"User-Agent": _USER_AGENT},
         follow_redirects=False,
+        transport=make_ssrf_safe_httpx_transport(),
     ) as client:
         resp = await client.get(card_url)
         resp.raise_for_status()
@@ -294,10 +297,13 @@ async def send_message(
 
     logger.info("send_message: POST %s (auth=%s)", endpoint, bool(auth_header))
 
+    from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
+
     async with httpx.AsyncClient(
         timeout=timeout,
         headers=headers,
         follow_redirects=False,
+        transport=make_ssrf_safe_httpx_transport(),
     ) as client:
         resp = await client.post(endpoint, json=payload)
         resp.raise_for_status()
@@ -414,10 +420,13 @@ async def send_message_with_payment(
     if auth_header:
         headers["Authorization"] = f"Bearer {auth_header}"
 
+    from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
+
     async with httpx.AsyncClient(
         timeout=timeout,
         headers=headers,
         follow_redirects=False,
+        transport=make_ssrf_safe_httpx_transport(),
     ) as client:
         resp = await client.post(endpoint, json=payload)
 

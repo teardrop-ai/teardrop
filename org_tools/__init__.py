@@ -1,10 +1,33 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Per-org custom tool registry — CRUD, caching, encryption, and webhook execution.
+"""Per-org custom webhook tool registry — CRUD, caching, encryption, SSRF validation,
+circuit-breaker execution, marketplace publication, and LangChain wrapping.
 
-Allows organisations to register webhook-backed tools that are injected
-into the agent at run time alongside the global tool registry.  Custom
-tools are never exposed in the public A2A agent card or MCP server.
+Allows organisations to register webhook-backed tools that are injected into
+the agent at run time alongside the global platform tool registry.
+
+─── CRUD & lifecycle ─────────────────────────────────────────────────────────
+create_org_tool, get_org_tool, list_org_tools, update_org_tool, delete_org_tool.
+Schema validation (JSON-Schema safe subset), per-org quotas, unique-name
+enforcement, global tool name collision check, marketplace publish_as_mcp flag.
+
+─── Cache layer ──────────────────────────────────────────────────────────────
+get_org_tools_cached (Redis TTLCache → in-process fallback).
+invalidate_org_tools_cache after every mutation.
+list_marketplace_tools (cached published tool list for agent injection).
+
+─── Webhook execution runtime ────────────────────────────────────────────────
+_build_langchain_tool: converts an OrgTool into a LangChain StructuredTool.
+SSRF validation (async_validate_url) enforced on every webhook call.
+Auth header encryption/decryption (Fernet, encrypt_header_value/decrypt_header_value).
+Circuit-breaker pattern via tools.health (is_breaker_tripped, record_success).
+50 KB response cap. Immutable audit trail (_record_event) for every execution.
+_on_webhook_failure: Sentry capture + circuit-breaker + org deactivation notification.
+
+─── Marketplace publication ──────────────────────────────────────────────────
+build_org_langchain_tools: assembles all active org tools into LangChain tools,
+skips global name collisions, skips non-GET webhook methods.
+Custom tools are never exposed in the public A2A agent card or MCP server.
 """
 
 from __future__ import annotations
@@ -28,7 +51,7 @@ from shared.db_pool import bind_pool, require_pool, unbind_pool
 from shared.webhook import WebhookCaller, WebhookCallError
 from teardrop.cache import TTLCache, get_redis
 from teardrop.config import get_settings
-from tools.definitions.http_fetch import async_validate_url
+from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
 from tools.shared import (
     build_pydantic_model,
     decrypt_header_value,
@@ -740,8 +763,9 @@ def _build_langchain_tool(
             call_result = await caller.call_get(
                 params=kwargs,
                 decrypt_header=_decrypt_header,
-                validate_url=async_validate_url,
+                validate_url=async_validate_url_with_ips,
                 client_session_factory=aiohttp.ClientSession,
+                connector_factory=make_ssrf_safe_connector,
             )
         except WebhookCallError as exc:
             return await _handle_call_error(exc)

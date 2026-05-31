@@ -381,7 +381,12 @@ class TestWebhookExecution:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+            patch(
+                "org_tools.async_validate_url_with_ips",
+                new_callable=AsyncMock,
+                return_value=(None, ["93.184.216.34"]),
+            ),
+            patch("org_tools.make_ssrf_safe_connector", return_value=None),
             patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
@@ -397,7 +402,12 @@ class TestWebhookExecution:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+            patch(
+                "org_tools.async_validate_url_with_ips",
+                new_callable=AsyncMock,
+                return_value=(None, ["93.184.216.34"]),
+            ),
+            patch("org_tools.make_ssrf_safe_connector", return_value=None),
             patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
@@ -418,7 +428,12 @@ class TestWebhookExecution:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+            patch(
+                "org_tools.async_validate_url_with_ips",
+                new_callable=AsyncMock,
+                return_value=(None, ["93.184.216.34"]),
+            ),
+            patch("org_tools.make_ssrf_safe_connector", return_value=None),
             patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
@@ -428,7 +443,11 @@ class TestWebhookExecution:
         tool = _sample_org_tool(webhook_url="http://169.254.169.254/metadata")
         lc_tool = _build_langchain_tool(tool, None, None)
 
-        with patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value="blocked: metadata endpoint"):
+        with patch(
+            "org_tools.async_validate_url_with_ips",
+            new_callable=AsyncMock,
+            return_value=("blocked: metadata endpoint", []),
+        ):
             result = await lc_tool.ainvoke({"query": "test"})
         assert "blocked" in result["error"]
 
@@ -455,7 +474,12 @@ class TestWebhookExecution:
             mock_session.__aexit__ = AsyncMock(return_value=False)
 
             with (
-                patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+                patch(
+                    "org_tools.async_validate_url_with_ips",
+                    new_callable=AsyncMock,
+                    return_value=(None, ["93.184.216.34"]),
+                ),
+                patch("org_tools.make_ssrf_safe_connector", return_value=None),
                 patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
             ):
                 result = await lc_tool.ainvoke({"query": "test"})
@@ -487,7 +511,12 @@ class TestWebhookExecution:
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+            patch(
+                "org_tools.async_validate_url_with_ips",
+                new_callable=AsyncMock,
+                return_value=(None, ["93.184.216.34"]),
+            ),
+            patch("org_tools.make_ssrf_safe_connector", return_value=None),
             patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
         ):
             # Truncated JSON will fail to parse → expect error
@@ -515,7 +544,12 @@ class TestWebhookExecution:
             mock_session.__aexit__ = AsyncMock(return_value=False)
 
             with (
-                patch("org_tools.async_validate_url", new_callable=AsyncMock, return_value=None),
+                patch(
+                    "org_tools.async_validate_url_with_ips",
+                    new_callable=AsyncMock,
+                    return_value=(None, ["93.184.216.34"]),
+                ),
+                patch("org_tools.make_ssrf_safe_connector", return_value=None),
                 patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
             ):
                 result = await lc_tool.ainvoke({"query": "test"})

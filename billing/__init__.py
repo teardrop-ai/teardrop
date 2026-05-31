@@ -54,6 +54,7 @@ _BUILD_402_HEADERS_ORIG = _x402.build_402_headers
 _REBUILD_REQUIREMENTS_IF_STALE_ORIG = _x402._rebuild_requirements_if_stale
 _VERIFY_PAYMENT_ORIG = _x402.verify_payment
 _SETTLE_PAYMENT_ORIG = _x402.settle_payment
+_CLEANUP_EXPIRED_PAYMENT_NONCES_ORIG = _x402.cleanup_expired_payment_nonces
 _BUILD_USDC_TOPUP_REQUIREMENTS_ORIG = _x402.build_usdc_topup_requirements
 _VERIFY_AND_SETTLE_USDC_TOPUP_ORIG = _x402.verify_and_settle_usdc_topup
 _CREDIT_USDC_TOPUP_ORIG = _x402.credit_usdc_topup
@@ -426,6 +427,11 @@ async def settle_payment(
     return await _call_async(_SETTLE_PAYMENT_ORIG, billing_result, actual_cost_usdc)
 
 
+async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
+    """Delete x402 payment-nonce replay claims older than ``retention_hours``."""
+    return await _call_async(_CLEANUP_EXPIRED_PAYMENT_NONCES_ORIG, retention_hours)
+
+
 def build_usdc_topup_requirements(amount_usdc: int) -> list:
     """Build x402 ``PaymentRequirements`` for an on-chain USDC credit topup of ``amount_usdc``."""
     return _call_sync(_BUILD_USDC_TOPUP_REQUIREMENTS_ORIG, amount_usdc)
@@ -576,6 +582,7 @@ __all__ = [
     # payment verification and settlement
     "verify_payment",
     "settle_payment",
+    "cleanup_expired_payment_nonces",
     "build_402_headers",
     "build_402_response_body",
     "build_usdc_topup_requirements",

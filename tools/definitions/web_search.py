@@ -19,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 class WebSearchInput(BaseModel):
     query: str = Field(..., description="Search query", max_length=500)
-    num_results: int = Field(default=5, ge=1, le=20)
+    num_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of web search results to return (1–20, default 5).",
+    )
     search_depth: Literal["basic", "advanced"] = Field(
         default="basic",
         description="'basic' for fast results, 'advanced' for thorough research (higher cost)",

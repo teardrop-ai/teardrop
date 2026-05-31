@@ -155,15 +155,20 @@ async def test_debit_credit_decreases_balance(billing_db_pool):
     assert balance == 70_000
 
 
-async def test_debit_credit_floors_at_zero(billing_db_pool):
-    """Debiting more than the balance floors at 0 — never goes negative."""
+async def test_debit_credit_insufficient_balance_rejected(billing_db_pool):
+    """Debiting more than the balance is rejected strictly — no partial debit.
+
+    Returns (False, 0) and leaves the balance untouched so the caller routes the
+    run to a failed-settlement retry instead of silently under-charging (which a
+    concurrent-request race could otherwise exploit).
+    """
     org = await create_org("floor-org")
     await admin_topup_credit(org.id, 10_000)
     success, deducted = await debit_credit(org.id, 999_999)
-    assert success is True
-    assert deducted == 10_000
+    assert success is False
+    assert deducted == 0
     balance = await get_credit_balance(org.id)
-    assert balance == 0
+    assert balance == 10_000
 
 
 async def test_debit_credit_no_row_returns_false(billing_db_pool):
@@ -183,6 +188,32 @@ async def test_debit_credit_full_balance(billing_db_pool):
     assert success is True
     assert deducted == 50_000
     assert await get_credit_balance(org.id) == 0
+
+
+async def test_debit_credit_concurrent_no_overdraft(billing_db_pool):
+    """Concurrent debits never overdraw: SELECT ... FOR UPDATE serializes them.
+
+    Two simultaneous debits of 60_000 against a 100_000 balance must result in
+    exactly one success (balance 40_000) and one rejection — never two successes
+    that would drive the balance negative or silently under-charge.
+    """
+    import asyncio
+
+    org = await create_org("race-org")
+    await admin_topup_credit(org.id, 100_000)
+
+    results = await asyncio.gather(
+        debit_credit(org.id, 60_000),
+        debit_credit(org.id, 60_000),
+    )
+
+    successes = [d for ok, d in results if ok]
+    failures = [d for ok, d in results if not ok]
+    assert len(successes) == 1
+    assert successes[0] == 60_000
+    assert len(failures) == 1
+    assert failures[0] == 0
+    assert await get_credit_balance(org.id) == 40_000
 
 
 # ─── record_settlement ────────────────────────────────────────────────────────

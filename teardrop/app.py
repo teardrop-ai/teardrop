@@ -49,6 +49,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from agent.cache_prewarm import prewarm_org_prefix
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from billing import (
+    cleanup_expired_payment_nonces,
     close_billing,
     init_billing,
     process_pending_settlements,
@@ -388,6 +389,12 @@ async def _refresh_token_cleanup_iter() -> None:
         logger.info("Refresh token cleanup: deleted %d expired tokens", deleted)
 
 
+async def _x402_nonce_cleanup_iter() -> None:
+    deleted = await cleanup_expired_payment_nonces()
+    if deleted:
+        logger.info("x402 nonce cleanup: deleted %d expired payment claims", deleted)
+
+
 async def _settlement_retry_loop() -> None:
     """Periodically retry failed settlements (runs as background task)."""
     await _run_periodic(
@@ -415,6 +422,16 @@ async def _refresh_token_cleanup_loop() -> None:
         _refresh_token_cleanup_iter,
         settings.refresh_token_cleanup_interval_seconds,
         monitor_slug="token-cleanup",
+    )
+
+
+async def _x402_nonce_cleanup_loop() -> None:
+    """Periodically delete expired x402 payment-nonce claims (runs as background task)."""
+    await _run_periodic(
+        "x402 nonce cleanup",
+        _x402_nonce_cleanup_iter,
+        settings.refresh_token_cleanup_interval_seconds,
+        monitor_slug="x402-nonce-cleanup",
     )
 
 
@@ -534,6 +551,7 @@ async def lifespan(app: FastAPI):
     bg_tasks: list[asyncio.Task] = []
     if settings.billing_enabled:
         bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
+        bg_tasks.append(asyncio.create_task(_x402_nonce_cleanup_loop()))
     if settings.memory_enabled and settings.memory_ttl_days > 0:
         bg_tasks.append(asyncio.create_task(_memory_cleanup_loop()))
     if settings.marketplace_auto_sweep_enabled:

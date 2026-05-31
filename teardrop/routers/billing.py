@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from billing import (
     build_usdc_topup_requirements,
@@ -176,6 +176,13 @@ class StripeTopupRequest(BaseModel):
         description="HTTPS return URL with {CHECKOUT_SESSION_ID} template",
     )
 
+    @field_validator("return_url")
+    @classmethod
+    def _require_https(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("return_url must use HTTPS")
+        return v
+
 
 @router.post("/billing/topup/stripe", tags=["Billing"])
 async def billing_topup_stripe(
@@ -187,6 +194,11 @@ async def billing_topup_stripe(
     Returns client_secret and session_id for embedding a Stripe form in the frontend.
     """
     org_id = _require_org_id(payload, "No org_id in token — top-up requires an org-scoped credential.")
+    await _rate_limit._enforce_rate_limit(
+        f"topup:stripe:{org_id}",
+        settings.rate_limit_topup_rpm,
+        detail="Top-up rate limit exceeded. Please slow down.",
+    )
     user_id: str = payload.get("sub", "")
     session_data = await create_stripe_embedded_session(org_id, user_id, body.amount_cents, body.return_url)
     return JSONResponse(
@@ -326,6 +338,12 @@ async def billing_topup_usdc(
     processed (duplicate submission), 503 if billing is disabled.
     """
     org_id = _require_org_id(payload, "No org_id in token — top-up requires an org-scoped credential.")
+
+    await _rate_limit._enforce_rate_limit(
+        f"topup:usdc:{org_id}",
+        settings.rate_limit_topup_rpm,
+        detail="Top-up rate limit exceeded. Please slow down.",
+    )
 
     try:
         result = await verify_and_settle_usdc_topup(body.payment_header, body.amount_usdc)

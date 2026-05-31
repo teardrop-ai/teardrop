@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import uuid
@@ -12,7 +13,7 @@ import uuid
 import asyncpg
 import sentry_sdk
 
-from billing.context import _bind_pool, _clear_pool, _get_pool, _reset_daily_spend_caches
+from billing.context import _bind_pool, _clear_pool, _get_pool, _has_pool, _reset_daily_spend_caches
 from billing.models import BillingResult, atomic_usdc_to_price_str
 from billing.pricing import get_current_pricing, get_live_pricing, reset_pricing_caches
 from teardrop.config import get_settings
@@ -236,6 +237,62 @@ async def _rebuild_requirements_if_stale() -> None:
     )
 
 
+async def _claim_payment_nonce(payment_header: str) -> bool:
+    """Atomically claim a payment header to block concurrent replays.
+
+    Returns True if this is the first time the header is seen (caller may
+    proceed), False if it was already claimed (reject).
+
+    The claim key is the SHA-256 of the raw header. On-chain settlement already
+    prevents an EIP-3009 authorization from spending twice; this guard closes
+    the narrower concurrent window where two in-flight requests with the same
+    header both verify and execute a paid tool before either settles. If the
+    nonce store is unavailable we fail open (log + allow) so a transient DB
+    issue cannot take down all paid traffic — the chain remains the final
+    double-spend backstop.
+    """
+    if not _has_pool():
+        logger.warning("x402 nonce store unavailable (no pool); skipping replay claim")
+        return True
+
+    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    pool = _get_pool()
+    try:
+        claimed = await pool.fetchval(
+            """
+            INSERT INTO x402_payment_nonces (nonce_hash)
+            VALUES ($1)
+            ON CONFLICT (nonce_hash) DO NOTHING
+            RETURNING nonce_hash
+            """,
+            nonce_hash,
+        )
+    except Exception:
+        logger.warning("x402 nonce claim query failed; failing open", exc_info=True)
+        return True
+    return claimed is not None
+
+
+async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
+    """Delete payment-nonce claims older than ``retention_hours``.
+
+    A signed x402 authorization is short-lived (validBefore window); once it is
+    well past use it can never be replayed against the chain, so its claim row
+    is safe to drop. Bounds table growth. Returns the number of rows deleted.
+    """
+    if not _has_pool():
+        return 0
+    pool = _get_pool()
+    result = await pool.execute(
+        "DELETE FROM x402_payment_nonces WHERE claimed_at < NOW() - make_interval(hours => $1)",
+        retention_hours,
+    )
+    try:
+        return int(result.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 async def verify_payment(payment_header: str) -> BillingResult:
     """Verify a payment header against cached requirements."""
     await _rebuild_requirements_if_stale()
@@ -267,6 +324,12 @@ async def verify_payment(payment_header: str) -> BillingResult:
 
         if result.is_valid:
             detected_scheme = getattr(requirement, "scheme", "exact") or "exact"
+            # Atomic concurrent-replay guard: claim the payment header before
+            # returning verified=True so two in-flight requests carrying the
+            # same signed header cannot both proceed to execute a paid tool.
+            if not await _claim_payment_nonce(payment_header):
+                logger.warning("x402 payment header already claimed (concurrent replay rejected)")
+                return BillingResult(error="Payment already used. Sign a new payment authorization.")
             return BillingResult(
                 verified=True,
                 payment_payload=payload,
