@@ -57,7 +57,7 @@ async def test_org_rate_limit_returns_429_with_scope_header(test_settings, monke
     org_agent_rpm = 3
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
 
     # Pre-fill the org bucket to capacity using real timestamps.
     now = time.time()
@@ -89,7 +89,7 @@ async def test_org_rate_limit_headers_contain_limit_and_remaining(test_settings,
     org_agent_rpm = 2
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
 
     now = time.time()
     app_module._rate_counters[f"run:org:{org_id}"] = [now - 0.1, now - 0.2]
@@ -120,7 +120,7 @@ async def test_exhausted_org_does_not_block_other_org(test_settings, monkeypatch
     org_agent_rpm = 2
 
     mock_settings = _make_settings(org_agent_rpm=org_agent_rpm)
-    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
 
     # Exhaust org-A.
     now = time.time()
@@ -160,7 +160,7 @@ async def test_user_limit_checked_before_org_limit(test_settings, monkeypatch):
 
     mock_settings = _make_settings(org_agent_rpm=10_000)
     mock_settings.rate_limit_agent_rpm = user_rpm
-    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
 
     # Exhaust only the user bucket.
     now = time.time()
@@ -188,7 +188,7 @@ async def test_empty_org_id_skips_org_rate_limit(test_settings, monkeypatch):
     from teardrop.main import app
 
     mock_settings = _make_settings(org_agent_rpm=1)
-    monkeypatch.setattr("teardrop.main.settings", mock_settings)
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
 
     # No org_id in JWT.
     app.dependency_overrides[require_auth] = lambda: {

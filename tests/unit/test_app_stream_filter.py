@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from teardrop.main import _A2UIStreamFilter, _normalize_exclusion_name, _recover_planner_suffix, _should_flush_planner_buffer
+from teardrop.agent_stream import _A2UIStreamFilter, _recover_planner_suffix, _should_flush_planner_buffer
+from teardrop.routers.agent import _normalize_exclusion_name
 
 
 def _drain(deltas: list[str]) -> str:

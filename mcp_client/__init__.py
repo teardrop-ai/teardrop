@@ -33,6 +33,24 @@ from tools.shared import build_pydantic_model, decrypt_header_value, encrypt_hea
 
 logger = logging.getLogger(__name__)
 
+# Public API surface for this package. Listing the supported symbols here makes
+# the per-org MCP client discoverable and documents the stable facade. Note that
+# `__all__` only governs `from mcp_client import *`; private helpers (prefixed
+# with `_`, e.g. `_row_to_model`) remain importable by name for internal callers.
+__all__ = [
+    "OrgMcpServer",
+    "init_mcp_client_db",
+    "close_mcp_client_db",
+    "create_org_mcp_server",
+    "get_org_mcp_server",
+    "list_org_mcp_servers",
+    "update_org_mcp_server",
+    "delete_org_mcp_server",
+    "invalidate_mcp_cache",
+    "discover_mcp_tools",
+    "build_mcp_langchain_tools",
+]
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _MAX_RESPONSE_BYTES = 50 * 1024  # 50 KB response cap per MCP tool call

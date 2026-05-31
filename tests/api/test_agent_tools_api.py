@@ -64,11 +64,11 @@ async def test_agent_tools_marketplace_enabled(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
-    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", AsyncMock(return_value=[_make_platform_tool()]))
-    monkeypatch.setattr("teardrop.main.get_subscribed_tools_catalog", AsyncMock(return_value=[_make_subscribed_tool()]))
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
+    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.agent.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
+    monkeypatch.setattr("teardrop.routers.agent.get_marketplace_catalog", AsyncMock(return_value=[_make_platform_tool()]))
+    monkeypatch.setattr("teardrop.routers.agent.get_subscribed_tools_catalog", AsyncMock(return_value=[_make_subscribed_tool()]))
+    monkeypatch.setattr("teardrop.routers.agent.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
 
     resp = await api_client.get("/agent/tools")
     assert resp.status_code == 200
@@ -91,13 +91,13 @@ async def test_agent_tools_marketplace_disabled_returns_org_only(api_client, mon
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
+    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.agent.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
     platform_mock = AsyncMock(return_value=[_make_platform_tool()])
     subscribed_mock = AsyncMock(return_value=[_make_subscribed_tool()])
-    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", platform_mock)
-    monkeypatch.setattr("teardrop.main.get_subscribed_tools_catalog", subscribed_mock)
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
+    monkeypatch.setattr("teardrop.routers.agent.get_marketplace_catalog", platform_mock)
+    monkeypatch.setattr("teardrop.routers.agent.get_subscribed_tools_catalog", subscribed_mock)
+    monkeypatch.setattr("teardrop.routers.agent.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
 
     resp = await api_client.get("/agent/tools")
     assert resp.status_code == 200
@@ -143,9 +143,9 @@ async def test_agent_tools_pricing_override_applied_for_org_tool(api_client, mon
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={"org/my_tool": 777}))
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
+    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={"org/my_tool": 777}))
+    monkeypatch.setattr("teardrop.routers.agent.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
+    monkeypatch.setattr("teardrop.routers.agent.list_org_tools", AsyncMock(return_value=[_make_org_tool("my_tool")]))
 
     resp = await api_client.get("/agent/tools")
     assert resp.status_code == 200
@@ -161,10 +161,10 @@ async def test_agent_tools_excludes_inactive_org_tools(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
+    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.agent.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
     monkeypatch.setattr(
-        "teardrop.main.list_org_tools",
+        "teardrop.routers.agent.list_org_tools",
         AsyncMock(return_value=[_make_org_tool("active_tool", is_active=True), _make_org_tool("inactive_tool", is_active=False)]),
     )
 
@@ -182,11 +182,11 @@ async def test_agent_tools_response_schema_fields(api_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.main.get_tool_pricing_overrides", AsyncMock(return_value={}))
-    monkeypatch.setattr("teardrop.main.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
-    monkeypatch.setattr("teardrop.main.get_marketplace_catalog", AsyncMock(return_value=[_make_platform_tool()]))
-    monkeypatch.setattr("teardrop.main.get_subscribed_tools_catalog", AsyncMock(return_value=[]))
-    monkeypatch.setattr("teardrop.main.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.agent.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000)))
+    monkeypatch.setattr("teardrop.routers.agent.get_marketplace_catalog", AsyncMock(return_value=[_make_platform_tool()]))
+    monkeypatch.setattr("teardrop.routers.agent.get_subscribed_tools_catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.agent.list_org_tools", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/agent/tools")
     assert resp.status_code == 200

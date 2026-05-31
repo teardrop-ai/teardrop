@@ -40,6 +40,28 @@ from tools.shared import (
 
 logger = logging.getLogger(__name__)
 
+# Public API surface for this package. Listing the supported symbols here makes
+# the org-tool registry discoverable and documents the stable facade. Note that
+# `__all__` only governs `from org_tools import *`; private helpers (prefixed
+# with `_`) remain importable by name for internal callers.
+__all__ = [
+    "OrgTool",
+    "init_org_tools_db",
+    "close_org_tools_db",
+    "create_org_tool",
+    "get_org_tool",
+    "list_org_tools",
+    "update_org_tool",
+    "delete_org_tool",
+    "get_org_tools_cached",
+    "invalidate_org_tools_cache",
+    "list_marketplace_tools",
+    "invalidate_marketplace_cache",
+    "normalize_webhook_response",
+    "validate_safe_schema_subset",
+    "build_org_langchain_tools",
+]
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _MAX_RESPONSE_BYTES = 50 * 1024  # 50 KB webhook response cap
