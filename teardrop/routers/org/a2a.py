@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from teardrop.config import get_settings
-from teardrop.dependencies import require_auth
+from teardrop.dependencies import require_auth, require_org_admin
 from teardrop.rate_limit import _enforce_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -37,28 +37,26 @@ class OrgCreateA2AAgentRequest(BaseModel):
 async def add_a2a_agent(
     request: Request,
     body: OrgCreateA2AAgentRequest,
-    payload: dict = Depends(require_auth),
+    payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:
-    """Add a trusted A2A agent to the authenticated org's allowlist."""
+    """Add a trusted A2A agent to the authenticated org's allowlist.
+
+    Restricted to org admins: an allowlist entry exposes an arbitrary URL to the
+    agent's delegate_to_agent tool (and, with jwt_forward, replays the caller's
+    JWT to that endpoint), so registration is a privileged org-configuration
+    action rather than a member-level one.
+    """
     org_id: str = payload.get("org_id", payload["sub"])
 
     # Per-org rate limit — registering an allowlist entry exposes a URL to the
     # agent's delegate_to_agent tool, so cap the write rate to defend against a
-    # stolen JWT bulk-injecting malicious endpoints.
+    # stolen admin JWT bulk-injecting malicious endpoints.
     await _enforce_rate_limit(
         f"a2a_add:{org_id}",
         settings.rate_limit_auth_rpm,
         detail="Rate limit exceeded for A2A agent registration.",
     )
 
-    # jwt_forward causes the caller's JWT to be replayed to an arbitrary external
-    # agent — a credential-exfiltration risk. Restrict it to org admins so a
-    # low-privilege member cannot register an allowlist entry that leaks tokens.
-    if body.jwt_forward and payload.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="jwt_forward=True requires org admin role",
-        )
     pool: asyncpg.Pool = request.app.state.pool
     agent_id = str(uuid.uuid4())
     try:
@@ -127,9 +125,9 @@ async def list_a2a_agents(
 async def delete_a2a_agent(
     request: Request,
     agent_id: str,
-    payload: dict = Depends(require_auth),
+    payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:
-    """Remove an A2A agent from the authenticated org's allowlist."""
+    """Remove an A2A agent from the authenticated org's allowlist (org admins only)."""
     org_id: str = payload.get("org_id", payload["sub"])
     pool: asyncpg.Pool = request.app.state.pool
     result = await pool.execute(

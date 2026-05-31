@@ -283,7 +283,7 @@ async def test_discover_mcp_tools_connection_error(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_list_mcp_servers(admin_api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.routers.admin.list_org_mcp_servers",
+        "teardrop.routers.admin.tools.list_org_mcp_servers",
         AsyncMock(return_value=[_sample_server()]),
     )
 

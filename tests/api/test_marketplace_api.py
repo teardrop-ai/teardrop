@@ -722,6 +722,43 @@ async def test_mcp_tools_call_insufficient_credit(api_client, monkeypatch):
     config.get_settings.cache_clear()
 
 
+@pytest.mark.anyio
+async def test_mcp_tools_call_builtin_invalid_arguments(api_client, monkeypatch):
+    """Built-in tool calls with malformed arguments are rejected pre-billing.
+
+    `get_eth_balance` requires `address`; omitting it must return a JSON-RPC
+    -32602 (Invalid params) error and must NOT invoke the tool implementation,
+    so the caller is never billed for an un-runnable call.
+    """
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    exec_spy = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.execute_tool", exec_spy)
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "get_eth_balance", "arguments": {}},
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data
+    assert data["error"]["code"] == -32602
+    exec_spy.assert_not_awaited()
+
+    config.get_settings.cache_clear()
+
+
 # ─── Admin marketplace endpoints ─────────────────────────────────────────────
 
 
@@ -737,7 +774,7 @@ async def test_admin_process_withdrawal_success(admin_api_client, monkeypatch):
         created_at=_NOW,
         settled_at=_NOW,
     )
-    monkeypatch.setattr("teardrop.routers.admin.process_withdrawal", AsyncMock(return_value=withdrawal))
+    monkeypatch.setattr("teardrop.routers.admin.marketplace.process_withdrawal", AsyncMock(return_value=withdrawal))
 
     resp = await admin_api_client.post("/admin/marketplace/process-withdrawal/w-1")
     assert resp.status_code == 200
@@ -749,7 +786,7 @@ async def test_admin_process_withdrawal_success(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_process_withdrawal_not_found(admin_api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.routers.admin.process_withdrawal",
+        "teardrop.routers.admin.marketplace.process_withdrawal",
         AsyncMock(side_effect=ValueError("Withdrawal not found or not in 'pending' status")),
     )
 
@@ -759,7 +796,7 @@ async def test_admin_process_withdrawal_not_found(admin_api_client, monkeypatch)
 
 @pytest.mark.anyio
 async def test_admin_complete_withdrawal_success(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.complete_withdrawal", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.admin.marketplace.complete_withdrawal", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post(
         "/admin/marketplace/complete-withdrawal/w-1",
@@ -782,7 +819,7 @@ async def test_admin_list_withdrawals(admin_api_client, monkeypatch):
         status="pending",
         created_at=_NOW,
     )
-    monkeypatch.setattr("teardrop.routers.admin.list_pending_withdrawals", AsyncMock(return_value=[withdrawal]))
+    monkeypatch.setattr("teardrop.routers.admin.marketplace.list_pending_withdrawals", AsyncMock(return_value=[withdrawal]))
 
     resp = await admin_api_client.get("/admin/marketplace/withdrawals")
     assert resp.status_code == 200
@@ -794,7 +831,7 @@ async def test_admin_list_withdrawals(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_list_withdrawals_org_filter(admin_api_client, monkeypatch):
     mock_list = AsyncMock(return_value=[])
-    monkeypatch.setattr("teardrop.routers.admin.list_pending_withdrawals", mock_list)
+    monkeypatch.setattr("teardrop.routers.admin.marketplace.list_pending_withdrawals", mock_list)
 
     resp = await admin_api_client.get("/admin/marketplace/withdrawals?org_id=some-org")
     assert resp.status_code == 200
@@ -1288,10 +1325,10 @@ async def test_mcp_tools_call_skips_execution_when_author_price_unaffordable(api
 @pytest.mark.anyio
 async def test_admin_pricing_accepts_marketplace_tool(admin_api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.routers.admin.get_marketplace_tool_by_name",
+        "teardrop.routers.admin.billing.get_marketplace_tool_by_name",
         AsyncMock(return_value={"org_id": "o1", "name": "weather"}),
     )
-    monkeypatch.setattr("teardrop.routers.admin.upsert_tool_pricing_override", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.admin.billing.upsert_tool_pricing_override", AsyncMock())
 
     resp = await admin_api_client.post(
         "/admin/pricing/tools",

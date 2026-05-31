@@ -214,7 +214,7 @@ async def test_delete_tool_not_found(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_admin_list_tools(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.list_org_tools", AsyncMock(return_value=[_TOOL]))
+    monkeypatch.setattr("teardrop.routers.admin.tools.list_org_tools", AsyncMock(return_value=[_TOOL]))
 
     resp = await admin_api_client.get("/admin/tools/test-org-id")
     assert resp.status_code == 200
@@ -224,7 +224,7 @@ async def test_admin_list_tools(admin_api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_admin_list_tools_requires_admin(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.admin.tools.list_org_tools", AsyncMock(return_value=[]))
 
     resp = await api_client.get("/admin/tools/test-org-id")
     assert resp.status_code == 403

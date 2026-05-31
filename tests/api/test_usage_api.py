@@ -36,7 +36,7 @@ async def test_usage_me_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_admin_usage_user(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.routers.admin.usage.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
 
     resp = await admin_api_client.get("/admin/usage/some-user-id")
     assert resp.status_code == 200
@@ -51,7 +51,7 @@ async def test_admin_usage_user_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_admin_usage_org(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.get_usage_by_org", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.routers.admin.usage.get_usage_by_org", AsyncMock(return_value=_SUMMARY))
 
     resp = await admin_api_client.get("/admin/usage/org/some-org-id")
     assert resp.status_code == 200

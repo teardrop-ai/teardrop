@@ -118,8 +118,8 @@ async def test_delete_memory_requires_auth(anon_client):
 
 @pytest.mark.anyio
 async def test_admin_list_org_memories(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.list_memories", AsyncMock(return_value=[_ENTRY]))
-    monkeypatch.setattr("teardrop.routers.admin.count_memories", AsyncMock(return_value=1))
+    monkeypatch.setattr("teardrop.routers.admin.memory.list_memories", AsyncMock(return_value=[_ENTRY]))
+    monkeypatch.setattr("teardrop.routers.admin.memory.count_memories", AsyncMock(return_value=1))
 
     resp = await admin_api_client.get("/admin/memories/org/test-org-id")
     assert resp.status_code == 200
@@ -139,7 +139,7 @@ async def test_admin_list_org_memories_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_admin_purge_org_memories(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.delete_all_org_memories", AsyncMock(return_value=5))
+    monkeypatch.setattr("teardrop.routers.admin.memory.delete_all_org_memories", AsyncMock(return_value=5))
 
     resp = await admin_api_client.delete("/admin/memories/org/test-org-id")
     assert resp.status_code == 200

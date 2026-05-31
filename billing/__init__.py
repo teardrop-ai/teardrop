@@ -4,6 +4,16 @@
 
 Implementation is split across focused submodules while this package root keeps
 legacy import paths and monkeypatch targets stable for tests and callers.
+
+Owner map (which submodule owns which concern):
+  - context.py:    pool access, org spending config, daily-spend tracking
+  - credit.py:     prepaid credit debit/top-up ledger (SELECT FOR UPDATE)
+  - pricing.py:    model + tool pricing resolution and overrides
+  - settlement.py: settlement records, pending/exhausted reconciliation
+  - stripe.py:     Stripe checkout/webhook idempotency
+  - x402.py:       on-chain x402 payment verification & settlement
+  - delegation.py: A2A delegation billing
+  - models.py:     atomic-USDC dataclasses (no float money math)
 """
 
 from __future__ import annotations

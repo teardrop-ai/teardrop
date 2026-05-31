@@ -186,7 +186,7 @@ async def test_admin_billing_revenue_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_admin_billing_revenue_returns_summary(admin_api_client, monkeypatch):
     mock_summary = {"total_settlements": 5, "total_revenue_usdc": 50_000}
-    monkeypatch.setattr("teardrop.routers.admin.get_revenue_summary", AsyncMock(return_value=mock_summary))
+    monkeypatch.setattr("teardrop.routers.admin.billing.get_revenue_summary", AsyncMock(return_value=mock_summary))
 
     resp = await admin_api_client.get("/admin/billing/revenue")
     assert resp.status_code == 200
@@ -198,7 +198,7 @@ async def test_admin_billing_revenue_returns_summary(admin_api_client, monkeypat
 @pytest.mark.anyio
 async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypatch):
     mock_fn = AsyncMock(return_value={"total_settlements": 2, "total_revenue_usdc": 20_000})
-    monkeypatch.setattr("teardrop.routers.admin.get_revenue_summary", mock_fn)
+    monkeypatch.setattr("teardrop.routers.admin.billing.get_revenue_summary", mock_fn)
 
     resp = await admin_api_client.get("/admin/billing/revenue?start=2026-01-01&end=2026-12-31")
     assert resp.status_code == 200
@@ -386,7 +386,7 @@ async def test_billing_invoice_scoped_to_authenticated_user(api_client, monkeypa
 
 @pytest.mark.anyio
 async def test_admin_credits_topup_success(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.admin_topup_credit", AsyncMock(return_value=1_500_000))
+    monkeypatch.setattr("teardrop.routers.admin.billing.admin_topup_credit", AsyncMock(return_value=1_500_000))
 
     resp = await admin_api_client.post(
         "/admin/credits/topup",
@@ -674,7 +674,7 @@ async def test_billing_pricing_includes_tool_overrides(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_upsert_tool_pricing_success(admin_api_client, monkeypatch):
     """POST /admin/pricing/tools with a known tool name succeeds."""
-    monkeypatch.setattr("teardrop.routers.admin.upsert_tool_pricing_override", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.admin.billing.upsert_tool_pricing_override", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post(
         "/admin/pricing/tools",
@@ -721,7 +721,7 @@ async def test_admin_upsert_cost_above_max_rejected(admin_api_client):
 @pytest.mark.anyio
 async def test_admin_delete_tool_pricing_success(admin_api_client, monkeypatch):
     """DELETE /admin/pricing/tools/{tool_name} returns {deleted: true}."""
-    monkeypatch.setattr("teardrop.routers.admin.delete_tool_pricing_override", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.admin.billing.delete_tool_pricing_override", AsyncMock(return_value=True))
 
     resp = await admin_api_client.delete("/admin/pricing/tools/web_search")
     assert resp.status_code == 200
@@ -733,7 +733,7 @@ async def test_admin_delete_tool_pricing_success(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_client, monkeypatch):
     """DELETE for a tool with no override → 404."""
-    monkeypatch.setattr("teardrop.routers.admin.delete_tool_pricing_override", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.admin.billing.delete_tool_pricing_override", AsyncMock(return_value=False))
 
     resp = await admin_api_client.delete("/admin/pricing/tools/nonexistent_tool")
     assert resp.status_code == 404
@@ -745,7 +745,7 @@ async def test_admin_delete_nonexistent_tool_pricing_returns_404(admin_api_clien
 
 @pytest.mark.anyio
 async def test_admin_billing_retry_x402_returns_422(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.reset_exhausted_settlement", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.admin.billing.reset_exhausted_settlement", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
     assert resp.status_code == 422
@@ -754,7 +754,7 @@ async def test_admin_billing_retry_x402_returns_422(admin_api_client, monkeypatc
 
 @pytest.mark.anyio
 async def test_admin_billing_retry_credit_returns_pending(admin_api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.reset_exhausted_settlement", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.admin.billing.reset_exhausted_settlement", AsyncMock(return_value=True))
 
     resp = await admin_api_client.post("/admin/billing/pending/set-1/retry")
     assert resp.status_code == 200

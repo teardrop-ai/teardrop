@@ -32,7 +32,7 @@ def _allow_rate_limit(monkeypatch):
 
 @pytest.mark.anyio
 async def test_admin_topup_rate_limited(admin_api_client, _deny_rate_limit, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.admin_topup_credit", AsyncMock(return_value=1))
+    monkeypatch.setattr("teardrop.routers.admin.billing.admin_topup_credit", AsyncMock(return_value=1))
     resp = await admin_api_client.post(
         "/admin/credits/topup",
         json={"org_id": "org-abc", "amount_usdc": 1_000_000},
@@ -42,7 +42,7 @@ async def test_admin_topup_rate_limited(admin_api_client, _deny_rate_limit, monk
 
 @pytest.mark.anyio
 async def test_admin_topup_allowed_when_under_limit(admin_api_client, _allow_rate_limit, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.admin.admin_topup_credit", AsyncMock(return_value=1_500_000))
+    monkeypatch.setattr("teardrop.routers.admin.billing.admin_topup_credit", AsyncMock(return_value=1_500_000))
     resp = await admin_api_client.post(
         "/admin/credits/topup",
         json={"org_id": "org-abc", "amount_usdc": 1_000_000},

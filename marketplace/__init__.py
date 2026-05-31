@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Marketplace package facade with compatibility state bridging."""
+"""Marketplace package facade with compatibility state bridging.
+
+Owner map (which submodule owns which concern):
+  - catalog.py:       tool catalog CRUD, lookup by name/slug, publish state
+  - subscriptions.py: org subscriptions to marketplace tools
+  - earnings.py:      author earnings accrual per tool call
+  - worker.py:        background withdrawal sweep loop
+  - withdrawals.py:   withdrawal lifecycle (pending/process/complete/reset)
+  - stats.py:         marketplace usage & revenue statistics
+"""
 
 from __future__ import annotations
 

@@ -28,6 +28,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError as PydanticValidationError
 
 from billing import (
     BillingResult,
@@ -333,6 +334,31 @@ async def mcp_jsonrpc_handler(
             if tool_name not in overrides and actual_tool_name not in overrides and author_price:
                 tool_cost = author_price
 
+        # ── Validate built-in tool arguments BEFORE the billing gate ──
+        # Built-in tools are invoked through their raw implementation coroutine
+        # (`tool_def.implementation`), which bypasses the LangChain/Pydantic
+        # argument coercion that the agent runtime relies on. Without an explicit
+        # check, malformed `arguments` would reach the tool body and surface as an
+        # unclassified runtime error — after the caller had already been billed.
+        # Validate here so rejected calls are never charged.
+        if not is_marketplace_tool:
+            tool_def = registry.get(tool_name)
+            if tool_def is None:
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
+                )
+            if not isinstance(arguments, dict):
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}': expected an object"),
+                )
+            try:
+                tool_def.input_schema(**arguments)
+            except PydanticValidationError:
+                logger.info("mcp/v1 invalid arguments org_id=%s tool=%s", org_id, tool_name)
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}'"),
+                )
+
         # ── Billing gate (credit-only for MCP calls) ──────────────────
         billing = BillingResult()
         if s.billing_enabled:
@@ -351,12 +377,7 @@ async def mcp_jsonrpc_handler(
             assert tool_row is not None  # resolved above for marketplace tools
             result = await _execute_marketplace_tool(tool_row, arguments)
         else:
-            # Built-in tool execution
-            tool_def = registry.get(tool_name)
-            if tool_def is None:
-                return JSONResponse(
-                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
-                )
+            # Built-in tool execution (tool_def resolved + validated above)
             exec_result = await execute_tool(
                 tool_name=tool_name,
                 tool_call_id=str(req_id),
