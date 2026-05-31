@@ -68,7 +68,10 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
     import aiohttp  # noqa: PLC0415
 
     from org_tools import _decrypt_header, _hash_webhook_host, _on_webhook_failure, _record_event  # noqa: PLC0415
-    from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
+    from tools.definitions.http_fetch import (  # noqa: PLC0415
+        async_validate_url_with_ips,
+        make_ssrf_safe_connector,
+    )
     from tools.health import is_breaker_tripped, record_success  # noqa: PLC0415
 
     tool_id = tool_row.get("id", "")
@@ -82,7 +85,7 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
     if tool_id and await is_breaker_tripped(tool_id):
         return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
 
-    url_err = await async_validate_url(url)
+    url_err, validated_ips = await async_validate_url_with_ips(url)
     if url_err:
         return {"error": f"Webhook URL blocked: {url_err}"}
 
@@ -99,8 +102,12 @@ async def _execute_marketplace_tool(tool_row: dict[str, Any], arguments: dict[st
 
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
     started = _time.monotonic()
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    hostname = urlparse(url).hostname or ""
+    connector = make_ssrf_safe_connector(hostname, validated_ips)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             if method == "GET":
                 resp = await session.get(url, headers=headers, params=arguments)
             elif method == "PUT":

@@ -100,14 +100,14 @@ def setup_mcp_client(mock_pool, test_settings, monkeypatch):
     """Inject a mock pool and stub out side-effects."""
     import mcp_client
 
-    monkeypatch.setattr(mcp_client, "_pool", mock_pool)
-    monkeypatch.setattr(mcp_client, "_server_caches", {})
-    monkeypatch.setattr(mcp_client, "_tools_cache", {})
-    monkeypatch.setattr(mcp_client, "_sessions", {})
-    # Stub out cache invalidation
-    monkeypatch.setattr(mcp_client, "invalidate_mcp_cache", AsyncMock())
-    # Stub out audit logging
-    monkeypatch.setattr(mcp_client, "_record_event", AsyncMock())
+    monkeypatch.setattr(mcp_client.base, "_pool", mock_pool)
+    monkeypatch.setattr(mcp_client.cache, "_server_caches", {})
+    monkeypatch.setattr(mcp_client.runtime, "_tools_cache", {})
+    monkeypatch.setattr(mcp_client.session, "_sessions", {})
+    # Stub out cache invalidation (looked up in the crud submodule)
+    monkeypatch.setattr(mcp_client.crud, "invalidate_mcp_cache", AsyncMock())
+    # Stub out audit logging (looked up in the crud submodule)
+    monkeypatch.setattr(mcp_client.crud, "_record_event", AsyncMock())
     return mock_pool
 
 
@@ -117,7 +117,7 @@ async def test_create_server_success(setup_mcp_client, monkeypatch):
     pool.fetchval = AsyncMock(return_value=0)
     pool.execute = AsyncMock()
 
-    monkeypatch.setattr("mcp_client._encrypt_token", lambda v: "encrypted")
+    monkeypatch.setattr("mcp_client.crud._encrypt_token", lambda v: "encrypted")
 
     from mcp_client import create_org_mcp_server
 
@@ -214,7 +214,7 @@ async def test_delete_server_success(setup_mcp_client, monkeypatch):
 
     import mcp_client
 
-    monkeypatch.setattr(mcp_client, "_evict_session", AsyncMock())
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
 
     from mcp_client import delete_org_mcp_server
 
@@ -229,7 +229,7 @@ async def test_delete_server_not_found(setup_mcp_client, monkeypatch):
 
     import mcp_client
 
-    monkeypatch.setattr(mcp_client, "_evict_session", AsyncMock())
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
 
     from mcp_client import delete_org_mcp_server
 
@@ -244,8 +244,8 @@ async def test_delete_server_not_found(setup_mcp_client, monkeypatch):
 async def test_build_mcp_langchain_tools_no_servers(setup_mcp_client, monkeypatch):
     import mcp_client
 
-    monkeypatch.setattr(mcp_client, "_get_servers_cached", AsyncMock(return_value=[]))
-    monkeypatch.setattr(mcp_client, "invalidate_mcp_cache", AsyncMock())
+    monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mcp_client.crud, "invalidate_mcp_cache", AsyncMock())
 
     from mcp_client import build_mcp_langchain_tools
 

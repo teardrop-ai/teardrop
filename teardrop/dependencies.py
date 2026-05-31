@@ -19,7 +19,16 @@ __all__ = ["require_auth", "require_admin", "require_org_admin", "_require_org_i
 async def require_admin(
     payload: dict = Depends(require_auth),
 ) -> dict:
-    """FastAPI dependency — requires an authenticated user with role=admin."""
+    """FastAPI dependency — requires an authenticated user with role=admin.
+
+    Platform-level privilege: ``role=admin`` grants access to every org's data
+    through the ``/admin/*`` routes (cross-tenant by design). Admin users are
+    provisioned out of band only — self-service registration and org invites
+    can never grant ``admin`` — so there is no privilege-escalation path, but a
+    compromised admin JWT exposes all tenant data. Treat admin tokens as
+    highly sensitive credentials. For org-scoped mutations use
+    ``require_org_admin`` instead.
+    """
     if payload.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

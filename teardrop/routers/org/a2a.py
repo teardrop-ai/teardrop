@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from teardrop.config import get_settings
 from teardrop.dependencies import require_auth
+from teardrop.rate_limit import _enforce_rate_limit
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -40,6 +41,16 @@ async def add_a2a_agent(
 ) -> JSONResponse:
     """Add a trusted A2A agent to the authenticated org's allowlist."""
     org_id: str = payload.get("org_id", payload["sub"])
+
+    # Per-org rate limit — registering an allowlist entry exposes a URL to the
+    # agent's delegate_to_agent tool, so cap the write rate to defend against a
+    # stolen JWT bulk-injecting malicious endpoints.
+    await _enforce_rate_limit(
+        f"a2a_add:{org_id}",
+        settings.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for A2A agent registration.",
+    )
+
     # jwt_forward causes the caller's JWT to be replayed to an arbitrary external
     # agent — a credential-exfiltration risk. Restrict it to org admins so a
     # low-privilege member cannot register an allowlist entry that leaks tokens.

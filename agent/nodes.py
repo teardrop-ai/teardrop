@@ -33,7 +33,6 @@ cache_creation_tokens) to the running _usage dict for USAGE_SUMMARY reporting.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -48,13 +47,20 @@ from agent.node_executor import (
     _get_liquidation_risk_targets,  # noqa: F401  (re-exported for backward compatibility)
     tool_executor_node,  # noqa: F401  (re-exported; used by agent.graph)
 )
+from agent.node_ui import (
+    _UI_GENERATOR_SYSTEM,  # noqa: F401  (re-exported for backward compatibility)
+    _contains_structured_data,  # noqa: F401  (re-exported for backward compatibility)
+    _extract_a2ui_from_text,  # noqa: F401  (re-exported for backward compatibility)
+    _parse_a2ui_json,  # noqa: F401  (re-exported for backward compatibility)
+    ui_generator_node,  # noqa: F401  (re-exported; used by agent.graph)
+)
 from agent.node_usage import (
     _accumulate_usage,
     _covered_defi_keys_from_result,  # noqa: F401  (re-exported for backward compatibility)
 )
 from agent.planner_ir import parse_plan_from_text
 from agent.slots import render_slots_markdown
-from agent.state import A2UIComponent, AgentState, TaskStatus
+from agent.state import AgentState, TaskStatus
 from teardrop.benchmarks import get_model_context_specs
 from teardrop.config import get_settings
 from teardrop.llm_config import is_provider_cooled_down, record_provider_failure
@@ -396,17 +402,6 @@ Final synthesis style:
         summarize or paraphrase numbers; state them precisely as returned by
         the tool output.
 """
-
-_UI_GENERATOR_SYSTEM = """\
-You are a UI layout assistant. The agent has finished its reasoning.
-Review the final assistant message below and extract any ```a2ui``` block.
-If no a2ui block is present but the response contains structured data (lists,
-numbers, comparisons) that would benefit from a visual presentation, generate
-one. Output ONLY valid JSON matching the schema:
-{"components": [<A2UIComponent>, ...]}
-No markdown, no prose — pure JSON.
-"""
-
 
 # ─── Nodes ────────────────────────────────────────────────────────────────────
 
@@ -956,106 +951,3 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         "plan": next_plan,
     }
 
-
-async def ui_generator_node(state: AgentState) -> dict[str, Any]:
-    """Parse or generate A2UI components from the agent's final message."""
-    logger.debug("ui_generator_node: entry")
-    last_msg = state.messages[-1] if state.messages else None
-    if not isinstance(last_msg, AIMessage):
-        for msg in reversed(state.messages):
-            if isinstance(msg, AIMessage) and msg.content:
-                last_msg = msg
-                break
-    emit_ui = bool(state.metadata.get("emit_ui", True))
-
-    # --- Try to extract inline ```a2ui``` block first ---
-    if isinstance(last_msg, AIMessage) and last_msg.content:
-        text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
-        components = _extract_a2ui_from_text(text)
-        if components:
-            return {
-                "ui_components": [c.model_dump() for c in components],
-                "task_status": TaskStatus.COMPLETED,
-            }
-
-    # --- If no inline block and we have a data-rich response, ask LLM to generate ---
-    if emit_ui and isinstance(last_msg, AIMessage) and last_msg.content:
-        text = last_msg.content if isinstance(last_msg.content, str) else str(last_msg.content)
-        if _contains_structured_data(text):
-            settings = get_settings()
-            prompt = f"{_UI_GENERATOR_SYSTEM}\n\nAssistant message:\n{text}"
-            try:
-                llm_config = state.metadata.get("_llm_config")
-                if llm_config:
-                    ui_llm = get_llm_for_request(llm_config)
-                else:
-                    ui_provider = settings.agent_ui_generator_provider
-                    ui_model = settings.agent_ui_generator_model
-                    ui_llm = create_llm_from_config(
-                        {
-                            "provider": ui_provider,
-                            "model": ui_model,
-                            "api_key": _provider_api_key(settings, ui_provider),
-                            "max_tokens": settings.agent_synthesis_max_tokens,
-                            "temperature": settings.agent_temperature,
-                            "timeout_seconds": settings.agent_ui_generator_timeout_seconds,
-                        }
-                    )
-                result: AIMessage = await asyncio.wait_for(  # type: ignore[assignment]
-                    ui_llm.ainvoke(prompt),
-                    timeout=settings.agent_ui_generator_timeout_seconds,
-                )
-                raw = result.content if isinstance(result.content, str) else str(result.content)
-                components = _parse_a2ui_json(raw)
-                if components:
-                    return {
-                        "ui_components": [c.model_dump() for c in components],
-                        "task_status": TaskStatus.COMPLETED,
-                    }
-            except asyncio.TimeoutError:
-                logger.warning("ui_generator_node: LLM call timed out")
-            except Exception as exc:
-                logger.warning("ui_generator_node: LLM call failed: %s", exc)
-
-    return {"task_status": TaskStatus.COMPLETED}
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-
-def _extract_a2ui_from_text(text: str) -> list[A2UIComponent]:
-    """Extract components from a ```a2ui ... ``` fenced block."""
-    import re
-
-    pattern = r"```a2ui\s*(\{.*?\})\s*```"
-    match = re.search(pattern, text, re.DOTALL)
-    if not match:
-        return []
-    return _parse_a2ui_json(match.group(1))
-
-
-def _parse_a2ui_json(raw: str) -> list[A2UIComponent]:
-    """Parse raw JSON string into A2UIComponent list."""
-    try:
-        data = json.loads(raw.strip())
-        raw_components = data.get("components", [])
-        return [A2UIComponent(**c) for c in raw_components]
-    except Exception as exc:
-        logger.debug("_parse_a2ui_json failed: %s", exc)
-        return []
-
-
-def _contains_structured_data(text: str) -> bool:
-    """Heuristic: does the text contain tables, lists, or numeric data?"""
-    import re
-
-    indicators = [
-        r"\|.*\|",  # Markdown table
-        r"^\s*[-*]\s+",  # Bullet list
-        r"\d+\.\s+\w+",  # Numbered list
-        r"\b\d+[.,]\d+\b",  # Decimal numbers
-    ]
-    for pattern in indicators:
-        if re.search(pattern, text, re.MULTILINE):
-            return True
-    return False

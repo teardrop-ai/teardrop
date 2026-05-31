@@ -32,7 +32,7 @@ async def billing_db_pool(docker_postgres: str):
     await apply_pending(pool)
 
     billing_module._pool = pool
-    user_module._pool = pool
+    user_module.base._pool = pool
     usage_module._pool = pool
 
     yield pool

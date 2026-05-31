@@ -52,7 +52,7 @@ class TestCreateOrg:
         from teardrop.users import create_org
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org = await create_org("ACME")
         assert isinstance(org, Org)
         assert org.name == "ACME"
@@ -65,7 +65,7 @@ class TestCreateOrg:
 
         pool = _pool()
         pool.execute = AsyncMock(side_effect=Exception("duplicate key"))
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             with pytest.raises(Exception, match="duplicate key"):
                 await create_org("duplicate-name")
 
@@ -79,7 +79,7 @@ class TestCreateUser:
         from teardrop.users import create_user
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await create_user("test@test.com", "secret", "org-1", "user")
         assert isinstance(user, User)
         assert user.email == "test@test.com"
@@ -91,7 +91,7 @@ class TestCreateUser:
         from teardrop.users import create_user
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await create_user("admin@test.com", "pw", "org-1", "admin")
         assert user.role == "admin"
 
@@ -117,7 +117,7 @@ class TestGetUserByEmail:
         }
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await get_user_by_email("test@test.com")
         assert user is not None
         assert user.id == "u-1"
@@ -138,7 +138,7 @@ class TestGetUserByEmail:
         }
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await get_user_by_email("inactive@test.com")
         assert user is None
 
@@ -147,7 +147,7 @@ class TestGetUserByEmail:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await get_user_by_email("nobody@test.com")
         assert user is None
 
@@ -160,14 +160,14 @@ class TestInitAndClose:
     async def test_close_user_db_clears_pool(self):
         from teardrop.users import close_user_db
 
-        with patch.object(users_module, "_pool", MagicMock()):
+        with patch.object(users_module.base, "_pool", MagicMock()):
             await close_user_db()
-        assert users_module._pool is None
+        assert users_module.base._pool is None
 
     async def test_get_pool_raises_when_uninitialised(self):
         from teardrop.users import _get_pool
 
-        with patch.object(users_module, "_pool", None):
+        with patch.object(users_module.base, "_pool", None):
             with pytest.raises(RuntimeError, match="not initialised"):
                 _get_pool()
 
@@ -175,10 +175,10 @@ class TestInitAndClose:
         from teardrop.users import init_user_db
 
         pool = _pool()
-        with patch.object(users_module, "_pool", None):
+        with patch.object(users_module.base, "_pool", None):
             await init_user_db(pool)
             # Assert inside the patch context before restoration
-            assert users_module._pool is pool
+            assert users_module.base._pool is pool
         assert pool.execute.call_count >= 6  # tables + indexes
 
 
@@ -193,7 +193,7 @@ class TestGetOrgById:
         row = {"id": "org-1", "name": "ACME", "created_at": datetime.now(timezone.utc)}
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org = await get_org_by_id("org-1")
         assert org is not None
         assert org.id == "org-1"
@@ -204,7 +204,7 @@ class TestGetOrgById:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org = await get_org_by_id("missing")
         assert org is None
 
@@ -220,7 +220,7 @@ class TestGetOrgByName:
         row = {"id": "org-2", "name": "Globex", "created_at": datetime.now(timezone.utc)}
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org = await get_org_by_name("Globex")
         assert org is not None
         assert org.name == "Globex"
@@ -230,7 +230,7 @@ class TestGetOrgByName:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org = await get_org_by_name("unknown")
         assert org is None
 
@@ -256,7 +256,7 @@ class TestGetUserByOrgId:
         }
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await get_user_by_org_id("org-1")
         assert user is not None
         assert user.org_id == "org-1"
@@ -266,7 +266,7 @@ class TestGetUserByOrgId:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             user = await get_user_by_org_id("empty-org")
         assert user is None
 
@@ -290,7 +290,7 @@ class TestClientCredentials:
         from teardrop.users import create_client_credential
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             cred, plaintext = await create_client_credential("org-1")
         assert cred.org_id == "org-1"
         assert len(plaintext) > 20
@@ -301,7 +301,7 @@ class TestClientCredentials:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=_make_cred_row())
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             cred = await get_client_credential_by_id("cid-1")
         assert cred is not None
         assert cred.client_id == "cid-1"
@@ -311,7 +311,7 @@ class TestClientCredentials:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             cred = await get_client_credential_by_id("missing")
         assert cred is None
 
@@ -320,7 +320,7 @@ class TestClientCredentials:
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[_make_cred_row()])
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             creds = await list_org_client_credentials("org-1")
         assert len(creds) == 1
         assert creds[0].org_id == "org-1"
@@ -330,7 +330,7 @@ class TestClientCredentials:
 
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[])
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             creds = await list_org_client_credentials("org-1")
         assert creds == []
 
@@ -338,7 +338,7 @@ class TestClientCredentials:
         from teardrop.users import delete_org_client_credentials
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             await delete_org_client_credentials("org-1")
         pool.execute.assert_called_once()
 
@@ -374,7 +374,7 @@ class TestRegisterOrgAndUser:
         from teardrop.users import register_org_and_user
 
         pool, conn = _make_transactional_pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             org, user = await register_org_and_user("MyOrg", "user@test.com", "pass123")
         assert org.name == "MyOrg"
         assert user.email == "user@test.com"
@@ -386,7 +386,7 @@ class TestRegisterOrgAndUser:
 
         pool, conn = _make_transactional_pool()
         conn.execute = AsyncMock(side_effect=Exception("unique violation"))
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             with pytest.raises(Exception, match="unique violation"):
                 await register_org_and_user("dup", "dup@test.com", "pw")
 
@@ -400,7 +400,7 @@ class TestVerificationTokens:
         from teardrop.users import create_verification_token
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             token = await create_verification_token("user-1")
         assert isinstance(token, str)
         assert len(token) > 10
@@ -420,7 +420,7 @@ class TestVerificationTokens:
                 "used": False,
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             uid = await consume_verification_token("valid-tok")
         assert uid == "u-42"
         conn.execute.assert_called_once()  # UPDATE SET used=TRUE
@@ -436,7 +436,7 @@ class TestVerificationTokens:
                 "used": False,
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             uid = await consume_verification_token("expired")
         assert uid is None
 
@@ -453,7 +453,7 @@ class TestVerificationTokens:
                 "used": True,
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             uid = await consume_verification_token("used-tok")
         assert uid is None
 
@@ -462,7 +462,7 @@ class TestVerificationTokens:
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             uid = await consume_verification_token("missing")
         assert uid is None
 
@@ -470,7 +470,7 @@ class TestVerificationTokens:
         from teardrop.users import mark_user_verified
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             await mark_user_verified("user-1")
         pool.execute.assert_called_once()
 
@@ -484,7 +484,7 @@ class TestOrgInvites:
         from teardrop.users import create_org_invite
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             invite = await create_org_invite("org-1", "admin-id", email="new@test.com")
         assert invite.org_id == "org-1"
         assert invite.email == "new@test.com"
@@ -509,7 +509,7 @@ class TestOrgInvites:
             "used": False,
         }
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             invite = await get_org_invite("tok-1")
         assert invite is not None
         assert invite.token == "tok-1"
@@ -519,7 +519,7 @@ class TestOrgInvites:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             invite = await get_org_invite("nope")
         assert invite is None
 
@@ -541,7 +541,7 @@ class TestOrgInvites:
             "used": True,
         }
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             invite = await get_org_invite("t")
         assert invite is None
 
@@ -553,7 +553,7 @@ class TestOrgInvites:
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
         conn.fetchrow = AsyncMock(return_value={"used": False, "expires_at": now + timedelta(hours=1)})
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await consume_org_invite("tok-1")
         assert result is True
         conn.execute.assert_called_once()
@@ -566,7 +566,7 @@ class TestOrgInvites:
         pool, conn = _make_transactional_pool()
         now = datetime.now(timezone.utc)
         conn.fetchrow = AsyncMock(return_value={"used": True, "expires_at": now + timedelta(hours=1)})
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await consume_org_invite("used-tok")
         assert result is False
 
@@ -575,7 +575,7 @@ class TestOrgInvites:
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await consume_org_invite("missing")
         assert result is False
 
@@ -589,7 +589,7 @@ class TestRefreshTokens:
         from teardrop.users import create_refresh_token
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             token = await create_refresh_token("u-1", "org-1", "password", {}, 30)
         assert isinstance(token, str)
         assert len(token) > 10
@@ -614,7 +614,7 @@ class TestRefreshTokens:
                 "revoked": False,
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await rotate_refresh_token("old-tok", 30)
         assert result is not None
         record, new_token = result
@@ -640,7 +640,7 @@ class TestRefreshTokens:
                 "revoked": True,
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await rotate_refresh_token("revoked-tok", 30)
         assert result is None
 
@@ -649,7 +649,7 @@ class TestRefreshTokens:
 
         pool, conn = _make_transactional_pool()
         conn.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             result = await rotate_refresh_token("missing", 30)
         assert result is None
 
@@ -657,7 +657,7 @@ class TestRefreshTokens:
         from teardrop.users import revoke_refresh_token
 
         pool = _pool()
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             await revoke_refresh_token("some-tok")
         pool.execute.assert_called_once()
 
@@ -666,7 +666,7 @@ class TestRefreshTokens:
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="DELETE 5")
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             count = await cleanup_expired_refresh_tokens()
         assert count == 5
 
@@ -675,7 +675,7 @@ class TestRefreshTokens:
 
         pool = _pool()
         pool.execute = AsyncMock(return_value="OK")
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             count = await cleanup_expired_refresh_tokens()
         assert count == 0
 
@@ -697,7 +697,7 @@ class TestRefreshTokens:
                 "expires_at": now + timedelta(days=30),
             }
         )
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             rec = await get_refresh_token_successor("old-tok")
         assert rec is not None
         assert rec.token == "new-tok"
@@ -707,6 +707,6 @@ class TestRefreshTokens:
 
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(users_module, "_pool", pool):
+        with patch.object(users_module.base, "_pool", pool):
             rec = await get_refresh_token_successor("no-successor")
         assert rec is None

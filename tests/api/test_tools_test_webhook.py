@@ -26,6 +26,28 @@ def _reset_rate_limit():
     app_module._rate_counters.clear()
 
 
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    """Default-safe SSRF stubs.
+
+    The endpoint validates with ``async_validate_url_with_ips`` and pins the
+    connection via ``make_ssrf_safe_connector``. Patch both to a safe public IP
+    so happy-path tests reach the (mocked) HTTP call; individual tests override
+    ``async_validate_url_with_ips`` to exercise the block path.
+    """
+    with (
+        patch(
+            "tools.definitions.http_fetch.async_validate_url_with_ips",
+            new=AsyncMock(return_value=(None, ["93.184.216.34"])),
+        ),
+        patch(
+            "tools.definitions.http_fetch.make_ssrf_safe_connector",
+            new=MagicMock(return_value=MagicMock()),
+        ),
+    ):
+        yield
+
+
 def _mock_session(*, status: int, body: bytes, content_type: str = "application/json"):
     """Build an AsyncMock aiohttp.ClientSession that returns a configured response."""
     mock_resp = AsyncMock()
@@ -210,10 +232,10 @@ async def test_ssrf_sync_blocks_localhost(api_client):
 
 @pytest.mark.anyio
 async def test_ssrf_async_dns_block(api_client):
-    """The async DNS re-check rejects when async_validate_url returns an error."""
+    """The async DNS re-check rejects when async_validate_url_with_ips returns an error."""
     with patch(
-        "tools.definitions.http_fetch.async_validate_url",
-        new=AsyncMock(return_value="resolves to blocked IP"),
+        "tools.definitions.http_fetch.async_validate_url_with_ips",
+        new=AsyncMock(return_value=("resolves to blocked IP", [])),
     ):
         resp = await api_client.post("/tools/test-webhook", json=_BODY)
     assert resp.status_code == 422
@@ -289,6 +311,29 @@ async def test_rate_limit_enforced(api_client, monkeypatch):
     assert "Rate limit exceeded" in resp.json()["detail"]
 
 
+# ─── DNS-rebinding TOCTOU pinning ─────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_connection_is_ip_pinned(api_client):
+    """The webhook call must use an SSRF-pinned connector built from the
+    validated IPs, closing the DNS-rebinding window between check and connect."""
+    session = _mock_session(status=200, body=b'{"ok": true}')
+    pin = MagicMock(return_value=MagicMock())
+    with (
+        patch("aiohttp.ClientSession", return_value=session),
+        patch(
+            "tools.definitions.http_fetch.async_validate_url_with_ips",
+            new=AsyncMock(return_value=(None, ["93.184.216.34"])),
+        ),
+        patch("tools.definitions.http_fetch.make_ssrf_safe_connector", new=pin),
+    ):
+        resp = await api_client.post("/tools/test-webhook", json=_BODY)
+
+    assert resp.status_code == 200
+    pin.assert_called_once_with("example.com", ["93.184.216.34"])
+
+
 # ─── No side effects on audit / breaker ───────────────────────────────────────
 
 
@@ -296,6 +341,9 @@ async def test_rate_limit_enforced(api_client, monkeypatch):
 async def test_no_audit_event_recorded(api_client, monkeypatch):
     """A test call must not write to org_tool_events."""
     record_event_mock = AsyncMock()
+
+
+# ─── No side effects on audit / breaker ───────────────────────────────────────
     monkeypatch.setattr("org_tools._record_event", record_event_mock)
     session = _mock_session(status=200, body=b'{"ok": true}')
     with (

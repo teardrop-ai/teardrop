@@ -35,7 +35,7 @@ async def sweep_db_pool(docker_postgres: str):
     await apply_pending(pool)
 
     marketplace_module._pool = pool
-    users_module._pool = pool
+    users_module.base._pool = pool
 
     yield pool
 
@@ -53,7 +53,7 @@ async def sweep_db_pool(docker_postgres: str):
         )
 
     marketplace_module._pool = None
-    users_module._pool = None
+    users_module.base._pool = None
     await pool.close()
 
 

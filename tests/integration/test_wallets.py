@@ -25,10 +25,10 @@ _ADDR_2 = "0xAbcd1234AbcD1234AbcD1234AbcD1234aBcD1234"
 @pytest.fixture(autouse=True)
 def bind_pools(db_pool):
     """Bind both module-level _pool globals to the test pool."""
-    user_module._pool = db_pool
+    user_module.base._pool = db_pool
     wallet_module._pool = db_pool
     yield
-    user_module._pool = None
+    user_module.base._pool = None
     wallet_module._pool = None
 
 

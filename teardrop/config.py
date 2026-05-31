@@ -283,7 +283,7 @@ class Settings(BaseSettings):
         default="keys/private.pem", description="Path to RSA private key (relative to project root)"
     )
     jwt_public_key_path: str = Field(default="keys/public.pem", description="Path to RSA public key (relative to project root)")
-    jwt_algorithm: str = "RS256"
+    jwt_algorithm: Literal["RS256"] = "RS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_issuer: str = "teardrop"
     jwt_client_id: str = Field(default="teardrop-client", description="Client ID for token endpoint")

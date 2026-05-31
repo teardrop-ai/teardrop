@@ -79,10 +79,10 @@ async def echo_server_url() -> str:
 @pytest.fixture
 async def isolated_mcp_client_state(monkeypatch):
     """Isolate module-level state so tests run independently and DB-free."""
-    monkeypatch.setattr(mcp_client, "_tools_cache", {})
-    monkeypatch.setattr(mcp_client, "_sessions", {})
-    monkeypatch.setattr(mcp_client, "_server_caches", {})
-    monkeypatch.setattr(mcp_client, "_record_event", AsyncMock())
+    monkeypatch.setattr(mcp_client.runtime, "_tools_cache", {})
+    monkeypatch.setattr(mcp_client.session, "_sessions", {})
+    monkeypatch.setattr(mcp_client.cache, "_server_caches", {})
+    monkeypatch.setattr(mcp_client.session, "_record_event", AsyncMock())
 
     # The SSRF guard pins outbound MCP connections to public IPs and blocks
     # loopback. These transport tests talk to a real local 127.0.0.1 server, so
@@ -121,7 +121,7 @@ async def isolated_mcp_client_state(monkeypatch):
 @pytest.mark.anyio
 async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
-    monkeypatch.setattr(mcp_client, "_get_servers_cached", AsyncMock(return_value=[server]))
+    monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
 
     tools, by_name = await mcp_client.build_mcp_langchain_tools("org-1")
 
@@ -134,7 +134,7 @@ async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, 
 @pytest.mark.anyio
 async def test_build_mcp_langchain_tools_ainvoke_calls_remote_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
-    monkeypatch.setattr(mcp_client, "_get_servers_cached", AsyncMock(return_value=[server]))
+    monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
 
     _, by_name = await mcp_client.build_mcp_langchain_tools("org-1")
     result = await by_name["echo__echo_greeting"].ainvoke({"name": "World"})

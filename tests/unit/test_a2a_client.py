@@ -60,6 +60,18 @@ class TestIsIpBlocked:
     def test_invalid_ip_blocked(self):
         assert _is_ip_blocked("not-an-ip") is True
 
+    def test_ipv4_mapped_loopback_blocked(self):
+        assert _is_ip_blocked("::ffff:127.0.0.1") is True
+
+    def test_ipv4_mapped_metadata_blocked(self):
+        assert _is_ip_blocked("::ffff:169.254.169.254") is True
+
+    def test_ipv4_mapped_private_blocked(self):
+        assert _is_ip_blocked("::ffff:10.0.0.1") is True
+
+    def test_ipv4_mapped_public_allowed(self):
+        assert _is_ip_blocked("::ffff:8.8.8.8") is False
+
 
 class TestValidateUrl:
     def test_valid_https_url(self):

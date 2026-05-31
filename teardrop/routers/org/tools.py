@@ -401,9 +401,14 @@ async def test_webhook(
     Always returns HTTP 200 on a successful proxy attempt; the webhook's own
     HTTP status is reported in the response body's ``status_code`` field.
     """
+    from urllib.parse import urlparse  # noqa: PLC0415
+
     import aiohttp  # noqa: PLC0415
 
-    from tools.definitions.http_fetch import async_validate_url  # noqa: PLC0415
+    from tools.definitions.http_fetch import (  # noqa: PLC0415
+        async_validate_url_with_ips,
+        make_ssrf_safe_connector,
+    )
 
     org_id = _require_org_id(payload)
 
@@ -418,8 +423,9 @@ async def test_webhook(
     # Sync SSRF + HTTPS-in-prod validation (raises 422 on fail).
     _validate_webhook_url(body.webhook_url)
 
-    # Async DNS re-check (anti-rebinding) — same defence as live execution.
-    url_err = await async_validate_url(body.webhook_url)
+    # Async DNS re-check (anti-rebinding) — returns the exact validated IPs so the
+    # connection below can be pinned, closing the DNS-rebinding TOCTOU window.
+    url_err, validated_ips = await async_validate_url_with_ips(body.webhook_url)
     if url_err is not None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -440,8 +446,11 @@ async def test_webhook(
     timeout = aiohttp.ClientTimeout(total=body.timeout_seconds)
     started = time.monotonic()
 
+    hostname = urlparse(body.webhook_url).hostname or ""
+    connector = make_ssrf_safe_connector(hostname, validated_ips)
+
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             if body.webhook_method == "GET":
                 resp = await session.get(body.webhook_url, headers=headers, params=body.payload)
             elif body.webhook_method == "PUT":

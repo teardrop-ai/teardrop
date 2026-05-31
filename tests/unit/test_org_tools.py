@@ -215,7 +215,7 @@ class TestCreateOrgTool:
 
         pool = _pool()
         try:
-            with patch.object(org_tools_module, "_pool", pool):
+            with patch.object(org_tools_module.base, "_pool", pool):
                 tool = await org_tools_module.create_org_tool(
                     org_id="org-1",
                     name="crm_lookup",
@@ -247,7 +247,7 @@ class TestCreateOrgTool:
         pool = _pool()
         pool.fetchval = AsyncMock(return_value=2)  # already at limit
         try:
-            with patch.object(org_tools_module, "_pool", pool):
+            with patch.object(org_tools_module.base, "_pool", pool):
                 with pytest.raises(ValueError, match="tool limit reached"):
                     await org_tools_module.create_org_tool(
                         org_id="org-1",
@@ -273,7 +273,7 @@ class TestCreateOrgTool:
 
         pool = _pool()
         try:
-            with patch.object(org_tools_module, "_pool", pool):
+            with patch.object(org_tools_module.base, "_pool", pool):
                 tool = await org_tools_module.create_org_tool(
                     org_id="org-1",
                     name="authed_tool",
@@ -306,7 +306,7 @@ class TestGetOrgTool:
         pool = _pool()
         row = _tool_row()
         pool.fetchrow = AsyncMock(return_value=row)
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             tool = await org_tools_module.get_org_tool("tool-1", "org-1")
         assert tool is not None
         assert tool.id == "tool-1"
@@ -314,14 +314,14 @@ class TestGetOrgTool:
     async def test_not_found(self):
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             tool = await org_tools_module.get_org_tool("bad-id", "org-1")
         assert tool is None
 
     async def test_wrong_org_returns_none(self):
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=None)  # scoped query won't match
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             tool = await org_tools_module.get_org_tool("tool-1", "other-org")
         assert tool is None
 
@@ -331,14 +331,14 @@ class TestListOrgTools:
     async def test_returns_list(self):
         pool = _pool()
         pool.fetch = AsyncMock(return_value=[_tool_row(), _tool_row(id="tool-2", name="tool_b")])
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             tools = await org_tools_module.list_org_tools("org-1")
         assert len(tools) == 2
         assert all(isinstance(t, OrgTool) for t in tools)
 
     async def test_empty(self):
         pool = _pool()
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             tools = await org_tools_module.list_org_tools("org-1")
         assert tools == []
 
@@ -349,14 +349,14 @@ class TestDeleteOrgTool:
         pool = _pool()
         pool.execute = AsyncMock(return_value="UPDATE 1")
         pool.fetchrow = AsyncMock(return_value={"name": "my_tool"})
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             result = await org_tools_module.delete_org_tool("tool-1", "org-1", actor_id="user-1")
         assert result is True
 
     async def test_not_found(self):
         pool = _pool()
         pool.execute = AsyncMock(return_value="UPDATE 0")
-        with patch.object(org_tools_module, "_pool", pool):
+        with patch.object(org_tools_module.base, "_pool", pool):
             result = await org_tools_module.delete_org_tool("bad-id", "org-1", actor_id="user-1")
         assert result is False
 
@@ -382,12 +382,12 @@ class TestWebhookExecution:
 
         with (
             patch(
-                "org_tools.async_validate_url_with_ips",
+                "org_tools.runtime.async_validate_url_with_ips",
                 new_callable=AsyncMock,
                 return_value=(None, ["93.184.216.34"]),
             ),
-            patch("org_tools.make_ssrf_safe_connector", return_value=None),
-            patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+            patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+            patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
         assert result == {"result": "ok"}
@@ -403,12 +403,12 @@ class TestWebhookExecution:
 
         with (
             patch(
-                "org_tools.async_validate_url_with_ips",
+                "org_tools.runtime.async_validate_url_with_ips",
                 new_callable=AsyncMock,
                 return_value=(None, ["93.184.216.34"]),
             ),
-            patch("org_tools.make_ssrf_safe_connector", return_value=None),
-            patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+            patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+            patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
         assert "timed out" in result["error"]
@@ -429,12 +429,12 @@ class TestWebhookExecution:
 
         with (
             patch(
-                "org_tools.async_validate_url_with_ips",
+                "org_tools.runtime.async_validate_url_with_ips",
                 new_callable=AsyncMock,
                 return_value=(None, ["93.184.216.34"]),
             ),
-            patch("org_tools.make_ssrf_safe_connector", return_value=None),
-            patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+            patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+            patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
         ):
             result = await lc_tool.ainvoke({"query": "test"})
         assert "non-JSON" in result["error"]
@@ -444,7 +444,7 @@ class TestWebhookExecution:
         lc_tool = _build_langchain_tool(tool, None, None)
 
         with patch(
-            "org_tools.async_validate_url_with_ips",
+            "org_tools.runtime.async_validate_url_with_ips",
             new_callable=AsyncMock,
             return_value=("blocked: metadata endpoint", []),
         ):
@@ -475,12 +475,12 @@ class TestWebhookExecution:
 
             with (
                 patch(
-                    "org_tools.async_validate_url_with_ips",
+                    "org_tools.runtime.async_validate_url_with_ips",
                     new_callable=AsyncMock,
                     return_value=(None, ["93.184.216.34"]),
                 ),
-                patch("org_tools.make_ssrf_safe_connector", return_value=None),
-                patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+                patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+                patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
             ):
                 result = await lc_tool.ainvoke({"query": "test"})
 
@@ -512,12 +512,12 @@ class TestWebhookExecution:
 
         with (
             patch(
-                "org_tools.async_validate_url_with_ips",
+                "org_tools.runtime.async_validate_url_with_ips",
                 new_callable=AsyncMock,
                 return_value=(None, ["93.184.216.34"]),
             ),
-            patch("org_tools.make_ssrf_safe_connector", return_value=None),
-            patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+            patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+            patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
         ):
             # Truncated JSON will fail to parse → expect error
             result = await lc_tool.ainvoke({"query": "test"})
@@ -545,12 +545,12 @@ class TestWebhookExecution:
 
             with (
                 patch(
-                    "org_tools.async_validate_url_with_ips",
+                    "org_tools.runtime.async_validate_url_with_ips",
                     new_callable=AsyncMock,
                     return_value=(None, ["93.184.216.34"]),
                 ),
-                patch("org_tools.make_ssrf_safe_connector", return_value=None),
-                patch("org_tools.aiohttp.ClientSession", return_value=mock_session),
+                patch("org_tools.runtime.make_ssrf_safe_connector", return_value=None),
+                patch("org_tools.runtime.aiohttp.ClientSession", return_value=mock_session),
             ):
                 result = await lc_tool.ainvoke({"query": "test"})
 
@@ -573,7 +573,7 @@ class TestCacheInvalidation:
         cache = org_tools_module._get_org_tool_cache("org-1")
         cache._value = [_sample_org_tool()]
         cache._expires = time.monotonic() + 9999
-        with patch("org_tools.get_redis", return_value=None):
+        with patch("org_tools.cache.get_redis", return_value=None):
             await invalidate_org_tools_cache("org-1")
         assert cache._value is None
 
@@ -585,7 +585,7 @@ class TestCacheInvalidation:
 class TestBuildOrgLangchainTools:
     async def test_empty_org(self):
         mock = AsyncMock(return_value=[])
-        with patch.object(org_tools_module, "get_org_tools_cached", mock):
+        with patch.object(org_tools_module.runtime, "get_org_tools_cached", mock):
             tools_list, tools_by_name = await org_tools_module.build_org_langchain_tools("org-1")
         assert tools_list == []
         assert tools_by_name == {}
@@ -604,12 +604,12 @@ class TestBuildOrgLangchainTools:
         mock_reg.get.return_value = MagicMock()  # non-None = collision
         with (
             patch.object(
-                org_tools_module,
+                org_tools_module.runtime,
                 "get_org_tools_cached",
                 cached_mock,
             ),
             patch.object(
-                org_tools_module,
+                org_tools_module.base,
                 "_pool",
                 pool,
             ),
@@ -628,17 +628,17 @@ class TestBuildOrgLangchainTools:
 class TestOrgToolsDbHelpers:
     async def test_init_sets_pool(self, monkeypatch):
         pool = MagicMock()
-        monkeypatch.setattr(org_tools_module, "_pool", None)
+        monkeypatch.setattr(org_tools_module.base, "_pool", None)
         await org_tools_module.init_org_tools_db(pool)
-        assert org_tools_module._pool is pool
+        assert org_tools_module.base._pool is pool
 
     async def test_close_clears_pool(self, monkeypatch):
-        monkeypatch.setattr(org_tools_module, "_pool", MagicMock())
+        monkeypatch.setattr(org_tools_module.base, "_pool", MagicMock())
         await org_tools_module.close_org_tools_db()
-        assert org_tools_module._pool is None
+        assert org_tools_module.base._pool is None
 
     def test_get_pool_raises_when_none(self, monkeypatch):
-        monkeypatch.setattr(org_tools_module, "_pool", None)
+        monkeypatch.setattr(org_tools_module.base, "_pool", None)
         with pytest.raises(RuntimeError, match="not initialised"):
             org_tools_module._get_pool()
 
@@ -677,7 +677,7 @@ class TestUpdateOrgTool:
     async def test_returns_none_when_not_found(self, monkeypatch):
         pool = MagicMock()
         pool.fetchrow = AsyncMock(return_value=None)
-        monkeypatch.setattr(org_tools_module, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
 
         result = await org_tools_module.update_org_tool("t-bad", "org-1", actor_id="u-1")
         assert result is None
@@ -687,9 +687,9 @@ class TestUpdateOrgTool:
         row = self._make_row()
         pool.fetchrow = AsyncMock(return_value=row)
         pool.execute = AsyncMock()
-        monkeypatch.setattr(org_tools_module, "_pool", pool)
-        monkeypatch.setattr(org_tools_module, "invalidate_org_tools_cache", AsyncMock())
-        monkeypatch.setattr(org_tools_module, "_record_event", AsyncMock())
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
 
         result = await org_tools_module.update_org_tool("tool-1", "org-1", actor_id="u-1")
         # No SET clause → returns unchanged row
@@ -702,9 +702,9 @@ class TestUpdateOrgTool:
         updated_row = dict(row, description="Updated!")
         pool.fetchrow = AsyncMock(side_effect=[row, updated_row])
         pool.execute = AsyncMock()
-        monkeypatch.setattr(org_tools_module, "_pool", pool)
-        monkeypatch.setattr(org_tools_module, "invalidate_org_tools_cache", AsyncMock())
-        monkeypatch.setattr(org_tools_module, "_record_event", AsyncMock())
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
 
         result = await org_tools_module.update_org_tool("tool-1", "org-1", actor_id="u-1", description="Updated!")
         assert result is not None
@@ -738,8 +738,8 @@ class TestGetOrgToolsCached:
         cache = org_tools_module._get_org_tool_cache("org-cached")
         cache._value = [tool]
         cache._expires = time.monotonic() + 9999
-        monkeypatch.setattr(org_tools_module, "_pool", MagicMock())
-        monkeypatch.setattr("org_tools.get_redis", lambda: None)
+        monkeypatch.setattr(org_tools_module.base, "_pool", MagicMock())
+        monkeypatch.setattr("org_tools.cache.get_redis", lambda: None)
 
         result = await org_tools_module.get_org_tools_cached("org-cached")
         assert len(result) == 1
@@ -777,9 +777,9 @@ class TestGetOrgToolsCached:
             ]
         )
         org_tools_module._org_tool_caches.pop("org-miss", None)
-        monkeypatch.setattr(org_tools_module, "_pool", pool)
-        monkeypatch.setattr("org_tools.get_redis", lambda: None)
-        monkeypatch.setattr("org_tools.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr("org_tools.cache.get_redis", lambda: None)
+        monkeypatch.setattr("org_tools.cache.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
         monkeypatch.setattr("teardrop.cache.get_redis", lambda: None)
 
         result = await org_tools_module.get_org_tools_cached("org-miss")
@@ -796,9 +796,9 @@ class TestListMarketplaceTools:
     async def test_returns_empty_list(self, monkeypatch):
         pool = MagicMock()
         pool.fetch = AsyncMock(return_value=[])
-        org_tools_module._marketplace_cache = None
-        monkeypatch.setattr(org_tools_module, "_pool", pool)
-        monkeypatch.setattr("org_tools.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
+        org_tools_module.cache._marketplace_cache = None
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr("org_tools.cache.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
 
         result = await org_tools_module.list_marketplace_tools()
         assert result == []
@@ -818,15 +818,15 @@ class TestListMarketplaceTools:
 @pytest.mark.anyio
 class TestInvalidateMarketplaceCache:
     async def test_clears_in_process_cache(self):
-        org_tools_module._marketplace_cache = [MagicMock()]
-        with patch("org_tools.get_redis", return_value=None):
+        org_tools_module.cache._marketplace_cache = [MagicMock()]
+        with patch("org_tools.cache.get_redis", return_value=None):
             await org_tools_module.invalidate_marketplace_cache()
-        assert org_tools_module._marketplace_cache is None
+        assert org_tools_module.cache._marketplace_cache is None
 
     async def test_deletes_redis_key(self):
-        org_tools_module._marketplace_cache = None
+        org_tools_module.cache._marketplace_cache = None
         redis = MagicMock()
         redis.delete = AsyncMock()
-        with patch("org_tools.get_redis", return_value=redis):
+        with patch("org_tools.cache.get_redis", return_value=redis):
             await org_tools_module.invalidate_marketplace_cache()
         redis.delete.assert_called_once_with("teardrop:marketplace:tools")

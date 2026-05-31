@@ -14,10 +14,10 @@ from teardrop.users import create_org, create_user
 
 @pytest.fixture(autouse=True)
 def bind_pools(db_pool):
-    user_module._pool = db_pool
+    user_module.base._pool = db_pool
     usage_module._pool = db_pool
     yield
-    user_module._pool = None
+    user_module.base._pool = None
     usage_module._pool = None
 
 

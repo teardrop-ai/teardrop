@@ -832,7 +832,7 @@ class TestUiGeneratorNode:
         last_msg = _make_ai_message(content="Portfolio value is 123.45 USD")
         state = _make_state(messages=[last_msg], metadata={"_usage": {}, "emit_ui": False})
 
-        with patch("agent.nodes.get_llm_for_request") as mock_get_llm:
+        with patch("agent.node_ui.get_llm_for_request") as mock_get_llm:
             result = await ui_generator_node(state)
 
         assert result["task_status"] == TaskStatus.COMPLETED
@@ -847,8 +847,8 @@ class TestUiGeneratorNode:
         mock_ui_llm.ainvoke = AsyncMock(return_value=_make_ai_message(content='{"components": []}'))
 
         with (
-            patch("agent.nodes.create_llm_from_config", return_value=mock_ui_llm) as mock_create,
-            patch("agent.nodes._contains_structured_data", return_value=True),
+            patch("agent.node_ui.create_llm_from_config", return_value=mock_ui_llm) as mock_create,
+            patch("agent.node_ui._contains_structured_data", return_value=True),
         ):
             result = await ui_generator_node(state)
 
@@ -872,9 +872,9 @@ class TestUiGeneratorNode:
         mock_byok_llm.ainvoke = AsyncMock(return_value=_make_ai_message(content='{"components": []}'))
 
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=mock_byok_llm) as mock_get,
-            patch("agent.nodes.create_llm_from_config") as mock_create,
-            patch("agent.nodes._contains_structured_data", return_value=True),
+            patch("agent.node_ui.get_llm_for_request", return_value=mock_byok_llm) as mock_get,
+            patch("agent.node_ui.create_llm_from_config") as mock_create,
+            patch("agent.node_ui._contains_structured_data", return_value=True),
         ):
             result = await ui_generator_node(state)
 

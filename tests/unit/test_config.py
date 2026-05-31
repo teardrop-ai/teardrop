@@ -60,6 +60,19 @@ def test_get_settings_is_cached():
     config.get_settings.cache_clear()
 
 
+def test_jwt_algorithm_defaults_to_rs256():
+    s = Settings()
+    assert s.jwt_algorithm == "RS256"
+
+
+def test_jwt_algorithm_rejects_insecure_value(monkeypatch):
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("JWT_ALGORITHM", "HS256")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_agent_max_tool_iterations_default():
     s = Settings()
     assert s.agent_max_tool_iterations == 4

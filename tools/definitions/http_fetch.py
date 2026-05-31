@@ -32,6 +32,7 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("fc00::/7"),  # IPv6 ULA (private)
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6 space
 ]
 
 
@@ -41,6 +42,9 @@ def _is_ip_blocked(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # Invalid IP → block
+    # Unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) so it matches IPv4 blocked ranges.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 

@@ -40,7 +40,7 @@ async def billing_db_pool(docker_postgres: str):
     await apply_pending(pool)
 
     billing_module._pool = pool
-    user_module._pool = pool
+    user_module.base._pool = pool
     usage_module._pool = pool
 
     yield pool
@@ -63,7 +63,7 @@ async def billing_db_pool(docker_postgres: str):
         )
 
     billing_module._pool = None
-    user_module._pool = None
+    user_module.base._pool = None
     usage_module._pool = None
     await pool.close()
 

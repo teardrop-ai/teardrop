@@ -141,3 +141,68 @@ async def test_httpx_transport_pins_validated_ip():
     assert request.url.host == "93.184.216.34"
     assert request.headers["host"] == "example.com"
     assert request.extensions.get("sni_hostname") == "example.com"
+
+
+# ─── marketplace tool execution pins its webhook connection ──────────────────
+
+
+async def test_execute_marketplace_tool_pins_connection():
+    """``_execute_marketplace_tool`` must validate-with-IPs and build an
+    SSRF-pinned connector instead of an unpinned aiohttp session."""
+    from unittest.mock import MagicMock
+
+    from teardrop.routers.marketplace_mcp import _execute_marketplace_tool
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.read = AsyncMock(return_value=b'{"ok": true}')
+    mock_resp.headers = {"Content-Type": "application/json"}
+
+    mock_session = AsyncMock()
+    mock_session.get = AsyncMock(return_value=mock_resp)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    pin = MagicMock(return_value=MagicMock())
+    tool_row = {
+        "id": "",  # empty id → skip breaker/event side effects
+        "org_id": "",
+        "name": "weather",
+        "webhook_url": "https://api.example.com/weather",
+        "webhook_method": "GET",
+        "timeout_seconds": 10,
+    }
+
+    with (
+        patch(
+            "tools.definitions.http_fetch.async_validate_url_with_ips",
+            new=AsyncMock(return_value=(None, ["93.184.216.34"])),
+        ),
+        patch("tools.definitions.http_fetch.make_ssrf_safe_connector", new=pin),
+        patch("aiohttp.ClientSession", return_value=mock_session),
+    ):
+        result = await _execute_marketplace_tool(tool_row, {"city": "SF"})
+
+    assert result == {"ok": True}
+    pin.assert_called_once_with("api.example.com", ["93.184.216.34"])
+
+
+async def test_execute_marketplace_tool_blocks_rebinding():
+    """A URL that fails the with-IPs validation is rejected before any connection."""
+    from teardrop.routers.marketplace_mcp import _execute_marketplace_tool
+
+    tool_row = {
+        "id": "",
+        "org_id": "",
+        "name": "evil",
+        "webhook_url": "https://rebind.example.com/",
+        "webhook_method": "GET",
+        "timeout_seconds": 10,
+    }
+    with patch(
+        "tools.definitions.http_fetch.async_validate_url_with_ips",
+        new=AsyncMock(return_value=("Hostname resolves to blocked IP: 10.0.0.5", [])),
+    ):
+        result = await _execute_marketplace_tool(tool_row, {})
+    assert "error" in result
+    assert "blocked" in result["error"].lower()

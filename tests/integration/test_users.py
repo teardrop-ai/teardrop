@@ -18,9 +18,9 @@ from teardrop.users import (
 @pytest.fixture(autouse=True)
 def bind_pool(db_pool):
     """Point the global users._pool at our test pool for every test."""
-    user_module._pool = db_pool
+    user_module.base._pool = db_pool
     yield
-    user_module._pool = None
+    user_module.base._pool = None
 
 
 @pytest.mark.anyio

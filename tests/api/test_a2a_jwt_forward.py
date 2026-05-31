@@ -65,3 +65,20 @@ async def test_jwt_forward_defaults_false_for_non_admin(api_client):
     )
     assert resp.status_code == 201
     assert resp.json()["jwt_forward"] is False
+
+
+@pytest.mark.anyio
+async def test_add_agent_rate_limited(api_client, monkeypatch):
+    """Per-org rate limit guards bulk allowlist injection via a stolen JWT."""
+    _seed_pool()
+
+    async def _denied(_key, _limit):
+        return False, 0, 9999999999
+
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", _denied)
+    resp = await api_client.post(
+        "/a2a/agents",
+        json={"agent_url": "https://agent.example.com"},
+    )
+    assert resp.status_code == 429
+    assert "Rate limit exceeded" in resp.json()["detail"]

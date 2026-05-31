@@ -32,8 +32,8 @@ from teardrop.users import create_org  # noqa: I001
 async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
     """Bind module pools, apply MCP migration SQL, and set encryption key."""
     # Bind pools
-    user_module._pool = db_pool
-    mcp_module._pool = db_pool
+    user_module.base._pool = db_pool
+    mcp_module.base._pool = db_pool
 
     # Ensure encryption key is set for Fernet
     from cryptography.fernet import Fernet
@@ -52,16 +52,16 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
     await db_pool.execute(sql)
 
     # Clear caches
-    mcp_module._servers_cache.clear()
-    mcp_module._tools_cache.clear()
+    mcp_module.cache._server_caches.clear()
+    mcp_module.runtime._tools_cache.clear()
 
     yield
 
     # Cleanup
     async with db_pool.acquire() as conn:
         await conn.execute("TRUNCATE TABLE org_mcp_server_events, org_mcp_servers RESTART IDENTITY CASCADE")
-    mcp_module._pool = None
-    user_module._pool = None
+    mcp_module.base._pool = None
+    user_module.base._pool = None
     config.get_settings.cache_clear()
 
 

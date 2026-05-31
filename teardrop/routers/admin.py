@@ -235,7 +235,10 @@ async def admin_credits_topup(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Top up an org's prepaid credit balance (admin only)."""
-    new_balance = await admin_topup_credit(body.org_id, body.amount_usdc)
+    # Record the acting admin in the immutable credit ledger ``reason`` so the
+    # financial audit trail attributes the top-up to a specific operator.
+    reason = f"admin_topup by {_admin.get('sub', 'unknown')}"
+    new_balance = await admin_topup_credit(body.org_id, body.amount_usdc, reason=reason)
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"org_id": body.org_id, "new_balance_usdc": new_balance},
