@@ -99,6 +99,7 @@ class _SessionPool:
             )
             read_stream, write_stream, _ = transport
             session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
+            # Wait for initialization. We use a generous timeout here to avoid flaky CI connections.
             await asyncio.wait_for(
                 session.initialize(),
                 timeout=float(settings.mcp_client_connect_timeout_seconds),

@@ -226,6 +226,13 @@ class _SSRFGuardHTTPXTransport(httpx.AsyncHTTPTransport):
             raise httpx.ConnectError(f"SSRF guard: {error}", request=request)
 
         pinned_ip = ips[0]
+
+        # Optimization: If the host is already the pinned IP (e.g. 127.0.0.1 literal),
+        # don't modify the request or headers. This avoids potential issues with
+        # httpx's internal Host header handling and connection pooling.
+        if pinned_ip == original_host:
+            return await super().handle_async_request(request)
+
         request.url = request.url.copy_with(host=pinned_ip)
         # Preserve virtual-host routing and certificate validation against the
         # real hostname even though we connect to the pinned IP.

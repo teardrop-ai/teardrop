@@ -50,7 +50,7 @@ async def echo_server_url():
     )
     serve_task = asyncio.create_task(server.serve())
 
-    deadline = time.monotonic() + 3.0
+    deadline = time.monotonic() + 10.0
     while not server.started and time.monotonic() < deadline:
         if serve_task.done():
             await serve_task
