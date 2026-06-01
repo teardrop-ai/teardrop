@@ -119,8 +119,6 @@ async def isolated_mcp_client_state(monkeypatch):
     await mcp_client._close_all_sessions()
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
     monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
@@ -133,8 +131,6 @@ async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, 
     assert by_name["echo__echo_greeting"] is tools[0]
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_build_mcp_langchain_tools_ainvoke_calls_remote_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
     monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
