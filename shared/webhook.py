@@ -97,4 +97,3 @@ class WebhookCaller:
         except aiohttp.ClientError as exc:
             error_name = type(exc).__name__
             raise WebhookCallError(f"Webhook request failed: {error_name}", error_name)
-

@@ -25,30 +25,14 @@ logger = logging.getLogger(__name__)
 
 # ─── SSRF Guard ───────────────────────────────────────────────────────────────
 
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6 space
-]
-
-
-def _is_ip_blocked(ip_str: str) -> bool:
-    """Check if an IP address falls within any blocked range."""
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return True
-    # Unwrap IPv4-mapped IPv6 (::ffff:x.x.x.x) so it matches IPv4 blocked ranges.
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    return any(addr in net for net in _BLOCKED_NETWORKS)
+# Single source of truth for the SSRF blocklist lives in tools.definitions.http_fetch.
+# Re-exported here so historical callers/tests that import _BLOCKED_NETWORKS and
+# _is_ip_blocked from teardrop.a2a_client keep working, while CGNAT/NAT64 and any
+# future range additions only need to be maintained in one place.
+from tools.definitions.http_fetch import (  # noqa: E402
+    _BLOCKED_NETWORKS,  # noqa: F401  (re-exported for backward compatibility)
+    _is_ip_blocked,
+)
 
 
 def validate_url(url: str) -> str | None:

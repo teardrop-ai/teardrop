@@ -40,10 +40,19 @@ def test_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("TAVILY_API_KEY", "")
+    # A routable SIWE domain so wallet-auth tests exercise a realistic, valid
+    # configuration. Without this the effective domain falls back to the
+    # non-routable bind address (0.0.0.0), which _verify_siwe rejects as a
+    # misconfiguration.
+    monkeypatch.setenv("SIWE_DOMAIN", "test.teardrop.dev")
 
     # Clear the LRU cache so the patched env is picked up.
     config.get_settings.cache_clear()
     settings = config.get_settings()
+
+    # teardrop.siwe snapshots settings at import time; keep that snapshot in sync
+    # with the freshly-built test settings so SIWE verification sees the test domain.
+    monkeypatch.setattr("teardrop.siwe.settings", settings, raising=False)
 
     yield settings
 

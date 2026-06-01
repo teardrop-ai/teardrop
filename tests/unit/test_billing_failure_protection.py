@@ -323,4 +323,3 @@ async def test_settle_billing_credit_success_does_not_enqueue():
 
     enqueue_mock.assert_not_called()
     assert result is response
-

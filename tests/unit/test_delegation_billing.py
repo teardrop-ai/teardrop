@@ -418,9 +418,7 @@ class TestDelegateToAgentBilling:
             patch(
                 f"{_BILLING_MOD}._get_pool",
                 return_value=AsyncMock(
-                    fetchrow=AsyncMock(
-                        return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False}
-                    )
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
                 ),
             ),
             patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
@@ -468,9 +466,7 @@ class TestDelegateToAgentBilling:
             patch(
                 f"{_BILLING_MOD}._get_pool",
                 return_value=AsyncMock(
-                    fetchrow=AsyncMock(
-                        return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False}
-                    )
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
                 ),
             ),
             patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
@@ -525,9 +521,7 @@ class TestDelegateToAgentBilling:
             patch(
                 f"{_BILLING_MOD}._get_pool",
                 return_value=AsyncMock(
-                    fetchrow=AsyncMock(
-                        return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False}
-                    )
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
                 ),
             ),
             patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),

@@ -26,7 +26,8 @@ web3>=7.0.0
 
 # ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────
 # 2.8.0 (released 2026-04-17) added upto scheme (X402_SCHEME=upto) and Arbitrum support.
-x402[fastapi,evm]>=2.8.0
+# Upper bound: payment-critical; pin major to avoid silent breaking-change upgrades.
+x402[fastapi,evm]>=2.8.0,<3.0.0
 
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.10.0
@@ -34,8 +35,9 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.1
 
 # ─── Authentication ────────────────────────────────────────────────────────────
-PyJWT>=2.12.0
-cryptography>=44.0.0
+# Upper bounds: auth-critical; pin major to avoid silent breaking-change upgrades.
+PyJWT>=2.12.0,<3.0.0
+cryptography>=44.0.0,<47.0.0
 
 # ─── Observability (Sentry) ────────────────────────────────────────────────────
 # Errors + cron monitoring. fastapi/asyncpg integrations auto-enabled.
@@ -57,7 +59,8 @@ httpx>=0.28.0
 anyio>=4.0.0
 
 # ─── Stripe (prepaid credit top-up) ───────────────────────────────────────────
-stripe>=10.0.0
+# Upper bound: payment-critical; pin major to avoid silent breaking-change upgrades.
+stripe>=10.0.0,<16.0.0
 
 # ─── Coinbase CDP (agent wallets) ─────────────────────────────────────────────
 cdp-sdk>=1.42.0

@@ -342,8 +342,7 @@ async def test_no_audit_event_recorded(api_client, monkeypatch):
     """A test call must not write to org_tool_events."""
     record_event_mock = AsyncMock()
 
-
-# ─── No side effects on audit / breaker ───────────────────────────────────────
+    # ─── No side effects on audit / breaker ───────────────────────────────────────
     monkeypatch.setattr("org_tools._record_event", record_event_mock)
     session = _mock_session(status=200, body=b'{"ok": true}')
     with (

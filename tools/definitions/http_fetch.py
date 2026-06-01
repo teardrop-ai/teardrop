@@ -28,10 +28,12 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("172.16.0.0/12"),  # RFC-1918
     ipaddress.ip_network("192.168.0.0/16"),  # RFC-1918
     ipaddress.ip_network("169.254.0.0/16"),  # Link-local (metadata endpoint)
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC-6598) — can reach internal infra behind NAT
     ipaddress.ip_network("0.0.0.0/8"),  # "This" network
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("fc00::/7"),  # IPv6 ULA (private)
     ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("64:ff9b::/96"),  # NAT64 (RFC-6052) — embeds IPv4, can target private ranges
     ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6 space
 ]
 
@@ -227,9 +229,7 @@ class _SSRFGuardHTTPXTransport(httpx.AsyncHTTPTransport):
         request.url = request.url.copy_with(host=pinned_ip)
         # Preserve virtual-host routing and certificate validation against the
         # real hostname even though we connect to the pinned IP.
-        request.headers["host"] = (
-            f"{original_host}:{request.url.port}" if request.url.port else original_host
-        )
+        request.headers["host"] = f"{original_host}:{request.url.port}" if request.url.port else original_host
         request.extensions = {**request.extensions, "sni_hostname": original_host}
         return await super().handle_async_request(request)
 
@@ -237,8 +237,6 @@ class _SSRFGuardHTTPXTransport(httpx.AsyncHTTPTransport):
 def make_ssrf_safe_httpx_transport() -> httpx.AsyncHTTPTransport:
     """Build an httpx transport that pins connections to SSRF-validated IPs."""
     return _SSRFGuardHTTPXTransport()
-
-
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────

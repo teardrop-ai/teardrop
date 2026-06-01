@@ -650,49 +650,26 @@ async def _invoke_planner_llm(
         }
 
 
-async def planner_node(state: AgentState) -> dict[str, Any]:
-    """Run the LangGraph planner stage for one turn.
+def _resolve_planner_llm(
+    state: AgentState,
+    all_tools: list[Any],
+    settings: Any,
+    *,
+    llm_config: dict | None,
+    tool_iterations: int,
+) -> "tuple[Any, str, str, int, float, str | None]":
+    """Resolve the planner LLM for one turn.
 
-    Reads ``state.metadata._org_tools``, ``_llm_config``, ``_usage``,
-    ``_excluded_tool_names``, ``_synthesis_forced`` and ``state.plan`` (compiler mode).
-    Resolves and invokes the LLM (with provider cooldown fallback if not BYOK).
-    Binds all tools for non-synthesis turns; skips bind_tools on forced synthesis
-    to reduce prompt size.
+    Routing order: primary provider cooldown -> fallback LLM (non-BYOK only) ->
+    synthesis/planner-turn model overrides -> bind_tools. BYOK configs
+    (``state.metadata._llm_config``) are respected and never overridden.
 
-    Updates ``state.metadata._usage`` via ``_accumulate_usage`` for token billing:
-    per-turn ``tokens_in``, ``tokens_out``, ``cache_read_tokens``,
-    ``cache_creation_tokens``, and per-turn attribution in ``_usage.turns``.
-
-    Returns a state patch with ``messages``, ``task_status``, ``metadata``, and
-    ``plan``. Sets ``task_status = EXECUTING`` when tool calls are present;
-    ``GENERATING_UI`` when the response is final.
+    Returns ``(llm, provider, model, max_tokens, timeout_seconds,
+    synthesis_fast_reason)``. The returned provider/model drive the per-turn
+    token attribution accumulated for the USAGE_SUMMARY SSE event;
+    ``synthesis_fast_reason`` is non-None when prior tool calls were suppressed
+    and ``bind_tools`` should be skipped to cut prompt size.
     """
-    logger.debug("planner_node: entry, %d messages", len(state.messages))
-    settings = get_settings()
-    if len(state.messages) > settings.agent_thread_warning_message_count:
-        logger.warning(
-            "planner_node: large thread history detected message_count=%d threshold=%d thread_id=%s",
-            len(state.messages),
-            settings.agent_thread_warning_message_count,
-            str(state.metadata.get("thread_id", "")),
-        )
-    tool_chars = sum(len(str(m.content)) for m in state.messages if isinstance(m, ToolMessage))
-    if tool_chars > settings.agent_thread_warning_tool_chars:
-        logger.warning(
-            "planner_node: large tool payload detected tool_chars=%d threshold=%d thread_id=%s",
-            tool_chars,
-            settings.agent_thread_warning_tool_chars,
-            str(state.metadata.get("thread_id", "")),
-        )
-    tools = _get_cached_tools()
-    org_tools = state.metadata.get("_org_tools", [])
-    all_tools = tools + org_tools
-    excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
-    if excluded_tool_names:
-        all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in excluded_tool_names]
-    llm_config = state.metadata.get("_llm_config")
-    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
-
     _cfg = llm_config or {}
     _provider = _cfg.get("provider", settings.agent_provider)
     _model = _cfg.get("model", settings.agent_model)
@@ -713,7 +690,6 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
 
     _max_tokens = _cfg.get("max_tokens", settings.agent_max_tokens)
     _timeout = _cfg.get("timeout_seconds", settings.agent_llm_timeout_seconds)
-    _synthesis_forced = bool(state.metadata.get("_synthesis_forced", False))
     _synthesis_fast_reason = _synthesis_fast_path_reason(state) if tool_iterations > 0 else None
     if tool_iterations > 0 and not llm_config:
         _max_tokens = settings.agent_synthesis_max_tokens
@@ -767,6 +743,61 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                     }
                 )
                 llm = _bind_tools_for_provider(llm, all_tools, _provider)
+
+    return llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason
+
+
+async def planner_node(state: AgentState) -> dict[str, Any]:
+    """Run the LangGraph planner stage for one turn.
+
+    Reads ``state.metadata._org_tools``, ``_llm_config``, ``_usage``,
+    ``_excluded_tool_names``, ``_synthesis_forced`` and ``state.plan`` (compiler mode).
+    Resolves and invokes the LLM (with provider cooldown fallback if not BYOK).
+    Binds all tools for non-synthesis turns; skips bind_tools on forced synthesis
+    to reduce prompt size.
+
+    Updates ``state.metadata._usage`` via ``_accumulate_usage`` for token billing:
+    per-turn ``tokens_in``, ``tokens_out``, ``cache_read_tokens``,
+    ``cache_creation_tokens``, and per-turn attribution in ``_usage.turns``.
+
+    Returns a state patch with ``messages``, ``task_status``, ``metadata``, and
+    ``plan``. Sets ``task_status = EXECUTING`` when tool calls are present;
+    ``GENERATING_UI`` when the response is final.
+    """
+    logger.debug("planner_node: entry, %d messages", len(state.messages))
+    settings = get_settings()
+    if len(state.messages) > settings.agent_thread_warning_message_count:
+        logger.warning(
+            "planner_node: large thread history detected message_count=%d threshold=%d thread_id=%s",
+            len(state.messages),
+            settings.agent_thread_warning_message_count,
+            str(state.metadata.get("thread_id", "")),
+        )
+    tool_chars = sum(len(str(m.content)) for m in state.messages if isinstance(m, ToolMessage))
+    if tool_chars > settings.agent_thread_warning_tool_chars:
+        logger.warning(
+            "planner_node: large tool payload detected tool_chars=%d threshold=%d thread_id=%s",
+            tool_chars,
+            settings.agent_thread_warning_tool_chars,
+            str(state.metadata.get("thread_id", "")),
+        )
+    tools = _get_cached_tools()
+    org_tools = state.metadata.get("_org_tools", [])
+    all_tools = tools + org_tools
+    excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
+    if excluded_tool_names:
+        all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in excluded_tool_names]
+    llm_config = state.metadata.get("_llm_config")
+    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
+
+    llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason = _resolve_planner_llm(
+        state,
+        all_tools,
+        settings,
+        llm_config=llm_config,
+        tool_iterations=tool_iterations,
+    )
+    _synthesis_forced = bool(state.metadata.get("_synthesis_forced", False))
 
     system_messages = _build_planner_system_messages(
         state,
@@ -950,4 +981,3 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
         "plan": next_plan,
     }
-

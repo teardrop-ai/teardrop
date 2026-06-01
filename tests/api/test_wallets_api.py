@@ -103,7 +103,7 @@ async def test_link_wallet_malformed_siwe_message_returns_400(api_client, monkey
 async def test_link_wallet_expired_nonce_returns_401(api_client, monkeypatch):
     """Using an expired or already-consumed nonce should return 401."""
     mock_msg = MagicMock()
-    mock_msg.domain = "0.0.0.0"
+    mock_msg.domain = "test.teardrop.dev"
     mock_msg.nonce = "oldnonce123"
     mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
     mock_msg.chain_id = "1"
@@ -114,7 +114,7 @@ async def test_link_wallet_expired_nonce_returns_401(api_client, monkeypatch):
         def from_message(m):
             return mock_msg
 
-    monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", FakeSiwe)
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=False))
 
     resp = await api_client.post(
@@ -132,7 +132,7 @@ async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch
     consume_mock = AsyncMock(return_value=True)
 
     mock_msg = MagicMock()
-    mock_msg.domain = "0.0.0.0"
+    mock_msg.domain = "test.teardrop.dev"
     mock_msg.nonce = "validnonce"
     mock_msg.verify = MagicMock(side_effect=siwe_errors.InvalidSignature)
 
@@ -141,7 +141,7 @@ async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch
         def from_message(m):
             return mock_msg
 
-    monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", FakeSiwe)
     monkeypatch.setattr("teardrop.siwe.consume_nonce", consume_mock)
 
     resp = await api_client.post(
@@ -157,7 +157,7 @@ async def test_link_wallet_invalid_signature_returns_401(api_client, monkeypatch
 async def test_link_wallet_already_linked_returns_409(api_client, monkeypatch):
     """Linking a wallet address that is already linked should return 409."""
     mock_msg = MagicMock()
-    mock_msg.domain = "0.0.0.0"
+    mock_msg.domain = "test.teardrop.dev"
     mock_msg.nonce = "validnonce"
     mock_msg.verify = MagicMock()
     mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -168,7 +168,7 @@ async def test_link_wallet_already_linked_returns_409(api_client, monkeypatch):
         def from_message(m):
             return mock_msg
 
-    monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", FakeSiwe)
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
     monkeypatch.setattr("teardrop.routers.wallets.get_wallet_by_address", AsyncMock(return_value=_WALLET))
 
@@ -183,7 +183,7 @@ async def test_link_wallet_already_linked_returns_409(api_client, monkeypatch):
 async def test_link_wallet_success_returns_201(api_client, monkeypatch):
     """Valid SIWE + unused nonce + new address → 201 with wallet details."""
     mock_msg = MagicMock()
-    mock_msg.domain = "0.0.0.0"
+    mock_msg.domain = "test.teardrop.dev"
     mock_msg.nonce = "freshonce"
     mock_msg.verify = MagicMock()
     mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
@@ -204,7 +204,7 @@ async def test_link_wallet_success_returns_201(api_client, monkeypatch):
         def from_message(m):
             return mock_msg
 
-    monkeypatch.setattr("siwe.SiweMessage", FakeSiwe)
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", FakeSiwe)
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
     monkeypatch.setattr("teardrop.routers.wallets.get_wallet_by_address", AsyncMock(return_value=None))
     monkeypatch.setattr("teardrop.routers.wallets.create_wallet", AsyncMock(return_value=new_wallet))

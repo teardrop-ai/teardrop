@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -54,15 +54,15 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
     monkeypatch.setattr("teardrop.siwe.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
     monkeypatch.setattr("teardrop.siwe.create_refresh_token", AsyncMock(return_value="siwe-rt"))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
 
-    with patch("siwe.SiweMessage", mock_siwe_cls):
-        resp = await anon_client.post(
-            "/token",
-            json={
-                "siwe_message": "some-siwe-message",
-                "siwe_signature": "0xsignature",
-            },
-        )
+    resp = await anon_client.post(
+        "/token",
+        json={
+            "siwe_message": "some-siwe-message",
+            "siwe_signature": "0xsignature",
+        },
+    )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -81,15 +81,15 @@ async def test_siwe_login_expired_nonce(anon_client, monkeypatch, test_settings)
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
 
-    with patch("siwe.SiweMessage", mock_siwe_cls):
-        resp = await anon_client.post(
-            "/token",
-            json={
-                "siwe_message": "some-siwe-message",
-                "siwe_signature": "0xsig",
-            },
-        )
+    resp = await anon_client.post(
+        "/token",
+        json={
+            "siwe_message": "some-siwe-message",
+            "siwe_signature": "0xsig",
+        },
+    )
 
     assert resp.status_code == 401
 
@@ -109,19 +109,52 @@ async def test_siwe_login_bad_signature(anon_client, monkeypatch, test_settings)
     mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
 
     monkeypatch.setattr("teardrop.siwe.consume_nonce", consume_mock)
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
 
-    with patch("siwe.SiweMessage", mock_siwe_cls):
-        resp = await anon_client.post(
-            "/token",
-            json={
-                "siwe_message": "some-siwe-message",
-                "siwe_signature": "0xbadsig",
-            },
-        )
+    resp = await anon_client.post(
+        "/token",
+        json={
+            "siwe_message": "some-siwe-message",
+            "siwe_signature": "0xbadsig",
+        },
+    )
 
     assert resp.status_code in (400, 401)
     # Nonce must NOT have been consumed — verify happens before consume
     consume_mock.assert_not_called()
+
+
+# ── Misconfiguration guard ────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bad_domain", ["", "0.0.0.0", "::"])
+async def test_verify_siwe_rejects_nonroutable_domain(monkeypatch, bad_domain):
+    """A non-routable effective domain (SIWE_DOMAIN unset) must fail with 503,
+    never silently authenticate against a wildcard bind address."""
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    import teardrop.siwe as siwe_mod
+
+    mock_msg = MagicMock()
+    mock_msg.domain = bad_domain
+    mock_siwe_cls = MagicMock()
+    mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
+
+    consume_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(siwe_mod, "settings", SimpleNamespace(effective_siwe_domain=bad_domain))
+    monkeypatch.setattr(siwe_mod, "consume_nonce", consume_mock)
+    monkeypatch.setattr(siwe_mod, "SiweMessage", mock_siwe_cls)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await siwe_mod._verify_siwe("some-siwe-message", "0xsig")
+
+    assert exc_info.value.status_code == 503
+    # Must reject before touching the nonce or verifying the signature.
+    consume_mock.assert_not_called()
+    mock_msg.verify.assert_not_called()
 
 
 # ── Nonce consumption ordering tests ──────────────────────────────────────────
@@ -159,12 +192,12 @@ async def test_siwe_login_valid_sig_consumes_nonce_with_address(anon_client, mon
     monkeypatch.setattr("teardrop.siwe.consume_nonce", consume_mock)
     monkeypatch.setattr("teardrop.siwe.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
     monkeypatch.setattr("teardrop.siwe.create_refresh_token", AsyncMock(return_value="siwe-rt"))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
 
-    with patch("siwe.SiweMessage", mock_siwe_cls):
-        resp = await anon_client.post(
-            "/token",
-            json={"siwe_message": "some-siwe-message", "siwe_signature": "0xsig"},
-        )
+    resp = await anon_client.post(
+        "/token",
+        json={"siwe_message": "some-siwe-message", "siwe_signature": "0xsig"},
+    )
 
     assert resp.status_code == 200
     consume_mock.assert_called_once()
@@ -188,12 +221,12 @@ async def test_siwe_login_nonce_address_mismatch(anon_client, monkeypatch, test_
 
     # consume_nonce returns False (simulates address mismatch)
     monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
 
-    with patch("siwe.SiweMessage", mock_siwe_cls):
-        resp = await anon_client.post(
-            "/token",
-            json={"siwe_message": "some-siwe-message", "siwe_signature": "0xvalid"},
-        )
+    resp = await anon_client.post(
+        "/token",
+        json={"siwe_message": "some-siwe-message", "siwe_signature": "0xvalid"},
+    )
 
     assert resp.status_code == 401
 

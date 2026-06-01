@@ -169,9 +169,7 @@ class TestHttpFetchRedirects:
     async def test_follows_validated_redirect(self, test_settings):
         html = "<html><head><title>Final</title></head><body><p>Arrived</p></body></html>"
         mock_session = MagicMock()
-        mock_session.get = MagicMock(
-            side_effect=[_redirect_resp("https://example.com/final"), _ok_resp(html)]
-        )
+        mock_session.get = MagicMock(side_effect=[_redirect_resp("https://example.com/final"), _ok_resp(html)])
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -185,9 +183,7 @@ class TestHttpFetchRedirects:
 
     async def test_blocks_redirect_to_internal_target(self, test_settings):
         mock_session = MagicMock()
-        mock_session.get = MagicMock(
-            return_value=_redirect_resp("http://169.254.169.254/latest/meta-data/")
-        )
+        mock_session.get = MagicMock(return_value=_redirect_resp("http://169.254.169.254/latest/meta-data/"))
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 

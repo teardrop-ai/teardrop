@@ -72,6 +72,19 @@ class TestIsIpBlocked:
     def test_ipv4_mapped_public_allowed(self):
         assert _is_ip_blocked("::ffff:8.8.8.8") is False
 
+    def test_cgnat_blocked(self):
+        # RFC-6598 carrier-grade NAT range can reach internal infra behind NAT.
+        assert _is_ip_blocked("100.64.0.1") is True
+        assert _is_ip_blocked("100.127.255.254") is True
+
+    def test_nat64_blocked(self):
+        # RFC-6052 NAT64 embeds an IPv4 destination; must be blocked.
+        assert _is_ip_blocked("64:ff9b::7f00:1") is True
+
+    def test_cgnat_boundary_public_allowed(self):
+        # 100.128.0.0 is just outside the CGNAT /10 and is public.
+        assert _is_ip_blocked("100.128.0.1") is False
+
 
 class TestValidateUrl:
     def test_valid_https_url(self):

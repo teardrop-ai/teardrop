@@ -532,6 +532,97 @@ class TestPlannerNode:
         assert result["metadata"]["_synthesis_forced"] is False
 
 
+# ─── _resolve_planner_llm (provider routing seam) ─────────────────────────────
+
+
+class TestResolvePlannerLlm:
+    """Direct unit tests for the extracted planner LLM routing seam.
+
+    Covers the cooldown -> fallback and synthesis-override branches that were
+    previously inlined inside planner_node, asserting provider/model selection
+    without invoking a full planner turn.
+    """
+
+    def test_cooldown_routes_to_fallback(self, test_settings):
+        from agent.nodes import _resolve_planner_llm
+
+        fallback_llm = MagicMock()
+        state = _make_state()
+        with (
+            patch("agent.nodes.is_provider_cooled_down", return_value=True),
+            patch("agent.nodes._get_fallback_llm", return_value=(fallback_llm, "anthropic", "claude-sonnet-4-6")),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+        ):
+            llm, provider, model, _max_tokens, _timeout, fast_reason = _resolve_planner_llm(
+                state,
+                [],
+                test_settings,
+                llm_config=None,
+                tool_iterations=0,
+            )
+
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
+        assert llm is fallback_llm
+        assert fast_reason is None
+
+    def test_byok_config_skips_fallback_and_overrides(self, test_settings):
+        """BYOK (_llm_config) must be respected: no cooldown fallback, no override."""
+        from agent.nodes import _resolve_planner_llm
+
+        byok_llm = MagicMock()
+        byok_cfg = {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash", "is_byok": True}
+        state = _make_state(metadata={"_usage": {}, "_llm_config": byok_cfg})
+        with (
+            patch("agent.nodes.is_provider_cooled_down", return_value=True),
+            patch("agent.nodes._get_fallback_llm", return_value=(MagicMock(), "anthropic", "x")) as mock_fallback,
+            patch("agent.nodes.get_llm_for_request", return_value=byok_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+        ):
+            llm, provider, model, _max_tokens, _timeout, _fast_reason = _resolve_planner_llm(
+                state,
+                [],
+                test_settings,
+                llm_config=byok_cfg,
+                tool_iterations=0,
+            )
+
+        mock_fallback.assert_not_called()
+        assert provider == "openrouter"
+        assert model == "deepseek/deepseek-v4-flash"
+        assert llm is byok_llm
+
+    def test_synthesis_override_selects_override_model_and_skips_bind(self, test_settings):
+        from agent.nodes import _resolve_planner_llm
+
+        synthesis_llm = MagicMock()
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_synthesis_forced": True})
+        with (
+            patch.object(test_settings, "agent_synthesis_provider", "openai"),
+            patch.object(test_settings, "agent_synthesis_model", "gpt-4o-mini"),
+            patch("agent.nodes._synthesis_fast_path_reason", return_value="forced"),
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._provider_api_key", return_value="test-key"),
+            patch("agent.nodes.create_llm_from_config", return_value=synthesis_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+        ):
+            llm, provider, model, max_tokens, _timeout, fast_reason = _resolve_planner_llm(
+                state,
+                [],
+                test_settings,
+                llm_config=None,
+                tool_iterations=1,
+            )
+
+        assert provider == "openai"
+        assert model == "gpt-4o-mini"
+        assert max_tokens == test_settings.agent_synthesis_max_tokens
+        # Synthesis fast path returns the unbound LLM so tool schemas aren't sent.
+        assert llm is synthesis_llm
+        assert fast_reason == "forced"
+
+
 # ─── tool_executor_node ───────────────────────────────────────────────────────
 
 

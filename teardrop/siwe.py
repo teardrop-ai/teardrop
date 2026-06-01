@@ -13,7 +13,10 @@ from __future__ import annotations
 import logging
 import secrets
 
+import siwe as siwe_errors
 from fastapi import HTTPException
+from siwe import SiweMessage
+from web3 import Web3
 
 from teardrop.auth import create_access_token
 from teardrop.config import get_settings
@@ -38,15 +41,21 @@ async def _verify_siwe(siwe_message: str, siwe_signature: str) -> tuple[str, int
     Raises HTTPException on any failure.  Signature is verified BEFORE the
     nonce is consumed to prevent nonce-exhaustion DoS attacks.
     """
-    import siwe as siwe_errors
-    from siwe import SiweMessage
-
     try:
         msg = SiweMessage.from_message(siwe_message)
     except Exception:
         raise HTTPException(status_code=400, detail="Malformed SIWE message")
 
     expected_domain = settings.effective_siwe_domain
+    # Security boundary: a non-routable bind address (the app_host fallback when
+    # SIWE_DOMAIN is unset) must never be accepted as the expected domain. Doing
+    # so would let any dApp present a SIWE prompt with domain="0.0.0.0" and
+    # replay the resulting signature here for account takeover. Fail loudly as a
+    # misconfiguration rather than silently authenticating against a wildcard.
+    if expected_domain in ("", "0.0.0.0", "::"):
+        logger.error("SIWE auth misconfigured: SIWE_DOMAIN unset (expected_domain=%r)", expected_domain)
+        raise HTTPException(status_code=503, detail="SIWE authentication is not configured")
+
     if msg.domain != expected_domain:
         raise HTTPException(status_code=400, detail=f"Domain mismatch: expected {expected_domain}")
 
@@ -66,8 +75,6 @@ async def _verify_siwe(siwe_message: str, siwe_signature: str) -> tuple[str, int
         raise HTTPException(status_code=401, detail="SIWE signature verification failed")
     except Exception:
         raise HTTPException(status_code=401, detail="SIWE verification error")
-
-    from web3 import Web3
 
     address = Web3.to_checksum_address(msg.address)
     chain_id = int(msg.chain_id) if msg.chain_id else 1
