@@ -28,7 +28,7 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture
-async def echo_server_url() -> str:
+async def echo_server_url():
     """Start a real local Streamable HTTP MCP server and return its endpoint URL."""
     app = FastMCP(name="echo")
 
@@ -79,9 +79,9 @@ async def echo_server_url() -> str:
 @pytest.fixture
 async def isolated_mcp_client_state(monkeypatch):
     """Isolate module-level state so tests run independently and DB-free."""
-    monkeypatch.setattr(mcp_client.runtime, "_tools_cache", {})
-    monkeypatch.setattr(mcp_client.session, "_sessions", {})
-    monkeypatch.setattr(mcp_client.cache, "_server_caches", {})
+    mcp_client.runtime._tools_cache.clear()
+    mcp_client.session._sessions.clear()
+    mcp_client.cache._server_caches.clear()
     monkeypatch.setattr(mcp_client.session, "_record_event", AsyncMock())
 
     # The SSRF guard pins outbound MCP connections to public IPs and blocks
@@ -101,7 +101,7 @@ async def isolated_mcp_client_state(monkeypatch):
         now = datetime.now(timezone.utc)
         return OrgMcpServer(
             id=f"server-{name}",
-            org_id="org-1",
+            org_id="org-transport-1",
             name=name,
             url=url,
             auth_type="none",
@@ -119,11 +119,12 @@ async def isolated_mcp_client_state(monkeypatch):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
     monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
 
-    tools, by_name = await mcp_client.build_mcp_langchain_tools("org-1")
+    tools, by_name = await mcp_client.build_mcp_langchain_tools("org-transport-1")
 
     assert len(tools) == 1
     assert tools[0].name == "echo__echo_greeting"
@@ -132,11 +133,12 @@ async def test_build_mcp_langchain_tools_discovers_server_tool(echo_server_url, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_build_mcp_langchain_tools_ainvoke_calls_remote_tool(echo_server_url, isolated_mcp_client_state, monkeypatch):
     server = isolated_mcp_client_state(echo_server_url)
     monkeypatch.setattr(mcp_client.runtime, "_get_servers_cached", AsyncMock(return_value=[server]))
 
-    _, by_name = await mcp_client.build_mcp_langchain_tools("org-1")
+    _, by_name = await mcp_client.build_mcp_langchain_tools("org-transport-1")
     result = await by_name["echo__echo_greeting"].ainvoke({"name": "World"})
 
     assert result == {"result": "Hello, World!"}
