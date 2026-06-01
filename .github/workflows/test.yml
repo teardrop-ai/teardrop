@@ -17,6 +17,7 @@ jobs:
       ANTHROPIC_API_KEY: dummy-key
       LANGSMITH_TRACING: "false"
       SKIP_INTEGRATION_TESTS: ""
+      MCP_CLIENT_CONNECT_TIMEOUT_SECONDS: "30"
 
     services:
       postgres:
