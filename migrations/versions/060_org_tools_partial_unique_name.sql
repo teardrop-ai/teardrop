@@ -19,7 +19,7 @@ BEGIN
         HAVING COUNT(*) > 1
     ) d;
     IF dup_count > 0 THEN
-        RAISE EXCEPTION 'Cannot drop UNIQUE constraint: %% active duplicate(s) exist', dup_count;
+        RAISE EXCEPTION 'Cannot drop UNIQUE constraint: % active duplicate(s) exist', dup_count;
     END IF;
 END $$;
 
