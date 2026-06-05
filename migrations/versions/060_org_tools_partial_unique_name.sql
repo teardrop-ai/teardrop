@@ -1,4 +1,4 @@
-﻿-- Migration 060: Replace unconditional UNIQUE(org_id, name) with a partial
+-- Migration 060: Replace unconditional UNIQUE(org_id, name) with a partial
 -- unique index so that soft-deleted (is_active=FALSE) tools do not block
 -- creation of a new active tool with the same name.
 -- Domain: tools
@@ -6,7 +6,7 @@
 -- tools release their name for immediate reuse.
 
 -- Safety check: there must be no active duplicates before we swap the constraint.
-DO 40
+DO $$
 DECLARE
     dup_count INTEGER;
 BEGIN
@@ -19,9 +19,9 @@ BEGIN
         HAVING COUNT(*) > 1
     ) d;
     IF dup_count > 0 THEN
-        RAISE EXCEPTION 'Cannot drop UNIQUE constraint: % active duplicate(s) exist', dup_count;
+        RAISE EXCEPTION 'Cannot drop UNIQUE constraint: %% active duplicate(s) exist', dup_count;
     END IF;
-END 40;
+END $$;
 
 -- Drop the table-level UNIQUE constraint (auto-named org_tools_org_id_name_key).
 ALTER TABLE org_tools DROP CONSTRAINT IF EXISTS org_tools_org_id_name_key;
