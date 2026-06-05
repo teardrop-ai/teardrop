@@ -428,6 +428,17 @@ class TestListOrgTools:
             tools = await org_tools_module.list_org_tools("org-1")
         assert tools == []
 
+    async def test_active_only_false_omits_is_active_filter(self):
+        """Verify that active_only=False removes the is_active=TRUE clause from the SQL query."""
+        pool = _pool()
+        with patch.object(org_tools_module.base, "_pool", pool):
+            tools = await org_tools_module.list_org_tools("org-1", active_only=False)
+        # pool.fetch is called with the SQL query; inspect it
+        call_args, _ = pool.fetch.call_args
+        sql_query = call_args[0]
+        assert "is_active = TRUE" not in sql_query
+        assert tools == []
+
 
 @pytest.mark.anyio
 class TestDeleteOrgTool:

@@ -10,7 +10,7 @@ import time
 from typing import Any, Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -263,10 +263,11 @@ async def create_tool(
 @router.get("/tools", tags=["Tools"])
 async def list_tools(
     payload: dict = Depends(require_auth),
+    active_only: bool = Query(default=True, description="When false, includes inactive (paused) tools in the response."),
 ) -> JSONResponse:
     """List custom tools for the authenticated org."""
     org_id = _require_org_id(payload)
-    tools = await list_org_tools(org_id)
+    tools = await list_org_tools(org_id, active_only=active_only)
     return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
 
 

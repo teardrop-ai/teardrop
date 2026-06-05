@@ -139,6 +139,72 @@ async def test_list_tools_returns_own_org(api_client, monkeypatch):
     assert len(data) == 1
     assert data[0]["name"] == "my_tool"
 
+@pytest.mark.anyio
+async def test_list_tools_excludes_inactive_by_default(api_client, monkeypatch):
+    active_tool = _TOOL
+    inactive_tool = OrgTool(
+        id="tool-inactive",
+        org_id="test-org-id",
+        name="paused_tool",
+        description="A paused custom tool",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        webhook_url="https://example.com/webhook",
+        webhook_method="GET",
+        has_auth=False,
+        timeout_seconds=10,
+        is_active=False,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    async def mock_list(org_id, *, active_only=True):
+        if active_only:
+            return [active_tool]
+        return [active_tool, inactive_tool]
+
+    monkeypatch.setattr("teardrop.routers.org.tools.list_org_tools", mock_list)
+
+    # Default (no param) should return only active tools
+    resp = await api_client.get("/tools")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "my_tool"
+
+
+@pytest.mark.anyio
+async def test_list_tools_active_only_false_includes_inactive(api_client, monkeypatch):
+    active_tool = _TOOL
+    inactive_tool = OrgTool(
+        id="tool-inactive",
+        org_id="test-org-id",
+        name="paused_tool",
+        description="A paused custom tool",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        webhook_url="https://example.com/webhook",
+        webhook_method="GET",
+        has_auth=False,
+        timeout_seconds=10,
+        is_active=False,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    async def mock_list(org_id, *, active_only=True):
+        if active_only:
+            return [active_tool]
+        return [active_tool, inactive_tool]
+
+    monkeypatch.setattr("teardrop.routers.org.tools.list_org_tools", mock_list)
+
+    # Explicit active_only=false should include inactive tools
+    resp = await api_client.get("/tools?active_only=false")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    names = {t["name"] for t in data}
+    assert "my_tool" in names
+    assert "paused_tool" in names
 
 # ─── GET /tools/{tool_id} ────────────────────────────────────────────────────
 
