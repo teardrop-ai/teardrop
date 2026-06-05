@@ -458,6 +458,64 @@ class TestDeleteOrgTool:
         assert result is False
 
 
+@pytest.mark.anyio
+class TestDeleteOrgToolNameReuse:
+    """After soft-delete the name is freed — creating a tool with the same name must succeed."""
+
+    async def test_deleted_name_can_be_reused(self, monkeypatch):
+        monkeypatch.setenv("ORG_TOOL_ENCRYPTION_KEY", _TEST_FERNET_KEY)
+        monkeypatch.setenv("MAX_ORG_TOOLS", "10")
+        org_tools_module._fernet = None
+        import teardrop.config as config
+
+        config.get_settings.cache_clear()
+
+        try:
+            pool = _pool()
+
+            # Delete step: mock execute to return row updated, fetchrow for name/publish info
+            pool.execute = AsyncMock(return_value="UPDATE 1")
+            pool.fetchrow = AsyncMock(
+                side_effect=[
+                    {"name": "crm_lookup", "publish_as_mcp": False},
+                    {"slug": "test-org"},
+                ]
+            )
+
+            with patch.object(org_tools_module.base, "_pool", pool):
+                deleted = await org_tools_module.delete_org_tool(
+                    "tool-1", "org-1", actor_id="user-1"
+                )
+                assert deleted is True
+
+            # Create step: mock quota (0 used), fetchrow returns None (no existing tool),
+            # execute returns INSERT success.  The partial unique index permits this
+            # because the deleted row has is_active=FALSE.
+            pool.fetchval = AsyncMock(return_value=0)
+            pool.fetchrow = AsyncMock(return_value=None)
+            pool.execute = AsyncMock(return_value="INSERT 1")
+
+            with patch.object(org_tools_module.base, "_pool", pool):
+                tool = await org_tools_module.create_org_tool(
+                    org_id="org-1",
+                    name="crm_lookup",  # same name as the deleted tool
+                    description="Recreated CRM tool",
+                    input_schema={"properties": {"id": {"type": "string"}}, "required": ["id"]},
+                    webhook_url="https://example.com/crm",
+                    auth_header_name=None,
+                    auth_header_value=None,
+                    timeout_seconds=10,
+                    actor_id="user-1",
+                )
+                assert isinstance(tool, OrgTool)
+                assert tool.name == "crm_lookup"
+                assert tool.org_id == "org-1"
+
+        finally:
+            org_tools_module._fernet = None
+            config.get_settings.cache_clear()
+
+
 # ─── Webhook execution (mocked aiohttp) ──────────────────────────────────────
 
 
