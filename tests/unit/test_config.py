@@ -86,7 +86,7 @@ def test_agent_max_tool_iterations_env_override(monkeypatch):
 
 def test_agent_tool_max_calls_per_run_default():
     s = Settings()
-    assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 1, "resolve_ens": 1}
+    assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 1, "resolve_ens": 1, "get_protocol_tvl": 3}
 
 
 def test_agent_tool_max_calls_per_run_env_override(monkeypatch):

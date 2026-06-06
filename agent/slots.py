@@ -144,18 +144,28 @@ _WRITERS = {
 
 
 def summarize_into_slots(tool_name: str, result_content: str, slots: dict[str, Any]) -> dict[str, Any]:
-    """Merge a tool result into slots, best-effort and side-effect safe."""
+    """Merge a tool result into slots, best-effort and side-effect safe.
+
+    Handles both single-dict payloads (existing behavior) and list payloads
+    (e.g. batched get_protocol_tvl calls). Each dict item in a list is
+    independently merged via the tool's slot writer.
+    """
     writer = _WRITERS.get(tool_name)
     if writer is None:
         return slots
-    payload = _as_json(result_content)
-    if payload is None:
-        return slots
-    out = dict(slots)
     try:
-        return writer(payload, out)
-    except Exception:
+        data = json.loads(result_content)
+    except (TypeError, ValueError, json.JSONDecodeError):
         return slots
+    items = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    out = dict(slots)
+    for item in items:
+        if isinstance(item, dict):
+            try:
+                out = writer(item, out)
+            except Exception:
+                pass
+    return out
 
 
 def render_slots_markdown(slots: dict[str, Any]) -> str:

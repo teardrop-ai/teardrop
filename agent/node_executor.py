@@ -215,7 +215,7 @@ async def _execute_single_tool_safe(
         }
 
 
-async def tool_executor_node(state: AgentState) -> dict[str, Any]:
+async def tool_executor_node(state: AgentState, config: dict | None = None) -> dict[str, Any]:
     """Execute all pending tool calls from the latest AIMessage in parallel.
 
     Resolves tool calls from the compiler plan (if active) or from
@@ -257,10 +257,11 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         incoming_calls = list(last_msg.tool_calls)
         stage_call_ids = [str(c.get("id", "")) for c in incoming_calls if isinstance(c, dict)]
 
+    _configurable = (config or {}).get("configurable", {})
     platform_tools_by_name = _get_platform_tools_by_name()
     tools_by_name = {
         **platform_tools_by_name,
-        **state.metadata.get("_org_tools_by_name", {}),
+        **(_configurable.get("_org_tools_by_name") or state.metadata.get("_org_tools_by_name", {})),
     }
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
     if excluded_tool_names:

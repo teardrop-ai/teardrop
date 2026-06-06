@@ -751,10 +751,10 @@ def _resolve_planner_llm(
     return llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason
 
 
-async def planner_node(state: AgentState) -> dict[str, Any]:
+async def planner_node(state: AgentState, config: dict | None = None) -> dict[str, Any]:
     """Run the LangGraph planner stage for one turn.
 
-    Reads ``state.metadata._org_tools``, ``_llm_config``, ``_usage``,
+    Reads ``config.configurable._org_tools`` (fallback ``state.metadata._org_tools``), ``_llm_config``, ``_usage``,
     ``_excluded_tool_names``, ``_synthesis_forced`` and ``state.plan`` (compiler mode).
     Resolves and invokes the LLM (with provider cooldown fallback if not BYOK).
     Binds all tools for non-synthesis turns; skips bind_tools on forced synthesis
@@ -786,7 +786,8 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             str(state.metadata.get("thread_id", "")),
         )
     tools = _get_cached_tools()
-    org_tools = state.metadata.get("_org_tools", [])
+    _configurable = (config or {}).get("configurable", {})
+    org_tools = _configurable.get("_org_tools") or state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
     if excluded_tool_names:

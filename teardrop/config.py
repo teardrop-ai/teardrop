@@ -138,7 +138,7 @@ class Settings(BaseSettings):
         ),
     )
     agent_tool_max_calls_per_run: dict[str, int] = Field(
-        default_factory=lambda: {"get_yield_rates": 1, "resolve_ens": 1},
+        default_factory=lambda: {"get_yield_rates": 1, "resolve_ens": 1, "get_protocol_tvl": 3},
         description=(
             "Per-run hard caps for specific platform tools keyed by tool name. "
             "Values are max allowed calls regardless of argument variation."

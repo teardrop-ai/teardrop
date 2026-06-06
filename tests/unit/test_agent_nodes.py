@@ -532,6 +532,153 @@ class TestPlannerNode:
         assert result["metadata"]["_synthesis_forced"] is False
 
 
+# ─── P0: Config-based tool resolution ─────────────────────────────────────────
+
+
+class TestPlannerNodeConfigTools:
+    """Verify planner_node reads _org_tools from config via config["configurable"]."""
+
+    async def test_planner_node_org_tools_from_config(self, test_settings):
+        """_org_tools from config are bound to the LLM."""
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _bind_spy(llm, tools, provider):
+            captured["tools"] = list(tools)
+            return llm
+
+        state = _make_state(metadata={"_usage": {}})
+        cfg = {"configurable": {"_org_tools": [_Tool("org_custom_tool")]}}
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=mock_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch.object(nodes_module, "_cached_tools", [_Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state, config=cfg)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        bound_names = [t.name for t in captured["tools"]]
+        assert "calculate" in bound_names
+        assert "org_custom_tool" in bound_names
+
+    async def test_planner_node_org_tools_fallback_to_metadata(self, test_settings):
+        """Without config, falls back to state.metadata._org_tools (backward compat)."""
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _bind_spy(llm, tools, provider):
+            captured["tools"] = list(tools)
+            return llm
+
+        state = _make_state(metadata={"_usage": {}, "_org_tools": [_Tool("meta_org_tool")]})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=mock_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch.object(nodes_module, "_cached_tools", [_Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        bound_names = [t.name for t in captured["tools"]]
+        assert "calculate" in bound_names
+        assert "meta_org_tool" in bound_names
+
+    async def test_planner_node_without_config_or_metadata(self, test_settings):
+        """Neither config nor metadata._org_tools — planner runs with platform tools only."""
+        mock_response = _make_ai_message("OK.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        state = _make_state(metadata={"_usage": {}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=mock_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, p: llm),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state, config={"configurable": {}})
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+
+
+class TestToolExecutorNodeConfigTools:
+    """Verify tool_executor_node reads _org_tools_by_name from config."""
+
+    async def test_tool_executor_org_tools_from_config(self, test_settings):
+        """_org_tools_by_name from config are used for tool dispatch."""
+        call = {"id": "c1", "name": "org_custom_tool", "args": {"x": 1}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "ok"})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {}},
+        )
+        cfg = {"configurable": {"_org_tools_by_name": {"org_custom_tool": mock_tool}}}
+        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state, config=cfg)
+
+        mock_tool.ainvoke.assert_called_once()
+        assert result["task_status"] == TaskStatus.PLANNING
+
+    async def test_tool_executor_org_tools_fallback_to_metadata(self, test_settings):
+        """Without config, falls back to state.metadata._org_tools_by_name."""
+        call = {"id": "c1", "name": "org_custom_tool", "args": {"x": 1}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": "ok"})
+
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {}, "_org_tools_by_name": {"org_custom_tool": mock_tool}},
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state)
+
+        mock_tool.ainvoke.assert_called_once()
+        assert result["task_status"] == TaskStatus.PLANNING
+
+    async def test_tool_executor_without_config_or_metadata(self, test_settings):
+        """Neither config nor metadata — platform tools only, no crash."""
+        call = {"id": "c1", "name": "calculate", "args": {"expression": "2+2"}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value={"result": 4})
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {"calculate": mock_tool}):
+            result = await tool_executor_node(state, config={"configurable": {}})
+
+        mock_tool.ainvoke.assert_called_once()
+        assert result["task_status"] == TaskStatus.PLANNING
+
+
 # ─── _resolve_planner_llm (provider routing seam) ─────────────────────────────
 
 
@@ -1240,3 +1387,26 @@ class TestToolExecutorDedup:
         blocked = [m for m in result["messages"] if "CUSTOM_TOOL_CAP_EXCEEDED" in m.content]
         assert len(blocked) == 1
         assert result["metadata"]["_usage"]["custom_tool_calls"] == 1
+
+
+# ─── Serialization guard ─────────────────────────────────────────────────────
+
+class TestAgentStateMetadata:
+    """AgentState model_dump must not fail when tool containers are empty."""
+
+    def test_metadata_serializable_with_empty_tool_containers(self):
+        """AgentState with empty _org_tools and _org_tools_by_name JSON-serializes cleanly."""
+        import json
+
+        state = AgentState(
+            messages=[HumanMessage(content="test")],
+            metadata={
+                "_org_tools": [],
+                "_org_tools_by_name": {},
+                "_usage": {"tool_iterations": 0},
+                "_excluded_tool_names": [],
+            },
+        )
+        dumped = state.model_dump()
+        serialized = json.dumps(dumped["metadata"])
+        assert '"tool_iterations"' in serialized

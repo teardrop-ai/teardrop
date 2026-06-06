@@ -48,3 +48,56 @@ def test_summarize_protocol_tvl_into_slots():
     assert slots["tvl"]["aave"]["note"] == "ok"
     assert "chain_breakdown" not in slots["tvl"]["aave"]
     assert "historical_series" not in slots["tvl"]["aave"]
+
+
+def test_summarize_protocol_tvl_batch_list():
+    """Batch get_protocol_tvl result (list of dicts) merges into slots."""
+    import json
+
+    payload = json.dumps([
+        {
+            "protocol": "aave-v3",
+            "current_tvl_usd": 12345.0,
+            "tvl_7d_change_pct": 1.5,
+            "tvl_30d_change_pct": -2.0,
+            "note": "ok",
+        },
+        {
+            "protocol": "uniswap-v3",
+            "current_tvl_usd": 6789.0,
+            "tvl_7d_change_pct": 0.5,
+            "tvl_30d_change_pct": 1.0,
+            "note": "ok",
+        },
+    ])
+    slots = summarize_into_slots("get_protocol_tvl", payload, {})
+    assert "tvl" in slots
+    assert slots["tvl"]["aave-v3"]["current_tvl_usd"] == 12345.0
+    assert slots["tvl"]["uniswap-v3"]["current_tvl_usd"] == 6789.0
+
+
+def test_summarize_protocol_tvl_empty_list():
+    """Empty list returns slots unchanged."""
+    slots = summarize_into_slots("get_protocol_tvl", "[]", {"tvl": {}})
+    assert slots == {"tvl": {}}
+
+
+def test_summarize_protocol_tvl_list_with_error_item():
+    """List item with empty protocol is skipped without error."""
+    import json
+
+    slots = summarize_into_slots(
+        "get_protocol_tvl",
+        json.dumps([{"protocol": "", "error": "not found"}]),
+        {},
+    )
+    assert slots == {}
+
+
+def test_summarize_ignores_non_dict_list_items():
+    """Non-dict items in a list are ignored; only dict items processed."""
+    import json
+
+    payload = json.dumps(["string", 42, {"protocol": "aave-v3", "current_tvl_usd": 100.0}])
+    slots = summarize_into_slots("get_protocol_tvl", payload, {})
+    assert slots["tvl"]["aave-v3"]["current_tvl_usd"] == 100.0

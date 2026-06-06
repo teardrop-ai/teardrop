@@ -188,8 +188,6 @@ async def agent_run(
                     "failed_tool_calls": 0,
                     "failed_tool_names": [],
                 },
-                "_org_tools": org_lc_tools,
-                "_org_tools_by_name": org_tools_by_name,
                 "_excluded_tool_names": list(excluded_tools),
                 "_memories": recalled,
                 "_llm_config": llm_config,
@@ -201,7 +199,13 @@ async def agent_run(
                 "emit_ui": body.emit_ui,
             },
         )
-        config = {"configurable": {"thread_id": scoped_thread_id}}
+        config = {
+            "configurable": {
+                "thread_id": scoped_thread_id,
+                "_org_tools": org_lc_tools,
+                "_org_tools_by_name": org_tools_by_name,
+            }
+        }
 
         # Drive the LangGraph event-dispatch loop. The generator yields the
         # per-token / per-tool / per-surface SSE frames and signals early
