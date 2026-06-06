@@ -483,9 +483,7 @@ class TestDeleteOrgToolNameReuse:
             )
 
             with patch.object(org_tools_module.base, "_pool", pool):
-                deleted = await org_tools_module.delete_org_tool(
-                    "tool-1", "org-1", actor_id="user-1"
-                )
+                deleted = await org_tools_module.delete_org_tool("tool-1", "org-1", actor_id="user-1")
                 assert deleted is True
 
             # Create step: mock quota (0 used), fetchrow returns None (no existing tool),

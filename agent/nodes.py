@@ -516,7 +516,11 @@ def _build_planner_system_messages(
     )
 
     if org_tools:
-        org_tool_lines = [f"- **{t.name}**: {t.description.splitlines()[0]}" for t in org_tools]
+        org_tool_lines = [
+            f"- **{t['name'] if isinstance(t, dict) else t.name}**: "
+            f"{(t.get('description', '') if isinstance(t, dict) else t.description).splitlines()[0]}"
+            for t in org_tools
+        ]
         uncached_parts.append("## Additional Organisation Tools\n" + "\n".join(org_tool_lines))
 
     uncached_prompt = "\n\n".join(uncached_parts)

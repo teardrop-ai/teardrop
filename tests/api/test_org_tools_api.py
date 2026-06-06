@@ -139,6 +139,7 @@ async def test_list_tools_returns_own_org(api_client, monkeypatch):
     assert len(data) == 1
     assert data[0]["name"] == "my_tool"
 
+
 @pytest.mark.anyio
 async def test_list_tools_excludes_inactive_by_default(api_client, monkeypatch):
     active_tool = _TOOL
@@ -205,6 +206,7 @@ async def test_list_tools_active_only_false_includes_inactive(api_client, monkey
     names = {t["name"] for t in data}
     assert "my_tool" in names
     assert "paused_tool" in names
+
 
 # ─── GET /tools/{tool_id} ────────────────────────────────────────────────────
 
