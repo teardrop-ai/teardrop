@@ -329,6 +329,56 @@ async def test_catalog_category_and_popularity_params(anon_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_catalog_q_param_passed_through(anon_client, monkeypatch):
+    catalog_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog", catalog_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/catalog?q=gpt")
+
+    assert resp.status_code == 200
+    catalog_mock.assert_awaited_once()
+    assert catalog_mock.call_args.kwargs["q"] == "gpt"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_q_and_org_slug_params(anon_client, monkeypatch):
+    catalog_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog", catalog_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/catalog?org_slug=acme&q=agent")
+
+    assert resp.status_code == 200
+    catalog_mock.assert_awaited_once()
+    assert catalog_mock.call_args.kwargs["org_slug"] == "acme"
+    assert catalog_mock.call_args.kwargs["q"] == "agent"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_rejects_q_too_long(anon_client):
+    resp = await anon_client.get(f"/marketplace/catalog?q={'a' * 201}")
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_catalog_rejects_invalid_category(anon_client, monkeypatch):
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 

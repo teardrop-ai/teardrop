@@ -184,11 +184,12 @@ async def get_marketplace_catalog(
     limit: int = 100,
     cursor: str | None = None,
     tool_name: str | None = None,
+    q: str | None = None,
 ) -> list[MarketplaceTool]:
     """Return published catalog tools (community + platform) with effective per-call prices.
 
     Tool cost precedence applied per entry: per-org override -> marketplace base price ->
-    ``default_tool_cost``. Supports org_slug/category filtering, sorting, and keyset pagination.
+    ``default_tool_cost``. Supports org_slug/category/search filtering, sorting, and keyset pagination.
     """
     return await _call_async(
         _GET_MARKETPLACE_CATALOG_ORIG,
@@ -200,6 +201,7 @@ async def get_marketplace_catalog(
         limit=limit,
         cursor=cursor,
         tool_name=tool_name,
+        q=q,
     )
 
 

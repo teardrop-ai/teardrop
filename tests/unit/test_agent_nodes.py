@@ -540,6 +540,7 @@ class TestPlannerNodeConfigTools:
 
     async def test_planner_node_org_tools_from_config(self, test_settings):
         """_org_tools from config are bound to the LLM."""
+
         class _Tool:
             def __init__(self, name: str) -> None:
                 self.name = name
@@ -573,6 +574,7 @@ class TestPlannerNodeConfigTools:
 
     async def test_planner_node_org_tools_fallback_to_metadata(self, test_settings):
         """Without config, falls back to state.metadata._org_tools (backward compat)."""
+
         class _Tool:
             def __init__(self, name: str) -> None:
                 self.name = name
@@ -1390,6 +1392,7 @@ class TestToolExecutorDedup:
 
 
 # ─── Serialization guard ─────────────────────────────────────────────────────
+
 
 class TestAgentStateMetadata:
     """AgentState model_dump must not fail when tool containers are empty."""

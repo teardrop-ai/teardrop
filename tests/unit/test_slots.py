@@ -54,22 +54,24 @@ def test_summarize_protocol_tvl_batch_list():
     """Batch get_protocol_tvl result (list of dicts) merges into slots."""
     import json
 
-    payload = json.dumps([
-        {
-            "protocol": "aave-v3",
-            "current_tvl_usd": 12345.0,
-            "tvl_7d_change_pct": 1.5,
-            "tvl_30d_change_pct": -2.0,
-            "note": "ok",
-        },
-        {
-            "protocol": "uniswap-v3",
-            "current_tvl_usd": 6789.0,
-            "tvl_7d_change_pct": 0.5,
-            "tvl_30d_change_pct": 1.0,
-            "note": "ok",
-        },
-    ])
+    payload = json.dumps(
+        [
+            {
+                "protocol": "aave-v3",
+                "current_tvl_usd": 12345.0,
+                "tvl_7d_change_pct": 1.5,
+                "tvl_30d_change_pct": -2.0,
+                "note": "ok",
+            },
+            {
+                "protocol": "uniswap-v3",
+                "current_tvl_usd": 6789.0,
+                "tvl_7d_change_pct": 0.5,
+                "tvl_30d_change_pct": 1.0,
+                "note": "ok",
+            },
+        ]
+    )
     slots = summarize_into_slots("get_protocol_tvl", payload, {})
     assert "tvl" in slots
     assert slots["tvl"]["aave-v3"]["current_tvl_usd"] == 12345.0

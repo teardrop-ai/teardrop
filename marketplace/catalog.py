@@ -88,6 +88,7 @@ async def get_marketplace_catalog(
     limit: int = 100,
     cursor: str | None = None,
     tool_name: str | None = None,
+    q: str | None = None,
 ) -> list[MarketplaceTool]:
     """Return published marketplace tools with optional filtering and sorting."""
     if sort not in _CATALOG_SORT_COLUMNS:
@@ -99,6 +100,11 @@ async def get_marketplace_catalog(
 
     if tool_overrides is None:
         tool_overrides = {}
+
+    if q is not None:
+        q = q.strip()
+        if not q:
+            q = None
 
     import base64 as _b64
     import json as _json
@@ -122,6 +128,11 @@ async def get_marketplace_catalog(
         params.append(value)
         return f"${len(params)}"
 
+    search_ref: str | None = None
+    if q is not None:
+        escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        search_ref = _add_param(f"%{escaped_q}%")
+
     include_community = org_slug != PLATFORM_SLUG
     include_platform = org_slug is None or org_slug == PLATFORM_SLUG
 
@@ -133,6 +144,16 @@ async def get_marketplace_catalog(
             where_clauses.append(f"COALESCE(t.category, '') = {_add_param(category)}")
         if tool_name is not None:
             where_clauses.append(f"t.name = {_add_param(tool_name)}")
+        if search_ref is not None:
+            where_clauses.append(
+                "("
+                f"t.name ILIKE {search_ref} ESCAPE '\\' OR "
+                f"t.description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"t.marketplace_description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"o.name ILIKE {search_ref} ESCAPE '\\' OR "
+                f"o.slug ILIKE {search_ref} ESCAPE '\\'"
+                ")"
+            )
         where_sql = " AND ".join(where_clauses)
         selects.append(
             f"""
@@ -163,6 +184,16 @@ async def get_marketplace_catalog(
             where_clauses.append(f"COALESCE(p.category, '') = {_add_param(category)}")
         if tool_name is not None:
             where_clauses.append(f"p.tool_name = {_add_param(tool_name)}")
+        if search_ref is not None:
+            where_clauses.append(
+                "("
+                f"p.tool_name ILIKE {search_ref} ESCAPE '\\' OR "
+                f"p.display_name ILIKE {search_ref} ESCAPE '\\' OR "
+                f"p.description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"'Teardrop' ILIKE {search_ref} ESCAPE '\\' OR "
+                f"'{PLATFORM_SLUG}' ILIKE {search_ref} ESCAPE '\\'"
+                ")"
+            )
         where_sql = " AND ".join(where_clauses)
         selects.append(
             f"""

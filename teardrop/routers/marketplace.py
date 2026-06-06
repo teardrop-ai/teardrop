@@ -311,6 +311,7 @@ def _escape_llms_text(value: Any) -> str:
 async def get_marketplace_catalog_endpoint(
     request: Request,
     org_slug: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
     category: str | None = Query(default=None, max_length=32),
     sort: str = "name",
     limit: int = Query(default=100, ge=1, le=200),
@@ -321,6 +322,8 @@ async def get_marketplace_catalog_endpoint(
     Query parameters:
     - **org_slug**: Filter to a single author org (use ``"platform"`` for
       Teardrop-owned tools). Omit for all tools.
+        - **q**: Optional case-insensitive partial search across tool names,
+            descriptions, and author fields.
         - **category**: Optional category filter (``defi``, ``search``, ``data``,
             ``communication``, or ``utility``).
         - **sort**: ``name`` (default), ``price_asc``, ``price_desc``, or
@@ -357,6 +360,7 @@ async def get_marketplace_catalog_endpoint(
         overrides,
         default_cost,
         org_slug=org_slug,
+        q=q,
         category=category,
         sort=sort,
         limit=limit,

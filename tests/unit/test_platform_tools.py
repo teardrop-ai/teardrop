@@ -178,6 +178,65 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert "defi" in args
 
 
+class TestGetMarketplaceCatalogSearch:
+    @pytest.mark.anyio
+    async def test_catalog_search_filters_across_catalog_fields(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(q="GPT")
+
+        sql = mock_pool.fetch.call_args.args[0]
+        args = mock_pool.fetch.call_args.args[1:]
+        assert "t.name ILIKE $1" in sql
+        assert "t.marketplace_description ILIKE $1" in sql
+        assert "o.slug ILIKE $1" in sql
+        assert "p.display_name ILIKE $1" in sql
+        assert "'Teardrop' ILIKE $1" in sql
+        assert args[0] == "%GPT%"
+
+    @pytest.mark.anyio
+    async def test_catalog_search_intersects_with_org_slug(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(org_slug="acme", q="GPT")
+
+        sql = mock_pool.fetch.call_args.args[0]
+        args = mock_pool.fetch.call_args.args[1:]
+        assert "o.slug = $2" in sql
+        assert "t.name ILIKE $1" in sql
+        assert "FROM marketplace_platform_tools" not in sql
+        assert args[0] == "%GPT%"
+        assert args[1] == "acme"
+
+    @pytest.mark.anyio
+    async def test_catalog_search_escapes_like_wildcards(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(q=r"100%_match")
+
+        args = mock_pool.fetch.call_args.args[1:]
+        assert args[0] == r"%100\%\_match%"
+
+    @pytest.mark.anyio
+    async def test_catalog_search_empty_string_skips_search_clause(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(q="   ")
+
+        sql = mock_pool.fetch.call_args.args[0]
+        args = mock_pool.fetch.call_args.args[1:]
+        assert "ILIKE" not in sql
+        assert args == (100,)
+
+
 # ─── get_platform_tool_price ─────────────────────────────────────────────────
 
 
