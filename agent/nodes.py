@@ -521,7 +521,13 @@ def _build_planner_system_messages(
             f"{(t.get('description', '') if isinstance(t, dict) else t.description).splitlines()[0]}"
             for t in org_tools
         ]
-        uncached_parts.append("## Additional Organisation Tools\n" + "\n".join(org_tool_lines))
+        uncached_parts.append(
+            "## Additional Organisation Tools\n"
+            "These are custom tools registered specifically for this organisation. "
+            "When an organisation tool can directly fulfil the user's request, "
+            "prefer it over platform tools with similar functionality.\n"
+            + "\n".join(org_tool_lines)
+        )
 
     uncached_prompt = "\n\n".join(uncached_parts)
 
@@ -800,6 +806,11 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
             for tool in org_tools
             if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in excluded_tool_names)
         ]
+    logger.info(
+        "planner_node: excluded=%s available_tools=%s",
+        sorted(excluded_tool_names) if excluded_tool_names else [],
+        [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in all_tools],
+    )
     llm_config = state.metadata.get("_llm_config")
     tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
 
