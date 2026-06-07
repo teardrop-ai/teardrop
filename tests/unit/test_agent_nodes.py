@@ -260,6 +260,43 @@ class TestPlannerNode:
         assert "calculate" in bound_names
         assert "org_allowed" in bound_names
 
+    async def test_excluded_tools_not_listed_in_system_prompt(self, test_settings):
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+
+        async def _invoke_spy(llm, messages, timeout_seconds, *, provider=None, model=None):
+            captured["messages"] = list(messages)
+            return mock_response
+
+        state = _make_state(
+            metadata={
+                "_usage": {},
+                "_org_tools": [_Tool("org_allowed"), _Tool("org_blocked")],
+                "_excluded_tool_names": ["web_search", "org_blocked"],
+            }
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+            patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
+            patch.object(nodes_module, "_cached_tools", [_Tool("web_search"), _Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        system_text = "\n".join(str(msg.content) for msg in captured["messages"] if getattr(msg, "type", "") == "system")
+        assert "- **web_search**:" not in system_text
+        assert "- **org_blocked**:" not in system_text
+        assert "- **calculate**:" in system_text
+        assert "- **org_allowed**:" in system_text
+
     async def test_no_tool_calls_routes_to_generating_ui(self, test_settings):
         mock_response = _make_ai_message("Here is my answer.", tool_calls=[])
         mock_llm = MagicMock()

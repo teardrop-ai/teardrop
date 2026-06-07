@@ -790,8 +790,16 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
     org_tools = _configurable.get("_org_tools") or state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
+    filtered_platform_tools = tools
+    filtered_org_tools = org_tools
     if excluded_tool_names:
         all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in excluded_tool_names]
+        filtered_platform_tools = [tool for tool in tools if getattr(tool, "name", "") not in excluded_tool_names]
+        filtered_org_tools = [
+            tool
+            for tool in org_tools
+            if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in excluded_tool_names)
+        ]
     llm_config = state.metadata.get("_llm_config")
     tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
 
@@ -810,8 +818,8 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
         model=_model,
         max_tokens=_max_tokens,
         timeout_seconds=_timeout,
-        platform_tools=tools,
-        org_tools=org_tools,
+        platform_tools=filtered_platform_tools,
+        org_tools=filtered_org_tools,
         emit_ui=bool(state.metadata.get("emit_ui", True)),
     )
     if settings.agent_compiler_mode_enabled:
