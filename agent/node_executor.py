@@ -215,7 +215,13 @@ async def _execute_single_tool_safe(
         }
 
 
-async def tool_executor_node(state: AgentState, config: dict | None = None) -> dict[str, Any]:
+# NOTE: `config` is intentionally left UNANNOTATED. This module uses
+# `from __future__ import annotations` (PEP 563), which stringifies type hints.
+# LangGraph 1.x detects the config-injection parameter by inspecting the raw
+# annotation object; a stringified `RunnableConfig` hint is NOT recognized, so
+# the runtime config (e.g. `_org_tools_by_name`) would silently fail to inject
+# and `config` would stay `None`. Leaving it unannotated forces name-based injection.
+async def tool_executor_node(state: AgentState, config=None) -> dict[str, Any]:
     """Execute all pending tool calls from the latest AIMessage in parallel.
 
     Resolves tool calls from the compiler plan (if active) or from
@@ -279,7 +285,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
     max_custom_tool_calls = int(get_settings().max_custom_tool_calls_per_run)
     incoming_call_names = [str(call.get("name", "")) for call in incoming_calls if isinstance(call, dict)]
 
-    logger.info(
+    logger.debug(
         "tool_executor: inventory incoming_calls=%s available_platform_tools=%s available_org_tools=%s excluded=%s custom_tool_calls=%d max_custom_tool_calls=%d",
         incoming_call_names,
         sorted(platform_tool_names),
@@ -401,7 +407,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
             seen_this_batch.add(sig)
             dedup_calls.append(call)
 
-    logger.info(
+    logger.debug(
         "tool_executor: resolution accepted_calls=%s skipped=%s",
         [str(call.get("name", "")) for call in dedup_calls if isinstance(call, dict)],
         skipped_reason_codes,

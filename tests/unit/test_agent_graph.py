@@ -200,3 +200,66 @@ class TestGetGraphLock:
         with patch.object(graph_module, "_graph_lock", existing):
             lock = graph_module._get_graph_lock()
         assert lock is existing
+
+
+# ─── node config injection (regression) ───────────────────────────────────────
+
+
+class TestNodeConfigInjection:
+    """Regression guard for LangGraph runtime-config injection into graph nodes.
+
+    agent/nodes.py and agent/node_executor.py use ``from __future__ import
+    annotations`` (PEP 563), which stringifies type hints. LangGraph 1.x detects
+    the config-injection parameter by inspecting the raw annotation object, so a
+    typed ``config`` hint (``dict | None`` or a stringified ``RunnableConfig``)
+    silently disables injection — the planner/executor then read an empty
+    ``_org_tools`` and org/MCP/marketplace tools disappear from the inventory.
+    The node ``config`` params must stay UNANNOTATED so name-based injection
+    applies. This test fails if a future change re-adds a breaking annotation.
+    """
+
+    async def test_planner_receives_org_tools_from_injected_config(self, test_settings, monkeypatch):
+        from langchain_core.tools import StructuredTool
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        import agent.nodes as nodes
+        from agent.graph import build_graph
+
+        def _price(symbol: str = "ETH") -> str:
+            return "ok"
+
+        org_tool = StructuredTool.from_function(func=_price, name="crypto_price", description="Get crypto price")
+
+        captured: dict[str, list[str]] = {}
+
+        class _StopProbe(Exception):
+            pass
+
+        def _capture(state, all_tools, settings, **kwargs):
+            captured["tool_names"] = [getattr(t, "name", "") for t in all_tools]
+            raise _StopProbe()
+
+        # Capture the tool set the planner would bind, then halt before the LLM call.
+        monkeypatch.setattr(nodes, "_resolve_planner_llm", _capture)
+
+        graph = build_graph(InMemorySaver())
+        config = {
+            "configurable": {
+                "thread_id": "u:regression-thread",
+                "_org_tools": [org_tool],
+                "_org_tools_by_name": {"crypto_price": org_tool},
+            }
+        }
+        init = AgentState(
+            messages=[HumanMessage(content="price of eth?")],
+            metadata={"_usage": {"tool_iterations": 0}},
+        )
+
+        with pytest.raises(_StopProbe):
+            async for _ in graph.astream_events(init.model_dump(), config=config, version="v2"):
+                pass
+
+        assert "crypto_price" in captured.get("tool_names", []), (
+            "planner_node did not receive _org_tools via injected config; ensure the "
+            "`config` parameter stays unannotated (PEP 563 breaks typed RunnableConfig injection)"
+        )

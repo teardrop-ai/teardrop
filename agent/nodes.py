@@ -766,7 +766,13 @@ def _resolve_planner_llm(
     return llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason
 
 
-async def planner_node(state: AgentState, config: dict | None = None) -> dict[str, Any]:
+# NOTE: `config` is intentionally left UNANNOTATED. This module uses
+# `from __future__ import annotations` (PEP 563), which stringifies type hints.
+# LangGraph 1.x detects the config-injection parameter by inspecting the raw
+# annotation object; a stringified `RunnableConfig` hint is NOT recognized, so
+# the runtime config (e.g. `_org_tools`) would silently fail to be injected and
+# `config` would stay `None`. Leaving it unannotated forces name-based injection.
+async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
     """Run the LangGraph planner stage for one turn.
 
     Reads ``config.configurable._org_tools`` (fallback ``state.metadata._org_tools``), ``_llm_config``, ``_usage``,
@@ -821,7 +827,7 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
             for tool in org_tools
             if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in effective_excluded)
         ]
-    logger.info(
+    logger.debug(
         "planner_node: tool inventory platform=%s org=%s excluded=%s available=%s tool_iterations=%d synthesis_forced=%s",
         [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in filtered_platform_tools],
         [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in filtered_org_tools],
@@ -1017,7 +1023,7 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
     if response.tool_calls or (next_plan is not None and not next_plan.is_done()):
         next_status = TaskStatus.EXECUTING
 
-    logger.info(
+    logger.debug(
         "planner_node: response tool_call_names=%s next_status=%s finish_reason=%s provider=%s model=%s",
         [str(call.get("name", "")) for call in getattr(response, "tool_calls", []) if isinstance(call, dict)],
         getattr(next_status, "value", str(next_status)),

@@ -195,7 +195,7 @@ async def _prepare_run_context(
 
     # Always-on discovery diagnostic: makes "missing org tool" runs deterministic.
     # If this line is absent from logs, the patched code is not the code running.
-    logger.info(
+    logger.debug(
         "prepare_run_context: org tool discovery org_id=%s resolved_count=%d names=%s",
         org_id,
         len(org_lc_tools),
