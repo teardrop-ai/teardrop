@@ -27,8 +27,9 @@ from org_tools.base import (
     _decrypt_header,
     _get_pool,
     _record_event,
+    _row_to_org_tool,
 )
-from org_tools.cache import get_org_tools_cached
+from org_tools.cache import get_org_tools_cached, invalidate_org_tools_cache
 from shared.webhook import WebhookCaller, WebhookCallError
 from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
 from tools.shared import build_pydantic_model
@@ -37,6 +38,15 @@ from tools.shared import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except Exception:
+        return default
 
 
 # ─── Dynamic Pydantic model from JSON Schema ─────────────────────────────────
@@ -284,6 +294,29 @@ async def _on_webhook_failure(
             logger.warning("auto_deactivate_tool_for_health failed tool_id=%s", tool_id, exc_info=True)
 
 
+async def _load_org_tools_uncached(org_id: str) -> list[OrgTool]:
+    """Direct DB fallback for org-tool discovery when cached state looks wrong."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT * FROM org_tools WHERE org_id = $1 AND is_active = TRUE ORDER BY name",
+        org_id,
+    )
+
+    tools: list[OrgTool] = []
+    for row in rows:
+        try:
+            tools.append(_row_to_org_tool(row))
+        except Exception:
+            logger.warning(
+                "Failed to decode org tool row id=%s name=%s org=%s",
+                _row_value(row, "id", "?"),
+                _row_value(row, "name", "?"),
+                org_id,
+                exc_info=True,
+            )
+    return tools
+
+
 async def build_org_langchain_tools(
     org_id: str,
 ) -> tuple[list[StructuredTool], dict[str, StructuredTool]]:
@@ -295,6 +328,19 @@ async def build_org_langchain_tools(
     from tools import registry as global_registry
 
     org_tools = await get_org_tools_cached(org_id)
+    if not org_tools:
+        direct_tools = await _load_org_tools_uncached(org_id)
+        if direct_tools:
+            logger.warning(
+                "Org tool cache returned empty for org_id=%s but direct DB query found active tools=%s; bypassing cache",
+                org_id,
+                [tool.name for tool in direct_tools],
+            )
+            try:
+                await invalidate_org_tools_cache(org_id)
+            except Exception:
+                logger.debug("Org tool cache invalidation failed after empty-cache fallback", exc_info=True)
+        org_tools = direct_tools
     if not org_tools:
         return [], {}
 

@@ -737,11 +737,59 @@ class TestCacheInvalidation:
 @pytest.mark.anyio
 class TestBuildOrgLangchainTools:
     async def test_empty_org(self):
+        pool = _pool()
+        pool.fetch = AsyncMock(return_value=[])
         mock = AsyncMock(return_value=[])
-        with patch.object(org_tools_module.runtime, "get_org_tools_cached", mock):
+        with (
+            patch.object(org_tools_module.runtime, "get_org_tools_cached", mock),
+            patch.object(org_tools_module.base, "_pool", pool),
+        ):
             tools_list, tools_by_name = await org_tools_module.build_org_langchain_tools("org-1")
         assert tools_list == []
         assert tools_by_name == {}
+
+    async def test_falls_back_to_direct_db_when_cache_empty(self):
+        now = datetime.now(timezone.utc)
+        tool_row = _tool_row(
+            id="tool-1",
+            org_id="org-1",
+            name="crypto_price",
+            description="Return the latest crypto price",
+            input_schema=json.dumps(
+                {
+                    "type": "object",
+                    "properties": {"coin_id": {"type": "string"}},
+                    "required": ["coin_id"],
+                }
+            ),
+            webhook_url="https://hook.example.com/price",
+            webhook_method="GET",
+            created_at=now,
+            updated_at=now,
+        )
+        pool = _pool()
+        pool.fetch = AsyncMock(
+            side_effect=[
+                [tool_row],
+                [{"id": "tool-1", "auth_header_name": None, "auth_header_enc": None}],
+            ]
+        )
+
+        cached_mock = AsyncMock(return_value=[])
+        invalidate_mock = AsyncMock()
+        mock_reg = MagicMock()
+        mock_reg.get.return_value = None
+        with (
+            patch.object(org_tools_module.runtime, "get_org_tools_cached", cached_mock),
+            patch.object(org_tools_module.runtime, "invalidate_org_tools_cache", invalidate_mock),
+            patch.object(org_tools_module.base, "_pool", pool),
+            patch("tools.registry", mock_reg),
+        ):
+            tools_list, tools_by_name = await org_tools_module.build_org_langchain_tools("org-1")
+
+        assert [tool.name for tool in tools_list] == ["crypto_price"]
+        assert list(tools_by_name) == ["crypto_price"]
+        invalidate_mock.assert_awaited_once_with("org-1")
 
     async def test_skips_global_collision(self):
         tool = _sample_org_tool(name="web_search")  # global tool name
