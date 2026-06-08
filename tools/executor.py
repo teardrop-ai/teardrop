@@ -140,7 +140,7 @@ async def execute_tool(
         else:
             result = await _invoke()
 
-        if isinstance(result, dict) and "error" in result:
+        if isinstance(result, dict) and result.get("error"):
             error_class, retry_safe, billable, message = _classify_embedded_error(result)
             return ToolResult(
                 success=False,
@@ -154,18 +154,14 @@ async def execute_tool(
             )
 
         resolved_output_schema = _resolve_output_schema(tool, output_schema)
-        valid_output, output_error = _validate_output_schema(result, resolved_output_schema)
-        if not valid_output:
-            return ToolResult(
-                success=False,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                content=_error_content("output_contract_error", output_error or "Output contract failed", False, False),
-                elapsed_ms=int((time.monotonic() - start_mono) * 1000),
-                error_class="output_contract_error",
-                retry_safe=False,
-                billable=False,
-            )
+        if resolved_output_schema is not None:
+            valid_output, output_error = _validate_output_schema(result, resolved_output_schema)
+            if not valid_output:
+                logger.warning(
+                    "tool '%s': output_schema validation warning — %s. Returning raw data.",
+                    tool_name,
+                    output_error or "Output contract failed",
+                )
 
         return ToolResult(
             success=True,

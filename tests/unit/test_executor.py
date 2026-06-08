@@ -117,7 +117,8 @@ async def test_execute_tool_embedded_business_error_billable():
 
 
 @pytest.mark.anyio
-async def test_execute_tool_output_contract_error_non_billable():
+async def test_execute_tool_output_contract_non_fatal_real_data_survives():
+    """output_schema mismatch no longer blocks data — the real content passes through."""
     tool = _DummyTool(result={"ok": "yes"}, metadata={"output_schema": _OutputModel})
     res = await execute_tool(
         tool_name="out",
@@ -125,9 +126,11 @@ async def test_execute_tool_output_contract_error_non_billable():
         tool_args={},
         tool=tool,
     )
-    assert res.success is False
-    assert res.error_class == "output_contract_error"
-    assert res.billable is False
+    # Data must survive: success=True, billable=True, real content, no error_class.
+    assert res.success is True
+    assert res.billable is True
+    assert res.error_class is None
+    assert res.content == '{"ok": "yes"}'
 
 
 @pytest.mark.anyio
@@ -174,3 +177,33 @@ async def test_execute_tool_unexpected_exception_non_billable():
     assert res.success is False
     assert res.error_class == "business_error"
     assert res.billable is False
+
+
+@pytest.mark.anyio
+async def test_execute_tool_output_schema_missing_required_fields_passes_data():
+    """Regression: org tool crypto_price returns {'price': 1.78, 'coin_id': 'the-open-network'}
+    but its output_schema requires id, symbol, price_usd. The real data must survive."""
+    schema = {
+        "type": "object",
+        "required": ["id", "symbol", "price_usd"],
+        "properties": {
+            "id": {"type": "string"},
+            "symbol": {"type": "string"},
+            "price_usd": {"type": "number"},
+        },
+    }
+    tool = _DummyTool(
+        result={"price": 1.78, "coin_id": "the-open-network"},
+        metadata={"output_schema": schema},
+    )
+    res = await execute_tool(
+        tool_name="crypto_price",
+        tool_call_id="c10",
+        tool_args={"coin_id": "the-open-network"},
+        tool=tool,
+    )
+    assert res.success is True
+    assert res.billable is True
+    assert res.error_class is None
+    assert "1.78" in res.content
+    assert "the-open-network" in res.content
