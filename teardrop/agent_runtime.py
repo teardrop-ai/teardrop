@@ -122,6 +122,13 @@ async def _prepare_run_context(
             logger.debug("Marketplace subscription injection failed for org_id=%s", org_id, exc_info=True)
             return [], {}
 
+    async def _safe_org_tools() -> tuple[list, dict[str, Any]]:
+        try:
+            return await build_org_langchain_tools(org_id)
+        except Exception:
+            logger.warning("Org tool discovery failed for org_id=%s", org_id, exc_info=True)
+            return [], {}
+
     async def _safe_recall() -> list[str]:
         if not mem_settings.memory_enabled:
             return []
@@ -169,7 +176,7 @@ async def _prepare_run_context(
         credit_balance_usdc,
     ) = await asyncio.gather(
         get_graph(),
-        build_org_langchain_tools(org_id),
+        _safe_org_tools(),
         _safe_mcp_tools(),
         _safe_marketplace_tools(),
         _safe_recall(),

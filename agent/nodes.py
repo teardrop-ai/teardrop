@@ -406,9 +406,16 @@ Final synthesis style:
 # ─── Nodes ────────────────────────────────────────────────────────────────────
 
 
-def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool) -> str:
+def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool, a2a_delegation_enabled: bool = True) -> str:
     """Build the cacheable planner prefix shared across requests."""
     cached_prompt = _PLANNER_SYSTEM
+    if not a2a_delegation_enabled:
+        cached_prompt = cached_prompt.replace(
+            "When a task requires specialist capabilities beyond your own tools, you may\n"
+            "delegate it to a remote agent using the delegate_to_agent tool. Only delegate\n"
+            "when your own tools cannot handle the request.\n\n",
+            "",
+        )
     if not emit_ui:
         cached_prompt += (
             "\n\nOutput constraint: Structured UI output is disabled for this request. "
@@ -443,6 +450,7 @@ def _build_planner_system_messages(
     platform_tools: list,
     org_tools: list,
     emit_ui: bool,
+    a2a_delegation_enabled: bool = True,
 ) -> list[SystemMessage]:
     """Assemble the planner system prompt(s).
 
@@ -460,7 +468,9 @@ def _build_planner_system_messages(
     # eligible for Anthropic prompt caching (90% discount on cache reads).
     # It must NOT contain any org-specific data (memories, org name, balance)
     # to prevent cross-org cache pollution.
-    cached_prompt = _build_cached_planner_prefix(platform_tools=platform_tools, emit_ui=emit_ui)
+    cached_prompt = _build_cached_planner_prefix(
+        platform_tools=platform_tools, emit_ui=emit_ui, a2a_delegation_enabled=a2a_delegation_enabled
+    )
 
     # ── Uncached suffix: org memory + runtime context + org-specific tools ─
     uncached_parts: list[str] = []
@@ -525,8 +535,7 @@ def _build_planner_system_messages(
             "## Additional Organisation Tools\n"
             "These are custom tools registered specifically for this organisation. "
             "When an organisation tool can directly fulfil the user's request, "
-            "prefer it over platform tools with similar functionality.\n"
-            + "\n".join(org_tool_lines)
+            "prefer it over platform tools with similar functionality.\n" + "\n".join(org_tool_lines)
         )
 
     uncached_prompt = "\n\n".join(uncached_parts)
@@ -796,19 +805,23 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
     org_tools = _configurable.get("_org_tools") or state.metadata.get("_org_tools", [])
     all_tools = tools + org_tools
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
+    server_excluded = frozenset()
+    if not settings.a2a_delegation_enabled:
+        server_excluded = frozenset({"delegate_to_agent"})
+    effective_excluded = excluded_tool_names | server_excluded
     filtered_platform_tools = tools
     filtered_org_tools = org_tools
-    if excluded_tool_names:
-        all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in excluded_tool_names]
-        filtered_platform_tools = [tool for tool in tools if getattr(tool, "name", "") not in excluded_tool_names]
+    if effective_excluded:
+        all_tools = [tool for tool in all_tools if getattr(tool, "name", "") not in effective_excluded]
+        filtered_platform_tools = [tool for tool in tools if getattr(tool, "name", "") not in effective_excluded]
         filtered_org_tools = [
             tool
             for tool in org_tools
-            if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in excluded_tool_names)
+            if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in effective_excluded)
         ]
     logger.info(
         "planner_node: excluded=%s available_tools=%s",
-        sorted(excluded_tool_names) if excluded_tool_names else [],
+        sorted(effective_excluded) if effective_excluded else [],
         [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in all_tools],
     )
     llm_config = state.metadata.get("_llm_config")
@@ -832,6 +845,7 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
         platform_tools=filtered_platform_tools,
         org_tools=filtered_org_tools,
         emit_ui=bool(state.metadata.get("emit_ui", True)),
+        a2a_delegation_enabled=bool(settings.a2a_delegation_enabled),
     )
     if settings.agent_compiler_mode_enabled:
         all_tool_names = [getattr(t, "name", "") for t in all_tools]

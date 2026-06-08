@@ -258,6 +258,29 @@ async def update_org_tool(
     if publish_as_mcp is not None or is_active is not None or base_price_usdc is not None or category is not None:
         await invalidate_marketplace_cache()
 
+    # Cascade: deactivate marketplace subscriptions when a published tool is
+    # deactivated or unpublished via PATCH (mirrors delete_org_tool).
+    if (is_active is False and row["is_active"]) or (publish_as_mcp is False and row.get("publish_as_mcp")):
+        try:
+            _org_row = await pool.fetchrow("SELECT slug FROM orgs WHERE id = $1", org_id)
+            if _org_row:
+                _qualified_name = f"{_org_row['slug']}/{row['name']}"
+                await pool.execute(
+                    "UPDATE org_marketplace_subscriptions SET is_active = FALSE"
+                    " WHERE qualified_tool_name = $1 AND is_active = TRUE",
+                    _qualified_name,
+                )
+                from marketplace import notify_subscribers_of_deactivation
+
+                asyncio.create_task(
+                    notify_subscribers_of_deactivation(
+                        _qualified_name,
+                        "deactivated by author",
+                    )
+                )
+        except Exception:  # pragma: no cover
+            logger.debug("Subscription deactivation cascade failed during tool update", exc_info=True)
+
     # Clear circuit breaker state on FALSE → TRUE transition so the tool
     # starts with a clean failure window after manual re-enable.
     if is_active is True and row["is_active"] is False:

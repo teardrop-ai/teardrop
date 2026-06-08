@@ -286,6 +286,17 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
     skipped_messages: list[ToolMessage] = []
     seen_this_batch: set[str] = set()
     for call in incoming_calls:
+        # Pre-empt unknown/unbound tool calls before any other processing.
+        if call["name"] not in tools_by_name:
+            skipped_messages.append(
+                ToolMessage(
+                    content=(
+                        f"[TOOL_UNAVAILABLE] Tool '{call['name']}' is not configured in this run. Synthesize from existing data."
+                    ),
+                    tool_call_id=call["id"],
+                )
+            )
+            continue
         if call["name"] not in platform_tool_names:
             accepted_custom_in_batch = sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
             if (custom_tool_calls + accepted_custom_in_batch) >= max_custom_tool_calls:

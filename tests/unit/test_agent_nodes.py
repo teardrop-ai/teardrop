@@ -568,6 +568,108 @@ class TestPlannerNode:
         unbound_llm.ainvoke.assert_called_once()
         assert result["metadata"]["_synthesis_forced"] is False
 
+    async def test_delegate_to_agent_excluded_when_a2a_disabled(self, test_settings):
+        """When a2a_delegation_enabled=False, delegate_to_agent must not be bound."""
+
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _bind_spy(llm, tools, provider):
+            captured["tools"] = list(tools)
+            return llm
+
+        state = _make_state(metadata={"_usage": {}})
+        with (
+            patch.object(test_settings, "a2a_delegation_enabled", False),
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None),
+            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        bound_names = [tool.name for tool in captured["tools"]]
+        assert "delegate_to_agent" not in bound_names
+        assert "calculate" in bound_names
+
+    async def test_delegate_to_agent_included_when_a2a_enabled(self, test_settings):
+        """When a2a_delegation_enabled=True, delegate_to_agent must be bound."""
+
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _bind_spy(llm, tools, provider):
+            captured["tools"] = list(tools)
+            return llm
+
+        state = _make_state(metadata={"_usage": {}})
+        with (
+            patch.object(test_settings, "a2a_delegation_enabled", True),
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None),
+            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        bound_names = [tool.name for tool in captured["tools"]]
+        assert "delegate_to_agent" in bound_names
+        assert "calculate" in bound_names
+
+    async def test_delegate_to_agent_absent_from_system_prompt_when_a2a_disabled(self, test_settings):
+        """When a2a disabled, system prompt must not mention delegate_to_agent."""
+
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+
+        async def _invoke_spy(llm, messages, timeout_seconds, *, provider=None, model=None):
+            captured["messages"] = list(messages)
+            return mock_response
+
+        state = _make_state(metadata={"_usage": {}})
+        with (
+            patch.object(test_settings, "a2a_delegation_enabled", False),
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+            patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None),
+            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        system_text = "\n".join(str(msg.content) for msg in captured["messages"] if getattr(msg, "type", "") == "system")
+        assert "delegate_to_agent" not in system_text
+        assert "calculate" in system_text
+
 
 # ─── P0: Config-based tool resolution ─────────────────────────────────────────
 
@@ -834,7 +936,7 @@ class TestToolExecutorNode:
         mock_tool.ainvoke.assert_not_called()
         assert result["task_status"] == TaskStatus.PLANNING
         assert len(result["messages"]) == 1
-        assert "not found" in result["messages"][0].content.lower()
+        assert "TOOL_UNAVAILABLE" in result["messages"][0].content
 
     async def test_executes_tool_and_returns_tool_message(self, test_settings):
         tool_call = {"id": "call-1", "name": "calculate", "args": {"expression": "2+2"}}
@@ -872,9 +974,10 @@ class TestToolExecutorNode:
             result = await tool_executor_node(state)
 
         assert len(result["messages"]) == 2
-        # Second message is an error for the missing tool
-        content = result["messages"][1].content
-        assert "not found" in content.lower() or "error" in content.lower()
+        # First message (skipped_messages) is an error for the missing tool
+        # The pre-check now catches missing tools before they reach execution.
+        content = result["messages"][0].content
+        assert "TOOL_UNAVAILABLE" in content
 
     async def test_tool_call_count_accumulated_in_usage(self, test_settings):
         calls = [
@@ -1057,6 +1160,20 @@ class TestToolExecutorNode:
 
         assert result["task_status"] == TaskStatus.PLANNING
         mock_tool.ainvoke.assert_called_once()
+
+    async def test_unbound_tool_call_returns_unavailable_message(self, test_settings):
+        """A tool call for an unbound tool must produce [TOOL_UNAVAILABLE]."""
+        call = {"id": "c1", "name": "unknown_tool", "args": {}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.PLANNING
+        assert len(result["messages"]) == 1
+        assert "[TOOL_UNAVAILABLE]" in result["messages"][0].content
+        assert "unknown_tool" in result["messages"][0].content
 
     async def test_all_calls_suppressed_routes_back_to_planning(self, test_settings):
         """If every tool call is suppressed, force a synthesis planner turn instead of ending blank."""

@@ -863,6 +863,87 @@ class TestUpdateOrgTool:
         assert result is not None
         assert result.description == "Updated!"
 
+    async def test_deactivate_cascades_to_subscriptions(self, monkeypatch):
+        """Setting is_active=False on a published tool must deactivate subscriptions."""
+        pool = MagicMock()
+        row = self._make_row()
+        row["publish_as_mcp"] = True
+        updated_row = dict(row, is_active=False)
+        pool.fetchrow = AsyncMock(side_effect=[row, updated_row, {"slug": "test-org"}])
+        pool.execute = AsyncMock()
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_marketplace_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
+        monkeypatch.setattr(
+            "marketplace.notify_subscribers_of_deactivation",
+            AsyncMock(),
+        )
+
+        result = await org_tools_module.update_org_tool(
+            "tool-1",
+            "org-1",
+            actor_id="u-1",
+            is_active=False,
+        )
+        assert result is not None
+        # Expect subscription UPDATE call.
+        subscription_calls = [c for c in pool.execute.call_args_list if "org_marketplace_subscriptions" in str(c)]
+        assert len(subscription_calls) == 1
+        assert "UPDATE org_marketplace_subscriptions SET is_active = FALSE" in str(subscription_calls[0])
+        assert "test-org/my_tool" in str(subscription_calls[0])
+
+    async def test_unpublish_cascades_to_subscriptions(self, monkeypatch):
+        """Setting publish_as_mcp=False on a published tool must deactivate subscriptions."""
+        pool = MagicMock()
+        row = self._make_row()
+        row["publish_as_mcp"] = True
+        updated_row = dict(row, publish_as_mcp=False)
+        pool.fetchrow = AsyncMock(side_effect=[row, updated_row, {"slug": "test-org"}])
+        pool.execute = AsyncMock()
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_marketplace_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
+        monkeypatch.setattr(
+            "marketplace.notify_subscribers_of_deactivation",
+            AsyncMock(),
+        )
+
+        result = await org_tools_module.update_org_tool(
+            "tool-1",
+            "org-1",
+            actor_id="u-1",
+            publish_as_mcp=False,
+        )
+        assert result is not None
+        subscription_calls = [c for c in pool.execute.call_args_list if "org_marketplace_subscriptions" in str(c)]
+        assert len(subscription_calls) == 1
+        assert "UPDATE org_marketplace_subscriptions SET is_active = FALSE" in str(subscription_calls[0])
+
+    async def test_deactivate_already_inactive_skips_cascade(self, monkeypatch):
+        """No subscription cascade when is_active=False and row already is_active=False."""
+        pool = MagicMock()
+        row = self._make_row()
+        row["is_active"] = False
+        pool.fetchrow = AsyncMock(return_value=row)
+        pool.execute = AsyncMock()
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_marketplace_cache", AsyncMock())
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
+
+        result = await org_tools_module.update_org_tool(
+            "tool-1",
+            "org-1",
+            actor_id="u-1",
+            is_active=False,
+        )
+        assert result is not None
+        # No subscription UPDATE should have been issued.
+        subscription_calls = [c for c in pool.execute.call_args_list if "org_marketplace_subscriptions" in str(c)]
+        assert len(subscription_calls) == 0
+
 
 # ─── get_org_tools_cached ────────────────────────────────────────────────────
 
