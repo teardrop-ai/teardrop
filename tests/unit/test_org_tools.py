@@ -1021,6 +1021,38 @@ class TestGetOrgToolsCached:
         assert result[0].name == "fresh_tool"
         org_tools_module._org_tool_caches.pop("org-miss", None)
 
+    async def test_empty_result_is_not_cached(self, monkeypatch):
+        now = datetime.now(timezone.utc)
+        pool = MagicMock()
+        pool.fetch = AsyncMock(
+            side_effect=[
+                [],
+                [
+                    _tool_row(
+                        id="t-3",
+                        org_id="org-negative",
+                        name="late_tool",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                ],
+            ]
+        )
+        org_tools_module._org_tool_caches.pop("org-negative", None)
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr("org_tools.cache.get_redis", lambda: None)
+        monkeypatch.setattr("org_tools.cache.get_settings", lambda: MagicMock(org_tools_cache_ttl_seconds=60))
+        monkeypatch.setattr("teardrop.cache.get_redis", lambda: None)
+
+        first = await org_tools_module.get_org_tools_cached("org-negative")
+        second = await org_tools_module.get_org_tools_cached("org-negative")
+
+        assert first == []
+        assert len(second) == 1
+        assert second[0].name == "late_tool"
+        assert pool.fetch.await_count == 2
+        org_tools_module._org_tool_caches.pop("org-negative", None)
+
 
 # ─── list_marketplace_tools ──────────────────────────────────────────────────
 

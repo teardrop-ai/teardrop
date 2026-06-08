@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 _org_tool_caches: dict[str, TTLCache[list[OrgTool]]] = {}
 
 
+def _should_cache_org_tools(tools: list[OrgTool] | None) -> bool:
+    """Cache only non-empty results so newly created tools appear immediately.
+
+    Empty snapshots are especially harmful in multi-worker deployments: a worker
+    that caches [] can keep hiding a tool created on another worker until the TTL
+    expires even though Redis invalidation succeeded.
+    """
+    return bool(tools)
+
+
 def _load_org_tools(org_id: str):
     """Loader for the per-org TTL cache (lazy import avoids a crud↔cache cycle)."""
     from org_tools.crud import list_org_tools
@@ -41,6 +51,7 @@ def _get_org_tool_cache(org_id: str) -> TTLCache[list[OrgTool]]:
             loader=lambda: _load_org_tools(org_id),
             serialize=lambda tools: json.dumps([t.model_dump(mode="json") for t in tools]),
             deserialize=lambda raw: [OrgTool(**item) for item in json.loads(raw)],
+            cache_when=_should_cache_org_tools,
         )
     return _org_tool_caches[org_id]
 
