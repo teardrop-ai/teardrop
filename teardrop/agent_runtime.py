@@ -193,6 +193,15 @@ async def _prepare_run_context(
         org_lc_tools = list(org_lc_tools) + mp_tools
         org_tools_by_name = {**org_tools_by_name, **mp_by_name}
 
+    # Always-on discovery diagnostic: makes "missing org tool" runs deterministic.
+    # If this line is absent from logs, the patched code is not the code running.
+    logger.info(
+        "prepare_run_context: org tool discovery org_id=%s resolved_count=%d names=%s",
+        org_id,
+        len(org_lc_tools),
+        sorted(org_tools_by_name.keys()),
+    )
+
     return _RunContext(
         graph=graph,
         org_lc_tools=org_lc_tools,
