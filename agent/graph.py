@@ -15,6 +15,8 @@ from typing import Literal
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from agent.nodes import planner_node, tool_executor_node, ui_generator_node
 from agent.state import AgentState, TaskStatus
@@ -24,15 +26,26 @@ logger = logging.getLogger(__name__)
 
 # Module-level handles so the lifespan can set/close them.
 _checkpointer: AsyncPostgresSaver | None = None
+_checkpointer_pool: AsyncConnectionPool | None = None
 _exit_stack: AsyncExitStack | None = None
 
 
 async def init_checkpointer() -> AsyncPostgresSaver:
     """Create and store the async Postgres checkpointer (via psycopg3)."""
-    global _checkpointer, _exit_stack
+    global _checkpointer, _checkpointer_pool, _exit_stack
     settings = get_settings()
     _exit_stack = AsyncExitStack()
-    _checkpointer = await _exit_stack.enter_async_context(AsyncPostgresSaver.from_conn_string(settings.pg_dsn))
+    pool = AsyncConnectionPool(
+        conninfo=settings.pg_dsn,
+        min_size=1,
+        max_size=1,
+        open=False,
+        check=AsyncConnectionPool.check_connection,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        name="langgraph-checkpointer",
+    )
+    _checkpointer_pool = await _exit_stack.enter_async_context(pool)
+    _checkpointer = AsyncPostgresSaver(_checkpointer_pool)
     await _checkpointer.setup()
     logger.info("Postgres checkpointer ready")
     return _checkpointer
@@ -40,9 +53,10 @@ async def init_checkpointer() -> AsyncPostgresSaver:
 
 async def close_checkpointer() -> None:
     """Gracefully close the checkpointer connection pool."""
-    global _checkpointer, _exit_stack, _compiled_graph
+    global _checkpointer, _checkpointer_pool, _exit_stack, _compiled_graph
     _compiled_graph = None
     _checkpointer = None
+    _checkpointer_pool = None
     if _exit_stack is not None:
         await _exit_stack.aclose()
         _exit_stack = None

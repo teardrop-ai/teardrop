@@ -6,6 +6,7 @@ No Postgres checkpointer or LangGraph runtime is needed.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -137,11 +138,62 @@ class TestRouteAfterTools:
 
 
 @pytest.mark.anyio
+class TestInitCheckpointer:
+    async def test_init_uses_validating_connection_pool(self):
+        class DummyPool:
+            @staticmethod
+            async def check_connection(conn):
+                return None
+
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+        class DummySaver:
+            def __init__(self, conn):
+                self.conn = conn
+                self.setup = AsyncMock()
+
+        mock_stack = AsyncMock()
+        mock_stack.enter_async_context = AsyncMock(side_effect=lambda cm: cm)
+
+        with (
+            patch.object(graph_module, "AsyncExitStack", return_value=mock_stack),
+            patch.object(graph_module, "AsyncConnectionPool", DummyPool),
+            patch.object(graph_module, "AsyncPostgresSaver", DummySaver),
+            patch.object(
+                graph_module,
+                "get_settings",
+                return_value=SimpleNamespace(pg_dsn="postgresql://user:pass@host/db"),
+            ),
+            patch.object(graph_module, "_checkpointer", None),
+            patch.object(graph_module, "_checkpointer_pool", None),
+            patch.object(graph_module, "_exit_stack", None),
+        ):
+            saver = await graph_module.init_checkpointer()
+
+        assert isinstance(saver, DummySaver)
+        assert isinstance(saver.conn, DummyPool)
+        assert saver.conn.kwargs["conninfo"] == "postgresql://user:pass@host/db"
+        assert saver.conn.kwargs["min_size"] == 1
+        assert saver.conn.kwargs["max_size"] == 1
+        assert saver.conn.kwargs["open"] is False
+        assert saver.conn.kwargs["check"] is DummyPool.check_connection
+        assert saver.conn.kwargs["name"] == "langgraph-checkpointer"
+        assert saver.conn.kwargs["kwargs"]["autocommit"] is True
+        assert saver.conn.kwargs["kwargs"]["prepare_threshold"] == 0
+        assert saver.conn.kwargs["kwargs"]["row_factory"] is graph_module.dict_row
+        mock_stack.enter_async_context.assert_awaited_once_with(saver.conn)
+        saver.setup.assert_awaited_once()
+
+
+@pytest.mark.anyio
 class TestCloseCheckpointer:
     async def test_close_is_noop_when_no_exit_stack(self):
         with (
             patch.object(graph_module, "_exit_stack", None),
             patch.object(graph_module, "_checkpointer", None),
+            patch.object(graph_module, "_checkpointer_pool", None),
             patch.object(graph_module, "_compiled_graph", None),
         ):
             await graph_module.close_checkpointer()  # must not raise
@@ -153,11 +205,13 @@ class TestCloseCheckpointer:
         with (
             patch.object(graph_module, "_exit_stack", mock_stack),
             patch.object(graph_module, "_checkpointer", MagicMock()),
+            patch.object(graph_module, "_checkpointer_pool", MagicMock()),
             patch.object(graph_module, "_compiled_graph", MagicMock()),
         ):
             await graph_module.close_checkpointer()
         mock_stack.aclose.assert_called_once()
         assert graph_module._checkpointer is None
+        assert graph_module._checkpointer_pool is None
         assert graph_module._exit_stack is None
 
 
