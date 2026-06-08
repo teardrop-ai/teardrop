@@ -809,6 +809,8 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
     if not settings.a2a_delegation_enabled:
         server_excluded = frozenset({"delegate_to_agent"})
     effective_excluded = excluded_tool_names | server_excluded
+    llm_config = state.metadata.get("_llm_config")
+    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
     filtered_platform_tools = tools
     filtered_org_tools = org_tools
     if effective_excluded:
@@ -820,12 +822,14 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
             if ((tool.get("name", "") if isinstance(tool, dict) else getattr(tool, "name", "")) not in effective_excluded)
         ]
     logger.info(
-        "planner_node: excluded=%s available_tools=%s",
+        "planner_node: tool inventory platform=%s org=%s excluded=%s available=%s tool_iterations=%d synthesis_forced=%s",
+        [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in filtered_platform_tools],
+        [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in filtered_org_tools],
         sorted(effective_excluded) if effective_excluded else [],
         [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in all_tools],
+        tool_iterations,
+        bool(state.metadata.get("_synthesis_forced", False)),
     )
-    llm_config = state.metadata.get("_llm_config")
-    tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))
 
     llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason = _resolve_planner_llm(
         state,
@@ -1012,6 +1016,15 @@ async def planner_node(state: AgentState, config: dict | None = None) -> dict[st
     next_status = TaskStatus.GENERATING_UI
     if response.tool_calls or (next_plan is not None and not next_plan.is_done()):
         next_status = TaskStatus.EXECUTING
+
+    logger.info(
+        "planner_node: response tool_call_names=%s next_status=%s finish_reason=%s provider=%s model=%s",
+        [str(call.get("name", "")) for call in getattr(response, "tool_calls", []) if isinstance(call, dict)],
+        getattr(next_status, "value", str(next_status)),
+        finish_reason,
+        _provider,
+        _model,
+    )
 
     return {
         "messages": [response],

@@ -277,6 +277,17 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
     defi_positions_covered: set[str] = set(usage.get("_defi_positions_covered", []))
     tool_max_calls = dict(get_settings().agent_tool_max_calls_per_run)
     max_custom_tool_calls = int(get_settings().max_custom_tool_calls_per_run)
+    incoming_call_names = [str(call.get("name", "")) for call in incoming_calls if isinstance(call, dict)]
+
+    logger.info(
+        "tool_executor: inventory incoming_calls=%s available_platform_tools=%s available_org_tools=%s excluded=%s custom_tool_calls=%d max_custom_tool_calls=%d",
+        incoming_call_names,
+        sorted(platform_tool_names),
+        sorted(name for name in tools_by_name if name not in platform_tool_names),
+        sorted(excluded_tool_names) if excluded_tool_names else [],
+        custom_tool_calls,
+        max_custom_tool_calls,
+    )
 
     # ── Within-run deduplication ──────────────────────────────────────────
     # Calls with identical (tool_name, args) are suppressed so a re-entering
@@ -284,10 +295,12 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
     completed_sigs: list[str] = list(usage.get("_completed_calls", []))
     dedup_calls: list[dict] = []
     skipped_messages: list[ToolMessage] = []
+    skipped_reason_codes: list[str] = []
     seen_this_batch: set[str] = set()
     for call in incoming_calls:
         # Pre-empt unknown/unbound tool calls before any other processing.
         if call["name"] not in tools_by_name:
+            skipped_reason_codes.append(f"{call['name']}:tool_unavailable")
             skipped_messages.append(
                 ToolMessage(
                     content=(
@@ -300,6 +313,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
         if call["name"] not in platform_tool_names:
             accepted_custom_in_batch = sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)
             if (custom_tool_calls + accepted_custom_in_batch) >= max_custom_tool_calls:
+                skipped_reason_codes.append(f"{call['name']}:custom_tool_cap")
                 skipped_messages.append(
                     ToolMessage(
                         content=(f"[CUSTOM_TOOL_CAP_EXCEEDED] custom tool calls exceeded per-run cap ({max_custom_tool_calls})."),
@@ -321,6 +335,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
         accepted_in_batch = sum(1 for c in dedup_calls if c["name"] == call["name"])
         if max_calls is not None and (current_calls + accepted_in_batch) >= int(max_calls):
             logger.debug("cap: suppressing capped call '%s'", call["name"])
+            skipped_reason_codes.append(f"{call['name']}:tool_cap")
             skipped_messages.append(
                 ToolMessage(
                     content=(
@@ -336,6 +351,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
             targets = _get_liquidation_risk_targets(call.get("args", {}))
             if targets and targets.issubset(defi_positions_covered):
                 logger.debug("semantic: suppressing redundant call '%s'", call["name"])
+                skipped_reason_codes.append(f"{call['name']}:semantic_redundancy")
                 skipped_messages.append(
                     ToolMessage(
                         content=(
@@ -354,6 +370,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
                 normalized = [t.strip().lower() for t in tokens if isinstance(t, str) and t.strip()]
                 if normalized and all(t.startswith("0x") for t in normalized):
                     logger.debug("semantic: suppressing unsupported get_token_price address-only call")
+                    skipped_reason_codes.append(f"{call['name']}:address_only")
                     skipped_messages.append(
                         ToolMessage(
                             content=(
@@ -369,6 +386,7 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
         sig = _call_signature(call["name"], call["args"])
         if sig in completed_sigs or sig in seen_this_batch:
             logger.debug("dedup: suppressing duplicate call '%s'", call["name"])
+            skipped_reason_codes.append(f"{call['name']}:duplicate")
             skipped_messages.append(
                 ToolMessage(
                     content=(
@@ -382,6 +400,12 @@ async def tool_executor_node(state: AgentState, config: dict | None = None) -> d
         else:
             seen_this_batch.add(sig)
             dedup_calls.append(call)
+
+    logger.info(
+        "tool_executor: resolution accepted_calls=%s skipped=%s",
+        [str(call.get("name", "")) for call in dedup_calls if isinstance(call, dict)],
+        skipped_reason_codes,
+    )
 
     if not dedup_calls:
         usage["tool_iterations"] = usage.get("tool_iterations", 0) + 1
