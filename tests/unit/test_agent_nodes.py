@@ -219,6 +219,25 @@ class TestSynthesisFastPathPredicates:
         assert _synthesis_fast_path_reason(state) == "all_resolved"
 
 
+class TestToolShortlistHook:
+    def test_apply_tool_shortlist_noop(self):
+        from agent.nodes import _apply_tool_shortlist
+
+        platform_tools = [MagicMock(name="calculate")]
+        org_tools = [MagicMock(name="org_tool")]
+        all_tools = platform_tools + org_tools
+
+        shortlisted_all, shortlisted_platform, shortlisted_org = _apply_tool_shortlist(
+            all_tools=all_tools,
+            platform_tools=platform_tools,
+            org_tools=org_tools,
+        )
+
+        assert shortlisted_all == all_tools
+        assert shortlisted_platform == platform_tools
+        assert shortlisted_org == org_tools
+
+
 # ─── planner_node ─────────────────────────────────────────────────────────────
 
 
@@ -258,7 +277,39 @@ class TestPlannerNode:
         assert "web_search" not in bound_names
         assert "org_blocked" not in bound_names
         assert "calculate" in bound_names
-        assert "org_allowed" in bound_names
+
+    async def test_planner_calls_tool_shortlist_hook(self, test_settings):
+        class _Tool:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = f"{name} description"
+
+        captured: dict[str, list[str]] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        def _shortlist_spy(*, all_tools, platform_tools, org_tools):
+            captured["all"] = [t.name for t in all_tools]
+            captured["platform"] = [t.name for t in platform_tools]
+            captured["org"] = [t.name for t in org_tools]
+            return all_tools, platform_tools, org_tools
+
+        state = _make_state(metadata={"_usage": {}, "_org_tools": [_Tool("org_custom_tool")]})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+            patch("agent.nodes._apply_tool_shortlist", side_effect=_shortlist_spy) as shortlist_mock,
+            patch.object(nodes_module, "_cached_tools", [_Tool("calculate")]),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        shortlist_mock.assert_called_once()
+        assert captured["platform"] == ["calculate"]
+        assert captured["org"] == ["org_custom_tool"]
+        assert sorted(captured["all"]) == ["calculate", "org_custom_tool"]
 
     async def test_excluded_tools_not_listed_in_system_prompt(self, test_settings):
         class _Tool:

@@ -68,3 +68,38 @@ class TestPrepareRunContext:
             )
 
         assert any("Org tool discovery failed" in rec.message for rec in caplog.records)
+
+    async def test_logs_tool_inventory_snapshot(self, test_settings, caplog):
+        """Telemetry inventory line is emitted with per-source counts."""
+        import logging
+
+        from teardrop import agent_runtime
+
+        caplog.set_level(logging.INFO)
+        org_tools = [MagicMock(name="org_tool")]
+        mcp_tools = [MagicMock(name="mcp_tool")]
+        marketplace_tools = [MagicMock(name="market_tool")]
+
+        with (
+            patch.object(agent_runtime, "get_graph", AsyncMock(return_value=MagicMock())),
+            patch.object(agent_runtime, "build_org_langchain_tools", AsyncMock(return_value=(org_tools, {"org_tool": object()}))),
+            patch.object(agent_runtime, "build_mcp_langchain_tools", AsyncMock(return_value=(mcp_tools, {"mcp__tool": object()}))),
+            patch("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=(marketplace_tools, {"acme/weather": object()}))),
+            patch("teardrop.agent_runtime.recall_memories", AsyncMock(return_value=[])),
+            patch("teardrop.agent_runtime.resolve_llm_config", AsyncMock(return_value=None)),
+            patch("teardrop.agent_runtime.get_org_by_id", AsyncMock(return_value=MagicMock(name="test-org"))),
+            patch("teardrop.agent_runtime.get_credit_balance", AsyncMock(return_value=None)),
+            patch.object(test_settings, "memory_enabled", False),
+            patch.object(test_settings, "billing_enabled", False),
+        ):
+            await agent_runtime._prepare_run_context(
+                org_id="org-1",
+                user_message="hello",
+                billing=MagicMock(verified=False),
+                mem_settings=test_settings,
+            )
+
+        assert any(
+            "tool_inventory org_id=org-1 webhook=1 mcp=1 marketplace=1 total=3" in rec.message
+            for rec in caplog.records
+        )

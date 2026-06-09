@@ -25,6 +25,16 @@ class PlatformToolSubscriptionError(ValueError):
     """Raised when callers attempt to subscribe to always-available platform tools."""
 
 
+class SelfSubscribeError(ValueError):
+    """Raised when an org tries to subscribe to its own published tool."""
+
+    def __init__(self, qualified_tool_name: str) -> None:
+        super().__init__(
+            f"Cannot subscribe to your own published tool: {qualified_tool_name}"
+        )
+        self.qualified_tool_name = qualified_tool_name
+
+
 _SUBSCRIPTION_CACHE: dict[str, tuple[frozenset[str], float]] = {}
 
 
@@ -48,6 +58,10 @@ async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> Marketplac
     tool_row = await get_marketplace_tool_by_name(tool_name, org_slug)
     if tool_row is None:
         raise ValueError(f"Marketplace tool not found: {qualified_tool_name}")
+
+    # Prevent self-subscribe: the tool's author org cannot subscribe.
+    if tool_row["org_id"] == org_id:
+        raise SelfSubscribeError(qualified_tool_name)
 
     current_hash = tool_row.get("schema_hash") or ""
     sub_id = str(uuid.uuid4())

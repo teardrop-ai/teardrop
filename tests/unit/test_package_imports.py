@@ -80,6 +80,7 @@ MARKETPLACE_IMPORT_SURFACE = [
     "record_marketplace_tool_usage_many",
     "record_tool_call_earnings",
     "request_withdrawal",
+    "SelfSubscribeError",
     "reset_withdrawal",
     "set_author_config",
     "subscribe_to_tool",

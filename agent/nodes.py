@@ -78,6 +78,23 @@ _RATE_LIMIT_MARKERS = (
     "quanta",
 )
 
+# ─── Shortlist stub ──────────────────────────────────────────────────────────
+
+
+def _apply_tool_shortlist(
+    *,
+    all_tools: list,
+    platform_tools: list,
+    org_tools: list,
+) -> tuple[list, list, list]:
+    """No-op shortlist stub.
+
+    Replace with a relevance-scored selector to cap token budget when the
+    org has many tools. Return order: (all_tools, platform_tools, org_tools).
+    """
+    return all_tools, platform_tools, org_tools
+
+
 # ─── Tool caches ──────────────────────────────────────────────────────────────
 
 _cached_tools: list | None = None
@@ -835,6 +852,13 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         [getattr(t, "name", t.get("name", "?") if isinstance(t, dict) else "?") for t in all_tools],
         tool_iterations,
         bool(state.metadata.get("_synthesis_forced", False)),
+    )
+
+    # Tool shortlist insertion point: can be overridden to cap token budget.
+    all_tools, filtered_platform_tools, filtered_org_tools = _apply_tool_shortlist(
+        all_tools=all_tools,
+        platform_tools=filtered_platform_tools,
+        org_tools=filtered_org_tools,
     )
 
     llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason = _resolve_planner_llm(

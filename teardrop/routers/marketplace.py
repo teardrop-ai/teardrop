@@ -532,12 +532,14 @@ async def subscribe_to_marketplace_tool(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Subscribe the authenticated org to a marketplace tool for /agent/run injection."""
-    from marketplace import PlatformToolSubscriptionError, subscribe_to_tool
+    from marketplace import PlatformToolSubscriptionError, SelfSubscribeError, subscribe_to_tool
 
     org_id: str = payload.get("org_id", "")
     try:
         sub = await subscribe_to_tool(org_id, body.qualified_tool_name)
     except PlatformToolSubscriptionError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except SelfSubscribeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))

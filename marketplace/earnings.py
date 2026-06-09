@@ -25,6 +25,15 @@ async def record_tool_call_earnings(
     total_cost_usdc: int,
 ) -> None:
     """Record a per-call earnings entry. Fire-and-forget safe."""
+    # Belt-and-suspenders: skip earnings when an org calls its own tool.
+    if author_org_id == caller_org_id:
+        logger.debug(
+            "Skipping earnings record for self-call: author_org_id=%s tool=%s",
+            author_org_id,
+            tool_name,
+        )
+        return
+
     try:
         pool = _get_pool()
 

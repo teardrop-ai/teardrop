@@ -186,12 +186,25 @@ async def _prepare_run_context(
     )
 
     # Merge MCP + marketplace tools after gather (cheap dict/list ops).
+    _wh_count = len(org_lc_tools)
+    _mcp_count = len(mcp_tools)
+    _mp_count = len(mp_tools)
     if mcp_tools:
         org_lc_tools = list(org_lc_tools) + mcp_tools
         org_tools_by_name = {**org_tools_by_name, **mcp_by_name}
     if mp_tools:
         org_lc_tools = list(org_lc_tools) + mp_tools
         org_tools_by_name = {**org_tools_by_name, **mp_by_name}
+
+    # Telemetry: per-org tool inventory snapshot.
+    logger.info(
+        "tool_inventory org_id=%s webhook=%d mcp=%d marketplace=%d total=%d",
+        org_id,
+        _wh_count,
+        _mcp_count,
+        _mp_count,
+        len(org_lc_tools),
+    )
 
     # Always-on discovery diagnostic: makes "missing org tool" runs deterministic.
     # If this line is absent from logs, the patched code is not the code running.

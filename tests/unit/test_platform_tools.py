@@ -574,6 +574,60 @@ class TestWeb3MarketplaceToolsMigration046:
         cost = await resolve_tool_cost("acme/weather", {"weather": 9000}, default_cost=1000, marketplace_enabled=True)
         assert cost == 9000
 
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_mcp_tool_is_free(self, monkeypatch):
+        """MCP tools (server__tool) are free unless explicitly overridden."""
+        from billing import resolve_tool_cost
+
+        mock_price = AsyncMock(return_value=2500)
+        monkeypatch.setattr("marketplace.get_platform_tool_price", mock_price)
+
+        cost = await resolve_tool_cost("github__list_repos", {}, default_cost=1000, marketplace_enabled=True)
+        assert cost == 0
+        mock_price.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_org_webhook_is_free_when_not_platform(self, monkeypatch):
+        """Bare org webhook tools are free when absent from platform catalog."""
+        from billing import resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=None))
+        cost = await resolve_tool_cost("my_crm_lookup", {}, default_cost=1000, marketplace_enabled=True)
+        assert cost == 0
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_override_wins_for_mcp(self, monkeypatch):
+        """Admin per-tool override must still win for MCP tools."""
+        from billing import resolve_tool_cost
+
+        mock_price = AsyncMock(return_value=2500)
+        monkeypatch.setattr("marketplace.get_platform_tool_price", mock_price)
+
+        cost = await resolve_tool_cost(
+            "github__list_repos",
+            {"github__list_repos": 500},
+            default_cost=1000,
+            marketplace_enabled=True,
+        )
+        assert cost == 500
+        mock_price.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_qualified_marketplace_tool_with_double_underscore_in_name_is_billed(self, monkeypatch):
+        """Regression: acme/my__tool must be billed at author price, not zeroed.
+
+        Tool bare-names are ^[a-z][a-z0-9_]*$ which allows '__'.  The '__' MCP
+        shortcut must not fire for qualified (slash-prefixed) marketplace names.
+        """
+        from billing import resolve_tool_cost
+
+        monkeypatch.setattr(
+            "marketplace.get_org_tool_price_by_qualified_name",
+            AsyncMock(return_value=3500),
+        )
+        cost = await resolve_tool_cost("acme/my__tool", {}, default_cost=1000, marketplace_enabled=True)
+        assert cost == 3500
+
     # ── Regression: excluded tools remain free ────────────────────────────
 
     @pytest.mark.anyio

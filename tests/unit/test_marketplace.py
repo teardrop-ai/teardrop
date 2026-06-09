@@ -10,11 +10,13 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from marketplace import (
     AuthorConfig,
     AuthorEarningByTool,
     MarketplaceTool,
+    SelfSubscribeError,
     _invalidate_platform_tool_cache,
     complete_withdrawal,
     get_author_balance,
@@ -119,6 +121,22 @@ class TestSetAuthorConfig:
 
 
 class TestRecordToolCallEarnings:
+    @pytest.mark.anyio
+    async def test_same_org_call_skips_earnings(self, monkeypatch):
+        """Self-calls must not create earnings entries."""
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await record_tool_call_earnings(
+            author_org_id="org-1",
+            tool_name="my_tool",
+            caller_org_id="org-1",
+            total_cost_usdc=10_000,
+        )
+
+        mock_pool.execute.assert_not_called()
+
     @pytest.mark.anyio
     async def test_no_author_config_skips(self, monkeypatch):
         mock_pool = MagicMock()
@@ -773,12 +791,60 @@ class TestSubscriptions:
         monkeypatch.setattr("marketplace._pool", mock_pool)
         monkeypatch.setattr(
             "marketplace.get_marketplace_tool_by_name",
-            AsyncMock(return_value={"schema_hash": "abc123"}),
+            AsyncMock(return_value={"org_id": "author-org", "schema_hash": "abc123"}),
         )
         result = await subscribe_to_tool("org-1", "acme/weather")
         assert result.org_id == "org-1"
         assert result.qualified_tool_name == "acme/weather"
         assert result.is_active is True
+
+    async def test_subscribe_self_raises(self, monkeypatch):
+        from marketplace import subscribe_to_tool
+
+        mock_pool = MagicMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        monkeypatch.setattr(
+            "marketplace.get_marketplace_tool_by_name",
+            AsyncMock(return_value={"org_id": "org-1", "schema_hash": "abc123"}),
+        )
+
+        with pytest.raises(SelfSubscribeError):
+            await subscribe_to_tool("org-1", "acme/weather")
+
+    async def test_subscribe_cross_org_allowed(self, monkeypatch):
+        from marketplace import subscribe_to_tool
+
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        monkeypatch.setattr(
+            "marketplace.get_marketplace_tool_by_name",
+            AsyncMock(return_value={"org_id": "author-org", "schema_hash": "abc123"}),
+        )
+
+        sub = await subscribe_to_tool("caller-org", "acme/weather")
+        assert sub.org_id == "caller-org"
+        assert sub.qualified_tool_name == "acme/weather"
+
+
+@pytest.mark.anyio
+class TestMarketplaceSubscriptionRouter:
+    async def test_router_maps_self_subscribe_to_400(self, monkeypatch):
+        from teardrop.routers.marketplace import SubscribeRequest, subscribe_to_marketplace_tool
+
+        monkeypatch.setattr(
+            "marketplace.subscribe_to_tool",
+            AsyncMock(side_effect=SelfSubscribeError("acme/weather")),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await subscribe_to_marketplace_tool(
+                body=SubscribeRequest(qualified_tool_name="acme/weather"),
+                payload={"org_id": "org-1"},
+            )
+
+        assert exc.value.status_code == 400
+        assert "Cannot subscribe to your own published tool" in str(exc.value.detail)
 
     async def test_unsubscribe_found(self, monkeypatch):
         from marketplace import unsubscribe_from_tool

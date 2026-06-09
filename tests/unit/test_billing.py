@@ -1266,8 +1266,8 @@ class TestCalculateRunCostPlatformPricing:
             )
         assert cost == 12_000
 
-    async def test_platform_price_none_falls_back_to_default(self):
-        """Tool not in marketplace_platform_tools → rule.tool_call_cost fallback."""
+    async def test_platform_price_none_is_free(self):
+        """Bare tool name absent from platform catalog → treated as org webhook tool, free."""
         rule = self._usage_rule()
         with (
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
@@ -1276,10 +1276,14 @@ class TestCalculateRunCostPlatformPricing:
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=None)),
         ):
             cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["calculate"]})
-        assert cost == 1_000
+        assert cost == 0
 
     async def test_mixed_run_platform_and_default(self):
-        """One platform tool + one non-platform tool in same run."""
+        """One platform tool + one non-platform bare tool in same run.
+
+        'calculate' is not in the platform catalog → org webhook tool → free.
+        Only 'web_search' at 4_000 is charged.
+        """
         rule = self._usage_rule()
 
         async def _price(name: str):
@@ -1299,7 +1303,7 @@ class TestCalculateRunCostPlatformPricing:
                     "tool_names": ["web_search", "calculate"],
                 }
             )
-        assert cost == 4_000 + 1_000
+        assert cost == 4_000
 
 
 class TestBuildUsdcTopupRequirementsPriceString:

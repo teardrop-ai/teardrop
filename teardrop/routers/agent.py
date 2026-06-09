@@ -417,7 +417,7 @@ async def list_agent_tools(
         if not tool.is_active:
             continue
         qualified_name = f"org/{tool.name}"
-        cost_usdc = tool_overrides.get(qualified_name, tool_overrides.get(tool.name, default_cost))
+        cost_usdc = tool_overrides.get(qualified_name, tool_overrides.get(tool.name, 0))
         tools.append(
             AgentToolItem(
                 name=tool.name,

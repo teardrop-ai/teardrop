@@ -235,6 +235,10 @@ async def resolve_tool_cost(
     if tool_name in overrides:
         return overrides[tool_name]
 
+    # Qualified marketplace tools ({org_slug}/{tool_name}) must be checked
+    # BEFORE the MCP-separator check below, because a tool bare-name may
+    # legally contain "__" (pattern ^[a-z][a-z0-9_]*$ allows it).  Checking
+    # "/" first ensures acme/my__tool is priced at its author price, not zeroed.
     if "/" in tool_name:
         _, bare_tool_name = tool_name.split("/", 1)
         if bare_tool_name in overrides:
@@ -248,6 +252,11 @@ async def resolve_tool_cost(
                 return author_price
         return default_cost
 
+    # MCP tools (server__tool) — bare names with "__" separator, no "/".
+    # Free unless an admin override was set above.
+    if "__" in tool_name:
+        return 0
+
     if marketplace_enabled:
         # Lazy import: marketplace imports from billing at module init.
         from marketplace import get_platform_tool_price
@@ -255,6 +264,8 @@ async def resolve_tool_cost(
         platform_price = await get_platform_tool_price(tool_name)
         if platform_price is not None:
             return platform_price
+        # Bare name not in platform registry → org webhook tool, free.
+        return 0
     return default_cost
 
 

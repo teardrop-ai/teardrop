@@ -96,6 +96,7 @@ _pool: asyncpg.Pool | None = _ctx._pool
 _SUBSCRIPTION_CACHE = _subscriptions._SUBSCRIPTION_CACHE
 PLATFORM_SLUG = _catalog.PLATFORM_SLUG
 PlatformToolSubscriptionError = _subscriptions.PlatformToolSubscriptionError
+SelfSubscribeError = _subscriptions.SelfSubscribeError
 
 
 def _sync_to_modules() -> None:
