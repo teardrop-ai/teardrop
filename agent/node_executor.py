@@ -286,7 +286,10 @@ async def tool_executor_node(state: AgentState, config=None) -> dict[str, Any]:
     incoming_call_names = [str(call.get("name", "")) for call in incoming_calls if isinstance(call, dict)]
 
     logger.debug(
-        "tool_executor: inventory incoming_calls=%s available_platform_tools=%s available_org_tools=%s excluded=%s custom_tool_calls=%d max_custom_tool_calls=%d",
+        (
+            "tool_executor: inventory incoming_calls=%s available_platform_tools=%s "
+            "available_org_tools=%s excluded=%s custom_tool_calls=%d max_custom_tool_calls=%d"
+        ),
         incoming_call_names,
         sorted(platform_tool_names),
         sorted(name for name in tools_by_name if name not in platform_tool_names),

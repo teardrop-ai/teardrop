@@ -83,8 +83,13 @@ class TestPrepareRunContext:
         with (
             patch.object(agent_runtime, "get_graph", AsyncMock(return_value=MagicMock())),
             patch.object(agent_runtime, "build_org_langchain_tools", AsyncMock(return_value=(org_tools, {"org_tool": object()}))),
-            patch.object(agent_runtime, "build_mcp_langchain_tools", AsyncMock(return_value=(mcp_tools, {"mcp__tool": object()}))),
-            patch("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=(marketplace_tools, {"acme/weather": object()}))),
+            patch.object(
+                agent_runtime, "build_mcp_langchain_tools", AsyncMock(return_value=(mcp_tools, {"mcp__tool": object()}))
+            ),
+            patch(
+                "marketplace.build_subscribed_marketplace_tools",
+                AsyncMock(return_value=(marketplace_tools, {"acme/weather": object()})),
+            ),
             patch("teardrop.agent_runtime.recall_memories", AsyncMock(return_value=[])),
             patch("teardrop.agent_runtime.resolve_llm_config", AsyncMock(return_value=None)),
             patch("teardrop.agent_runtime.get_org_by_id", AsyncMock(return_value=MagicMock(name="test-org"))),
@@ -99,7 +104,4 @@ class TestPrepareRunContext:
                 mem_settings=test_settings,
             )
 
-        assert any(
-            "tool_inventory org_id=org-1 webhook=1 mcp=1 marketplace=1 total=3" in rec.message
-            for rec in caplog.records
-        )
+        assert any("tool_inventory org_id=org-1 webhook=1 mcp=1 marketplace=1 total=3" in rec.message for rec in caplog.records)

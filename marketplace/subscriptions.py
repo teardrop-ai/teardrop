@@ -29,9 +29,7 @@ class SelfSubscribeError(ValueError):
     """Raised when an org tries to subscribe to its own published tool."""
 
     def __init__(self, qualified_tool_name: str) -> None:
-        super().__init__(
-            f"Cannot subscribe to your own published tool: {qualified_tool_name}"
-        )
+        super().__init__(f"Cannot subscribe to your own published tool: {qualified_tool_name}")
         self.qualified_tool_name = qualified_tool_name
 
 
