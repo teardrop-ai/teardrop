@@ -254,6 +254,16 @@ class Settings(BaseSettings):
         default=5,
         description="Per-IP rate limit for POST /register (requests per minute). Intentionally lower than auth.",
     )
+    auth_lockout_threshold: int = Field(
+        default=10,
+        ge=1,
+        description="Failed email-login attempts before temporary lockout for that email bucket.",
+    )
+    auth_lockout_window_seconds: int = Field(
+        default=900,
+        ge=60,
+        description="Window for tracking failed email-login attempts (seconds).",
+    )
     rate_limit_org_agent_rpm: int = Field(
         default=100,
         description=(
@@ -684,6 +694,18 @@ class Settings(BaseSettings):
     )
 
     # ── Email / Resend ────────────────────────────────────────────────────────
+    allow_public_registration: bool = Field(
+        default=True,
+        description="When False, POST /register is disabled and users must onboard via invite flow.",
+    )
+    turnstile_secret_key: str = Field(
+        default="",
+        description="Cloudflare Turnstile secret key for server-side CAPTCHA verification on registration.",
+    )
+    turnstile_verify_url: str = Field(
+        default="https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        description="Cloudflare Turnstile siteverify endpoint.",
+    )
     require_email_verification: bool = Field(
         default=False,
         description=(

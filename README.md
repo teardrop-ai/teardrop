@@ -247,6 +247,9 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `ORG_TOOL_ENCRYPTION_KEY` | Fernet key for encrypting webhook `auth_header_value` at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `LLM_CONFIG_ENCRYPTION_KEY` | Fernet key for encrypting BYOK API keys at rest (same format as above) |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` to require email verification before login (default: `false`) |
+| `ALLOW_PUBLIC_REGISTRATION` | `false` to disable `POST /register` and force invite-only onboarding (default: `true`) |
+| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret key for server-side CAPTCHA verification on `POST /register` (optional) |
+| `TURNSTILE_VERIFY_URL` | Turnstile siteverify URL (default: `https://challenges.cloudflare.com/turnstile/v0/siteverify`) |
 | `RESEND_API_KEY` | Resend API key for sending verification / invite emails |
 | `RESEND_FROM_EMAIL` | Sender address for transactional emails (e.g. `noreply@yourdomain.com`) |
 | `APP_BASE_URL` | Public URL of this deployment (used in email links, e.g. `https://api.teardrop.dev`) |
@@ -260,6 +263,8 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token validity window in days (default: `30`) |
 | `RATE_LIMIT_AUTH_RPM` | Per-IP rate limit for `/token` and `/auth/siwe/nonce` (default: `20`) |
 | `RATE_LIMIT_REGISTER_RPM` | Per-IP rate limit for `POST /register` (default: `5`) |
+| `AUTH_LOCKOUT_THRESHOLD` | Failed email-login attempts before temporary lockout (default: `10`) |
+| `AUTH_LOCKOUT_WINDOW_SECONDS` | Failed email-login lockout window in seconds (default: `900`) |
 | `RATE_LIMIT_AGENT_RPM` | Per-user rate limit for `/agent/run` (default: `30`) |
 | `RATE_LIMIT_ORG_AGENT_RPM` | Per-org aggregate rate limit for `/agent/run` (default: `100`) |
 | `RATE_LIMIT_ORG_MCP_RPM` | Per-org rate limit for MCP gateway (default: `200`) |
@@ -745,7 +750,7 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE); returns `access_token` + `refresh_token` |
 | `GET` | `/auth/me` | Bearer | Return the authenticated user's identity |
 | `GET` | `/auth/siwe/nonce` | — | Generate single-use SIWE nonce |
-| `POST` | `/register` | — | Self-serve org + user registration |
+| `POST` | `/register` | — | Self-serve org + user registration (optional invite-only + CAPTCHA gates) |
 | `GET` | `/auth/verify-email` | — | Consume one-time email verification token |
 | `POST` | `/auth/resend-verification` | Bearer | Re-send verification email |
 | `POST` | `/auth/refresh` | — | Exchange refresh token for new access + rotated refresh token |

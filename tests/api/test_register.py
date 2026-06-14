@@ -186,3 +186,65 @@ async def test_register_per_email_rate_limit_429(anon_client, monkeypatch):
         json={"org_name": "Org", "email": "alice@example.com", "password": "strongpass1"},
     )
     assert resp.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_register_disabled_when_public_registration_off(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.allow_public_registration", False)
+    create_org_user = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", create_org_user)
+
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Org", "email": "alice@example.com", "password": "strongpass1"},
+    )
+
+    assert resp.status_code == 403
+    create_org_user.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_register_turnstile_enabled_rejects_invalid_token(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.allow_public_registration", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.turnstile_secret_key", "ts_secret")
+    verify_turnstile = AsyncMock(return_value=False)
+    monkeypatch.setattr("teardrop.routers.auth.verify_turnstile", verify_turnstile)
+
+    resp = await anon_client.post(
+        "/register",
+        json={
+            "org_name": "Org",
+            "email": "alice@example.com",
+            "password": "strongpass1",
+            "captcha_token": "bad-token",
+        },
+    )
+
+    assert resp.status_code == 403
+    verify_turnstile.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_register_turnstile_enabled_accepts_valid_token(anon_client, monkeypatch):
+    org, user = _mock_org(), _mock_user()
+    monkeypatch.setattr("teardrop.routers.auth.settings.allow_public_registration", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.turnstile_secret_key", "ts_secret")
+    verify_turnstile = AsyncMock(return_value=True)
+    monkeypatch.setattr("teardrop.routers.auth.verify_turnstile", verify_turnstile)
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", AsyncMock(return_value=(org, user)))
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", AsyncMock(return_value="tok"))
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt"))
+
+    resp = await anon_client.post(
+        "/register",
+        json={
+            "org_name": "Org",
+            "email": "alice@example.com",
+            "password": "strongpass1",
+            "captcha_token": "cf-token",
+        },
+    )
+
+    assert resp.status_code == 201
+    verify_turnstile.assert_awaited_once()

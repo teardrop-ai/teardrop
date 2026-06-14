@@ -240,3 +240,69 @@ async def test_token_per_email_rate_limit_429(anon_client, monkeypatch):
         json={"email": "victim@example.com", "secret": "anypassword"},
     )
     assert resp.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_token_failed_login_lockout_429(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.rate_limit.check_auth_lockout", AsyncMock(return_value=(True, 42)))
+
+    resp = await anon_client.post(
+        "/token",
+        json={"email": "victim@example.com", "secret": "anypassword"},
+    )
+
+    assert resp.status_code == 429
+    assert resp.headers.get("Retry-After") == "42"
+
+
+@pytest.mark.anyio
+async def test_token_failed_login_records_auth_failure(anon_client, monkeypatch):
+    import teardrop.routers.auth as auth_router
+
+    monkeypatch.setattr("teardrop.rate_limit.check_auth_lockout", AsyncMock(return_value=(False, 0)))
+    record_auth_failure = AsyncMock(return_value=1)
+    monkeypatch.setattr("teardrop.rate_limit.record_auth_failure", record_auth_failure)
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=None))
+
+    resp = await anon_client.post(
+        "/token",
+        json={"email": "victim@example.com", "secret": "bad-password"},
+    )
+
+    assert resp.status_code == 401
+    record_auth_failure.assert_awaited_once_with(
+        "token:failed:victim@example.com",
+        auth_router.settings.auth_lockout_window_seconds,
+    )
+
+
+@pytest.mark.anyio
+async def test_token_success_clears_auth_failures(anon_client, monkeypatch):
+    from datetime import datetime, timezone
+
+    from teardrop.users import User
+
+    user = User(
+        id="user-123",
+        email="alice@example.com",
+        org_id="org-123",
+        hashed_secret="ignored",
+        salt="ignored",
+        role="user",
+        is_active=True,
+        created_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr("teardrop.rate_limit.check_auth_lockout", AsyncMock(return_value=(False, 0)))
+    clear_auth_failures = AsyncMock()
+    monkeypatch.setattr("teardrop.rate_limit.clear_auth_failures", clear_auth_failures)
+    monkeypatch.setattr("teardrop.routers.auth.get_user_by_email", AsyncMock(return_value=user))
+    monkeypatch.setattr("teardrop.routers.auth.verify_secret", lambda *a, **kw: True)
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt-test"))
+
+    resp = await anon_client.post(
+        "/token",
+        json={"email": "alice@example.com", "secret": "good"},
+    )
+
+    assert resp.status_code == 200
+    clear_auth_failures.assert_awaited_once_with("token:failed:alice@example.com")

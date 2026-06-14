@@ -23,6 +23,7 @@ import teardrop.rate_limit as app_module
 def _reset_rate_counters():
     """Clear the in-process rate counter dict between tests."""
     app_module._rate_counters.clear()
+    app_module._auth_fail_counters.clear()
 
 
 # ─── In-process fallback ─────────────────────────────────────────────────────
@@ -138,6 +139,57 @@ class TestRedisRateLimit:
             allowed, _, _ = await app_module._check_rate_limit("fallback:key", 10)
             assert allowed is True  # In-process fallback should work
         _reset_rate_counters()
+
+
+# ─── Failed auth lockout helpers ─────────────────────────────────────────────
+
+
+class TestAuthFailureLockout:
+    @pytest.fixture(autouse=True)
+    def _setup(self):
+        _reset_rate_counters()
+        yield
+        _reset_rate_counters()
+
+    async def test_inprocess_lockout_after_threshold(self):
+        with patch.object(app_module, "get_redis", return_value=None):
+            for _ in range(3):
+                await app_module.record_auth_failure("email:victim@example.com", 60)
+            locked, retry_after = await app_module.check_auth_lockout("email:victim@example.com", 3, 60)
+
+        assert locked is True
+        assert retry_after >= 1
+
+    async def test_inprocess_clear_auth_failures(self):
+        with patch.object(app_module, "get_redis", return_value=None):
+            await app_module.record_auth_failure("email:victim@example.com", 60)
+            await app_module.clear_auth_failures("email:victim@example.com")
+            locked, retry_after = await app_module.check_auth_lockout("email:victim@example.com", 1, 60)
+
+        assert locked is False
+        assert retry_after == 0
+
+    async def test_redis_lockout_uses_ttl(self):
+        mock_redis = MagicMock()
+        mock_redis.get = AsyncMock(return_value=b"7")
+        mock_redis.ttl = AsyncMock(return_value=45)
+
+        with patch.object(app_module, "get_redis", return_value=mock_redis):
+            locked, retry_after = await app_module.check_auth_lockout("email:victim@example.com", 5, 900)
+
+        assert locked is True
+        assert retry_after == 45
+
+    async def test_redis_record_auth_failure_sets_expiry(self):
+        mock_redis = MagicMock()
+        mock_redis.incr = AsyncMock(return_value=1)
+        mock_redis.expire = AsyncMock(return_value=True)
+
+        with patch.object(app_module, "get_redis", return_value=mock_redis):
+            count = await app_module.record_auth_failure("email:victim@example.com", 120)
+
+        assert count == 1
+        mock_redis.expire.assert_awaited_once_with("teardrop:authfail:email:victim@example.com", 120)
 
 
 # ─── Keying patterns ─────────────────────────────────────────────────────────

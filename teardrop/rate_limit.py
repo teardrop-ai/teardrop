@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 _rate_counters: dict[str, list[float]] = defaultdict(list)
 _RATE_COUNTER_MAX_KEYS = 10_000
+_auth_fail_counters: dict[str, tuple[int, float]] = {}
+_AUTH_FAIL_COUNTER_MAX_KEYS = 10_000
 
 # Named tuple for rate limit check results.
 RateLimitResult = tuple[bool, int, int]  # (allowed, remaining, reset_epoch)
@@ -102,3 +104,70 @@ async def _enforce_rate_limit(
         detail=detail,
         headers=headers,
     )
+
+
+async def record_auth_failure(key: str, window_seconds: int) -> int:
+    """Increment failed-auth counter and return the current count for *key*."""
+    now = time.time()
+
+    if (redis := get_redis()) is not None:
+        redis_key = f"teardrop:authfail:{key}"
+        try:
+            count = await redis.incr(redis_key)
+            if count == 1:
+                await redis.expire(redis_key, window_seconds)
+            return int(count)
+        except Exception as exc:
+            logger.warning("Redis auth-failure counter failed; falling back to in-process: %s", exc)
+
+    count, expires_at = _auth_fail_counters.get(key, (0, now + window_seconds))
+    if expires_at <= now:
+        count = 0
+        expires_at = now + window_seconds
+    count += 1
+    _auth_fail_counters[key] = (count, expires_at)
+    if len(_auth_fail_counters) > _AUTH_FAIL_COUNTER_MAX_KEYS:
+        oldest_key = next(iter(_auth_fail_counters))
+        del _auth_fail_counters[oldest_key]
+    return count
+
+
+async def check_auth_lockout(key: str, threshold: int, window_seconds: int) -> tuple[bool, int]:
+    """Return (locked, retry_after_seconds) for failed-auth lockout state."""
+    now = time.time()
+
+    if (redis := get_redis()) is not None:
+        redis_key = f"teardrop:authfail:{key}"
+        try:
+            raw_count = await redis.get(redis_key)
+            count = int(raw_count) if raw_count else 0
+            if count >= threshold:
+                ttl = await redis.ttl(redis_key)
+                retry_after = window_seconds if ttl is None or ttl <= 0 else int(ttl)
+                return True, max(1, retry_after)
+            return False, 0
+        except Exception as exc:
+            logger.warning("Redis auth-lockout check failed; falling back to in-process: %s", exc)
+
+    state = _auth_fail_counters.get(key)
+    if state is None:
+        return False, 0
+    count, expires_at = state
+    if expires_at <= now:
+        _auth_fail_counters.pop(key, None)
+        return False, 0
+    if count >= threshold:
+        return True, max(1, int(expires_at - now))
+    return False, 0
+
+
+async def clear_auth_failures(key: str) -> None:
+    """Clear failed-auth state for *key* after a successful login."""
+    if (redis := get_redis()) is not None:
+        redis_key = f"teardrop:authfail:{key}"
+        try:
+            await redis.delete(redis_key)
+            return
+        except Exception as exc:
+            logger.warning("Redis auth-failure clear failed; falling back to in-process: %s", exc)
+    _auth_fail_counters.pop(key, None)

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from shared.captcha import verify_turnstile
 from shared.email import send_invite_email, send_verification_email
 from teardrop import rate_limit as _rate_limit
 from teardrop.auth import create_access_token, require_auth
@@ -113,6 +114,20 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     # ── User-credentials flow ──────────────────────────────────────────────
     if body.email and body.secret:
         email_key = body.email.strip().lower()
+        lockout_key = f"token:failed:{email_key}"
+
+        locked, retry_after = await _rate_limit.check_auth_lockout(
+            lockout_key,
+            threshold=settings.auth_lockout_threshold,
+            window_seconds=settings.auth_lockout_window_seconds,
+        )
+        if locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Please try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
         email_allowed, _, _ = await _rate_limit._check_rate_limit(f"token:email:{email_key}", 5)
         if not email_allowed:
             raise HTTPException(
@@ -120,12 +135,14 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                 detail="Rate limit exceeded. Please slow down.",
                 headers={"Retry-After": "60"},
             )
-        user = await get_user_by_email(body.email)
+        user = await get_user_by_email(email_key)
         if user is None or not verify_secret(body.secret, user.hashed_secret, user.salt):
+            await _rate_limit.record_auth_failure(lockout_key, settings.auth_lockout_window_seconds)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid user credentials",
             )
+        await _rate_limit.clear_auth_failures(lockout_key)
         if settings.require_email_verification and not user.is_verified:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -229,6 +246,7 @@ class RegisterRequest(BaseModel):
     org_name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     password: str = Field(..., min_length=8, max_length=128)
+    captcha_token: str | None = Field(default=None, max_length=4096)
 
     @field_validator("email")
     @classmethod
@@ -255,6 +273,18 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     """
     client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(f"register:{client_ip}", settings.rate_limit_register_rpm)
+    if not settings.allow_public_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled. Please use an invite.",
+        )
+    if settings.turnstile_secret_key:
+        captcha_ok = await verify_turnstile(body.captcha_token, remote_ip=client_ip)
+        if not captcha_ok:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CAPTCHA verification failed.",
+            )
     email_allowed, _, _ = await _rate_limit._check_rate_limit(f"register:email:{body.email}", 3)
     if not email_allowed:
         raise HTTPException(
