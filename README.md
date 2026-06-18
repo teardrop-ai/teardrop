@@ -586,6 +586,8 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 
 The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace` and `endpoints.marketplace_catalog` so external A2A clients can discover the paid marketplace catalog without hard-coding Teardrop-specific URLs.
 
+The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers.
+
 ### How it works
 
 ```
@@ -721,9 +723,12 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 |--------|------|------|-------------|
 | `GET` | `/` | — | Redirects to `/docs` |
 | `GET` | `/health` | — | Liveness probe |
+| `GET` | `/llms.txt` | — | Root LLM-friendly discovery index for public Teardrop surfaces |
+| `GET` | `/robots.txt` | — | Public crawler directives with `llms.txt` pointer |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
+| `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
 | `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
 | `GET` | `/docs` | — | Swagger UI |
 | `GET` | `/redoc` | — | ReDoc UI |

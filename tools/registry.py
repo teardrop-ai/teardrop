@@ -148,6 +148,7 @@ class ToolRegistry:
         skills: list[dict[str, Any]] = []
         for tool in self.list_latest(include_deprecated=True):
             skill: dict[str, Any] = {
+                "id": tool.name,
                 "name": tool.name,
                 "description": tool.description,
                 "tags": tool.tags,

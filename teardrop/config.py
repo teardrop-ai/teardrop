@@ -722,6 +722,14 @@ class Settings(BaseSettings):
         default="",
         description="Public base URL (e.g. https://teardrop.dev) used to build email links",
     )
+    agent_card_icon_url: str = Field(
+        default="https://teardrop.dev/teardrop.png",
+        description="Optional public icon URL advertised in the Teardrop agent card.",
+    )
+    discovery_registry_urls: list[str] = Field(
+        default_factory=list,
+        description="Optional registry submission endpoints for discovery automation.",
+    )
 
     # ── Refresh Tokens ────────────────────────────────────────────────────────
     refresh_token_expire_days: int = Field(default=30, description="Refresh token validity window in days")

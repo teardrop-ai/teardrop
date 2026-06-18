@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from org_tools import list_marketplace_tools
 from teardrop._meta import APP_VERSION
@@ -21,6 +23,195 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+
+def _first_forwarded_value(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.split(",", 1)[0].strip()
+
+
+def _public_base_url(request: Request, current_settings) -> str:
+    configured = current_settings.app_base_url.strip().rstrip("/")
+    if configured:
+        return configured
+
+    forwarded_proto = _first_forwarded_value(request.headers.get("x-forwarded-proto"))
+    forwarded_host = _first_forwarded_value(request.headers.get("x-forwarded-host"))
+    scheme = forwarded_proto or request.url.scheme
+    host = forwarded_host or request.url.netloc
+    return f"{scheme}://{host}".rstrip("/")
+
+
+def _discovery_headers(*, cache_seconds: int, etag: str | None = None) -> dict[str, str]:
+    headers = {
+        "Cache-Control": f"public, max-age={cache_seconds}",
+        "Vary": "Host, X-Forwarded-Host, X-Forwarded-Proto",
+    }
+    if etag:
+        headers["ETag"] = etag
+    return headers
+
+
+def _build_weak_etag(content: Any) -> str:
+    serialized = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+    return f'W/"{APP_VERSION}-{digest}"'
+
+
+def _etag_matches(request: Request, etag: str) -> bool:
+    if_none_match = request.headers.get("if-none-match", "")
+    if not if_none_match:
+        return False
+    candidates = {item.strip() for item in if_none_match.split(",")}
+    return "*" in candidates or etag in candidates
+
+
+def _json_discovery_response(request: Request, content: dict[str, Any], *, cache_seconds: int = 300) -> Response:
+    etag = _build_weak_etag(content)
+    headers = _discovery_headers(cache_seconds=cache_seconds, etag=etag)
+    if _etag_matches(request, etag):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    return JSONResponse(content=content, headers=headers)
+
+
+def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
+    lines = [
+        "# Teardrop",
+        "",
+        (
+            "> Intelligence beyond the browser. Teardrop is a task-manager agent API with "
+            "AG-UI streaming, MCP tool discovery, and optional paid marketplace access."
+        ),
+        "",
+        "Use these public discovery surfaces before authenticating or invoking paid workflows.",
+        "",
+        "## Discovery",
+        f"- [Agent Card]({base_url}/.well-known/agent-card.json): Public Teardrop agent discovery manifest.",
+        f"- [Legacy Agent Card]({base_url}/.well-known/agent.json): Legacy alias for older crawlers.",
+        f"- [MCP Server Card]({base_url}/.well-known/mcp/server-card.json): Public MCP tool catalogue.",
+        f"- [Docs]({base_url}/docs): Interactive API documentation.",
+        "",
+        "## Pricing",
+        f"- [Billing Pricing]({base_url}/billing/pricing): Public pricing and payment metadata.",
+    ]
+    if marketplace_enabled:
+        lines.extend(
+            [
+                "",
+                "## Marketplace",
+                f"- [Marketplace Catalog]({base_url}/marketplace/catalog): Public paid MCP tool catalogue.",
+                f"- [Marketplace llms.txt]({base_url}/marketplace/llms.txt): LLM-friendly marketplace index.",
+            ]
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_agent_card_content(request: Request) -> dict[str, Any]:
+    card_settings = get_settings()
+    base_url = _public_base_url(request, card_settings)
+    security_requirements = [{"bearer_jwt": []}]
+    capabilities: dict[str, Any] = {
+        "streaming": True,
+        "pushNotifications": False,
+        "extendedAgentCard": False,
+        "a2ui": True,
+        "mcp_tools": True,
+        "multi_turn": True,
+        "human_in_the_loop": True,
+        "billing": {
+            "enabled": card_settings.billing_enabled,
+            "scheme": card_settings.x402_scheme,
+            "network": card_settings.x402_network,
+            "payment_endpoint": "/agent/run",
+            "pricing_endpoint": "/billing/pricing",
+            **(
+                {
+                    "max_amount": card_settings.x402_upto_max_amount,
+                }
+                if card_settings.x402_scheme == "upto"
+                else {}
+            ),
+        },
+    }
+    endpoints = {
+        "agent_run": "/agent/run",
+        "health": "/health",
+        "docs": "/docs",
+        "mcp_tools": "/tools/mcp",
+    }
+    if card_settings.marketplace_enabled:
+        capabilities["marketplace"] = {
+            "enabled": True,
+            "catalog_endpoint": "/marketplace/catalog",
+            "mcp_gateway_endpoint": endpoints["mcp_tools"],
+        }
+        endpoints["marketplace_catalog"] = "/marketplace/catalog"
+
+    card: dict[str, Any] = {
+        "schema_version": "1.0",
+        "protocolVersion": "1.0",
+        "name": "Teardrop",
+        "description": (
+            "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering."
+        ),
+        "version": APP_VERSION,
+        "url": base_url,
+        "provider": {
+            "organization": "Teardrop AI",
+            "url": base_url,
+        },
+        "documentationUrl": f"{base_url}/docs",
+        "supportedInterfaces": [
+            {
+                "url": f"{base_url}/agent/run",
+                "protocolBinding": "https://teardrop.ai/bindings/ag-ui-sse/v1",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "capabilities": capabilities,
+        "protocols": ["ag-ui", "a2a", "mcp"],
+        "endpoints": endpoints,
+        "defaultInputModes": ["text/plain", "application/json"],
+        "defaultOutputModes": ["text/plain", "application/json"],
+        "skills": [
+            {
+                "id": "task_planning",
+                "name": "task_planning",
+                "description": "Break complex tasks into actionable steps.",
+            },
+            *registry.to_a2a_skills(),
+            {
+                "id": "a2ui_rendering",
+                "name": "a2ui_rendering",
+                "description": "Declarative UI component generation (table, form, text, button, etc.).",
+            },
+        ],
+        "tools": registry.to_a2a_tool_list(),
+        "authentication": {
+            "required": True,
+            "scheme": "bearer",
+            "type": "jwt",
+            "token_endpoint": "/token",
+        },
+        "securitySchemes": {
+            "bearer_jwt": {
+                "httpAuthSecurityScheme": {
+                    "description": "JWT bearer token issued by Teardrop.",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT",
+                }
+            }
+        },
+        "security": security_requirements,
+        "securityRequirements": security_requirements,
+    }
+
+    icon_url = getattr(card_settings, "agent_card_icon_url", "").strip()
+    if icon_url:
+        card["iconUrl"] = icon_url
+    return card
 
 
 @router.get("/", include_in_schema=False)
@@ -105,79 +296,50 @@ async def jwks() -> JSONResponse:
 
 
 @router.get("/.well-known/agent-card.json", tags=["A2A"])
-async def agent_card() -> JSONResponse:
+async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
-    card_settings = get_settings()
-    capabilities: dict[str, Any] = {
-        "streaming": True,
-        "a2ui": True,
-        "mcp_tools": True,
-        "multi_turn": True,
-        "human_in_the_loop": True,
-        "billing": {
-            "enabled": card_settings.billing_enabled,
-            "scheme": card_settings.x402_scheme,
-            "network": card_settings.x402_network,
-            "payment_endpoint": "/agent/run",
-            "pricing_endpoint": "/billing/pricing",
-            **(
-                {
-                    "max_amount": card_settings.x402_upto_max_amount,
-                }
-                if card_settings.x402_scheme == "upto"
-                else {}
-            ),
-        },
-    }
-    endpoints = {
-        "agent_run": "/agent/run",
-        "health": "/health",
-        "docs": "/docs",
-        "mcp_tools": "/tools/mcp",
-    }
-    if card_settings.marketplace_enabled:
-        capabilities["marketplace"] = {
-            "enabled": True,
-            "catalog_endpoint": "/marketplace/catalog",
-            "mcp_gateway_endpoint": endpoints["mcp_tools"],
-        }
-        endpoints["marketplace_catalog"] = "/marketplace/catalog"
-    return JSONResponse(
-        content={
-            "schema_version": "1.0",
-            "name": "Teardrop",
-            "description": (
-                "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering."
-            ),
-            "version": APP_VERSION,
-            "url": f"http://{card_settings.app_host}:{card_settings.app_port}",
-            "capabilities": capabilities,
-            "protocols": ["ag-ui", "a2a", "mcp"],
-            "endpoints": endpoints,
-            "skills": [
-                {
-                    "name": "task_planning",
-                    "description": "Break complex tasks into actionable steps.",
-                },
-                *registry.to_a2a_skills(),
-                {
-                    "name": "a2ui_rendering",
-                    "description": "Declarative UI component generation (table, form, text, button, etc.).",  # noqa: E501
-                },
-            ],
-            "tools": registry.to_a2a_tool_list(),
-            "authentication": {
-                "required": True,
-                "scheme": "bearer",
-                "type": "jwt",
-                "token_endpoint": "/token",
-            },
-        }
+    return _json_discovery_response(request, _build_agent_card_content(request))
+
+
+@router.get("/.well-known/agent.json", include_in_schema=False, tags=["A2A"])
+async def legacy_agent_card(request: Request) -> Response:
+    """Legacy alias for older discovery clients that still probe agent.json."""
+    return _json_discovery_response(request, _build_agent_card_content(request))
+
+
+@router.get("/llms.txt", include_in_schema=False, tags=["System"])
+async def llms_txt(request: Request) -> Response:
+    """Root llms.txt manifest for LLM-friendly Teardrop discovery."""
+    current_settings = get_settings()
+    base_url = _public_base_url(request, current_settings)
+    return Response(
+        content=_build_llms_txt(base_url, marketplace_enabled=current_settings.marketplace_enabled),
+        media_type="text/plain; charset=utf-8",
+        headers=_discovery_headers(cache_seconds=3600),
+    )
+
+
+@router.get("/robots.txt", include_in_schema=False, tags=["System"])
+async def robots_txt(request: Request) -> Response:
+    """Crawler directives plus a pointer to the llms.txt manifest."""
+    base_url = _public_base_url(request, get_settings())
+    content = "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            f"# llms.txt: {base_url}/llms.txt",
+            "",
+        ]
+    )
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers=_discovery_headers(cache_seconds=3600),
     )
 
 
 @router.get("/.well-known/mcp/server-card.json", tags=["MCP"])
-async def mcp_server_card() -> JSONResponse:
+async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
     tools = [
         {
@@ -202,12 +364,13 @@ async def mcp_server_card() -> JSONResponse:
                 )
         except Exception:
             logger.debug("Failed to load marketplace tools for server card", exc_info=True)
-    return JSONResponse(
-        content={
+    return _json_discovery_response(
+        request,
+        {
             "serverInfo": {"name": "teardrop-tools", "version": APP_VERSION},
             "authentication": {"required": True, "schemes": ["bearer"]},
             "tools": tools,
             "resources": [],
             "prompts": [],
-        }
+        },
     )
