@@ -85,4 +85,4 @@ wheels/
 dmypy.json
 
 # Building
-prompts/
+/prompts/
