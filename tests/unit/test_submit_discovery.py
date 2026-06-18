@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -61,6 +65,24 @@ def test_validate_llms_txt_requires_title_and_links():
 
     assert any("H1" in error for error in errors)
     assert any("markdown link" in error for error in errors)
+
+
+def test_submit_discovery_help_works_from_outside_repo(tmp_path):
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "submit_discovery.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Validate Teardrop discovery surfaces" in result.stdout
 
 
 @pytest.mark.anyio
