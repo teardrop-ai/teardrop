@@ -137,6 +137,7 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
     }
     endpoints = {
         "agent_run": "/agent/run",
+        "a2a_message": "/message:send",
         "health": "/health",
         "docs": "/docs",
         "mcp_tools": "/tools/mcp",
@@ -168,7 +169,12 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
                 "url": f"{base_url}/agent/run",
                 "protocolBinding": "https://teardrop.ai/bindings/ag-ui-sse/v1",
                 "protocolVersion": "1.0",
-            }
+            },
+            {
+                "url": f"{base_url}/message:send",
+                "protocolBinding": "https://teardrop.ai/bindings/a2a-jsonrpc/v1",
+                "protocolVersion": "1.0",
+            },
         ],
         "capabilities": capabilities,
         "protocols": ["ag-ui", "a2a", "mcp"],

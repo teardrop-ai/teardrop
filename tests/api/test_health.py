@@ -38,8 +38,10 @@ async def test_agent_card_shape(api_client):
     assert "authentication" in body
     assert "securitySchemes" in body
     assert body["supportedInterfaces"][0]["url"] == "http://test/agent/run"
+    assert body["supportedInterfaces"][1]["url"] == "http://test/message:send"
     assert body["defaultInputModes"] == ["text/plain", "application/json"]
     assert all("id" in skill for skill in body["skills"])
+    assert body["endpoints"]["a2a_message"] == "/message:send"
     assert body["endpoints"]["mcp_tools"] == "/tools/mcp"
     assert body["capabilities"]["billing"]["pricing_endpoint"] == "/billing/pricing"
 
@@ -89,6 +91,7 @@ async def test_agent_card_prefers_app_base_url(api_client, test_settings):
     assert body["url"] == "https://api.teardrop.dev"
     assert body["documentationUrl"] == "https://api.teardrop.dev/docs"
     assert body["supportedInterfaces"][0]["url"] == "https://api.teardrop.dev/agent/run"
+    assert body["supportedInterfaces"][1]["url"] == "https://api.teardrop.dev/message:send"
 
 
 @pytest.mark.anyio

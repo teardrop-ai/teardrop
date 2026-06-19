@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import teardrop.config as config
@@ -14,16 +16,31 @@ from billing import BillingResult
 
 
 @pytest.fixture
-async def x402_client(test_settings, monkeypatch):
-    """Client with auth enabled + x402 enabled (no billing for simplicity)."""
-    monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
-    monkeypatch.setenv("MCP_X402_ENABLED", "true")
-    config.get_settings.cache_clear()
-    from teardrop.main import app
+def x402_client(test_settings, monkeypatch):
+    """Factory yielding a fresh mounted MCP app with x402 enabled."""
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
-    config.get_settings.cache_clear()
+    @asynccontextmanager
+    async def _client():
+        monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
+        monkeypatch.setenv("MCP_X402_ENABLED", "true")
+        config.get_settings.cache_clear()
+
+        from teardrop.mcp_gateway import MCPGatewayMiddleware
+        from tools.mcp_server import mcp
+
+        mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
+        mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+        mounted_app.add_middleware(MCPGatewayMiddleware)
+        mounted_app.mount("/tools/mcp", mounted_mcp_app)
+
+        try:
+            async with mounted_app.router.lifespan_context(mounted_app):
+                async with AsyncClient(transport=ASGITransport(app=mounted_app), base_url="http://test") as client:
+                    yield client
+        finally:
+            config.get_settings.cache_clear()
+
+    return _client
 
 
 def _tools_call_body(tool_name: str = "web_search", req_id: int = 1) -> str:
@@ -40,18 +57,19 @@ def _tools_call_body(tool_name: str = "web_search", req_id: int = 1) -> str:
 @pytest.mark.asyncio
 async def test_no_auth_no_payment_returns_402(x402_client):
     """No Bearer + no x402 payment header → 402 with accepts body."""
-    with (
-        patch(
-            "billing.build_402_response_body",
-            return_value={"error": "Payment required", "accepts": [], "x402Version": 2},
-        ),
-        patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
-    ):
-        resp = await x402_client.post(
-            "/tools/mcp",
-            content=_tools_call_body(),
-            headers={"Content-Type": "application/json"},
-        )
+    async with x402_client() as client:
+        with (
+            patch(
+                "billing.build_402_response_body",
+                return_value={"error": "Payment required", "accepts": [], "x402Version": 2},
+            ),
+            patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
+        ):
+            resp = await client.post(
+                "/tools/mcp",
+                content=_tools_call_body(),
+                headers={"Content-Type": "application/json"},
+            )
 
     assert resp.status_code == 402
     body = resp.json()
@@ -62,22 +80,23 @@ async def test_no_auth_no_payment_returns_402(x402_client):
 @pytest.mark.asyncio
 async def test_invalid_payment_returns_402(x402_client):
     """No Bearer + invalid x402 payment → 402 with error."""
-    with (
-        patch(
-            "billing.verify_payment",
-            new_callable=AsyncMock,
-            return_value=BillingResult(error="Malformed payment"),
-        ),
-        patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
-    ):
-        resp = await x402_client.post(
-            "/tools/mcp",
-            content=_tools_call_body(),
-            headers={
-                "Content-Type": "application/json",
-                "X-Payment": "bad-payment-data",
-            },
-        )
+    async with x402_client() as client:
+        with (
+            patch(
+                "billing.verify_payment",
+                new_callable=AsyncMock,
+                return_value=BillingResult(error="Malformed payment"),
+            ),
+            patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
+        ):
+            resp = await client.post(
+                "/tools/mcp",
+                content=_tools_call_body(),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Payment": "bad-payment-data",
+                },
+            )
 
     assert resp.status_code == 402
     body = resp.json()
@@ -87,19 +106,20 @@ async def test_invalid_payment_returns_402(x402_client):
 @pytest.mark.asyncio
 async def test_valid_payment_passes_through(x402_client):
     """No Bearer + valid x402 payment → request reaches FastMCP."""
-    with patch(
-        "billing.verify_payment",
-        new_callable=AsyncMock,
-        return_value=BillingResult(verified=True, billing_method="x402"),
-    ):
-        resp = await x402_client.post(
-            "/tools/mcp",
-            content=_tools_call_body(),
-            headers={
-                "Content-Type": "application/json",
-                "X-Payment": "valid-payment-data",
-            },
-        )
+    async with x402_client() as client:
+        with patch(
+            "billing.verify_payment",
+            new_callable=AsyncMock,
+            return_value=BillingResult(verified=True, billing_method="x402"),
+        ):
+            resp = await client.post(
+                "/tools/mcp",
+                content=_tools_call_body(),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Payment": "valid-payment-data",
+                },
+            )
 
     # Should NOT be 401 or 402 — request passed auth gate.
     assert resp.status_code not in (401, 402)
@@ -111,14 +131,21 @@ async def test_x402_disabled_returns_401(test_settings, monkeypatch):
     monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
     monkeypatch.setenv("MCP_X402_ENABLED", "false")
     config.get_settings.cache_clear()
-    from teardrop.main import app
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import mcp
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        resp = await c.post(
-            "/tools/mcp",
-            content=_tools_call_body(),
-            headers={"Content-Type": "application/json"},
-        )
+    mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
+    mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+    mounted_app.add_middleware(MCPGatewayMiddleware)
+    mounted_app.mount("/tools/mcp", mounted_mcp_app)
+
+    async with mounted_app.router.lifespan_context(mounted_app):
+        async with AsyncClient(transport=ASGITransport(app=mounted_app), base_url="http://test") as c:
+            resp = await c.post(
+                "/tools/mcp",
+                content=_tools_call_body(),
+                headers={"Content-Type": "application/json"},
+            )
 
     assert resp.status_code == 401
     config.get_settings.cache_clear()
@@ -127,15 +154,16 @@ async def test_x402_disabled_returns_401(test_settings, monkeypatch):
 @pytest.mark.asyncio
 async def test_bearer_present_skips_x402(x402_client, test_jwt_token):
     """When Bearer token is present, x402 path is never entered."""
-    with patch("billing.verify_payment", new_callable=AsyncMock) as mock_verify:
-        resp = await x402_client.post(
-            "/tools/mcp",
-            content=_tools_call_body(),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {test_jwt_token}",
-            },
-        )
+    async with x402_client() as client:
+        with patch("billing.verify_payment", new_callable=AsyncMock) as mock_verify:
+            resp = await client.post(
+                "/tools/mcp",
+                content=_tools_call_body(),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {test_jwt_token}",
+                },
+            )
 
     # verify_payment should not be called when Bearer auth succeeds.
     mock_verify.assert_not_called()

@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import teardrop.config as config
@@ -303,18 +305,33 @@ class TestPlatformToolSubscriptions:
 
 
 @pytest.fixture
-async def billing_client(test_settings, monkeypatch):
-    """Client with auth + billing + marketplace enabled."""
-    monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
-    monkeypatch.setenv("MCP_BILLING_ENABLED", "true")
-    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
-    monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
-    config.get_settings.cache_clear()
-    from teardrop.main import app
+def billing_client(test_settings, monkeypatch):
+    """Factory yielding a fresh mounted MCP app with marketplace billing enabled."""
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
-    config.get_settings.cache_clear()
+    @asynccontextmanager
+    async def _client():
+        monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
+        monkeypatch.setenv("MCP_BILLING_ENABLED", "true")
+        monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+        monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
+        config.get_settings.cache_clear()
+
+        from teardrop.mcp_gateway import MCPGatewayMiddleware
+        from tools.mcp_server import mcp
+
+        mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
+        mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+        mounted_app.add_middleware(MCPGatewayMiddleware)
+        mounted_app.mount("/tools/mcp", mounted_mcp_app)
+
+        try:
+            async with mounted_app.router.lifespan_context(mounted_app):
+                async with AsyncClient(transport=ASGITransport(app=mounted_app), base_url="http://test") as client:
+                    yield client
+        finally:
+            config.get_settings.cache_clear()
+
+    return _client
 
 
 class TestMCPBillingGatePlatformTools:
@@ -333,25 +350,26 @@ class TestMCPBillingGatePlatformTools:
             }
         )
 
-        with (
-            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
-            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
-            patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=2000),
-            patch(
-                "billing.verify_credit",
-                new_callable=AsyncMock,
-                return_value=MagicMock(verified=True, billing_method="credit", error=None),
-            ),
-            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
-        ):
-            resp = await billing_client.post(
-                "/tools/mcp",
-                content=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {test_jwt_token}",
-                },
-            )
+        async with billing_client() as client:
+            with (
+                patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+                patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+                patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=2000),
+                patch(
+                    "billing.verify_credit",
+                    new_callable=AsyncMock,
+                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
+                ),
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+            ):
+                resp = await client.post(
+                    "/tools/mcp",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {test_jwt_token}",
+                    },
+                )
 
         if resp.status_code == 200:
             mock_debit.assert_called_once_with("test-org-id", 2000, reason="mcp:get_token_price")
@@ -369,25 +387,26 @@ class TestMCPBillingGatePlatformTools:
             }
         )
 
-        with (
-            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
-            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
-            patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=None),
-            patch(
-                "billing.verify_credit",
-                new_callable=AsyncMock,
-                return_value=MagicMock(verified=True, billing_method="credit", error=None),
-            ),
-            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
-        ):
-            resp = await billing_client.post(
-                "/tools/mcp",
-                content=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {test_jwt_token}",
-                },
-            )
+        async with billing_client() as client:
+            with (
+                patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+                patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+                patch("marketplace.get_platform_tool_price", new_callable=AsyncMock, return_value=None),
+                patch(
+                    "billing.verify_credit",
+                    new_callable=AsyncMock,
+                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
+                ),
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+            ):
+                resp = await client.post(
+                    "/tools/mcp",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {test_jwt_token}",
+                    },
+                )
 
         if resp.status_code == 200:
             # Should use default cost (1000), not a platform price
@@ -660,31 +679,32 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
             }
         )
 
-        with (
-            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
-            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
-            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
-            patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
-            patch(
-                "billing.verify_credit",
-                new_callable=AsyncMock,
-                return_value=MagicMock(verified=True, billing_method="credit", error=None),
-            ),
-            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
-            patch(
-                "marketplace.get_marketplace_tool_by_name",
-                new_callable=AsyncMock,
-                return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-            ),
-        ):
-            resp = await billing_client.post(
-                "/tools/mcp",
-                content=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {test_jwt_token}",
-                },
-            )
+        async with billing_client() as client:
+            with (
+                patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+                patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+                patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+                patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
+                patch(
+                    "billing.verify_credit",
+                    new_callable=AsyncMock,
+                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
+                ),
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+                patch(
+                    "marketplace.get_marketplace_tool_by_name",
+                    new_callable=AsyncMock,
+                    return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
+                ),
+            ):
+                resp = await client.post(
+                    "/tools/mcp",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {test_jwt_token}",
+                    },
+                )
 
         if resp.status_code == 200:
             mock_debit.assert_called_once_with("test-org-id", 5000, reason="mcp:acme/weather")
@@ -699,31 +719,32 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
             }
         )
 
-        with (
-            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}),
-            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
-            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
-            patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
-            patch(
-                "billing.verify_credit",
-                new_callable=AsyncMock,
-                return_value=MagicMock(verified=True, billing_method="credit", error=None),
-            ) as mock_verify,
-            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True),
-            patch(
-                "marketplace.get_marketplace_tool_by_name",
-                new_callable=AsyncMock,
-                return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-            ),
-        ):
-            _ = await billing_client.post(
-                "/tools/mcp",
-                content=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {test_jwt_token}",
-                },
-            )
+        async with billing_client() as client:
+            with (
+                patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}),
+                patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+                patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+                patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
+                patch(
+                    "billing.verify_credit",
+                    new_callable=AsyncMock,
+                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
+                ) as mock_verify,
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True),
+                patch(
+                    "marketplace.get_marketplace_tool_by_name",
+                    new_callable=AsyncMock,
+                    return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
+                ),
+            ):
+                _ = await client.post(
+                    "/tools/mcp",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {test_jwt_token}",
+                    },
+                )
 
         mock_verify.assert_called_once_with("test-org-id", 9000)
 
