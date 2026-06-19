@@ -341,33 +341,45 @@ async def robots_txt(request: Request) -> Response:
 @router.get("/.well-known/mcp/server-card.json", tags=["MCP"])
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
-    tools = [
-        {
-            "name": t.name,
-            "description": t.description,
-            "inputSchema": t.input_schema.model_json_schema(),
-        }
-        for t in registry.list_latest()
-    ]
+    tools = registry.to_mcp_server_card_tools()
+
     # Include published marketplace tools
     s = get_settings()
     if s.marketplace_enabled:
         try:
             mp_tools = await list_marketplace_tools()
             for mt in mp_tools:
-                tools.append(
-                    {
-                        "name": mt.name,
-                        "description": mt.marketplace_description or mt.description,
-                        "inputSchema": mt.input_schema,
-                    }
-                )
+                mt_entry: dict[str, Any] = {
+                    "name": mt.name,
+                    "title": mt.name.replace("_", " ").title(),
+                    "description": mt.marketplace_description or mt.description,
+                    "inputSchema": mt.input_schema,
+                    "annotations": {"openWorldHint": True},
+                }
+                if mt.output_schema is not None:
+                    mt_entry["outputSchema"] = mt.output_schema
+                tools.append(mt_entry)
         except Exception:
             logger.debug("Failed to load marketplace tools for server card", exc_info=True)
+
+    server_info: dict[str, Any] = {
+        "name": "teardrop-tools",
+        "title": "Teardrop",
+        "description": (
+            "Intelligence beyond the browser. "
+            "Teardrop is a task-manager agent API with AG-UI streaming, "
+            "MCP tool discovery, and optional paid marketplace access."
+        ),
+        "version": APP_VERSION,
+        "websiteUrl": _public_base_url(request, s),
+    }
+    if s.agent_card_icon_url:
+        server_info["icons"] = [{"src": s.agent_card_icon_url}]
+
     return _json_discovery_response(
         request,
         {
-            "serverInfo": {"name": "teardrop-tools", "version": APP_VERSION},
+            "serverInfo": server_info,
             "authentication": {"required": True, "schemes": ["bearer"]},
             "tools": tools,
             "resources": [],

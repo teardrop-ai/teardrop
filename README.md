@@ -715,6 +715,27 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 
 ---
 
+## Publishing to Smithery
+
+Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-card.json`. To distribute on Smithery:
+
+1. Copy the public base URL of your Teardrop instance into the Smithery **URL Deployment** wizard.
+2. Provide the following **Configuration Schema (JSON)** inside the Smithery CLI or publish wizard to expose x402 anonymous capability:
+   ```json
+   {
+     "type": "object",
+     "properties": {
+       "apiKey": {
+         "type": "string",
+         "title": "API Key",
+         "x-from": { "header": "x-teardrop-key" },
+         "x-to": { "header": "Authorization" }
+       }
+     }
+   }
+   ```
+3. Set the Display Name, Description, Homepage, and Icon within the Smithery dashboard to achieve the maximum 100/100 quality score.
+
 ## API reference
 
 ### Core
@@ -728,6 +749,7 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
+| `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
 | `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
 | `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
 | `GET` | `/docs` | — | Swagger UI |

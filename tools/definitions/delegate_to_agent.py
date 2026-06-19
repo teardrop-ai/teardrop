@@ -309,5 +309,10 @@ TOOL = ToolDefinition(
     tags=["a2a", "delegation", "agent"],
     input_schema=DelegateToAgentInput,
     output_schema=DelegateToAgentOutput,
+    annotations={
+        "readOnlyHint": False,
+        "openWorldHint": True,
+        "idempotentHint": False,
+    },
     implementation=delegate_to_agent,
 )

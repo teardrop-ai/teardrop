@@ -128,12 +128,27 @@ async def test_agent_card_headers_and_legacy_alias(api_client):
 
 
 @pytest.mark.anyio
-async def test_mcp_server_card_headers(api_client):
+async def test_mcp_server_card(api_client, test_settings):
+    test_settings.agent_card_icon_url = "https://example.com/icon.png"
     resp = await api_client.get("/.well-known/mcp/server-card.json")
 
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "public, max-age=300"
     assert "etag" in resp.headers
+
+    body = resp.json()
+    assert body["serverInfo"]["title"] == "Teardrop"
+    assert body["serverInfo"]["websiteUrl"] == "http://test"
+    assert body["serverInfo"]["icons"] == [{"src": "https://example.com/icon.png"}]
+
+    # Check that tools have outputSchema, annotations, title
+    tools = body["tools"]
+    assert len(tools) > 0
+    t = tools[0]
+    assert "title" in t
+    assert "inputSchema" in t
+    assert "outputSchema" in t
+    assert "annotations" in t
 
 
 @pytest.mark.anyio

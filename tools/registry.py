@@ -30,6 +30,7 @@ class ToolDefinition(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
     input_schema: Any = Field(..., description="Pydantic BaseModel class for input validation")
     output_schema: Any = Field(default=None, description="Optional Pydantic BaseModel class for output validation")
+    annotations: dict[str, Any] | None = Field(default=None, description="Optional MCP tool annotations (readOnlyHint, etc.)")
     timeout_seconds: float | None = Field(default=None, description="Optional per-call timeout override")
     max_calls_per_run: int | None = Field(default=None, description="Optional per-run call cap")
     implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
@@ -183,6 +184,26 @@ class ToolRegistry:
         return tools
 
     # ── Export: MCP ───────────────────────────────────────────────────────────
+
+    def to_mcp_server_card_tools(self) -> list[dict[str, Any]]:
+        """Generate the tools array for the static .well-known/mcp/server-card.json."""
+        tools: list[dict[str, Any]] = []
+        for tool in self.list_latest():
+            title = tool.name.replace("_", " ").title()
+            entry: dict[str, Any] = {
+                "name": tool.name,
+                "title": title,
+                "description": tool.description,
+                "inputSchema": tool.input_schema.model_json_schema(),
+                "annotations": tool.annotations or {"readOnlyHint": True},
+            }
+            if tool.output_schema is not None:
+                if isinstance(tool.output_schema, dict):
+                    entry["outputSchema"] = tool.output_schema
+                else:
+                    entry["outputSchema"] = tool.output_schema.model_json_schema()
+            tools.append(entry)
+        return tools
 
     def to_mcp_tool_defs(self) -> list[dict[str, Any]]:
         """Return metadata dicts suitable for dynamic MCP tool registration."""
