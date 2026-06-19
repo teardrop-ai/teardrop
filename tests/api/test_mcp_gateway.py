@@ -143,3 +143,34 @@ async def test_non_mcp_path_not_intercepted(mcp_client):
     resp = await mcp_client.get("/health")
     # /health should work without auth regardless of mcp_auth_enabled.
     assert resp.status_code in (200, 503)  # ok or degraded (no DB in tests)
+
+
+@pytest.mark.asyncio
+async def test_smitherybot_discovery_bypass_success(mcp_client):
+    """POST /tools/mcp with SmitheryBot User-Agent and handshake methods bypasses auth."""
+    resp = await mcp_client.post(
+        "/tools/mcp",
+        content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "SmitheryBot/1.0 (+https://smithery.ai)",
+        },
+    )
+    # Bypasses 401/402 gate completely and hits FastMCP layer (not 401/402)
+    assert resp.status_code != 401
+    assert resp.status_code != 402
+
+
+@pytest.mark.asyncio
+async def test_smitherybot_execution_blocked(mcp_client):
+    """POST /tools/mcp with SmitheryBot User-Agent requesting tools/call is STILL blocked."""
+    resp = await mcp_client.post(
+        "/tools/mcp",
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "SmitheryBot/1.0 (+https://smithery.ai)",
+        },
+    )
+    # Execution is not bypassed, so it gets blocked by Phase 1 auth (401)
+    assert resp.status_code == 401

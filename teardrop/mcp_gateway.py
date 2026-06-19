@@ -42,6 +42,31 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         settings = get_settings()
 
+        # ── Check for Smithery Bot Handshake (Safe Schema Scanning) ──────────────────
+        user_agent = request.headers.get("user-agent", "") or ""
+        is_smithery_discovery = False
+        if "smitherybot" in user_agent.lower():
+            if request.method == "POST":
+                try:
+                    # Sniff JSON-RPC method safely; Starlette caches body in request._body
+                    body = await request.body()
+                    if body:
+                        data = json.loads(body)
+                        method = data.get("method", "")
+                        # Allow handshake/listing methods only. Execution (tools/call) is strictly BLOCKED.
+                        if method in ("initialize", "tools/list", "resources/list", "prompts/list"):
+                            is_smithery_discovery = True
+                except Exception:
+                    pass
+            else:
+                # SSE/GET connection init channels for scanning
+                is_smithery_discovery = True
+
+        if is_smithery_discovery:
+            request.state.mcp_org_id = None
+            request.state.mcp_auth_method = ""
+            return await call_next(request)
+
         # ── Phase 1: JWT auth (or x402 fallback) ──────────────────────────
         auth_response = await self._authenticate(request, settings)
         if auth_response is not None:
