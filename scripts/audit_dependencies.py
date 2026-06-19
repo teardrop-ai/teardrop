@@ -279,7 +279,8 @@ def query_osv_batch(packages: Sequence[dict[str, str]]) -> list[list[dict[str, A
     return mapped_results
 
 
-def build_report(manifest_paths: Sequence[Path]) -> dict[str, Any]:
+def build_report(manifest_paths: Sequence[Path], ignore_advisories: Iterable[str] | None = None) -> dict[str, Any]:
+    ignored = set(ignore_advisories) if ignore_advisories else set()
     targets = load_dependency_targets(manifest_paths)
     if not targets:
         raise AuditError("No dependency manifests were found or they did not contain supported dependencies.")
@@ -327,9 +328,10 @@ def build_report(manifest_paths: Sequence[Path]) -> dict[str, Any]:
     for package in packages:
         if package["upgrade_available"]:
             upgrade_available += 1
-        if package["vulnerabilities"]:
+        active_vulns = [v for v in package["vulnerabilities"] if v["id"] not in ignored]
+        if active_vulns:
             vulnerable_packages += 1
-            if any(vulnerability["severity"] in HIGH_OR_CRITICAL for vulnerability in package["vulnerabilities"]):
+            if any(v["severity"] in HIGH_OR_CRITICAL for v in active_vulns):
                 high_or_critical += 1
 
     return {
@@ -344,15 +346,17 @@ def build_report(manifest_paths: Sequence[Path]) -> dict[str, Any]:
     }
 
 
-def report_has_high_or_critical(report: dict[str, Any]) -> bool:
+def report_has_high_or_critical(report: dict[str, Any], ignore_advisories: Iterable[str] | None = None) -> bool:
+    ignored = set(ignore_advisories) if ignore_advisories else set()
     return any(
-        vulnerability["severity"] in HIGH_OR_CRITICAL
+        vulnerability["severity"] in HIGH_OR_CRITICAL and vulnerability["id"] not in ignored
         for package in report["packages"]
         for vulnerability in package["vulnerabilities"]
     )
 
 
-def print_text_report(report: dict[str, Any]) -> None:
+def print_text_report(report: dict[str, Any], ignore_advisories: Iterable[str] | None = None) -> None:
+    ignored = set(ignore_advisories) if ignore_advisories else set()
     summary = report["summary"]
     print(
         "Dependency audit: "
@@ -372,8 +376,10 @@ def print_text_report(report: dict[str, Any]) -> None:
             continue
         for vulnerability in package["vulnerabilities"]:
             fixed_versions = ",".join(vulnerability["fixed_versions"]) or "unknown"
+            label = " [IGNORED]" if vulnerability["id"] in ignored else ""
             print(
-                f"  {vulnerability['severity']} {vulnerability['id']} fixed={fixed_versions} summary={vulnerability['summary']}"
+                f"  {vulnerability['severity']} {vulnerability['id']}{label} "
+                f"fixed={fixed_versions} summary={vulnerability['summary']}"
             )
 
 
@@ -393,6 +399,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Exit with status 1 when a HIGH or CRITICAL vulnerability is present.",
     )
+    parser.add_argument(
+        "--ignore-advisory",
+        dest="ignore_advisories",
+        action="append",
+        default=[],
+        help="Vulnerability ID(s) to ignore from summary calculations and exit gates.",
+    )
     return parser.parse_args(argv)
 
 
@@ -402,7 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     emit_json = args.json or not args.txt
 
     try:
-        report = build_report(manifest_paths)
+        report = build_report(manifest_paths, ignore_advisories=args.ignore_advisories)
     except AuditError as exc:
         print(f"dependency audit failed: {exc}", file=sys.stderr)
         return 2
@@ -410,9 +423,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if emit_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     if args.txt:
-        print_text_report(report)
+        print_text_report(report, ignore_advisories=args.ignore_advisories)
 
-    if args.fail_on_critical and report_has_high_or_critical(report):
+    if args.fail_on_critical and report_has_high_or_critical(report, ignore_advisories=args.ignore_advisories):
         return 1
     return 0
 

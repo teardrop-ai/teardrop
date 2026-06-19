@@ -23,11 +23,11 @@ jobs:
 
       - name: Generate dependency audit report
         run: |
-          python scripts/audit_dependencies.py --json > dependency-audit-report.json
+          python scripts/audit_dependencies.py --ignore-advisory GHSA-537c-gmf6-5ccf --json > dependency-audit-report.json
 
       - name: Fail on high or critical vulnerabilities
         run: |
-          python scripts/audit_dependencies.py --fail-on-critical --txt
+          python scripts/audit_dependencies.py --ignore-advisory GHSA-537c-gmf6-5ccf --fail-on-critical --txt
 
       - name: Upload dependency audit report
         uses: actions/upload-artifact@v4

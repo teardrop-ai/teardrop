@@ -206,12 +206,64 @@ def test_main_returns_expected_exit_codes(monkeypatch, capsys):
             }
         ],
     }
-    monkeypatch.setattr(audit, "build_report", lambda manifests: high_report)
+    monkeypatch.setattr(audit, "build_report", lambda manifests, ignore_advisories=None: high_report)
 
     assert audit.main(["--txt", "--fail-on-critical"]) == 1
     assert "Dependency audit: 1 packages" in capsys.readouterr().out
 
-    monkeypatch.setattr(audit, "build_report", lambda manifests: (_ for _ in ()).throw(audit.AuditError("broken")))
+    def fail_build(_manifests, ignore_advisories=None):
+        raise audit.AuditError("broken")
+
+    monkeypatch.setattr(audit, "build_report", fail_build)
 
     assert audit.main(["--json"]) == 2
     assert "dependency audit failed: broken" in capsys.readouterr().err
+
+
+def test_main_with_ignore_advisory_bypasses_failure(monkeypatch, capsys):
+    high_report_template = {
+        "packages": [
+            {
+                "name": "x402",
+                "installed": "2.8.0",
+                "distribution": "x402",
+                "latest": "2.8.3",
+                "upgrade_available": True,
+                "latest_changelog_url": "https://example.com/x402/releases",
+                "sources": ["requirements.txt"],
+                "metadata_error": None,
+                "vulnerabilities": [
+                    {
+                        "id": "OSV-2026-1",
+                        "summary": "Permit validation bypass.",
+                        "severity": "HIGH",
+                        "aliases": [],
+                        "fixed_versions": ["2.8.3"],
+                        "reference_urls": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    # Simulate dynamic behavior of build_report which filters out high_or_critical counts if ignored
+    def fake_build_report(manifests, ignore_advisories=None):
+        ignored = set(ignore_advisories or [])
+        high_cnt = 0 if "OSV-2026-1" in ignored else 1
+        return {
+            "summary": {
+                "total_packages": 1,
+                "upgrade_available": 1,
+                "vulnerable_packages": 1,
+                "high_or_critical_packages": high_cnt,
+            },
+            **high_report_template,
+        }
+
+    monkeypatch.setattr(audit, "build_report", fake_build_report)
+
+    # When ignored, exit status should be 0 because we ignore the HIGH advisory
+    assert audit.main(["--txt", "--fail-on-critical", "--ignore-advisory", "OSV-2026-1"]) == 0
+    out = capsys.readouterr().out
+    assert "OSV-2026-1 [IGNORED]" in out
+    assert "0 high/critical." in out
