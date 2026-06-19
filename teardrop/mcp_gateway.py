@@ -36,6 +36,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
     """Auth + billing + x402 gateway for the MCP endpoint."""
 
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        # FastMCP is mounted at /tools/mcp and serves its root at "/".
+        # Normalizing the bare mount path avoids FastAPI falling through to
+        # /tools/{tool_id} and returning a method-mismatch 405.
+        if request.scope.get("path") == _MCP_PREFIX:
+            request.scope["path"] = f"{_MCP_PREFIX}/"
+            request.scope["raw_path"] = f"{_MCP_PREFIX}/".encode("utf-8")
+
         # Only intercept MCP requests.
         if not request.url.path.startswith(_MCP_PREFIX):
             return await call_next(request)

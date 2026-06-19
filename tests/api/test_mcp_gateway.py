@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import teardrop.config as config  # ── JWKS endpoint ─────────────────────────────────────────────────────────────
@@ -154,9 +155,7 @@ async def test_mcp_app_real_handshake():
         # We test FastMCP's ASGI app directly here because testing it through proxy
         # requires the full FastAPI DB-connected lifespan.
         async with AsyncClient(
-            transport=ASGITransport(app=mcp_app),
-            base_url="http://test",
-            headers={"Accept": "application/json"}
+            transport=ASGITransport(app=mcp_app), base_url="http://test", headers={"Accept": "application/json"}
         ) as c:
             resp = await c.post(
                 "/",
@@ -187,19 +186,57 @@ async def test_mcp_app_real_handshake():
             assert "tools" in list_data["result"]
             assert len(list_data["result"]["tools"]) > 0
 
+
+@pytest.mark.asyncio
+async def test_mounted_mcp_normalizes_no_slash_path():
+    """POST /tools/mcp should hit the mounted FastMCP app, not /tools/{tool_id}."""
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import mcp
+
+    mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
+    mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+    mounted_app.add_middleware(MCPGatewayMiddleware)
+    mounted_app.mount("/tools/mcp", mounted_mcp_app)
+
+    async with mounted_app.router.lifespan_context(mounted_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=mounted_app),
+            base_url="http://test",
+            headers={"Accept": "application/json"},
+        ) as c:
+            resp = await c.post(
+                "/tools/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1.0"},
+                    },
+                },
+            )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["result"]["serverInfo"]["name"] == "teardrop-tools"
+
+
 @pytest.mark.asyncio
 async def test_public_discovery_bypass_success(mcp_client):
-    """POST /tools/mcp/ with initialize method bypasses auth for all clients."""
+    """POST /tools/mcp with initialize method bypasses auth for all clients."""
     resp = await mcp_client.post(
-        "/tools/mcp/",
+        "/tools/mcp",
         content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
         headers={
             "Content-Type": "application/json",
             "User-Agent": "RandomClient/1.0",
         },
     )
-    # Bypasses 401/402 gate completely. FastMCP might return 500 because lifespan isn't run in ASGITransport
-    assert resp.status_code not in (401, 402)
+    # Bypasses 401/402 gate completely and should not fall through to 405.
+    # ASGITransport still skips the full app lifespan, so a 500 is acceptable here.
+    assert resp.status_code not in (401, 402, 405)
 
 
 @pytest.mark.asyncio
