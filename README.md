@@ -15,6 +15,8 @@ Agents can securely delegate tasks to other agents via the `delegate_to_agent` t
 
 **Environment variables:**
 ```
+A2A_INBOUND_ENABLED=true                         # Enable public inbound POST /message:send
+A2A_INBOUND_TIMEOUT_SECONDS=60                  # Agent execution timeout for inbound A2A calls
 A2A_DELEGATION_ENABLED=true                      # Enable agent-to-agent delegation
 A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: true)
 A2A_DELEGATION_MAX_PER_RUN=3                     # Max delegations per run (default: 3)
@@ -270,12 +272,13 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `RATE_LIMIT_ORG_MCP_RPM` | Per-org rate limit for MCP gateway (default: `200`) |
 | `RATE_LIMIT_WEBHOOK_RPM` | Per-IP rate limit for Stripe webhook (default: `120`) |
 | `RATE_LIMIT_TEST_WEBHOOK_RPM` | Per-org rate limit for test-webhook endpoint (default: `10`) |
+| `TRUSTED_PROXY_COUNT` | Trusted proxy hops when deriving client IP from `X-Forwarded-For` (default: `1`; set `0` to ignore the header) |
 
 ---
 
 ## Authentication
 
-Teardrop issues RS256 JWTs. All endpoints (except `/health`, `/docs`, `/billing/pricing`, `/.well-known/agent-card.json`, and the public payment-gated `POST /message:send` A2A endpoint) require a `Bearer` token.
+Teardrop issues RS256 JWTs. All endpoints (except `/health`, `/docs`, `/billing/pricing`, `/.well-known/agent-card.json`, and the public payment-gated `POST /message:send` A2A endpoint when `A2A_INBOUND_ENABLED=true`) require a `Bearer` token.
 
 ### 1. Client credentials (machine-to-machine)
 
@@ -595,6 +598,7 @@ External agents can call Teardrop directly over `POST /message:send`.
 - Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response.
 - Authenticated callers may present a Teardrop JWT and reuse the existing credit/x402 billing gate.
 - The current implementation is a single-turn blocking endpoint: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
+- Operators may disable the surface with `A2A_INBOUND_ENABLED=false`; the endpoint then returns `404` and the public agent card stops advertising `a2a_message`.
 
 ### How it works
 
@@ -755,7 +759,7 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
 | `GET` | `/llms.txt` | — | Root LLM-friendly discovery index for public Teardrop surfaces |
 | `GET` | `/robots.txt` | — | Public crawler directives with `llms.txt` pointer |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
-| `POST` | `/message:send` | Bearer or x402 | Blocking inbound A2A endpoint for external agents |
+| `POST` | `/message:send` | Bearer or x402 | Blocking inbound A2A endpoint for external agents (when enabled) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
 | `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
@@ -1208,6 +1212,7 @@ migrations/
 shared/             # Internal shared utilities: db pool registry, audit inserts, webhook caller
 scripts/
   generate_keys.py  # Generate RSA keypair → keys/private.pem + keys/public.pem
+  audit_dependencies.py  # Review direct Python dependencies for OSV vulnerabilities and upgrade drift
   init_neon.py      # Initialize Neon Postgres schema
   seed_users.py     # Create default org + admin user for local dev
 ```

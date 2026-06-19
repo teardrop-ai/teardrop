@@ -75,6 +75,25 @@ async def test_agent_card_omits_marketplace_when_disabled(api_client, test_setti
 
 
 @pytest.mark.anyio
+async def test_agent_card_omits_inbound_a2a_when_disabled(api_client, test_settings):
+    test_settings.a2a_inbound_enabled = False
+
+    resp = await api_client.get("/.well-known/agent-card.json")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["supportedInterfaces"] == [
+        {
+            "url": "http://test/agent/run",
+            "protocolBinding": "https://teardrop.ai/bindings/ag-ui-sse/v1",
+            "protocolVersion": "1.0",
+        }
+    ]
+    assert "a2a_message" not in body["endpoints"]
+    assert body["protocols"] == ["ag-ui", "mcp"]
+
+
+@pytest.mark.anyio
 async def test_agent_card_prefers_app_base_url(api_client, test_settings):
     test_settings.app_base_url = "https://api.teardrop.dev"
 
@@ -141,7 +160,7 @@ async def test_mcp_server_card(api_client, test_settings):
 
     body = resp.json()
     assert body["title"] == "Teardrop"
-    assert body["description"].startswith("Intelligence beyond the browser.")
+    assert body["description"].startswith("The native infrastructure layer")
     assert body["homepage"] == "http://test"
     assert body["documentationUrl"] == "http://test/docs"
     assert body["iconUrl"] == "https://example.com/icon.png"

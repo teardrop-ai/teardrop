@@ -28,6 +28,7 @@ from billing import BillingResult, build_402_headers, build_402_response_body, g
 from billing.context import _get_pool
 from marketplace import record_marketplace_tool_usage_many
 from shared.audit import insert_event_row
+from shared.request_ip import client_ip_from_request
 from teardrop.a2a_client import A2AArtifact, A2AMessage, A2APart, A2ATask, A2ATaskStatus
 from teardrop.agent_event_loop import _coerce_stream_text
 from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot
@@ -102,12 +103,7 @@ def _parse_auth_payload(request: Request) -> dict[str, Any] | None:
 
 
 def _request_client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return ""
+    return client_ip_from_request(request, trusted_proxy_count=settings.trusted_proxy_count)
 
 
 async def _enforce_anonymous_rate_limit(request: Request) -> None:
@@ -207,6 +203,19 @@ def _payment_caller_address(billing: BillingResult) -> str:
     return str(payer).strip()
 
 
+def _usage_identity(
+    *,
+    payload: dict[str, Any] | None,
+    billing: BillingResult,
+    user_id: str,
+    org_id: str,
+    run_id: str,
+) -> tuple[str, str]:
+    if payload is None:
+        return _anonymous_usage_identity(billing, run_id)
+    return user_id, org_id
+
+
 def _response_error_text(response: JSONResponse) -> str:
     try:
         payload = json.loads(response.body.decode("utf-8"))
@@ -266,6 +275,58 @@ async def _record_inbound_event(
         logger.warning("Failed to record inbound A2A audit event run_id=%s", run_id, exc_info=True)
 
 
+async def _record_failure_usage_event(
+    *,
+    graph: Any,
+    config: dict[str, Any],
+    run_id: str,
+    scoped_thread_id: str,
+    payload: dict[str, Any] | None,
+    billing: BillingResult,
+    user_id: str,
+    org_id: str,
+    duration_ms: int,
+    llm_config: dict[str, Any] | None,
+    platform_fee: int,
+) -> UsageEvent:
+    _, usage_data = await fetch_usage_snapshot(
+        graph=graph,
+        config=config,
+        run_id=run_id,
+        settings=settings,
+    )
+    usage_user_id, usage_org_id = _usage_identity(
+        payload=payload,
+        billing=billing,
+        user_id=user_id,
+        org_id=org_id,
+        run_id=run_id,
+    )
+    usage_event = UsageEvent(
+        user_id=usage_user_id,
+        org_id=usage_org_id,
+        thread_id=scoped_thread_id,
+        run_id=run_id,
+        tokens_in=usage_data.get("tokens_in", 0),
+        tokens_out=usage_data.get("tokens_out", 0),
+        cache_read_tokens=usage_data.get("cache_read_tokens", 0),
+        cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
+        tool_calls=usage_data.get("tool_calls", 0),
+        tool_names=usage_data.get("tool_names", []),
+        billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
+        billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
+        failed_tool_calls=usage_data.get("failed_tool_calls", 0),
+        failed_tool_names=usage_data.get("failed_tool_names", []),
+        duration_ms=duration_ms,
+        cost_usdc=0,
+        platform_fee_usdc=0 if platform_fee > 0 else 0,
+        provider=llm_config["provider"] if llm_config else settings.agent_provider,
+        model=llm_config["model"] if llm_config else settings.agent_model,
+    )
+    await record_usage_event(usage_event)
+    return usage_event
+
+
 def _build_task_response(
     *,
     request_body: A2ASendMessageRequest,
@@ -292,6 +353,12 @@ def _build_task_response(
 @router.post("/message:send", tags=["A2A"])
 async def message_send(request: Request) -> JSONResponse:
     """Blocking inbound A2A endpoint for external agent callers."""
+    if not settings.a2a_inbound_enabled:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "A2A inbound endpoint disabled"},
+        )
+
     try:
         raw_body = await request.json()
     except json.JSONDecodeError:
@@ -492,13 +559,27 @@ async def message_send(request: Request) -> JSONResponse:
     try:
         invoke_result = await asyncio.wait_for(
             graph.ainvoke(initial_state, config),
-            timeout=float(settings.a2a_delegation_timeout_seconds),
+            timeout=float(settings.a2a_inbound_timeout_seconds),
         )
     except asyncio.TimeoutError:
         logger.warning("a2a inbound execution timed out run_id=%s", run_id)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        usage_event = await _record_failure_usage_event(
+            graph=graph,
+            config=config,
+            run_id=run_id,
+            scoped_thread_id=scoped_thread_id,
+            payload=payload,
+            billing=billing,
+            user_id=user_id,
+            org_id=org_id,
+            duration_ms=duration_ms,
+            llm_config=llm_config,
+            platform_fee=platform_fee,
+        )
         await _record_inbound_event(
             run_id=run_id,
-            usage_event_id=None,
+            usage_event_id=usage_event.id,
             caller_org_id=caller_org_id,
             caller_user_id=caller_user_id,
             caller_address=_payment_caller_address(billing),
@@ -510,7 +591,7 @@ async def message_send(request: Request) -> JSONResponse:
             cost_usdc=0,
             settlement_tx="",
             billing_method=billing.billing_method if billing.verified else "",
-            duration_ms=int((time.monotonic() - start_time) * 1000),
+            duration_ms=duration_ms,
             error="Task timed out.",
         )
         return _build_task_response(
@@ -522,9 +603,23 @@ async def message_send(request: Request) -> JSONResponse:
         )
     except Exception:
         logger.exception("a2a inbound execution failed run_id=%s", run_id)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        usage_event = await _record_failure_usage_event(
+            graph=graph,
+            config=config,
+            run_id=run_id,
+            scoped_thread_id=scoped_thread_id,
+            payload=payload,
+            billing=billing,
+            user_id=user_id,
+            org_id=org_id,
+            duration_ms=duration_ms,
+            llm_config=llm_config,
+            platform_fee=platform_fee,
+        )
         await _record_inbound_event(
             run_id=run_id,
-            usage_event_id=None,
+            usage_event_id=usage_event.id,
             caller_org_id=caller_org_id,
             caller_user_id=caller_user_id,
             caller_address=_payment_caller_address(billing),
@@ -536,7 +631,7 @@ async def message_send(request: Request) -> JSONResponse:
             cost_usdc=0,
             settlement_tx="",
             billing_method=billing.billing_method if billing.verified else "",
-            duration_ms=int((time.monotonic() - start_time) * 1000),
+            duration_ms=duration_ms,
             error="Task failed.",
         )
         return _build_task_response(

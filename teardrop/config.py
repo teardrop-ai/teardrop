@@ -275,6 +275,14 @@ class Settings(BaseSettings):
         default=200,
         description=("Per-org aggregate rate limit for MCP requests via the gateway (requests per minute)."),
     )
+    trusted_proxy_count: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "Number of proxy hops to trust when deriving the client IP from X-Forwarded-For. "
+            "Set to 0 to ignore X-Forwarded-For and always use the direct peer address."
+        ),
+    )
     rate_limit_webhook_rpm: int = Field(
         default=120,
         description="Per-IP rate limit for POST /billing/topup/webhook (requests per minute).",
@@ -536,6 +544,14 @@ class Settings(BaseSettings):
 
     # ── A2A Delegation (outbound agent-to-agent calls) ────────────────────────
     a2a_delegation_enabled: bool = Field(default=False, description="Enable outbound A2A delegation via delegate_to_agent tool")
+    a2a_inbound_enabled: bool = Field(
+        default=True,
+        description="Enable the public inbound A2A /message:send endpoint and advertise it in discovery.",
+    )
+    a2a_inbound_timeout_seconds: int = Field(
+        default=60,
+        description="Timeout for inbound A2A /message:send agent execution (seconds)",
+    )
     a2a_delegation_timeout_seconds: int = Field(
         default=120, description="HTTP timeout for outbound A2A /message:send calls (seconds)"
     )

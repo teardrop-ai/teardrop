@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
 
@@ -86,11 +87,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         if is_public_discovery:
             # Lightweight per-IP limit for unauthenticated discovery endpoints
-            ip = ""
-            if request.headers.get("x-forwarded-for"):
-                ip = request.headers["x-forwarded-for"].split(",")[0].strip()
-            if not ip and request.client:
-                ip = request.client.host
+            ip = client_ip_from_request(request, trusted_proxy_count=settings.trusted_proxy_count)
 
             if ip:
                 from teardrop.rate_limit import _check_rate_limit

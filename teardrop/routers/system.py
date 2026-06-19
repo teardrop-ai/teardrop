@@ -137,11 +137,28 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
     }
     endpoints = {
         "agent_run": "/agent/run",
-        "a2a_message": "/message:send",
         "health": "/health",
         "docs": "/docs",
         "mcp_tools": "/tools/mcp",
     }
+    supported_interfaces = [
+        {
+            "url": f"{base_url}/agent/run",
+            "protocolBinding": "https://teardrop.ai/bindings/ag-ui-sse/v1",
+            "protocolVersion": "1.0",
+        }
+    ]
+    protocols = ["ag-ui", "mcp"]
+    if card_settings.a2a_inbound_enabled:
+        endpoints["a2a_message"] = "/message:send"
+        supported_interfaces.append(
+            {
+                "url": f"{base_url}/message:send",
+                "protocolBinding": "https://teardrop.ai/bindings/a2a-jsonrpc/v1",
+                "protocolVersion": "1.0",
+            }
+        )
+        protocols.insert(1, "a2a")
     if card_settings.marketplace_enabled:
         capabilities["marketplace"] = {
             "enabled": True,
@@ -164,20 +181,9 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
             "url": base_url,
         },
         "documentationUrl": f"{base_url}/docs",
-        "supportedInterfaces": [
-            {
-                "url": f"{base_url}/agent/run",
-                "protocolBinding": "https://teardrop.ai/bindings/ag-ui-sse/v1",
-                "protocolVersion": "1.0",
-            },
-            {
-                "url": f"{base_url}/message:send",
-                "protocolBinding": "https://teardrop.ai/bindings/a2a-jsonrpc/v1",
-                "protocolVersion": "1.0",
-            },
-        ],
+        "supportedInterfaces": supported_interfaces,
         "capabilities": capabilities,
-        "protocols": ["ag-ui", "a2a", "mcp"],
+        "protocols": protocols,
         "endpoints": endpoints,
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["text/plain", "application/json"],

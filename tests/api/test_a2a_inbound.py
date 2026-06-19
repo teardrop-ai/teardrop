@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -45,6 +46,23 @@ def _failing_ctx() -> SimpleNamespace:
     class _Graph:
         async def ainvoke(self, *_args, **_kwargs):
             raise RuntimeError("boom")
+
+    return SimpleNamespace(
+        graph=_Graph(),
+        org_lc_tools=[],
+        org_tools_by_name={},
+        mp_by_name={},
+        recalled=[],
+        llm_config=None,
+        org_name="",
+        credit_balance_usdc=None,
+    )
+
+
+def _hanging_ctx() -> SimpleNamespace:
+    class _Graph:
+        async def ainvoke(self, *_args, **_kwargs):
+            await asyncio.Future()
 
     return SimpleNamespace(
         graph=_Graph(),
@@ -241,9 +259,15 @@ async def test_message_send_execution_failure_records_audit(anon_client, test_se
     test_settings.rate_limit_agent_rpm = 1_000
     test_settings.rate_limit_org_agent_rpm = 1_000
     audit_mock = AsyncMock(return_value=None)
+    usage_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
     monkeypatch.setattr("teardrop.routers.a2a_messages.get_org_llm_config_cached", AsyncMock(return_value=None))
     monkeypatch.setattr("teardrop.routers.a2a_messages._prepare_run_context", AsyncMock(return_value=_failing_ctx()))
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.fetch_usage_snapshot",
+        AsyncMock(return_value=(_snapshot("Task failed.", "failed"), {"tokens_in": 9, "tokens_out": 3})),
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", usage_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
 
     resp = await anon_client.post(
@@ -257,6 +281,59 @@ async def test_message_send_execution_failure_records_audit(anon_client, test_se
     audit_kwargs = audit_mock.await_args.kwargs
     assert audit_kwargs["task_state"] == "failed"
     assert audit_kwargs["error"] == "Task failed."
+    usage_mock.assert_awaited_once()
+    usage_event = usage_mock.await_args.args[0]
+    assert usage_event.cost_usdc == 0
+    assert usage_event.tokens_in == 9
+    assert usage_event.org_id == "anonymous-a2a"
+
+
+@pytest.mark.anyio
+async def test_message_send_timeout_records_zero_cost_usage(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = False
+    test_settings.rate_limit_requests_per_minute = 1_000
+    test_settings.rate_limit_agent_rpm = 1_000
+    test_settings.rate_limit_org_agent_rpm = 1_000
+    test_settings.a2a_inbound_timeout_seconds = 0
+    audit_mock = AsyncMock(return_value=None)
+    usage_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.a2a_messages._prepare_run_context", AsyncMock(return_value=_hanging_ctx()))
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.fetch_usage_snapshot",
+        AsyncMock(return_value=(_snapshot("Task failed.", "failed"), {"tokens_in": 4, "tokens_out": 2})),
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", usage_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["status"]["state"] == "failed"
+    usage_mock.assert_awaited_once()
+    usage_event = usage_mock.await_args.args[0]
+    assert usage_event.cost_usdc == 0
+    assert usage_event.tokens_in == 4
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args.kwargs["task_state"] == "timeout"
+
+
+@pytest.mark.anyio
+async def test_message_send_returns_404_when_inbound_disabled(anon_client, test_settings, monkeypatch):
+    test_settings.a2a_inbound_enabled = False
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+
+    resp = await anon_client.post(
+        "/message:send",
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "A2A inbound endpoint disabled"
 
 
 @pytest.mark.anyio
