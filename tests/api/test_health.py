@@ -137,6 +137,11 @@ async def test_mcp_server_card(api_client, test_settings):
     assert "etag" in resp.headers
 
     body = resp.json()
+    assert body["title"] == "Teardrop"
+    assert body["description"].startswith("Intelligence beyond the browser.")
+    assert body["homepage"] == "http://test"
+    assert body["documentationUrl"] == "http://test/docs"
+    assert body["iconUrl"] == "https://example.com/icon.png"
     assert body["serverInfo"]["title"] == "Teardrop"
     assert body["serverInfo"]["websiteUrl"] == "http://test"
     assert body["serverInfo"]["icons"] == [{"src": "https://example.com/icon.png"}]
@@ -149,6 +154,35 @@ async def test_mcp_server_card(api_client, test_settings):
     assert "inputSchema" in t
     assert "outputSchema" in t
     assert "annotations" in t
+
+
+@pytest.mark.anyio
+async def test_oauth_protected_resource_metadata(api_client):
+    root_resp = await api_client.get("/.well-known/oauth-protected-resource")
+
+    assert root_resp.status_code == 200
+    assert root_resp.headers["cache-control"] == "public, max-age=300"
+    assert "etag" in root_resp.headers
+    root_body = root_resp.json()
+    assert root_body["resource"] == "http://test"
+    assert root_body["resource_name"] == "Teardrop"
+    assert root_body["resource_documentation"] == "http://test/docs"
+    assert root_body["bearer_methods_supported"] == ["header"]
+    assert root_body["homepage"] == "http://test"
+
+    mcp_resp = await api_client.get("/.well-known/oauth-protected-resource/tools/mcp")
+
+    assert mcp_resp.status_code == 200
+    mcp_body = mcp_resp.json()
+    assert mcp_body["resource"] == "http://test/tools/mcp"
+    assert mcp_body["resource_name"] == "Teardrop MCP"
+    assert mcp_body["resource_documentation"] == "http://test/docs"
+
+    cached_resp = await api_client.get(
+        "/.well-known/oauth-protected-resource/tools/mcp",
+        headers={"If-None-Match": mcp_resp.headers["etag"]},
+    )
+    assert cached_resp.status_code == 304
 
 
 @pytest.mark.anyio

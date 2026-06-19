@@ -214,6 +214,31 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
     return card
 
 
+def _mcp_server_description() -> str:
+    return (
+        "The native infrastructure layer for autonomous economic agents. "
+        "Teardrop is a task-manager agent API with AG-UI streaming, "
+        "MCP tool discovery, and optional paid marketplace access."
+    )
+
+
+def _build_oauth_protected_resource_content(request: Request, resource_path: str = "") -> dict[str, Any]:
+    current_settings = get_settings()
+    base_url = _public_base_url(request, current_settings)
+    normalized_path = f"/{resource_path.lstrip('/')}" if resource_path else ""
+    resource_url = f"{base_url}{normalized_path}"
+    resource_name = "Teardrop" if not normalized_path else "Teardrop MCP"
+
+    return {
+        "resource": resource_url,
+        "resource_name": resource_name,
+        "resource_documentation": f"{base_url}/docs",
+        "bearer_methods_supported": ["header"],
+        "description": _mcp_server_description(),
+        "homepage": base_url,
+    }
+
+
 @router.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs")
@@ -307,6 +332,18 @@ async def legacy_agent_card(request: Request) -> Response:
     return _json_discovery_response(request, _build_agent_card_content(request))
 
 
+@router.get("/.well-known/oauth-protected-resource", tags=["MCP"])
+async def oauth_protected_resource_root(request: Request) -> Response:
+    """OAuth protected-resource metadata for the Teardrop host resource."""
+    return _json_discovery_response(request, _build_oauth_protected_resource_content(request))
+
+
+@router.get("/.well-known/oauth-protected-resource/{resource_path:path}", tags=["MCP"])
+async def oauth_protected_resource_path(request: Request, resource_path: str) -> Response:
+    """OAuth protected-resource metadata for path-scoped resources such as /tools/mcp."""
+    return _json_discovery_response(request, _build_oauth_protected_resource_content(request, resource_path))
+
+
 @router.get("/llms.txt", include_in_schema=False, tags=["System"])
 async def llms_txt(request: Request) -> Response:
     """Root llms.txt manifest for LLM-friendly Teardrop discovery."""
@@ -342,9 +379,11 @@ async def robots_txt(request: Request) -> Response:
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
     tools = registry.to_mcp_server_card_tools()
+    description = _mcp_server_description()
 
     # Include published marketplace tools
     s = get_settings()
+    base_url = _public_base_url(request, s)
     if s.marketplace_enabled:
         try:
             mp_tools = await list_marketplace_tools()
@@ -365,24 +404,24 @@ async def mcp_server_card(request: Request) -> Response:
     server_info: dict[str, Any] = {
         "name": "teardrop-tools",
         "title": "Teardrop",
-        "description": (
-            "Intelligence beyond the browser. "
-            "Teardrop is a task-manager agent API with AG-UI streaming, "
-            "MCP tool discovery, and optional paid marketplace access."
-        ),
+        "description": description,
         "version": APP_VERSION,
-        "websiteUrl": _public_base_url(request, s),
+        "websiteUrl": base_url,
+    }
+    content: dict[str, Any] = {
+        "name": server_info["name"],
+        "title": server_info["title"],
+        "description": description,
+        "homepage": base_url,
+        "documentationUrl": f"{base_url}/docs",
+        "serverInfo": server_info,
+        "authentication": {"required": True, "schemes": ["bearer"]},
+        "tools": tools,
+        "resources": [],
+        "prompts": [],
     }
     if s.agent_card_icon_url:
         server_info["icons"] = [{"src": s.agent_card_icon_url}]
+        content["iconUrl"] = s.agent_card_icon_url
 
-    return _json_discovery_response(
-        request,
-        {
-            "serverInfo": server_info,
-            "authentication": {"required": True, "schemes": ["bearer"]},
-            "tools": tools,
-            "resources": [],
-            "prompts": [],
-        },
-    )
+    return _json_discovery_response(request, content)
