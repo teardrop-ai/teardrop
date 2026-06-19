@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import teardrop.config as config  # ── JWKS endpoint ─────────────────────────────────────────────────────────────
+from teardrop._meta import APP_VERSION
 
 
 @pytest.mark.asyncio
@@ -174,7 +175,8 @@ async def test_mcp_app_real_handshake():
             data = resp.json()
             assert "result" in data
             assert data["result"]["protocolVersion"] == "2024-11-05"
-            assert data["result"]["serverInfo"]["name"] == "teardrop-tools"
+            assert data["result"]["serverInfo"]["name"] == "Teardrop"
+            assert data["result"]["serverInfo"]["version"] == APP_VERSION
 
             # Check tools/list is also available
             resp_list = await c.post(
@@ -185,6 +187,9 @@ async def test_mcp_app_real_handshake():
             list_data = resp_list.json()
             assert "tools" in list_data["result"]
             assert len(list_data["result"]["tools"]) > 0
+            calculate_tool = next(tool for tool in list_data["result"]["tools"] if tool["name"] == "calculate")
+            assert "outputSchema" in calculate_tool
+            assert "description" in calculate_tool["inputSchema"]["properties"]["expression"]
 
 
 @pytest.mark.asyncio
@@ -220,7 +225,7 @@ async def test_mounted_mcp_normalizes_no_slash_path():
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["result"]["serverInfo"]["name"] == "teardrop-tools"
+    assert data["result"]["serverInfo"]["name"] == "Teardrop"
 
 
 @pytest.mark.asyncio
@@ -237,6 +242,22 @@ async def test_public_discovery_bypass_success(mcp_client):
     # Bypasses 401/402 gate completely and should not fall through to 405.
     # ASGITransport still skips the full app lifespan, so a 500 is acceptable here.
     assert resp.status_code not in (401, 402, 405)
+
+
+@pytest.mark.asyncio
+async def test_smithery_events_list_returns_empty_catalog(mcp_client):
+    """Smithery trigger discovery should return an empty event catalog, not a validation error."""
+    resp = await mcp_client.post(
+        "/tools/mcp",
+        content=json.dumps({"jsonrpc": "2.0", "method": "ai.smithery/events/list", "id": 3}),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "SmitheryBot/1.0 (+https://smithery.ai)",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"jsonrpc": "2.0", "id": 3, "result": {"events": []}}
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,20 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+def _mcp_safe_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return an MCP-safe output schema for live FastMCP registration.
+
+    FastMCP only accepts object-root output schemas. For non-object roots we
+    leave the live schema unset rather than changing the structured output shape
+    seen by MCP clients.
+    """
+    if schema is None:
+        return None
+    if schema.get("type") == "object":
+        return schema
+    return None
+
+
 class ToolDefinition(BaseModel):
     """Canonical description of a single versioned tool."""
 
@@ -209,12 +223,12 @@ class ToolRegistry:
         """Return metadata dicts suitable for dynamic MCP tool registration."""
         defs: list[dict[str, Any]] = []
         for tool in self.list_latest():
-            out_schema = None
+            raw_output_schema = None
             if tool.output_schema is not None:
                 if isinstance(tool.output_schema, dict):
-                    out_schema = tool.output_schema
+                    raw_output_schema = tool.output_schema
                 else:
-                    out_schema = tool.output_schema.model_json_schema()
+                    raw_output_schema = tool.output_schema.model_json_schema()
 
             defs.append(
                 {
@@ -222,7 +236,7 @@ class ToolRegistry:
                     "title": tool.name.replace("_", " ").title(),
                     "description": tool.description,
                     "input_schema": tool.input_schema,
-                    "output_schema": out_schema,
+                    "output_schema": _mcp_safe_output_schema(raw_output_schema),
                     "annotations": tool.annotations or {"readOnlyHint": True},
                     "implementation": tool.implementation,
                 }

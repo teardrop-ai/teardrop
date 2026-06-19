@@ -35,6 +35,16 @@ def _jsonrpc_error(req_id: int | str | None, code: int, message: str) -> dict:
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
     """Auth + billing + x402 gateway for the MCP endpoint."""
 
+    @staticmethod
+    def _smithery_events_list_response(req_id: int | str | None) -> JSONResponse:
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"events": []},
+            }
+        )
+
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
         # FastMCP is mounted at /tools/mcp and serves its root at "/".
         # Normalizing the bare mount path avoids FastAPI falling through to
@@ -50,6 +60,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         settings = get_settings()
 
         # ── Public Discovery Gate ──────────────────────────────────────────────────
+        rpc_id: int | str | None = None
+        discovery_response: JSONResponse | None = None
         is_public_discovery = False
         if request.method != "POST":
             is_public_discovery = True
@@ -59,9 +71,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 body = await request.body()
                 if body:
                     data = json.loads(body)
+                    rpc_id = data.get("id")
                     method = data.get("method", "")
+                    if method == "ai.smithery/events/list":
+                        discovery_response = self._smithery_events_list_response(rpc_id)
+                        is_public_discovery = True
                     # Gate only execution (tools/call). Handshakes/listing/notifications are public.
-                    if method != "tools/call":
+                    elif method != "tools/call":
                         is_public_discovery = True
                 else:
                     is_public_discovery = True
@@ -94,6 +110,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
+            if discovery_response is not None:
+                return discovery_response
             return await call_next(request)
 
         # ── Phase 1: JWT auth (or x402 fallback) ──────────────────────────
