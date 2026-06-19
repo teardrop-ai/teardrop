@@ -209,11 +209,21 @@ class ToolRegistry:
         """Return metadata dicts suitable for dynamic MCP tool registration."""
         defs: list[dict[str, Any]] = []
         for tool in self.list_latest():
+            out_schema = None
+            if tool.output_schema is not None:
+                if isinstance(tool.output_schema, dict):
+                    out_schema = tool.output_schema
+                else:
+                    out_schema = tool.output_schema.model_json_schema()
+
             defs.append(
                 {
                     "name": tool.name,
+                    "title": tool.name.replace("_", " ").title(),
                     "description": tool.description,
                     "input_schema": tool.input_schema,
+                    "output_schema": out_schema,
+                    "annotations": tool.annotations or {"readOnlyHint": True},
                     "implementation": tool.implementation,
                 }
             )

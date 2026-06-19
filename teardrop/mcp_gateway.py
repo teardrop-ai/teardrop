@@ -42,27 +42,49 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         settings = get_settings()
 
-        # ── Check for Smithery Bot Handshake (Safe Schema Scanning) ──────────────────
-        user_agent = request.headers.get("user-agent", "") or ""
-        is_smithery_discovery = False
-        if "smitherybot" in user_agent.lower():
-            if request.method == "POST":
-                try:
-                    # Sniff JSON-RPC method safely; Starlette caches body in request._body
-                    body = await request.body()
-                    if body:
-                        data = json.loads(body)
-                        method = data.get("method", "")
-                        # Allow handshake/listing methods only. Execution (tools/call) is strictly BLOCKED.
-                        if method in ("initialize", "tools/list", "resources/list", "prompts/list"):
-                            is_smithery_discovery = True
-                except Exception:
-                    pass
-            else:
-                # SSE/GET connection init channels for scanning
-                is_smithery_discovery = True
+        # ── Public Discovery Gate ──────────────────────────────────────────────────
+        is_public_discovery = False
+        if request.method != "POST":
+            is_public_discovery = True
+        else:
+            try:
+                # Sniff JSON-RPC method safely; Starlette caches body in request._body
+                body = await request.body()
+                if body:
+                    data = json.loads(body)
+                    method = data.get("method", "")
+                    # Gate only execution (tools/call). Handshakes/listing/notifications are public.
+                    if method != "tools/call":
+                        is_public_discovery = True
+                else:
+                    is_public_discovery = True
+            except Exception:
+                is_public_discovery = True
 
-        if is_smithery_discovery:
+        if is_public_discovery:
+            # Lightweight per-IP limit for unauthenticated discovery endpoints
+            ip = ""
+            if request.headers.get("x-forwarded-for"):
+                ip = request.headers["x-forwarded-for"].split(",")[0].strip()
+            if not ip and request.client:
+                ip = request.client.host
+
+            if ip:
+                from teardrop.rate_limit import _check_rate_limit
+
+                allowed, remaining, reset_at = await _check_rate_limit(f"mcp:ip:{ip}", 60)
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content=_jsonrpc_error(None, -32029, "Anonymous rate limit exceeded"),
+                        headers={
+                            "X-RateLimit-Limit": "60",
+                            "X-RateLimit-Remaining": str(remaining),
+                            "X-RateLimit-Reset": str(reset_at),
+                            "Retry-After": "60",
+                        },
+                    )
+
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
             return await call_next(request)

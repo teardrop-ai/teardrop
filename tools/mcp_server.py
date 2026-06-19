@@ -22,16 +22,21 @@ from typing import Any
 
 import fastmcp
 
+from teardrop.config import get_settings
 from tools import registry
 
 logger = logging.getLogger(__name__)
 
 # ─── Build FastMCP server ─────────────────────────────────────────────────────
 
+s = get_settings()
+
 mcp = fastmcp.FastMCP(
     name="teardrop-tools",
     version="1.0.0",
     instructions=("Teardrop MCP tool server. Provides tools auto-registered from the Teardrop tool registry."),
+    website_url=s.app_base_url if s.app_base_url else None,
+    icons=[{"src": s.agent_card_icon_url}] if s.agent_card_icon_url else None,
 )
 
 
@@ -74,7 +79,12 @@ def _register_tools_with_mcp() -> None:
         handler.__name__ = f"mcp_{name}"
         handler.__doc__ = description
 
-        mcp.tool(description=description)(handler)
+        mcp.tool(
+            name=name,
+            description=description,
+            title=tool_def.get("title"),
+            annotations=tool_def.get("annotations"),
+        )(handler)
         logger.debug("MCP: registered tool %s", name)
 
 

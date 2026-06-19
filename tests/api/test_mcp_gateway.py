@@ -45,17 +45,17 @@ async def mcp_client(test_settings, monkeypatch):
     config.get_settings.cache_clear()
     from teardrop.main import app
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as c:
         yield c
     config.get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
 async def test_auth_gate_rejects_missing_token(mcp_client):
-    """POST /tools/mcp without Authorization header → 401."""
+    """POST /tools/mcp without Authorization header executing tools/call → 401."""
     resp = await mcp_client.post(
         "/tools/mcp",
-        content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
         headers={"Content-Type": "application/json"},
     )
     assert resp.status_code == 401
@@ -64,10 +64,10 @@ async def test_auth_gate_rejects_missing_token(mcp_client):
 
 @pytest.mark.asyncio
 async def test_auth_gate_rejects_invalid_token(mcp_client):
-    """POST /tools/mcp with garbage Bearer → 401."""
+    """POST /tools/mcp with garbage Bearer executing tools/call → 401."""
     resp = await mcp_client.post(
         "/tools/mcp",
-        content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer not-a-valid-jwt",
@@ -79,7 +79,7 @@ async def test_auth_gate_rejects_invalid_token(mcp_client):
 
 @pytest.mark.asyncio
 async def test_auth_gate_rejects_expired_token(mcp_client, test_settings):
-    """POST /tools/mcp with an expired JWT → 401."""
+    """POST /tools/mcp with an expired JWT executing tools/call → 401."""
     from datetime import datetime, timedelta, timezone
 
     import jwt as pyjwt
@@ -95,7 +95,7 @@ async def test_auth_gate_rejects_expired_token(mcp_client, test_settings):
 
     resp = await mcp_client.post(
         "/tools/mcp",
-        content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {expired_token}",
@@ -107,10 +107,10 @@ async def test_auth_gate_rejects_expired_token(mcp_client, test_settings):
 
 @pytest.mark.asyncio
 async def test_auth_gate_passes_valid_token(mcp_client, test_jwt_token):
-    """POST /tools/mcp with valid JWT passes through to FastMCP layer."""
+    """POST /tools/mcp with valid JWT executing tools/call passes through to FastMCP layer."""
     resp = await mcp_client.post(
         "/tools/mcp",
-        content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {test_jwt_token}",
@@ -122,15 +122,15 @@ async def test_auth_gate_passes_valid_token(mcp_client, test_jwt_token):
 
 @pytest.mark.asyncio
 async def test_auth_gate_disabled_passes_through(test_settings, monkeypatch):
-    """When mcp_auth_enabled=False, unauthenticated requests pass through."""
+    """When mcp_auth_enabled=False, unauthenticated tools/call passes through."""
     monkeypatch.setenv("MCP_AUTH_ENABLED", "false")
     config.get_settings.cache_clear()
     from teardrop.main import app
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as c:
         resp = await c.post(
             "/tools/mcp",
-            content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
+            content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
             headers={"Content-Type": "application/json"},
         )
     assert resp.status_code != 401
@@ -146,24 +146,65 @@ async def test_non_mcp_path_not_intercepted(mcp_client):
 
 
 @pytest.mark.asyncio
-async def test_smitherybot_discovery_bypass_success(mcp_client):
-    """POST /tools/mcp with SmitheryBot User-Agent and handshake methods bypasses auth."""
+async def test_mcp_app_real_handshake():
+    """Verify FastMCP stateless streamable layer returns a valid initialize handshake."""
+    from teardrop.app import mcp_app
+
+    async with mcp_app.router.lifespan_context(mcp_app):
+        # We test FastMCP's ASGI app directly here because testing it through proxy
+        # requires the full FastAPI DB-connected lifespan.
+        async with AsyncClient(
+            transport=ASGITransport(app=mcp_app),
+            base_url="http://test",
+            headers={"Accept": "application/json"}
+        ) as c:
+            resp = await c.post(
+                "/",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1.0"},
+                    },
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "result" in data
+            assert data["result"]["protocolVersion"] == "2024-11-05"
+            assert data["result"]["serverInfo"]["name"] == "teardrop-tools"
+
+            # Check tools/list is also available
+            resp_list = await c.post(
+                "/",
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            )
+            assert resp_list.status_code == 200
+            list_data = resp_list.json()
+            assert "tools" in list_data["result"]
+            assert len(list_data["result"]["tools"]) > 0
+
+@pytest.mark.asyncio
+async def test_public_discovery_bypass_success(mcp_client):
+    """POST /tools/mcp/ with initialize method bypasses auth for all clients."""
     resp = await mcp_client.post(
-        "/tools/mcp",
+        "/tools/mcp/",
         content=json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": 1}),
         headers={
             "Content-Type": "application/json",
-            "User-Agent": "SmitheryBot/1.0 (+https://smithery.ai)",
+            "User-Agent": "RandomClient/1.0",
         },
     )
-    # Bypasses 401/402 gate completely and hits FastMCP layer (not 401/402)
-    assert resp.status_code != 401
-    assert resp.status_code != 402
+    # Bypasses 401/402 gate completely. FastMCP might return 500 because lifespan isn't run in ASGITransport
+    assert resp.status_code not in (401, 402)
 
 
 @pytest.mark.asyncio
-async def test_smitherybot_execution_blocked(mcp_client):
-    """POST /tools/mcp with SmitheryBot User-Agent requesting tools/call is STILL blocked."""
+async def test_execution_blocked_for_all(mcp_client):
+    """POST /tools/mcp requesting tools/call is blocked without auth."""
     resp = await mcp_client.post(
         "/tools/mcp",
         content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),

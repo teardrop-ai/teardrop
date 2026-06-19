@@ -110,7 +110,6 @@ from teardrop.wallets import (
     init_wallets_db,
 )
 from tools._internals._rpc_semaphore import init_chain_rate_limiter, init_chain_semaphore, init_rpc_semaphore
-from tools.mcp_server import mcp as _mcp_server
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -607,11 +606,17 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to close web3 client sessions", exc_info=True)
 
 
+from fastmcp.utilities.lifespan import combine_lifespans  # noqa: E402
+
+from tools.mcp_server import mcp as _mcp_server  # noqa: E402
+
+mcp_app = _mcp_server.http_app(path="/", stateless_http=True, json_response=True)
+
 app = FastAPI(
     title="Teardrop",
     description=("The native infrastructure layer for autonomous economic agents"),
     version=APP_VERSION,
-    lifespan=lifespan,
+    lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -648,7 +653,7 @@ from teardrop.mcp_gateway import MCPGatewayMiddleware  # noqa: E402
 app.add_middleware(MCPGatewayMiddleware)
 
 # ─── MCP Streamable HTTP endpoint (Smithery / direct MCP clients) ────────────
-app.mount("/tools/mcp", _mcp_server.http_app())
+app.mount("/tools/mcp", mcp_app)
 
 # ─── Domain routers (system/discovery extracted into teardrop.routers) ───────
 from teardrop.routers import register_routers  # noqa: E402
