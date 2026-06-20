@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, Response
 from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
+from teardrop.public_url import public_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,15 @@ _MCP_PREFIX = "/tools/mcp"
 
 def _jsonrpc_error(req_id: int | str | None, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def _mcp_402_resource(request: Request) -> dict[str, str]:
+    base_url = public_base_url(request, get_settings())
+    return {
+        "url": f"{base_url}/tools/mcp",
+        "description": "MCP gateway tools/call execution endpoint.",
+        "mimeType": "application/json",
+    }
 
 
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
@@ -277,19 +287,21 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         )
 
         payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        response_kwargs = {"resource": _mcp_402_resource(request)}
         if not payment_header:
             return JSONResponse(
                 status_code=402,
-                content=build_402_response_body(),
-                headers=build_402_headers(),
+                content=build_402_response_body(**response_kwargs),
+                headers=build_402_headers(**response_kwargs),
             )
 
         billing = await verify_payment(payment_header)
         if not billing.verified:
+            response_kwargs["error"] = billing.error
             return JSONResponse(
                 status_code=402,
-                content={"error": billing.error},
-                headers=build_402_headers(),
+                content=build_402_response_body(**response_kwargs),
+                headers=build_402_headers(**response_kwargs),
             )
 
         request.state.x402_billing = billing

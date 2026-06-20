@@ -314,6 +314,12 @@ def _parse_send_response(data: dict[str, Any]) -> A2ASendMessageResponse:
     return A2ASendMessageResponse(task=task, raw=data)
 
 
+def _requirement_value(requirement: Any, key: str, default: Any = None) -> Any:
+    if isinstance(requirement, dict):
+        return requirement.get(key, default)
+    return getattr(requirement, key, default)
+
+
 def extract_result_text(response: A2ASendMessageResponse) -> str:
     """Extract human-readable text from an A2A send-message response."""
     if response.task is None:
@@ -440,32 +446,55 @@ def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
     Returns None if parsing or signing fails.
     """
     import base64
+    import json as _json
 
     try:
-        # Try header first (x402 standard), then body fallback.
-        raw_header = resp.headers.get("X-PAYMENT-REQUIRED", "")
-        if raw_header:
-            import json as _json
+        from x402 import x402ClientSync
+        from x402.mechanisms.evm.exact import ExactEvmScheme
+        from x402.schemas.payments import PaymentRequired
 
-            reqs_data = _json.loads(base64.b64decode(raw_header))
+        # Try the v2 standard header first, then legacy header and body fallbacks.
+        standard_header = resp.headers.get("PAYMENT-REQUIRED", "")
+        if standard_header:
+            from x402.http import decode_payment_required_header
+
+            payment_required = decode_payment_required_header(standard_header)
         else:
-            body = resp.json()
-            reqs_data = body.get("accepts", [])
+            legacy_header = resp.headers.get("X-PAYMENT-REQUIRED", "")
+            if legacy_header:
+                payment_required = PaymentRequired.model_validate(
+                    {
+                        "x402Version": 2,
+                        "accepts": _json.loads(base64.b64decode(legacy_header)),
+                    }
+                )
+            else:
+                body = resp.json()
+                payment_required = PaymentRequired.model_validate(body)
 
-        if not reqs_data:
+        if not payment_required.accepts:
             logger.warning("_sign_x402_payment: no payment requirements found")
             return None
 
-        from x402 import build_payment_payload
+        client = x402ClientSync()
+        registered_networks: set[str] = set()
+        needs_upto = any(_requirement_value(req, "scheme") == "upto" for req in payment_required.accepts)
+        for requirement in payment_required.accepts:
+            network = str(_requirement_value(requirement, "network"))
+            if network in registered_networks:
+                continue
+            client.register(network, ExactEvmScheme(signer=signer))
+            if needs_upto:
+                from x402.mechanisms.evm.upto import UptoEvmScheme
 
-        req = reqs_data[0] if isinstance(reqs_data, list) else reqs_data
-        payload = build_payment_payload(req, signer)
+                client.register(network, UptoEvmScheme(signer=signer))
+            registered_networks.add(network)
+
+        payload = client.create_payment_payload(payment_required)
 
         # Encode payload for the X-PAYMENT header.
-        import json as _json
-
         payload_json = _json.dumps(
-            payload.model_dump() if hasattr(payload, "model_dump") else payload,
+            payload.model_dump(by_alias=True, exclude_none=True) if hasattr(payload, "model_dump") else payload,
             default=str,
         )
         return base64.b64encode(payload_json.encode()).decode()

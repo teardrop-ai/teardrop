@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
 
 from agent.state import AgentState
 from billing import BillingResult, build_402_headers, build_402_response_body, get_byok_platform_fee
@@ -36,6 +37,7 @@ from teardrop.agent_runtime import _prepare_run_context, _record_marketplace_ear
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
+from teardrop.public_url import public_base_url
 from teardrop.rate_limit import _check_rate_limit, _enforce_rate_limit
 from teardrop.usage import UsageEvent, record_usage_event
 
@@ -66,6 +68,76 @@ class A2ASendMessageRequest(BaseModel):
         if len(json.dumps(v, default=str)) > 8_192:
             raise ValueError("A2A caller metadata exceeds 8 KB limit")
         return v
+
+
+_A2A_BAZAAR_INPUT_EXAMPLE = {
+    "message": {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Summarize the top 3 takeaways from the last run."}],
+    },
+    "metadata": {"source": "agentic.market"},
+    "contextId": "ctx_demo",
+    "taskId": "task_demo",
+}
+
+_A2A_BAZAAR_OUTPUT_EXAMPLE = {
+    "jsonrpc": "2.0",
+    "result": {
+        "id": "task_demo",
+        "status": {
+            "state": "completed",
+            "message": {
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "Here are the top takeaways..."}],
+            },
+        },
+        "artifacts": [
+            {
+                "name": "result",
+                "parts": [{"kind": "text", "text": "Here are the top takeaways..."}],
+            }
+        ],
+        "history": [
+            _A2A_BAZAAR_INPUT_EXAMPLE["message"],
+            {
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "Here are the top takeaways..."}],
+            },
+        ],
+    },
+}
+
+
+def _a2a_402_resource(request: Request) -> dict[str, str]:
+    base_url = public_base_url(request, settings)
+    return {
+        "url": f"{base_url}/message:send",
+        "description": "Blocking public A2A endpoint for external agent callers.",
+        "mimeType": "application/json",
+    }
+
+
+def _a2a_402_extensions() -> dict[str, Any]:
+    extension = declare_discovery_extension(
+        input=_A2A_BAZAAR_INPUT_EXAMPLE,
+        input_schema=A2ASendMessageRequest.model_json_schema(by_alias=True),
+        body_type="json",
+        output=OutputConfig(example=_A2A_BAZAAR_OUTPUT_EXAMPLE),
+    )
+    bazaar = extension.get("bazaar")
+    if isinstance(bazaar, dict):
+        info = bazaar.setdefault("info", {})
+        input_data = info.setdefault("input", {})
+        input_data["method"] = "POST"
+    return extension
+
+
+def _a2a_402_kwargs(request: Request, *, error: str | None = "Payment required") -> dict[str, Any]:
+    return {
+        "error": error,
+        "resource": _a2a_402_resource(request),
+        "extensions": _a2a_402_extensions(),
+    }
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -376,9 +448,10 @@ async def message_send(request: Request) -> JSONResponse:
         if settings.billing_enabled and not payment_header:
             # Registry probes may omit or malform the body; unpaid anonymous
             # callers should still receive the x402 challenge first.
+            response_kwargs = _a2a_402_kwargs(request)
             try:
-                _402_body = build_402_response_body()
-                _402_hdrs = build_402_headers()
+                _402_body = build_402_response_body(**response_kwargs)
+                _402_hdrs = build_402_headers(**response_kwargs)
             except RuntimeError:
                 logger.warning("x402 billing not initialised; cannot issue payment requirements run_id=%s", run_id)
                 return JSONResponse(
@@ -438,13 +511,16 @@ async def message_send(request: Request) -> JSONResponse:
                     duration_ms=0,
                     error=billing.error,
                 )
+                response_kwargs = _a2a_402_kwargs(request, error=billing.error)
                 try:
-                    _402_hdrs = build_402_headers()
+                    _402_body = build_402_response_body(**response_kwargs)
+                    _402_hdrs = build_402_headers(**response_kwargs)
                 except RuntimeError:
+                    _402_body = {"error": billing.error}
                     _402_hdrs = {}
                 return JSONResponse(
                     status_code=402,
-                    content={"error": billing.error},
+                    content=_402_body,
                     headers=_402_hdrs,
                 )
     else:

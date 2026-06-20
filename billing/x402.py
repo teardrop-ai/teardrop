@@ -9,6 +9,8 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Mapping
+from typing import Any
 
 import asyncpg
 import sentry_sdk
@@ -179,27 +181,79 @@ def get_payment_requirements() -> list:
     return _requirements_cache
 
 
-def build_402_response_body() -> dict:
+def _serialize_requirement(requirement: Any) -> dict[str, Any]:
+    if hasattr(requirement, "model_dump"):
+        return requirement.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(requirement, Mapping):
+        return dict(requirement)
+    return dict(vars(requirement))
+
+
+def _build_payment_required(
+    *,
+    error: str | None = "Payment required",
+    resource: Mapping[str, Any] | None = None,
+    extensions: dict[str, Any] | None = None,
+):
+    from x402.schemas.payments import PaymentRequired, PaymentRequirements, ResourceInfo
+
+    resource_info = None
+    if resource is not None:
+        resource_payload = dict(resource)
+        if "mime_type" in resource_payload and "mimeType" not in resource_payload:
+            resource_payload["mimeType"] = resource_payload.pop("mime_type")
+        resource_info = ResourceInfo.model_validate(resource_payload)
+
+    requirements = [
+        req if isinstance(req, PaymentRequirements) else PaymentRequirements.model_validate(_serialize_requirement(req))
+        for req in get_payment_requirements()
+    ]
+
+    return PaymentRequired(
+        error=error,
+        resource=resource_info,
+        accepts=requirements,
+        extensions=extensions or None,
+    )
+
+
+def build_402_response_body(
+    error: str | None = "Payment required",
+    resource: Mapping[str, Any] | None = None,
+    extensions: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build the JSON body for a 402 Payment Required response."""
-    reqs = get_payment_requirements()
-    return {
-        "error": "Payment required",
-        "accepts": [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in reqs],
-        "x402Version": 2,
-    }
+    return _build_payment_required(
+        error=error,
+        resource=resource,
+        extensions=extensions,
+    ).model_dump(by_alias=True, exclude_none=True)
 
 
-def build_402_headers() -> dict[str, str]:
+def build_402_headers(
+    error: str | None = "Payment required",
+    resource: Mapping[str, Any] | None = None,
+    extensions: dict[str, Any] | None = None,
+) -> dict[str, str]:
     """Build response headers for a 402 Payment Required response."""
     import base64
 
-    reqs = get_payment_requirements()
-    serialised = json.dumps(
-        [r.model_dump() if hasattr(r, "model_dump") else r.__dict__ for r in reqs],
+    from x402.http import PAYMENT_REQUIRED_HEADER, encode_payment_required_header
+
+    payment_required = _build_payment_required(
+        error=error,
+        resource=resource,
+        extensions=extensions,
+    )
+    legacy_serialised = json.dumps(
+        [req.model_dump(by_alias=True, exclude_none=True) for req in payment_required.accepts],
         default=str,
     )
-    encoded = base64.b64encode(serialised.encode()).decode()
-    return {"X-PAYMENT-REQUIRED": encoded}
+    legacy_encoded = base64.b64encode(legacy_serialised.encode()).decode()
+    return {
+        PAYMENT_REQUIRED_HEADER: encode_payment_required_header(payment_required),
+        "X-PAYMENT-REQUIRED": legacy_encoded,
+    }
 
 
 async def _rebuild_requirements_if_stale() -> None:

@@ -18,6 +18,7 @@ from org_tools import list_marketplace_tools
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
+from teardrop.public_url import public_base_url
 from tools import registry
 
 logger = logging.getLogger(__name__)
@@ -26,22 +27,8 @@ settings = get_settings()
 router = APIRouter()
 
 
-def _first_forwarded_value(value: str | None) -> str:
-    if not value:
-        return ""
-    return value.split(",", 1)[0].strip()
-
-
 def _public_base_url(request: Request, current_settings) -> str:
-    configured = current_settings.app_base_url.strip().rstrip("/")
-    if configured:
-        return configured
-
-    forwarded_proto = _first_forwarded_value(request.headers.get("x-forwarded-proto"))
-    forwarded_host = _first_forwarded_value(request.headers.get("x-forwarded-host"))
-    scheme = forwarded_proto or request.url.scheme
-    host = forwarded_host or request.url.netloc
-    return f"{scheme}://{host}".rstrip("/")
+    return public_base_url(request, current_settings)
 
 
 def _discovery_headers(*, cache_seconds: int, etag: str | None = None) -> dict[str, str]:

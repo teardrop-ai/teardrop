@@ -493,6 +493,7 @@ Client                         Teardrop                     x402 Facilitator
   │── POST /agent/run ───────────►│                               │
   │   (no payment header)         │                               │
   │◄── 402 Payment Required ──────│                               │
+  │    PAYMENT-REQUIRED: <v2>     │                               │
   │    X-PAYMENT-REQUIRED: <reqs> │                               │
   │                               │                               │
   │── POST /agent/run ───────────►│                               │
@@ -597,8 +598,9 @@ Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.we
 
 External agents can call Teardrop directly over `POST /message:send`.
 
-- Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response.
+- Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response. The challenge now uses the standard `PAYMENT-REQUIRED` header and also serves `X-PAYMENT-REQUIRED` as a legacy compatibility alias.
 - Unpaid anonymous probes receive the `402 Payment Required` challenge before request-body validation, which keeps registry validators compatible with empty or malformed probe payloads.
+- The `402` body is a full x402 v2 `PaymentRequired` payload with top-level `resource`, `accepts`, and `extensions`. On `POST /message:send`, `extensions.bazaar` advertises the A2A request and response shape for registries.
 - Authenticated callers may present a Teardrop JWT and reuse the existing credit/x402 billing gate.
 - The current implementation is a single-turn blocking endpoint: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
 - Operators may disable the surface with `A2A_INBOUND_ENABLED=false`; the endpoint then returns `404` and the public agent card stops advertising `a2a_message`.
@@ -737,6 +739,13 @@ Use the full public URL of the paid A2A surface, for example `https://api.teardr
 Do not register the bare origin `https://api.teardrop.dev/`. `GET /` redirects to `/docs`, and `POST /` is not a paid Teardrop entrypoint.
 
 Agentic Market validators may probe `/.well-known/x402`, `/.well-known/x402.json`, and the configured endpoint URL. Teardrop serves those discovery aliases publicly and issues the x402 challenge on unpaid anonymous `POST /message:send` requests before body validation.
+
+That challenge now includes:
+
+- `PAYMENT-REQUIRED` with the full x402 v2 `PaymentRequired` envelope.
+- `X-PAYMENT-REQUIRED` as a legacy alias for older clients that only decode the requirement list.
+- Top-level `resource.url` describing the paid surface.
+- Top-level `extensions.bazaar` describing the A2A request and response shape.
 
 ## Publishing to Smithery
 

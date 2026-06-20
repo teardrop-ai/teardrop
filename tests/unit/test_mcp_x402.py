@@ -57,13 +57,25 @@ def _tools_call_body(tool_name: str = "web_search", req_id: int = 1) -> str:
 @pytest.mark.asyncio
 async def test_no_auth_no_payment_returns_402(x402_client):
     """No Bearer + no x402 payment header → 402 with accepts body."""
+    seen: dict[str, dict] = {}
+
+    def _body(**kwargs):
+        seen["body"] = kwargs
+        return {
+            "error": kwargs.get("error", "Payment required"),
+            "accepts": [],
+            "x402Version": 2,
+            "resource": kwargs["resource"],
+        }
+
+    def _headers(**kwargs):
+        seen["headers"] = kwargs
+        return {"PAYMENT-REQUIRED": "dGVzdA==", "X-PAYMENT-REQUIRED": "bGVnYWN5"}
+
     async with x402_client() as client:
         with (
-            patch(
-                "billing.build_402_response_body",
-                return_value={"error": "Payment required", "accepts": [], "x402Version": 2},
-            ),
-            patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
+            patch("billing.build_402_response_body", side_effect=_body),
+            patch("billing.build_402_headers", side_effect=_headers),
         ):
             resp = await client.post(
                 "/tools/mcp",
@@ -74,7 +86,10 @@ async def test_no_auth_no_payment_returns_402(x402_client):
     assert resp.status_code == 402
     body = resp.json()
     assert "accepts" in body
+    assert body["resource"]["url"] == "http://test/tools/mcp"
+    assert "PAYMENT-REQUIRED" in resp.headers
     assert "X-PAYMENT-REQUIRED" in resp.headers
+    assert seen["body"]["resource"]["mimeType"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -87,7 +102,14 @@ async def test_invalid_payment_returns_402(x402_client):
                 new_callable=AsyncMock,
                 return_value=BillingResult(error="Malformed payment"),
             ),
-            patch("billing.build_402_headers", return_value={"X-PAYMENT-REQUIRED": "dGVzdA=="}),
+            patch(
+                "billing.build_402_headers",
+                return_value={"PAYMENT-REQUIRED": "dGVzdA==", "X-PAYMENT-REQUIRED": "bGVnYWN5"},
+            ),
+            patch(
+                "billing.build_402_response_body",
+                return_value={"error": "Malformed payment", "accepts": [], "x402Version": 2},
+            ),
         ):
             resp = await client.post(
                 "/tools/mcp",

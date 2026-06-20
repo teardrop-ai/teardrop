@@ -419,14 +419,32 @@ def get_payment_requirements() -> list:
     return _call_sync(_GET_PAYMENT_REQUIREMENTS_ORIG)
 
 
-def build_402_response_body() -> dict:
-    """Build the HTTP 402 body (``accepts`` + ``x402Version``) for the billing gate."""
-    return _call_sync(_BUILD_402_RESPONSE_BODY_ORIG)
+def build_402_response_body(
+    error: str | None = "Payment required",
+    resource: dict[str, Any] | None = None,
+    extensions: dict[str, Any] | None = None,
+) -> dict:
+    """Build the HTTP 402 body for the billing gate."""
+    return _call_sync(
+        _BUILD_402_RESPONSE_BODY_ORIG,
+        error=error,
+        resource=resource,
+        extensions=extensions,
+    )
 
 
-def build_402_headers() -> dict[str, str]:
-    """Build the ``X-PAYMENT-REQUIRED`` response headers for the billing gate."""
-    return _call_sync(_BUILD_402_HEADERS_ORIG)
+def build_402_headers(
+    error: str | None = "Payment required",
+    resource: dict[str, Any] | None = None,
+    extensions: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Build the x402 response headers for the billing gate."""
+    return _call_sync(
+        _BUILD_402_HEADERS_ORIG,
+        error=error,
+        resource=resource,
+        extensions=extensions,
+    )
 
 
 async def verify_payment(payment_header: str) -> BillingResult:

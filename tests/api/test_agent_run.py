@@ -58,9 +58,17 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     # live billing server (_requirements_cache would be None otherwise)
     monkeypatch.setattr(
         "teardrop.agent_runtime.build_402_response_body",
-        lambda: {"error": "Payment required", "accepts": []},
+        lambda **kwargs: {
+            "error": "Payment required",
+            "accepts": [],
+            "resource": kwargs["resource"],
+            "x402Version": 2,
+        },
     )
-    monkeypatch.setattr("teardrop.agent_runtime.build_402_headers", lambda: {})
+    monkeypatch.setattr(
+        "teardrop.agent_runtime.build_402_headers",
+        lambda **kwargs: {"PAYMENT-REQUIRED": "abc", "X-PAYMENT-REQUIRED": "legacy"},
+    )
 
     app.dependency_overrides[require_auth] = _siwe_auth
     try:
@@ -70,6 +78,8 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
         app.dependency_overrides.pop(require_auth, None)
 
     assert resp.status_code == 402
+    assert resp.headers["payment-required"] == "abc"
+    assert resp.json()["resource"]["url"] == "http://test/agent/run"
 
 
 # ─── Billing gate — credit ────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ from org_tools import build_org_langchain_tools
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import recall_memories
+from teardrop.public_url import public_base_url
 from teardrop.users import get_org_by_id
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,15 @@ class _RunContext:
         self.llm_config = llm_config
         self.org_name = org_name
         self.credit_balance_usdc = credit_balance_usdc
+
+
+def _agent_run_402_resource(request: Request) -> dict[str, str]:
+    base_url = public_base_url(request, settings)
+    return {
+        "url": f"{base_url}/agent/run",
+        "description": "AG-UI streaming agent run endpoint.",
+        "mimeType": "text/event-stream",
+    }
 
 
 async def _prepare_run_context(
@@ -281,7 +291,8 @@ async def _run_billing_gate(
           → org credit rail (``verify_credit``, debit post-run via ``debit_credit``)
       * ``siwe`` with zero credit balance
           → x402 on-chain payment required; returns a ``JSONResponse(402)`` with
-            ``X-PAYMENT-REQUIRED`` header so the caller can sign and re-POST
+                        ``PAYMENT-REQUIRED`` plus the legacy ``X-PAYMENT-REQUIRED`` alias
+                        so the caller can sign and re-POST
       * ``client_credentials`` / ``email``
           → org prepaid credit rail only (``verify_credit``)
       * billing disabled OR auth_method not in ``billable_auth_methods``
@@ -320,18 +331,20 @@ async def _run_billing_gate(
 
         # No credit balance: require per-request x402 exact payment.
         payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        response_kwargs = {"resource": _agent_run_402_resource(request)}
         if not payment_header:
             return BillingResult(), JSONResponse(
                 status_code=402,
-                content=build_402_response_body(),
-                headers=build_402_headers(),
+                content=build_402_response_body(**response_kwargs),
+                headers=build_402_headers(**response_kwargs),
             )
         billing = await verify_payment(payment_header)
         if not billing.verified:
+            response_kwargs["error"] = billing.error
             return BillingResult(), JSONResponse(
                 status_code=402,
-                content={"error": billing.error},
-                headers=build_402_headers(),
+                content=build_402_response_body(**response_kwargs),
+                headers=build_402_headers(**response_kwargs),
             )
         return billing, None
 

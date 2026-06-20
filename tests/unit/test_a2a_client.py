@@ -15,6 +15,7 @@ from teardrop.a2a_client import (
     A2ATaskStatus,
     _agent_card_cache,
     _is_ip_blocked,
+    _sign_x402_payment,
     async_validate_url,
     check_delegation_allowed,
     discover_agent_card,
@@ -338,6 +339,38 @@ class TestSendMessage:
     async def test_ssrf_blocked(self):
         with pytest.raises(ValueError, match="SSRF"):
             await send_message("https://10.0.0.1", "Task")
+
+
+class TestSignX402Payment:
+    def test_prefers_payment_required_header(self):
+        signer = object()
+        request = httpx.Request("POST", "https://agent.example.com/message:send")
+        response = httpx.Response(
+            402,
+            headers={
+                "PAYMENT-REQUIRED": "spec-header",
+                "X-PAYMENT-REQUIRED": "bGVnYWN5",
+            },
+            request=request,
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base"}])
+        payload = MagicMock()
+        payload.model_dump.return_value = {"payload": {"signed": True}, "x402Version": 2}
+        client = MagicMock()
+        client.create_payment_payload.return_value = payload
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync", return_value=client) as client_cls,
+            patch("x402.mechanisms.evm.exact.ExactEvmScheme", return_value="exact-scheme") as exact_scheme,
+        ):
+            signed = _sign_x402_payment(response, signer=signer)
+
+        assert signed is not None
+        client_cls.assert_called_once_with()
+        exact_scheme.assert_called_once_with(signer=signer)
+        client.register.assert_called_once_with("base", "exact-scheme")
+        client.create_payment_payload.assert_called_once_with(payment_required)
 
 
 # ─── Extract Result Text ─────────────────────────────────────────────────────

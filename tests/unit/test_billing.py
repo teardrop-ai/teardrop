@@ -917,7 +917,15 @@ class TestBuild402ResponseBody:
         from billing import build_402_response_body
 
         mock_req = MagicMock()
-        mock_req.model_dump.return_value = {"scheme": "exact", "network": "base"}
+        mock_req.model_dump.return_value = {
+            "scheme": "exact",
+            "network": "base",
+            "asset": "0xasset",
+            "amount": "10000",
+            "payTo": "0xpayto",
+            "maxTimeoutSeconds": 60,
+            "extra": {},
+        }
 
         with patch.object(billing_module, "_requirements_cache", [mock_req]):
             result = build_402_response_body()
@@ -927,6 +935,34 @@ class TestBuild402ResponseBody:
         assert result["x402Version"] == 2
         assert len(result["accepts"]) == 1
 
+    def test_includes_resource_and_extensions(self):
+        from billing import build_402_response_body
+
+        mock_req = MagicMock()
+        mock_req.model_dump.return_value = {
+            "scheme": "exact",
+            "network": "base",
+            "asset": "0xasset",
+            "amount": "10000",
+            "payTo": "0xpayto",
+            "maxTimeoutSeconds": 60,
+            "extra": {},
+        }
+
+        with patch.object(billing_module, "_requirements_cache", [mock_req]):
+            result = build_402_response_body(
+                resource={
+                    "url": "https://api.teardrop.dev/message:send",
+                    "description": "Inbound A2A endpoint",
+                    "mimeType": "application/json",
+                },
+                extensions={"bazaar": {"info": {"input": {"method": "POST"}}}},
+            )
+
+        assert result["resource"]["url"] == "https://api.teardrop.dev/message:send"
+        assert result["resource"]["mimeType"] == "application/json"
+        assert result["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
+
     def test_dual_requirements_upto_first_exact_second(self):
         """When upto is enabled, 402 body has two accepts: upto first, exact second."""
         from billing import build_402_response_body
@@ -935,13 +971,21 @@ class TestBuild402ResponseBody:
         upto_req.model_dump.return_value = {
             "scheme": "upto",
             "network": "base",
+            "asset": "0xasset",
             "amount": "500000",
+            "payTo": "0xpayto",
+            "maxTimeoutSeconds": 60,
+            "extra": {},
         }
         exact_req = MagicMock()
         exact_req.model_dump.return_value = {
             "scheme": "exact",
             "network": "base",
+            "asset": "0xasset",
             "amount": "10000",
+            "payTo": "0xpayto",
+            "maxTimeoutSeconds": 60,
+            "extra": {},
         }
 
         with patch.object(billing_module, "_requirements_cache", [upto_req, exact_req]):
@@ -960,12 +1004,23 @@ class TestBuild402Headers:
         from billing import build_402_headers
 
         mock_req = MagicMock()
-        mock_req.model_dump.return_value = {"scheme": "exact", "network": "base"}
+        mock_req.model_dump.return_value = {
+            "scheme": "exact",
+            "network": "base",
+            "asset": "0xasset",
+            "amount": "10000",
+            "payTo": "0xpayto",
+            "maxTimeoutSeconds": 60,
+            "extra": {},
+        }
 
         with patch.object(billing_module, "_requirements_cache", [mock_req]):
             result = build_402_headers()
 
+        assert "PAYMENT-REQUIRED" in result
         assert "X-PAYMENT-REQUIRED" in result
+        assert isinstance(result["PAYMENT-REQUIRED"], str)
+        assert len(result["PAYMENT-REQUIRED"]) > 0
         assert isinstance(result["X-PAYMENT-REQUIRED"], str)
         assert len(result["X-PAYMENT-REQUIRED"]) > 0
 

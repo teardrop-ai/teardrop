@@ -105,13 +105,26 @@ async def test_message_send_anonymous_missing_payment_returns_402(anon_client, t
     test_settings.billing_enabled = True
     test_settings.rate_limit_requests_per_minute = 1_000
     audit_mock = AsyncMock(return_value=None)
+    seen: dict[str, dict] = {}
     monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
-    monkeypatch.setattr(
-        "teardrop.routers.a2a_messages.build_402_response_body",
-        lambda: {"error": "Payment required", "accepts": []},
-    )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-PAYMENT-REQUIRED": "abc"})
+
+    def _body(**kwargs):
+        seen["body"] = kwargs
+        return {
+            "error": kwargs["error"],
+            "accepts": [],
+            "x402Version": 2,
+            "resource": kwargs["resource"],
+            "extensions": kwargs["extensions"],
+        }
+
+    def _headers(**kwargs):
+        seen["headers"] = kwargs
+        return {"PAYMENT-REQUIRED": "abc", "X-PAYMENT-REQUIRED": "legacy"}
+
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_response_body", _body)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", _headers)
 
     resp = await anon_client.post(
         "/message:send",
@@ -119,8 +132,13 @@ async def test_message_send_anonymous_missing_payment_returns_402(anon_client, t
     )
 
     assert resp.status_code == 402
-    assert resp.headers["x-payment-required"] == "abc"
+    assert resp.headers["payment-required"] == "abc"
+    assert resp.headers["x-payment-required"] == "legacy"
     assert resp.json()["error"] == "Payment required"
+    assert resp.json()["resource"]["url"] == "http://test/message:send"
+    assert resp.json()["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
+    assert seen["body"]["resource"]["mimeType"] == "application/json"
+    assert seen["headers"]["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
     audit_mock.assert_not_awaited()
 
 
@@ -133,13 +151,17 @@ async def test_message_send_anonymous_missing_payment_empty_body_returns_402(ano
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
     monkeypatch.setattr(
         "teardrop.routers.a2a_messages.build_402_response_body",
-        lambda: {"error": "Payment required", "accepts": []},
+        lambda **kwargs: {"error": "Payment required", "accepts": [], "x402Version": 2},
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-PAYMENT-REQUIRED": "abc"})
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_headers",
+        lambda **kwargs: {"PAYMENT-REQUIRED": "abc", "X-PAYMENT-REQUIRED": "abc"},
+    )
 
     resp = await anon_client.post("/message:send")
 
     assert resp.status_code == 402
+    assert resp.headers["payment-required"] == "abc"
     assert resp.headers["x-payment-required"] == "abc"
     assert resp.json()["error"] == "Payment required"
     audit_mock.assert_not_awaited()
@@ -154,9 +176,12 @@ async def test_message_send_anonymous_missing_payment_invalid_json_returns_402(a
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
     monkeypatch.setattr(
         "teardrop.routers.a2a_messages.build_402_response_body",
-        lambda: {"error": "Payment required", "accepts": []},
+        lambda **kwargs: {"error": "Payment required", "accepts": [], "x402Version": 2},
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-PAYMENT-REQUIRED": "abc"})
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_headers",
+        lambda **kwargs: {"PAYMENT-REQUIRED": "abc", "X-PAYMENT-REQUIRED": "abc"},
+    )
 
     resp = await anon_client.post(
         "/message:send",
@@ -165,6 +190,7 @@ async def test_message_send_anonymous_missing_payment_invalid_json_returns_402(a
     )
 
     assert resp.status_code == 402
+    assert resp.headers["payment-required"] == "abc"
     assert resp.headers["x-payment-required"] == "abc"
     assert resp.json()["error"] == "Payment required"
     audit_mock.assert_not_awaited()
@@ -292,7 +318,10 @@ async def test_message_send_anonymous_invalid_payment_returns_402(anon_client, t
         "billing.verify_payment",
         AsyncMock(return_value=BillingResult(verified=False, error="Payment verification failed: bad signature")),
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-Payment-Required": "1"})
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_headers",
+        lambda **kwargs: {"PAYMENT-REQUIRED": "1", "X-Payment-Required": "1"},
+    )
 
     resp = await anon_client.post(
         "/message:send",
