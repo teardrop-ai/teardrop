@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -98,6 +99,22 @@ def _patch_success_path(monkeypatch, test_settings, *, billing_enabled: bool = T
     monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", AsyncMock(return_value=None))
     monkeypatch.setattr("teardrop.routers.a2a_messages.dispatch_settlement", _noop_dispatch_settlement)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", AsyncMock(return_value=None))
+
+
+def test_a2a_bazaar_extension_uses_self_contained_body_schema():
+    from x402.extensions.bazaar import validate_discovery_extension
+
+    from teardrop.routers.a2a_messages import _a2a_402_extensions
+
+    bazaar = _a2a_402_extensions()["bazaar"]
+    body_schema = bazaar["schema"]["properties"]["input"]["properties"]["body"]
+
+    result = validate_discovery_extension(bazaar)
+
+    assert result.valid, result.errors
+    assert '"$defs"' not in json.dumps(body_schema)
+    assert '"$ref"' not in json.dumps(body_schema)
+    assert body_schema["properties"]["message"]["type"] == "object"
 
 
 @pytest.mark.anyio

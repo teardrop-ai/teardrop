@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import uuid
+from copy import deepcopy
 from typing import Any
 
 import jwt
@@ -108,6 +109,56 @@ _A2A_BAZAAR_OUTPUT_EXAMPLE = {
 }
 
 
+def _flatten_embedded_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Inline local refs so an embedded schema remains self-contained.
+
+    Pydantic emits ``$defs`` plus root-anchored ``$ref`` values. Once that
+    schema is nested under Bazaar's ``info.input.body``, those references no
+    longer point at valid locations. Inline them before embedding so the body
+    schema validates both locally and with external discovery validators.
+    """
+
+    root = deepcopy(schema)
+    defs: dict[str, Any] = {}
+    for defs_key in ("$defs", "definitions"):
+        defs_value = root.pop(defs_key, None)
+        if isinstance(defs_value, dict):
+            defs.update(defs_value)
+
+    def _resolve(node: Any, seen: tuple[str, ...] = ()) -> Any:
+        if isinstance(node, list):
+            return [_resolve(item, seen) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            ref_name = ""
+            if ref.startswith("#/$defs/"):
+                ref_name = ref.rsplit("/", 1)[-1]
+            elif ref.startswith("#/definitions/"):
+                ref_name = ref.rsplit("/", 1)[-1]
+            if ref_name and ref_name in defs:
+                if ref_name in seen:
+                    raise ValueError(f"Recursive schema reference: {ref_name}")
+                resolved = _resolve(deepcopy(defs[ref_name]), seen + (ref_name,))
+                if isinstance(resolved, dict):
+                    for key, value in node.items():
+                        if key == "$ref":
+                            continue
+                        resolved[key] = _resolve(value, seen)
+                return resolved
+
+        flattened: dict[str, Any] = {}
+        for key, value in node.items():
+            if key in {"$defs", "definitions"}:
+                continue
+            flattened[key] = _resolve(value, seen)
+        return flattened
+
+    return _resolve(root)
+
+
 def _a2a_402_resource(request: Request) -> dict[str, str]:
     base_url = public_base_url(request, settings)
     return {
@@ -120,7 +171,7 @@ def _a2a_402_resource(request: Request) -> dict[str, str]:
 def _a2a_402_extensions() -> dict[str, Any]:
     extension = declare_discovery_extension(
         input=_A2A_BAZAAR_INPUT_EXAMPLE,
-        input_schema=A2ASendMessageRequest.model_json_schema(by_alias=True),
+        input_schema=_flatten_embedded_json_schema(A2ASendMessageRequest.model_json_schema(by_alias=True)),
         body_type="json",
         output=OutputConfig(example=_A2A_BAZAAR_OUTPUT_EXAMPLE),
     )
