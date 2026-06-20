@@ -125,6 +125,92 @@ async def test_message_send_anonymous_missing_payment_returns_402(anon_client, t
 
 
 @pytest.mark.anyio
+async def test_message_send_anonymous_missing_payment_empty_body_returns_402(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.rate_limit_requests_per_minute = 1_000
+    audit_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_response_body",
+        lambda: {"error": "Payment required", "accepts": []},
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-PAYMENT-REQUIRED": "abc"})
+
+    resp = await anon_client.post("/message:send")
+
+    assert resp.status_code == 402
+    assert resp.headers["x-payment-required"] == "abc"
+    assert resp.json()["error"] == "Payment required"
+    audit_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_message_send_anonymous_missing_payment_invalid_json_returns_402(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.rate_limit_requests_per_minute = 1_000
+    audit_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_response_body",
+        lambda: {"error": "Payment required", "accepts": []},
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda: {"X-PAYMENT-REQUIRED": "abc"})
+
+    resp = await anon_client.post(
+        "/message:send",
+        content="{",
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert resp.status_code == 402
+    assert resp.headers["x-payment-required"] == "abc"
+    assert resp.json()["error"] == "Payment required"
+    audit_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_message_send_anonymous_paid_invalid_json_returns_422(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.rate_limit_requests_per_minute = 1_000
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+
+    resp = await anon_client.post(
+        "/message:send",
+        content="{",
+        headers={
+            "Content-Type": "application/json",
+            "X-PAYMENT": "signed-payment",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid JSON body"
+
+
+@pytest.mark.anyio
+async def test_message_send_authenticated_invalid_json_returns_422(auth_header, anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.rate_limit_requests_per_minute = 1_000
+    test_settings.rate_limit_agent_rpm = 1_000
+    test_settings.rate_limit_org_agent_rpm = 1_000
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+
+    resp = await anon_client.post(
+        "/message:send",
+        content="{",
+        headers={
+            **auth_header,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid JSON body"
+
+
+@pytest.mark.anyio
 async def test_message_send_anonymous_x402_success_returns_task(anon_client, test_settings, monkeypatch):
     _patch_success_path(monkeypatch, test_settings)
     audit_mock = AsyncMock(return_value=None)

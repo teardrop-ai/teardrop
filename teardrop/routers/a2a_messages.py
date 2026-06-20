@@ -359,14 +359,9 @@ async def message_send(request: Request) -> JSONResponse:
             content={"error": "A2A inbound endpoint disabled"},
         )
 
-    try:
-        raw_body = await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid JSON body")
-
-    body, rpc_id = _parse_send_body(raw_body)
-    user_message = _message_text(body.message)
+    run_id = str(uuid.uuid4())
     payload = _parse_auth_payload(request)
+    payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
 
     org_id = payload.get("org_id", "") if payload else ""
     user_id = payload.get("sub", "") if payload else ""
@@ -378,6 +373,19 @@ async def message_send(request: Request) -> JSONResponse:
 
     if payload is None:
         await _enforce_anonymous_rate_limit(request)
+        if settings.billing_enabled and not payment_header:
+            # Registry probes may omit or malform the body; unpaid anonymous
+            # callers should still receive the x402 challenge first.
+            try:
+                _402_body = build_402_response_body()
+                _402_hdrs = build_402_headers()
+            except RuntimeError:
+                logger.warning("x402 billing not initialised; cannot issue payment requirements run_id=%s", run_id)
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"error": "Payment service temporarily unavailable"},
+                )
+            return JSONResponse(status_code=402, content=_402_body, headers=_402_hdrs)
     else:
         await _enforce_rate_limit(
             f"a2a:msg:user:{user_id}",
@@ -392,7 +400,13 @@ async def message_send(request: Request) -> JSONResponse:
                 extra_headers={"X-RateLimit-Scope": "org"},
             )
 
-    run_id = str(uuid.uuid4())
+    try:
+        raw_body = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid JSON body")
+
+    body, rpc_id = _parse_send_body(raw_body)
+    user_message = _message_text(body.message)
     resolved_task_id = body.task_id or run_id
     scoped_thread_id = f"{user_id or 'anonymous-a2a'}:{body.task_id or body.context_id or run_id}"
 
@@ -403,18 +417,6 @@ async def message_send(request: Request) -> JSONResponse:
     billing = BillingResult()
     if payload is None:
         if settings.billing_enabled:
-            payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
-            if not payment_header:
-                try:
-                    _402_body = build_402_response_body()
-                    _402_hdrs = build_402_headers()
-                except RuntimeError:
-                    logger.warning("x402 billing not initialised; cannot issue payment requirements run_id=%s", run_id)
-                    return JSONResponse(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        content={"error": "Payment service temporarily unavailable"},
-                    )
-                return JSONResponse(status_code=402, content=_402_body, headers=_402_hdrs)
             from billing import verify_payment
 
             billing = await verify_payment(payment_header)
@@ -446,7 +448,6 @@ async def message_send(request: Request) -> JSONResponse:
                     headers=_402_hdrs,
                 )
     else:
-        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
         try:
             billing, gate_response = await _run_billing_gate(
                 request,

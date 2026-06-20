@@ -150,6 +150,64 @@ async def test_agent_card_headers_and_legacy_alias(api_client):
 
 
 @pytest.mark.anyio
+async def test_x402_discovery_metadata(api_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.mcp_x402_enabled = True
+    monkeypatch.setattr(
+        "teardrop.routers.system.build_402_response_body",
+        lambda: {
+            "error": "Payment required",
+            "accepts": [{"scheme": "exact", "network": "eip155:8453", "maxAmountRequired": "0.01"}],
+            "x402Version": 2,
+        },
+    )
+
+    resp = await api_client.get("/.well-known/x402")
+
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "public, max-age=300"
+    assert "etag" in resp.headers
+    body = resp.json()
+    assert body["x402Version"] == 2
+    assert body["billing"] == {
+        "enabled": True,
+        "scheme": test_settings.x402_scheme,
+        "network": test_settings.x402_network,
+        "pricing_endpoint": "http://test/billing/pricing",
+    }
+    assert body["endpoints"]["a2a_message"] == "/message:send"
+    assert body["endpoints"]["mcp_tools"] == "/tools/mcp"
+    assert body["resources"][0]["path"] == "/agent/run"
+    assert body["resources"][1] == {
+        "path": "/message:send",
+        "url": "http://test/message:send",
+        "method": "POST",
+        "protocol": "a2a",
+        "auth_modes": ["bearer", "x402"],
+        "description": "Blocking public A2A endpoint for external agent callers.",
+    }
+    assert body["resources"][2] == {
+        "path": "/tools/mcp",
+        "url": "http://test/tools/mcp",
+        "method": "POST",
+        "protocol": "mcp",
+        "auth_modes": ["bearer", "x402"],
+        "description": "MCP discovery and optional paid tool execution gateway.",
+    }
+    assert body["accepts"] == [{"scheme": "exact", "network": "eip155:8453", "maxAmountRequired": "0.01"}]
+
+    json_resp = await api_client.get("/.well-known/x402.json")
+    assert json_resp.status_code == 200
+    assert json_resp.json() == body
+
+    cached_resp = await api_client.get(
+        "/.well-known/x402",
+        headers={"If-None-Match": resp.headers["etag"]},
+    )
+    assert cached_resp.status_code == 304
+
+
+@pytest.mark.anyio
 async def test_mcp_server_card(api_client, test_settings):
     test_settings.agent_card_icon_url = "https://example.com/icon.png"
     resp = await api_client.get("/.well-known/mcp/server-card.json")

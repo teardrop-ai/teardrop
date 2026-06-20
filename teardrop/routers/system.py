@@ -13,6 +13,7 @@ import asyncpg
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from billing import build_402_response_body
 from org_tools import list_marketplace_tools
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
@@ -251,6 +252,74 @@ def _build_oauth_protected_resource_content(request: Request, resource_path: str
     }
 
 
+def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
+    current_settings = get_settings()
+    base_url = _public_base_url(request, current_settings)
+    endpoints: dict[str, str] = {
+        "pricing": "/billing/pricing",
+        "docs": "/docs",
+        "agent_run": "/agent/run",
+        "mcp_tools": "/tools/mcp",
+    }
+    resources: list[dict[str, Any]] = [
+        {
+            "path": "/agent/run",
+            "url": f"{base_url}/agent/run",
+            "method": "POST",
+            "protocol": "ag-ui",
+            "auth_modes": ["bearer"],
+            "description": "Streaming Teardrop agent execution endpoint.",
+        },
+        {
+            "path": "/tools/mcp",
+            "url": f"{base_url}/tools/mcp",
+            "method": "POST",
+            "protocol": "mcp",
+            "auth_modes": ["bearer", *(["x402"] if current_settings.mcp_x402_enabled else [])],
+            "description": "MCP discovery and optional paid tool execution gateway.",
+        },
+    ]
+    if current_settings.a2a_inbound_enabled:
+        endpoints["a2a_message"] = "/message:send"
+        resources.insert(
+            1,
+            {
+                "path": "/message:send",
+                "url": f"{base_url}/message:send",
+                "method": "POST",
+                "protocol": "a2a",
+                "auth_modes": ["bearer", *(["x402"] if current_settings.billing_enabled else ["anonymous"])],
+                "description": "Blocking public A2A endpoint for external agent callers.",
+            },
+        )
+
+    accepts: list[dict[str, Any]] = []
+    x402_version = 2
+    if current_settings.billing_enabled:
+        try:
+            payment_body = build_402_response_body()
+        except RuntimeError:
+            logger.debug("x402 discovery requested before billing requirements were initialized", exc_info=True)
+        else:
+            accepts = payment_body.get("accepts", [])
+            x402_version = int(payment_body.get("x402Version", 2))
+
+    return {
+        "x402Version": x402_version,
+        "accepts": accepts,
+        "billing": {
+            "enabled": current_settings.billing_enabled,
+            "scheme": current_settings.x402_scheme,
+            "network": current_settings.x402_network,
+            "pricing_endpoint": f"{base_url}/billing/pricing",
+        },
+        "endpoints": endpoints,
+        "resources": resources,
+        "homepage": base_url,
+        "documentationUrl": f"{base_url}/docs",
+    }
+
+
 @router.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs")
@@ -336,6 +405,18 @@ async def jwks() -> JSONResponse:
 async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
     return _json_discovery_response(request, _build_agent_card_content(request))
+
+
+@router.get("/.well-known/x402", tags=["System"])
+async def x402_discovery(request: Request) -> Response:
+    """Public x402 metadata for registries and validators."""
+    return _json_discovery_response(request, _build_x402_discovery_content(request))
+
+
+@router.get("/.well-known/x402.json", include_in_schema=False, tags=["System"])
+async def x402_discovery_json(request: Request) -> Response:
+    """Legacy JSON alias for x402 discovery metadata."""
+    return _json_discovery_response(request, _build_x402_discovery_content(request))
 
 
 @router.get("/.well-known/agent.json", include_in_schema=False, tags=["A2A"])

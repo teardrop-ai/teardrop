@@ -591,11 +591,14 @@ The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway un
 
 The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. `supportedInterfaces` now advertises both the streaming AG-UI surface (`/agent/run`) and the blocking inbound A2A surface (`/message:send`).
 
+Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`.
+
 ### Inbound A2A entrypoint
 
 External agents can call Teardrop directly over `POST /message:send`.
 
 - Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response.
+- Unpaid anonymous probes receive the `402 Payment Required` challenge before request-body validation, which keeps registry validators compatible with empty or malformed probe payloads.
 - Authenticated callers may present a Teardrop JWT and reuse the existing credit/x402 billing gate.
 - The current implementation is a single-turn blocking endpoint: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
 - Operators may disable the surface with `A2A_INBOUND_ENABLED=false`; the endpoint then returns `404` and the public agent card stops advertising `a2a_message`.
@@ -727,6 +730,14 @@ When a delegation occurs during an agent run, the final `USAGE_SUMMARY` and `BIL
 
 ---
 
+## Publishing to Agentic Market
+
+Use the full public URL of the paid A2A surface, for example `https://api.teardrop.dev/message:send`, with method `POST`.
+
+Do not register the bare origin `https://api.teardrop.dev/`. `GET /` redirects to `/docs`, and `POST /` is not a paid Teardrop entrypoint.
+
+Agentic Market validators may probe `/.well-known/x402`, `/.well-known/x402.json`, and the configured endpoint URL. Teardrop serves those discovery aliases publicly and issues the x402 challenge on unpaid anonymous `POST /message:send` requests before body validation.
+
 ## Publishing to Smithery
 
 Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-card.json`. To distribute on Smithery:
@@ -762,6 +773,8 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
 | `POST` | `/message:send` | Bearer or x402 | Blocking inbound A2A endpoint for external agents (when enabled) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
+| `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators |
+| `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |
 | `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
 | `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
 | `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
