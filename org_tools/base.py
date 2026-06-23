@@ -50,8 +50,10 @@ class OrgTool(BaseModel):
     description: str
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = None
-    webhook_url: str
+    webhook_url: str | None = None
     webhook_method: str
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
     has_auth: bool
     timeout_seconds: int
     is_active: bool
@@ -157,6 +159,8 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         output_schema=output_schema_raw,
         webhook_url=row["webhook_url"],
         webhook_method=row["webhook_method"],
+        mcp_server_id=row.get("mcp_server_id"),
+        mcp_tool_name=row.get("mcp_tool_name"),
         has_auth=row["auth_header_name"] is not None,
         timeout_seconds=row["timeout_seconds"],
         is_active=row["is_active"],

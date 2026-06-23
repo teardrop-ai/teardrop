@@ -45,6 +45,13 @@ _SAFE_SCHEMA_KEYS: set[str] = {
 _SAFE_SCHEMA_TYPES: set[str] = {"object", "string", "integer", "number", "boolean", "array"}
 
 
+def _safe_empty_object_schema(description: str | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "object", "properties": {}}
+    if description:
+        schema["description"] = description
+    return schema
+
+
 @lru_cache(maxsize=8)
 def _fernet_for_key(key: str) -> Fernet:
     return Fernet(key.encode())
@@ -181,3 +188,132 @@ def validate_safe_schema_subset(schema: dict[str, Any]) -> list[str]:
 
     _walk(schema, "$")
     return errors
+
+
+def normalize_to_safe_schema_subset(schema: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    """Drop unsupported JSON-Schema features while preserving the safe subset.
+
+    The normalizer is intentionally lossy: unsupported keywords and unsupported
+    union/null types are removed so the result can pass ``validate_safe_schema_subset``
+    and be rendered by Teardrop's runtime tooling.
+    """
+
+    dropped: list[str] = []
+
+    def _copy_common_keys(source: dict[str, Any], target: dict[str, Any]) -> None:
+        for key in ("description", "title", "default", "enum"):
+            if key in source:
+                target[key] = source[key]
+
+    def _normalize_type(raw_type: Any, path: str, *, fallback: str) -> str:
+        if isinstance(raw_type, str):
+            if raw_type in _SAFE_SCHEMA_TYPES:
+                return raw_type
+            dropped.append(f"{path}.type={raw_type}: type not supported")
+            return fallback
+        if isinstance(raw_type, list):
+            supported = [item for item in raw_type if item in _SAFE_SCHEMA_TYPES]
+            removed = [item for item in raw_type if item not in _SAFE_SCHEMA_TYPES]
+            if removed:
+                dropped.append(f"{path}.type={removed}: type not supported")
+            if supported:
+                return supported[0]
+            return fallback
+        if raw_type is not None:
+            dropped.append(f"{path}.type: invalid type declaration")
+        return fallback
+
+    def _normalize_node(node: Any, path: str, *, root: bool = False) -> dict[str, Any]:
+        if not isinstance(node, dict):
+            dropped.append(f"{path}: schema node replaced with safe default")
+            return _safe_empty_object_schema() if root else {"type": "string"}
+
+        if root:
+            fallback = "object"
+        elif "properties" in node:
+            fallback = "object"
+        elif "items" in node:
+            fallback = "array"
+        else:
+            fallback = "string"
+
+        schema_type = _normalize_type(node.get("type"), path, fallback=fallback)
+
+        if schema_type == "object":
+            normalized: dict[str, Any] = {"type": "object", "properties": {}}
+            _copy_common_keys(node, normalized)
+
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                normalized_props: dict[str, Any] = {}
+                for key, value in properties.items():
+                    normalized_props[key] = _normalize_node(value, f"{path}.properties.{key}")
+                normalized["properties"] = normalized_props
+            elif properties is not None:
+                dropped.append(f"{path}.properties: expected object")
+
+            required = node.get("required", [])
+            if isinstance(required, list):
+                filtered_required = [name for name in required if name in normalized["properties"]]
+                if len(filtered_required) != len(required):
+                    dropped.append(f"{path}.required: removed unknown property references")
+                if filtered_required:
+                    normalized["required"] = filtered_required
+            elif required is not None:
+                dropped.append(f"{path}.required: expected array")
+
+            for key in node.keys():
+                if key in {"type", "properties", "required", "description", "title", "default", "enum"}:
+                    continue
+                dropped.append(f"{path}.{key}: keyword not supported")
+
+            return normalized
+
+        if schema_type == "array":
+            normalized = {"type": "array"}
+            _copy_common_keys(node, normalized)
+            items = node.get("items")
+            if items is None:
+                normalized["items"] = {"type": "string"}
+            else:
+                normalized["items"] = _normalize_node(items, f"{path}.items")
+
+            for key in node.keys():
+                if key in {"type", "items", "description", "title", "default", "enum"}:
+                    continue
+                dropped.append(f"{path}.{key}: keyword not supported")
+
+            return normalized
+
+        normalized = {"type": schema_type}
+        _copy_common_keys(node, normalized)
+
+        if schema_type in {"integer", "number"}:
+            for key in ("minimum", "maximum"):
+                if key in node:
+                    normalized[key] = node[key]
+        if schema_type == "string":
+            for key in ("minLength", "maxLength", "pattern"):
+                if key in node:
+                    normalized[key] = node[key]
+
+        for key in node.keys():
+            if key in {
+                "type",
+                "description",
+                "title",
+                "default",
+                "enum",
+                "minimum",
+                "maximum",
+                "minLength",
+                "maxLength",
+                "pattern",
+            }:
+                continue
+            dropped.append(f"{path}.{key}: keyword not supported")
+
+        return normalized
+
+    normalized = _normalize_node(schema or {}, "$", root=True)
+    return normalized, dropped

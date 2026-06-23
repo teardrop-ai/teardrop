@@ -18,5 +18,15 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Describes the marketplace catalog surface for platform tools."
+  },
+  {
+    "id": "marketplace.community_tools.001",
+    "messages": [{"role": "user", "content": "Can a community marketplace tool be backed by either a webhook or an MCP server, and does the buyer need to care which transport it uses?"}],
+    "expected_text_contains": ["webhook", "MCP", "buyer", "qualified", "transparent"],
+    "expected_text_not_contains": ["must choose transport"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains that community marketplace tools may be webhook- or MCP-backed while remaining transparent to subscribers and buyers."
   }
 ]

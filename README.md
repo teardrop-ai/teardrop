@@ -66,6 +66,7 @@ Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
 - Public catalog responses include `category`, `total_calls`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
 - Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages at `GET /marketplace/catalog/{org_slug}/{tool_name}`, author profiles at `GET /marketplace/authors/{org_slug}`, and LLM-friendly discovery at `GET /marketplace/llms.txt`
+- Marketplace authors can register external MCP servers and turn discovered tools into listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`
 - Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`
 - Agent runs that call these tools incur their marketplace prices (in addition to token costs)
 - Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls

@@ -245,9 +245,12 @@ def _build_marketplace_langchain_tool(
     tool_row: dict[str, Any],
     qualified_name: str,
 ) -> StructuredTool:
-    """Wrap a marketplace tool row as a LangChain StructuredTool via webhook."""
+    """Wrap a marketplace tool row as a LangChain StructuredTool via webhook or MCP."""
     import json as _json
 
+    from mcp_client.crud import get_mcp_server_by_id
+    from mcp_client.runtime import build_mcp_backed_tool
+    from org_tools.runtime import _record_event
     from shared.webhook import WebhookCaller, WebhookCallError
     from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
     from tools.shared import build_pydantic_model, decrypt_header_value
@@ -258,6 +261,65 @@ def _build_marketplace_langchain_tool(
 
     model_name = f"MPTool_{qualified_name.replace('/', '_')}_Input"
     args_model = build_pydantic_model(qualified_name, raw_schema, model_name=model_name)
+
+    if tool_row.get("mcp_server_id"):
+
+        async def _load_server():
+            return await get_mcp_server_by_id(tool_row["mcp_server_id"])
+
+        async def _on_success(latency_ms: int) -> None:
+            await _record_event(
+                tool_row["org_id"],
+                tool_row["id"],
+                tool_row["name"],
+                "executed",
+                actor_id="agent",
+                detail={
+                    "latency_ms": latency_ms,
+                    "transport": "mcp",
+                    "server_id": tool_row.get("mcp_server_id"),
+                    "qualified_name": qualified_name,
+                },
+            )
+
+        async def _on_failure(error_type: str, tripped: bool) -> None:
+            await _record_event(
+                tool_row["org_id"],
+                tool_row["id"],
+                tool_row["name"],
+                "failed",
+                actor_id="agent",
+                detail={
+                    "error_type": error_type,
+                    "transport": "mcp",
+                    "server_id": tool_row.get("mcp_server_id"),
+                    "qualified_name": qualified_name,
+                },
+            )
+            if not tripped:
+                return
+            try:
+                from marketplace import auto_deactivate_tool_for_health
+
+                await auto_deactivate_tool_for_health(str(tool_row["id"]))
+            except Exception:  # pragma: no cover
+                logger.warning(
+                    "auto_deactivate_tool_for_health failed tool_id=%s",
+                    tool_row.get("id"),
+                    exc_info=True,
+                )
+
+        return build_mcp_backed_tool(
+            _load_server,
+            tool_row.get("mcp_tool_name") or tool_row["name"],
+            qualified_name,
+            tool_row.get("marketplace_description") or tool_row.get("description", ""),
+            raw_schema,
+            output_schema=tool_row.get("output_schema"),
+            tool_id=str(tool_row.get("id")) if tool_row.get("id") else None,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
 
     _url = tool_row["webhook_url"]
     _method = tool_row.get("webhook_method", "GET")

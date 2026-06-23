@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -286,6 +287,40 @@ class TestBuildLangchainTool:
         schema = lc_tool.args_schema.model_json_schema()
         assert "query" in schema["properties"]
 
+    @pytest.mark.anyio
+    async def test_mcp_backed_tool_executes_via_mcp_runtime(self):
+        tool = _sample_org_tool(
+            webhook_url=None,
+            mcp_server_id="srv-1",
+            mcp_tool_name="remote_lookup",
+        )
+        lc_tool = _build_langchain_tool(tool, None, None)
+
+        fake_server = SimpleNamespace(id="srv-1", timeout_seconds=15)
+
+        class _Part:
+            def __init__(self, text: str):
+                self.text = text
+
+        class _Result:
+            def __init__(self, content):
+                self.content = content
+
+        class _Session:
+            async def call_tool(self, tool_name, kwargs):
+                assert tool_name == "remote_lookup"
+                assert kwargs == {"query": "test"}
+                return _Result([_Part('{"ok": true}')])
+
+        with (
+            patch("mcp_client.crud.get_mcp_server_by_id", AsyncMock(return_value=fake_server)),
+            patch("mcp_client.runtime._get_or_create_session", AsyncMock(return_value=_Session())),
+            patch("org_tools.runtime._record_event", AsyncMock()),
+        ):
+            result = await lc_tool.ainvoke({"query": "test"})
+
+        assert result == {"ok": True}
+
 
 # ─── CRUD (mocked DB) ────────────────────────────────────────────────────────
 
@@ -376,9 +411,8 @@ class TestCreateOrgTool:
             # First call to execute is the INSERT into org_tools
             insert_call = pool.execute.call_args_list[0]
             insert_args = insert_call[0]
-            # auth_header_enc is the 9th positional arg (index 8 in args tuple
-            # after the SQL string, so index 9 in 0-based)
-            enc_val = insert_args[9]  # auth_header_enc
+            # auth_header_enc follows the MCP target columns in the INSERT payload.
+            enc_val = insert_args[12]
             assert enc_val is not None
             assert enc_val != "Bearer secret123"  # should be encrypted
         finally:

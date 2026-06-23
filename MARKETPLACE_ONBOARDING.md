@@ -19,7 +19,9 @@ and collecting earnings.  All amounts are in **USDC atomic units** (6 decimals).
 - A valid **EIP-55 checksummed** Ethereum / Base address for settlement payouts.
   Use `Web3.to_checksum_address(addr)` if you are unsure — all lowercase or
   uppercase addresses will be rejected.
-- A publicly reachable HTTPS webhook URL that implements your tool logic.
+- One publication path:
+  - A registered MCP server you control, or
+  - A publicly reachable HTTPS webhook URL that implements your tool logic.
 
 ---
 
@@ -71,7 +73,91 @@ When a caller retrieves the catalog via `GET /marketplace/catalog`, they can opt
 
 ---
 
-## Step 3 — Create the Tool
+## Step 3A — Fast Path: Import from an MCP Server
+
+If you already expose tools through MCP, Teardrop can scan, preview, and publish
+them without hand-writing schemas.
+
+### 3A.1 Register the MCP Server
+
+```bash
+curl -X POST https://api.teardrop.ai/mcp/servers \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "weather_mcp",
+    "url": "https://your-service.example.com/mcp",
+    "auth_type": "bearer",
+    "auth_token": "<server-token>",
+    "timeout_seconds": 15
+  }'
+```
+
+### 3A.2 Preview Importable Tools
+
+```bash
+SERVER_ID="<mcp-server-id>"
+
+curl -X POST https://api.teardrop.ai/marketplace/import/preview \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_id": "'"$SERVER_ID"'"
+  }'
+```
+
+Preview returns, per tool:
+- a sanitized `proposed_name`
+- input/output schemas normalized to Teardrop's safe Draft 7 subset
+- a synthesized `output_schema` when the upstream MCP server omitted one
+- warnings when unsupported schema features were dropped or when the name had to be adjusted
+
+### 3A.3 Publish Confirmed MCP Tools
+
+Only org admins can publish imported tools because publishing creates a billable
+marketplace listing.
+
+```bash
+curl -X POST https://api.teardrop.ai/marketplace/import/publish \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_id": "'"$SERVER_ID"'",
+    "tools": [
+      {
+        "remote_tool_name": "current_weather",
+        "name": "current_weather",
+        "description": "Returns current weather for a given city.",
+        "marketplace_description": "Real-time weather data for any city worldwide.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "City name"}
+          },
+          "required": ["city"]
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "temperature": {"type": "number"},
+            "summary": {"type": "string"}
+          },
+          "required": ["temperature", "summary"]
+        },
+        "base_price_usdc": 10000,
+        "category": "data"
+      }
+    ]
+  }'
+```
+
+Imported tools are published immediately as ordinary marketplace listings. Buyers
+subscribe to them exactly the same way they subscribe to webhook-backed community
+tools; the backing transport is transparent to the buyer.
+
+---
+
+## Step 3B — Manual Path: Create a Webhook Tool
 
 Create your webhook-backed tool via `POST /tools`.  The `input_schema` field
 must be a valid JSON Schema object describing the tool's parameters. Published
@@ -120,7 +206,7 @@ curl -X POST https://api.teardrop.ai/tools \
 
 ---
 
-## Step 4 — Publish to the Marketplace
+## Step 4 — Publish a Manually Created Webhook Tool
 
 Enable marketplace visibility by patching the tool:
 
@@ -141,34 +227,37 @@ Your tool now appears in the public catalog at `GET /marketplace/catalog`, its
 detail page is available at `GET /marketplace/catalog/<your-org-slug>/weather_lookup`,
 and your author profile is available at `GET /marketplace/authors/<your-org-slug>`.
 
+If you used the MCP import flow in Step 3A, this patch step is not required because
+`POST /marketplace/import/publish` already created a published marketplace tool row.
+
 > Soft-deleting (`DELETE /tools/<id>`) a published tool automatically
 > deactivates all subscriber subscriptions so callers are not left with
 > a broken reference.
 
-### Webhook Health & Auto-Deactivation
+### Health & Auto-Deactivation
 
-Teardrop monitors the health of every published tool's webhook and protects
-both you and your subscribers from misbehaving endpoints:
+Teardrop monitors the health of every published marketplace tool and protects
+both you and your subscribers from misbehaving upstream endpoints:
 
-- **Failed calls are not billed.** When a webhook times out, returns
-  non-JSON content, returns HTTP 4xx/5xx, or fails auth-header decryption,
+- **Failed calls are not billed.** When a webhook or MCP-backed tool times out,
+  returns invalid data, returns HTTP 4xx/5xx, or fails credential handling,
   the calling org is **not** debited and you do **not** earn revenue for
   that call.
-- **Automatic deactivation (circuit breaker).** If a webhook fails 5 or
-  more times within a 10-minute window, the tool is automatically
+- **Automatic deactivation (circuit breaker).** If the backing webhook or MCP
+  server tool fails 5 or more times within a 10-minute window, the listing is automatically
   deactivated and removed from the marketplace catalog. All active
   subscriptions are cancelled and an email notification is sent to each
   subscriber org's admins/owners.
 - **Manual re-enable required.** Auto-deactivated tools do **not** recover
-  on their own. After fixing your webhook, re-enable the tool by sending
+  on their own. After fixing your upstream service, re-enable the tool by sending
   `PATCH /tools/<tool-id>` with `{"is_active": true}`. The failure counter
   resets on the false→true transition so you start with a clean window.
 - **Audit trail.** Every webhook call (success or failure) is recorded in
   `org_tool_events` with latency, status code, and a hashed (non-PII)
-  representation of the webhook host. Query your tool's history via the
+  representation of the upstream endpoint. Query your tool's history via the
   audit-events endpoints.
 
-To minimise nuisance deactivations, ensure your webhook:
+To minimise nuisance deactivations, ensure your upstream tool service:
 
 1. Returns valid JSON with `Content-Type: application/json`.
 2. Responds within the configured `timeout_seconds` (default 10s).

@@ -99,8 +99,10 @@ class OrgToolResponse(BaseModel):
     description: str
     input_schema: dict
     output_schema: dict | None
-    webhook_url: str
+    webhook_url: str | None
     webhook_method: str
+    mcp_server_id: str | None
+    mcp_tool_name: str | None
     has_auth: bool
     timeout_seconds: int
     is_active: bool
@@ -155,6 +157,8 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "output_schema": tool.output_schema,
         "webhook_url": tool.webhook_url,
         "webhook_method": tool.webhook_method,
+        "mcp_server_id": tool.mcp_server_id,
+        "mcp_tool_name": tool.mcp_tool_name,
         "has_auth": tool.has_auth,
         "timeout_seconds": tool.timeout_seconds,
         "is_active": tool.is_active,

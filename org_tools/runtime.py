@@ -145,6 +145,77 @@ def _build_langchain_tool(
     The returned tool calls the webhook URL with SSRF validation, timeout,
     and response truncation.
     """
+    if tool.mcp_server_id is not None:
+        from mcp_client.runtime import build_mcp_backed_tool  # noqa: PLC0415
+
+        async def _load_server():
+            from mcp_client.crud import get_mcp_server_by_id  # noqa: PLC0415
+
+            return await get_mcp_server_by_id(tool.mcp_server_id or "")
+
+        async def _on_success(latency_ms: int) -> None:
+            await _record_event(
+                tool.org_id,
+                tool.id,
+                tool.name,
+                "executed",
+                actor_id="agent",
+                detail={
+                    "latency_ms": latency_ms,
+                    "transport": "mcp",
+                    "server_id": tool.mcp_server_id,
+                },
+            )
+
+        async def _on_failure(error_type: str, tripped: bool) -> None:
+            await _record_event(
+                tool.org_id,
+                tool.id,
+                tool.name,
+                "failed",
+                actor_id="agent",
+                detail={
+                    "error_type": error_type,
+                    "transport": "mcp",
+                    "server_id": tool.mcp_server_id,
+                },
+            )
+            if not tripped:
+                return
+            try:
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("tool_id", str(tool.id))
+                    scope.set_tag("org_id", str(tool.org_id))
+                    scope.set_tag("error_type", error_type)
+                    scope.set_tag("mcp_server_id", str(tool.mcp_server_id))
+                    scope.set_tag("transport", "mcp")
+                    scope.set_tag("circuit_breaker", "tripped")
+                    sentry_sdk.capture_message(
+                        f"MCP circuit breaker tripped: tool_id={tool.id}",
+                        level="warning",
+                    )
+            except Exception:  # pragma: no cover
+                logger.debug("sentry capture failed in MCP failure path", exc_info=True)
+
+            try:
+                from marketplace import auto_deactivate_tool_for_health  # noqa: PLC0415
+
+                await auto_deactivate_tool_for_health(tool.id)
+            except Exception:  # pragma: no cover
+                logger.warning("auto_deactivate_tool_for_health failed tool_id=%s", tool.id, exc_info=True)
+
+        return build_mcp_backed_tool(
+            _load_server,
+            tool.mcp_tool_name or tool.name,
+            tool.name,
+            tool.description,
+            tool.input_schema,
+            output_schema=tool.output_schema,
+            tool_id=tool.id,
+            on_success=_on_success,
+            on_failure=_on_failure,
+        )
+
     args_model = _build_pydantic_model(tool.name, tool.input_schema)
 
     # Capture values in closure — avoid mutable state.
@@ -365,7 +436,7 @@ async def build_org_langchain_tools(
             )
             continue
 
-        if ot.webhook_method != "GET":
+        if ot.mcp_server_id is None and ot.webhook_method != "GET":
             logger.warning(
                 "Org tool '%s' (org=%s) skipped — non-GET webhook_method '%s' not permitted",
                 ot.name,

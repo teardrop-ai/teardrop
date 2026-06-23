@@ -38,7 +38,7 @@ async def create_org_tool(
     name: str,
     description: str,
     input_schema: dict[str, Any],
-    webhook_url: str,
+    webhook_url: str | None,
     auth_header_name: str | None,
     auth_header_value: str | None,
     timeout_seconds: int,
@@ -48,6 +48,8 @@ async def create_org_tool(
     marketplace_description: str = "",
     category: str = "",
     base_price_usdc: int = 0,
+    mcp_server_id: str | None = None,
+    mcp_tool_name: str | None = None,
 ) -> OrgTool:
     """Insert a new custom tool.  Raises on duplicate name or quota exceeded."""
     pool = _get_pool()
@@ -68,6 +70,13 @@ async def create_org_tool(
     if auth_header_value:
         auth_enc = _encrypt_header(auth_header_value)
 
+    if mcp_server_id is None and mcp_tool_name is not None:
+        raise ValueError("mcp_tool_name requires mcp_server_id")
+    if mcp_server_id is not None and not mcp_tool_name:
+        raise ValueError("mcp_server_id requires mcp_tool_name")
+    if webhook_url is None and mcp_server_id is None:
+        raise ValueError("Either webhook_url or mcp_server_id is required")
+
     # Validate: publishing requires author config
     if publish_as_mcp:
         from marketplace import get_author_config
@@ -85,12 +94,12 @@ async def create_org_tool(
         await pool.execute(
             "INSERT INTO org_tools"
             " (id, org_id, name, description, input_schema, output_schema,"
-            "  webhook_url, webhook_method,"
+            "  webhook_url, webhook_method, mcp_server_id, mcp_tool_name,"
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
             "  publish_as_mcp, marketplace_description, category, base_price_usdc,"
             "  created_at, updated_at, last_schema_changed_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12, $13, $14, $15, $16, $16, $16)",
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14, $15, $16, $17, $18, $18, $18)",
             tool_id,
             org_id,
             name,
@@ -99,6 +108,8 @@ async def create_org_tool(
             json.dumps(output_schema) if output_schema is not None else None,
             webhook_url,
             "GET",
+            mcp_server_id,
+            mcp_tool_name,
             auth_header_name,
             auth_enc,
             timeout_seconds,
@@ -125,6 +136,8 @@ async def create_org_tool(
         output_schema=output_schema,
         webhook_url=webhook_url,
         webhook_method="GET",
+        mcp_server_id=mcp_server_id,
+        mcp_tool_name=mcp_tool_name,
         has_auth=auth_header_name is not None,
         timeout_seconds=timeout_seconds,
         is_active=True,

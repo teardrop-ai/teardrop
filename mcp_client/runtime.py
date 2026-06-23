@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -21,6 +22,10 @@ from mcp_client.cache import _get_servers_cached
 from mcp_client.session import _get_or_create_session
 from teardrop.config import get_settings
 from tools.shared import build_pydantic_model
+
+McpServerLoader = OrgMcpServer | Callable[[], Awaitable[OrgMcpServer | None]]
+McpSuccessHandler = Callable[[int], Awaitable[None]] | None
+McpFailureHandler = Callable[[str, bool], Awaitable[None]] | None
 
 # ─── Dynamic Pydantic model (shared helper) ───────────────────────────────────
 
@@ -49,22 +54,136 @@ async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
 
     tools: list[dict[str, Any]] = []
     for mcp_tool in response.tools[: settings.max_mcp_tools_per_server]:
+        output_schema = getattr(mcp_tool, "outputSchema", None)
+        if output_schema is None:
+            output_schema = getattr(mcp_tool, "output_schema", None)
         tools.append(
             {
                 "name": mcp_tool.name,
                 "description": mcp_tool.description or "",
                 "input_schema": mcp_tool.inputSchema or {},
+                "output_schema": output_schema if isinstance(output_schema, dict) else None,
             }
         )
     return tools
 
 
+def _extract_mcp_result_payload(result: Any) -> dict[str, Any]:
+    structured = getattr(result, "structuredContent", None)
+    if structured is None:
+        structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        return structured
+    if structured is not None:
+        return {"result": structured}
+
+    if hasattr(result, "content") and result.content:
+        parts: list[str] = []
+        for part in result.content:
+            text = getattr(part, "text", None)
+            if text is None and isinstance(part, dict):
+                text = part.get("text")
+            if text is not None:
+                parts.append(str(text))
+        combined = "\n".join(parts)
+        if len(combined) > _MAX_RESPONSE_BYTES:
+            combined = combined[:_MAX_RESPONSE_BYTES] + "\n[TRUNCATED: MCP response exceeded 50 KB - content clipped]"
+        try:
+            parsed = json.loads(combined)
+            return parsed if isinstance(parsed, dict) else {"result": parsed}
+        except (json.JSONDecodeError, ValueError):
+            return {"result": combined}
+    return {"result": str(result)}
+
+
+async def _resolve_server(server_or_loader: McpServerLoader) -> OrgMcpServer | None:
+    if isinstance(server_or_loader, OrgMcpServer):
+        return server_or_loader
+    return await server_or_loader()
+
+
+def build_mcp_backed_tool(
+    server_or_loader: McpServerLoader,
+    mcp_tool_name: str,
+    name: str,
+    description: str,
+    input_schema: dict[str, Any],
+    *,
+    output_schema: dict[str, Any] | None = None,
+    tool_id: str | None = None,
+    on_success: McpSuccessHandler = None,
+    on_failure: McpFailureHandler = None,
+) -> StructuredTool:
+    """Wrap an MCP tool as a LangChain StructuredTool with breaker support."""
+    args_model = _build_pydantic_model(name, input_schema)
+    _remote_tool_name = mcp_tool_name
+    _tool_id = tool_id
+
+    async def _call_mcp_tool(**kwargs: Any) -> dict[str, Any]:
+        from tools.health import is_breaker_tripped, record_failure, record_success
+
+        if _tool_id and await is_breaker_tripped(_tool_id):
+            return {"error": "Tool temporarily unavailable (circuit breaker tripped)"}
+
+        started = time.monotonic()
+
+        async def _handle_failure(error_type: str, message: str) -> dict[str, Any]:
+            tripped = False
+            if _tool_id:
+                tripped = await record_failure(_tool_id)
+            if on_failure is not None:
+                await on_failure(error_type, tripped)
+            return {"error": message}
+
+        try:
+            server = await _resolve_server(server_or_loader)
+        except Exception as exc:
+            return await _handle_failure("server_lookup_failed", f"MCP server lookup failed: {type(exc).__name__}")
+
+        if server is None:
+            return await _handle_failure("server_unavailable", "MCP server unavailable")
+
+        try:
+            session = await _get_or_create_session(server)
+            result = await asyncio.wait_for(
+                session.call_tool(_remote_tool_name, kwargs),
+                timeout=float(server.timeout_seconds),
+            )
+        except asyncio.TimeoutError:
+            return await _handle_failure(
+                "timeout",
+                f"MCP tool '{_remote_tool_name}' timed out after {server.timeout_seconds}s",
+            )
+        except Exception as exc:
+            return await _handle_failure(
+                "upstream_error",
+                f"MCP tool '{_remote_tool_name}' failed: {type(exc).__name__}",
+            )
+
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if _tool_id:
+            await record_success(_tool_id)
+        if on_success is not None:
+            await on_success(latency_ms)
+        return _extract_mcp_result_payload(result)
+
+    return StructuredTool.from_function(
+        coroutine=_call_mcp_tool,
+        name=name,
+        description=description,
+        args_schema=args_model,
+        metadata={
+            "output_schema": output_schema,
+        },
+    )
+
+
 def _wrap_mcp_tool(
     server: OrgMcpServer,
-    session: Any,
     mcp_tool_name: str,
     mcp_tool_description: str,
     mcp_tool_input_schema: dict[str, Any],
+    mcp_tool_output_schema: dict[str, Any] | None = None,
 ) -> StructuredTool:
     """Wrap a single MCP tool as a LangChain StructuredTool.
 
@@ -72,44 +191,13 @@ def _wrap_mcp_tool(
     ``{server_name}__{tool_name}``
     """
     prefixed_name = f"{server.name}{_NAME_SEPARATOR}{mcp_tool_name}"
-    args_model = _build_pydantic_model(prefixed_name, mcp_tool_input_schema)
-
-    # Capture in closure
-    _session = session
-    _tool_name = mcp_tool_name
-    _timeout = server.timeout_seconds
-
-    async def _call_mcp_tool(**kwargs: Any) -> dict[str, Any]:
-        try:
-            result = await asyncio.wait_for(
-                _session.call_tool(_tool_name, kwargs),
-                timeout=float(_timeout),
-            )
-            # Extract text content from MCP result
-            if hasattr(result, "content") and result.content:
-                parts = []
-                for part in result.content:
-                    if hasattr(part, "text"):
-                        parts.append(part.text)
-                combined = "\n".join(parts)
-                if len(combined) > _MAX_RESPONSE_BYTES:
-                    combined = combined[:_MAX_RESPONSE_BYTES] + "\n[TRUNCATED: MCP response exceeded 50 KB - content clipped]"
-                # Try to parse as JSON for structured output
-                try:
-                    return json.loads(combined)
-                except (json.JSONDecodeError, ValueError):
-                    return {"result": combined}
-            return {"result": str(result)}
-        except asyncio.TimeoutError:
-            return {"error": f"MCP tool '{_tool_name}' timed out after {_timeout}s"}
-        except Exception as exc:
-            return {"error": f"MCP tool '{_tool_name}' failed: {type(exc).__name__}"}
-
-    return StructuredTool.from_function(
-        coroutine=_call_mcp_tool,
-        name=prefixed_name,
-        description=mcp_tool_description or f"Tool from MCP server '{server.name}'",
-        args_schema=args_model,
+    return build_mcp_backed_tool(
+        server,
+        mcp_tool_name,
+        prefixed_name,
+        mcp_tool_description or f"Tool from MCP server '{server.name}'",
+        mcp_tool_input_schema,
+        output_schema=mcp_tool_output_schema,
     )
 
 
@@ -211,10 +299,10 @@ async def build_mcp_langchain_tools(
                 try:
                     lc_tool = _wrap_mcp_tool(
                         server,
-                        session,
                         mcp_tool.name,
                         mcp_tool.description or "",
                         mcp_tool.inputSchema or {},
+                        getattr(mcp_tool, "outputSchema", None),
                     )
                     all_tools.append(lc_tool)
                     all_by_name[prefixed_name] = lc_tool

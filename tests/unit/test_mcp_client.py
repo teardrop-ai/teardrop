@@ -272,7 +272,9 @@ async def test_wrap_mcp_tool_marks_truncated_responses(monkeypatch):
         async def call_tool(self, tool_name, kwargs):
             return _Result([_Part("x" * (mcp_client._MAX_RESPONSE_BYTES + 1))])
 
-    tool = mcp_client._wrap_mcp_tool(server, _Session(), "list_files", "List files", {"type": "object"})
+    tool = mcp_client._wrap_mcp_tool(server, "list_files", "List files", {"type": "object"})
+
+    monkeypatch.setattr(mcp_client.runtime, "_get_or_create_session", AsyncMock(return_value=_Session()))
     result = await tool.ainvoke({})
 
     assert "TRUNCATED" in result["result"]

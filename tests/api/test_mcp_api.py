@@ -224,7 +224,7 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
         "teardrop.routers.org.mcp.discover_mcp_tools",
         AsyncMock(
             return_value=[
-                {"name": "add", "description": "Add numbers", "input_schema": {}},
+                {"name": "add", "description": "Add numbers", "input_schema": {}, "output_schema": {"type": "object"}},
             ]
         ),
     )
@@ -235,6 +235,7 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
     assert data["server_id"] == "srv-1"
     assert len(data["tools"]) == 1
     assert data["tools"][0]["name"] == "add"
+    assert data["tools"][0]["output_schema"] == {"type": "object"}
 
 
 @pytest.mark.anyio

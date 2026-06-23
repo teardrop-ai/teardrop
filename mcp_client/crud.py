@@ -111,6 +111,16 @@ async def get_org_mcp_server(server_id: str, org_id: str) -> OrgMcpServer | None
     return _row_to_model(row) if row else None
 
 
+async def get_mcp_server_by_id(server_id: str) -> OrgMcpServer | None:
+    """Return a single active server by ID, regardless of owning org."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM org_mcp_servers WHERE id = $1 AND is_active = TRUE",
+        server_id,
+    )
+    return _row_to_model(row) if row else None
+
+
 async def list_org_mcp_servers(org_id: str, *, active_only: bool = True) -> list[OrgMcpServer]:
     """List all MCP servers for an org."""
     pool = _get_pool()
