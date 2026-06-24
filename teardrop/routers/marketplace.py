@@ -67,8 +67,8 @@ class MarketplaceImportPublishToolRequest(BaseModel):
     remote_tool_name: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(..., min_length=1, max_length=500)
-    input_schema: dict = Field(..., description="Normalized Draft 7 schema for tool inputs")
-    output_schema: dict = Field(..., description="Confirmed Draft 7 schema for tool outputs")
+    input_schema: dict | None = Field(default=None, description="Normalized Draft 7 schema for tool inputs")
+    output_schema: dict | None = Field(default=None, description="Confirmed Draft 7 schema for tool outputs")
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory = ""
     base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
@@ -148,17 +148,10 @@ def _schema_status(dropped: list[str], *, synthesized: bool = False) -> str:
     return "unchanged"
 
 
-def _preview_import_tool(
+def _normalized_import_schemas(
     discovered_tool: dict[str, Any],
-    reserved_names: set[str],
-    *,
-    suggested_base_price_usdc: int,
-    quota_exceeded: bool,
-) -> dict[str, Any]:
-    remote_tool_name = str(discovered_tool.get("name") or "tool")
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str], bool]:
     description = str(discovered_tool.get("description") or "")
-    proposed_name, name_adjusted, collision_resolved = _propose_import_tool_name(remote_tool_name, reserved_names)
-
     normalized_input_schema, input_dropped = normalize_to_safe_schema_subset(discovered_tool.get("input_schema") or {})
 
     raw_output_schema = discovered_tool.get("output_schema")
@@ -169,6 +162,23 @@ def _preview_import_tool(
         normalized_output_schema = _synthesized_output_schema(description)
         output_dropped = []
         output_synthesized = True
+
+    return normalized_input_schema, normalized_output_schema, input_dropped, output_dropped, output_synthesized
+
+
+def _preview_import_tool(
+    discovered_tool: dict[str, Any],
+    reserved_names: set[str],
+    *,
+    suggested_base_price_usdc: int,
+    quota_exceeded: bool,
+) -> dict[str, Any]:
+    remote_tool_name = str(discovered_tool.get("name") or "tool")
+    description = str(discovered_tool.get("description") or "")
+    proposed_name, name_adjusted, collision_resolved = _propose_import_tool_name(remote_tool_name, reserved_names)
+    normalized_input_schema, normalized_output_schema, input_dropped, output_dropped, output_synthesized = (
+        _normalized_import_schemas(discovered_tool)
+    )
 
     warnings: list[str] = []
     if input_dropped:
@@ -314,6 +324,18 @@ async def preview_marketplace_import(
     pricing = await get_current_pricing()
     suggested_base_price_usdc = pricing.tool_call_cost if pricing is not None else 0
 
+    # Surface publish blockers up front so non-admin or unconfigured authors
+    # learn why /marketplace/import/publish would reject them, instead of
+    # discovering it only after preparing a publish payload. Additive fields.
+    author_config = await get_author_config(org_id)
+    is_org_admin = payload.get("role") == "admin"
+    blockers: list[str] = []
+    if not is_org_admin:
+        blockers.append("requires_org_admin")
+    if author_config is None:
+        blockers.append("settlement_wallet_missing")
+    can_publish = not blockers
+
     preview_tools: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
@@ -341,6 +363,8 @@ async def preview_marketplace_import(
         content={
             "server_id": body.server_id,
             "slots_remaining": slots_remaining,
+            "can_publish": can_publish,
+            "blockers": blockers,
             "tools": preview_tools,
             "errors": errors,
         }
@@ -408,14 +432,17 @@ async def publish_marketplace_import(
             continue
 
         try:
-            _validate_import_schema(item.input_schema, "input_schema")
-            _validate_import_schema(item.output_schema, "output_schema")
+            normalized_input_schema, normalized_output_schema, _, _, _ = _normalized_import_schemas(discovered_tool)
+            input_schema = item.input_schema if item.input_schema is not None else normalized_input_schema
+            output_schema = item.output_schema if item.output_schema is not None else normalized_output_schema
+            _validate_import_schema(input_schema, "input_schema")
+            _validate_import_schema(output_schema, "output_schema")
             created_tool = await create_org_tool(
                 org_id=org_id,
                 name=item.name,
                 description=item.description,
-                input_schema=item.input_schema,
-                output_schema=item.output_schema,
+                input_schema=input_schema,
+                output_schema=output_schema,
                 webhook_url=None,
                 auth_header_name=None,
                 auth_header_value=None,

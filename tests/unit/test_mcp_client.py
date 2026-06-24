@@ -237,6 +237,146 @@ async def test_delete_server_not_found(setup_mcp_client, monkeypatch):
     assert result is False
 
 
+# ─── Cascade: dependent marketplace listings ─────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_delete_server_cascades_dependent_tools(setup_mcp_client, monkeypatch):
+    """Soft-deleting a server deactivates all its published marketplace tools."""
+    pool = setup_mcp_client
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+    pool.fetchrow = AsyncMock(return_value={"name": "my_server"})
+    pool.fetch = AsyncMock(return_value=[{"id": "tool-a"}, {"id": "tool-b"}])
+
+    import mcp_client
+
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
+    deact_mock = AsyncMock()
+    monkeypatch.setattr("marketplace.auto_deactivate_tool_for_health", deact_mock)
+
+    from mcp_client import delete_org_mcp_server
+
+    result = await delete_org_mcp_server("srv-1", "org-1", actor_id="user-1")
+    assert result is True
+    assert deact_mock.await_count == 2
+    deact_mock.assert_any_await(
+        "tool-a",
+        event_actor_id="system:mcp_server_cascade",
+        event_reason="mcp_server_disabled_or_removed",
+        notification_reason="automatic — backing MCP server was disabled or removed",
+        capture_sentry=False,
+    )
+    deact_mock.assert_any_await(
+        "tool-b",
+        event_actor_id="system:mcp_server_cascade",
+        event_reason="mcp_server_disabled_or_removed",
+        notification_reason="automatic — backing MCP server was disabled or removed",
+        capture_sentry=False,
+    )
+
+
+@pytest.mark.anyio
+async def test_delete_server_no_dependent_tools(setup_mcp_client, monkeypatch):
+    """When no dependent tools exist, cascade is a no-op (no deactivation calls)."""
+    pool = setup_mcp_client
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+    pool.fetchrow = AsyncMock(return_value={"name": "my_server"})
+    pool.fetch = AsyncMock(return_value=[])
+
+    import mcp_client
+
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
+    deact_mock = AsyncMock()
+    monkeypatch.setattr("marketplace.auto_deactivate_tool_for_health", deact_mock)
+
+    from mcp_client import delete_org_mcp_server
+
+    result = await delete_org_mcp_server("srv-1", "org-1", actor_id="user-1")
+    assert result is True
+    deact_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_update_server_disable_cascades(setup_mcp_client, monkeypatch):
+    """Setting is_active=False on an active server cascades to its tools."""
+    pool = setup_mcp_client
+    # Current row is active; update returns the deactivated row.
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            _make_db_row(is_active=True),  # initial SELECT
+            _make_db_row(is_active=False),  # RETURNING *
+        ]
+    )
+    pool.fetch = AsyncMock(return_value=[{"id": "tool-a"}])
+
+    import mcp_client
+
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
+    deact_mock = AsyncMock()
+    monkeypatch.setattr("marketplace.auto_deactivate_tool_for_health", deact_mock)
+
+    from mcp_client import update_org_mcp_server
+
+    result = await update_org_mcp_server("srv-1", "org-1", actor_id="user-1", is_active=False)
+    assert result is not None
+    deact_mock.assert_awaited_once_with(
+        "tool-a",
+        event_actor_id="system:mcp_server_cascade",
+        event_reason="mcp_server_disabled_or_removed",
+        notification_reason="automatic — backing MCP server was disabled or removed",
+        capture_sentry=False,
+    )
+
+
+@pytest.mark.anyio
+async def test_update_server_enable_does_not_cascade(setup_mcp_client, monkeypatch):
+    """Re-enabling a server must NOT auto-reactivate tools (manual re-enable only)."""
+    pool = setup_mcp_client
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            _make_db_row(is_active=False),  # initial SELECT (currently inactive)
+            _make_db_row(is_active=True),  # RETURNING *
+        ]
+    )
+
+    import mcp_client
+
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
+    deact_mock = AsyncMock()
+    monkeypatch.setattr("marketplace.auto_deactivate_tool_for_health", deact_mock)
+
+    from mcp_client import update_org_mcp_server
+
+    result = await update_org_mcp_server("srv-1", "org-1", actor_id="user-1", is_active=True)
+    assert result is not None
+    deact_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_update_server_url_change_does_not_cascade(setup_mcp_client, monkeypatch):
+    """A URL-only update must not trigger cascade (only is_active False→True transition does)."""
+    pool = setup_mcp_client
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            _make_db_row(is_active=True),
+            _make_db_row(is_active=True, url="https://new.example.com/sse"),
+        ]
+    )
+
+    import mcp_client
+
+    monkeypatch.setattr(mcp_client.crud, "_evict_session", AsyncMock())
+    monkeypatch.setattr("tools.definitions.http_fetch.async_validate_url", AsyncMock(return_value=None))
+    deact_mock = AsyncMock()
+    monkeypatch.setattr("marketplace.auto_deactivate_tool_for_health", deact_mock)
+
+    from mcp_client import update_org_mcp_server
+
+    result = await update_org_mcp_server("srv-1", "org-1", actor_id="user-1", url="https://new.example.com/sse")
+    assert result is not None
+    deact_mock.assert_not_awaited()
+
+
 # ─── build_mcp_langchain_tools (empty case) ──────────────────────────────────
 
 

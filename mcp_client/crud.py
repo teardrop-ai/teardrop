@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg
+import asyncpg  # type: ignore[import-not-found]
 
 from mcp_client.base import (
     OrgMcpServer,
@@ -16,6 +16,7 @@ from mcp_client.base import (
     _get_pool,
     _record_event,
     _row_to_model,
+    logger,
 )
 from mcp_client.cache import invalidate_mcp_cache
 from mcp_client.session import _evict_session
@@ -132,6 +133,50 @@ async def list_org_mcp_servers(org_id: str, *, active_only: bool = True) -> list
     return [_row_to_model(r) for r in rows]
 
 
+async def _deactivate_dependent_marketplace_tools(server_id: str, org_id: str) -> None:
+    """Cascade-deactivate marketplace listings backed by a disabled/removed MCP server.
+
+    When an MCP server is soft-deleted or set ``is_active=False``, every
+    published ``org_tools`` row that targets it would otherwise remain in the
+    catalog and fail at runtime as ``server_unavailable`` until the circuit
+    breaker eventually trips. This proactively deactivates those listings via
+    the existing ``auto_deactivate_tool_for_health`` path, which preserves the
+    immutable audit trail, cache invalidation, subscription cascade, and
+    subscriber notification invariants.
+
+    Idempotent: rows already inactive are skipped by the SQL filter and by
+    ``auto_deactivate_tool_for_health``'s own early-return. Org-scoped.
+    """
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT id FROM org_tools WHERE mcp_server_id = $1 AND org_id = $2 AND is_active = TRUE",
+        server_id,
+        org_id,
+    )
+    if not rows:
+        return
+
+    from marketplace import auto_deactivate_tool_for_health  # noqa: PLC0415
+
+    for row in rows:
+        tool_id = str(row["id"])
+        try:
+            await auto_deactivate_tool_for_health(
+                tool_id,
+                event_actor_id="system:mcp_server_cascade",
+                event_reason="mcp_server_disabled_or_removed",
+                notification_reason="automatic — backing MCP server was disabled or removed",
+                capture_sentry=False,
+            )
+        except Exception:
+            logger.warning(
+                "cascade: auto_deactivate_tool_for_health failed server_id=%s tool_id=%s",
+                server_id,
+                tool_id,
+                exc_info=True,
+            )
+
+
 async def update_org_mcp_server(
     server_id: str,
     org_id: str,
@@ -208,6 +253,13 @@ async def update_org_mcp_server(
     await _evict_session(server_id)
     await invalidate_mcp_cache(org_id)
 
+    # Cascade: deactivating the server must deactivate its published marketplace
+    # listings so subscribers are not left with dead references. Re-enabling the
+    # server does NOT auto-reactivate tools — authors must re-enable manually,
+    # mirroring the circuit-breaker re-enable semantics.
+    if is_active is False and row["is_active"]:
+        await _deactivate_dependent_marketplace_tools(server_id, org_id)
+
     return _row_to_model(updated) if updated else None
 
 
@@ -226,4 +278,6 @@ async def delete_org_mcp_server(server_id: str, org_id: str, *, actor_id: str) -
         await _record_event(org_id, server_id, name, "deleted", actor_id)
         await _evict_session(server_id)
         await invalidate_mcp_cache(org_id)
+        # Cascade-deactivate marketplace listings backed by this server.
+        await _deactivate_dependent_marketplace_tools(server_id, org_id)
     return deleted

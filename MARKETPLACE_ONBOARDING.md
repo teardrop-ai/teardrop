@@ -16,9 +16,8 @@ and collecting earnings.  All amounts are in **USDC atomic units** (6 decimals).
 ## Prerequisites
 
 - An active Teardrop account with API access.
-- A valid **EIP-55 checksummed** Ethereum / Base address for settlement payouts.
-  Use `Web3.to_checksum_address(addr)` if you are unsure — all lowercase or
-  uppercase addresses will be rejected.
+- A valid Ethereum / Base settlement wallet (`0x` + 40 hex characters).
+  Teardrop stores the canonical **EIP-55 checksummed** form automatically.
 - One publication path:
   - A registered MCP server you control, or
   - A publicly reachable HTTPS webhook URL that implements your tool logic.
@@ -59,6 +58,8 @@ curl -X POST https://api.teardrop.ai/marketplace/author-config \
 
 The wallet can be updated at any time with the same endpoint.  Pending
 earnings are always settled to the wallet recorded **at withdrawal time**.
+The response echoes the canonical EIP-55 checksummed form, even if you pasted
+the address in lowercase.
 
 ---
 
@@ -115,7 +116,9 @@ Preview returns, per tool:
 ### 3A.3 Publish Confirmed MCP Tools
 
 Only org admins can publish imported tools because publishing creates a billable
-marketplace listing.
+marketplace listing. If you already called preview, `input_schema` and
+`output_schema` are optional here; when omitted, Teardrop reuses the normalized
+or synthesized versions from live discovery.
 
 ```bash
 curl -X POST https://api.teardrop.ai/marketplace/import/publish \
@@ -129,21 +132,6 @@ curl -X POST https://api.teardrop.ai/marketplace/import/publish \
         "name": "current_weather",
         "description": "Returns current weather for a given city.",
         "marketplace_description": "Real-time weather data for any city worldwide.",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "city": {"type": "string", "description": "City name"}
-          },
-          "required": ["city"]
-        },
-        "output_schema": {
-          "type": "object",
-          "properties": {
-            "temperature": {"type": "number"},
-            "summary": {"type": "string"}
-          },
-          "required": ["temperature", "summary"]
-        },
         "base_price_usdc": 10000,
         "category": "data"
       }
@@ -154,6 +142,38 @@ curl -X POST https://api.teardrop.ai/marketplace/import/publish \
 Imported tools are published immediately as ordinary marketplace listings. Buyers
 subscribe to them exactly the same way they subscribe to webhook-backed community
 tools; the backing transport is transparent to the buyer.
+
+### 3A.4 Test a Tool Before Publishing (Optional but Recommended)
+
+Before publishing, you can verify an MCP tool actually executes by firing a
+single diagnostic call. This is a **real, unbilled invocation** against your own
+MCP server — it does not write to the audit trail and does not interact with
+the circuit breaker.
+
+```bash
+curl -X POST https://api.teardrop.ai/mcp/servers/$SERVER_ID/test-tool \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_name": "current_weather",
+    "args": {"city": "San Francisco"}
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "latency_ms": 142,
+  "result": {"temperature": 18.5, "summary": "Partly cloudy"},
+  "error": null
+}
+```
+
+If the tool returns an error payload or raises an exception, `success` will be
+`false` with a description in `error` (containing only the exception type name,
+never secrets). Use this to catch misconfigured auth, broken upstream logic, or
+schema mismatches before your listing goes live.
 
 ---
 
@@ -256,6 +276,12 @@ both you and your subscribers from misbehaving upstream endpoints:
   `org_tool_events` with latency, status code, and a hashed (non-PII)
   representation of the upstream endpoint. Query your tool's history via the
   audit-events endpoints.
+- **Server disable/delete cascade.** If you soft-delete an MCP server
+  (`DELETE /mcp/servers/<id>`) or disable it (`PATCH /mcp/servers/<id>` with
+  `{"is_active": false}`), every marketplace listing backed by that server is
+  automatically deactivated. Subscribers are notified via email. Re-enabling the
+  server does **not** auto-reactivate tools — you must re-enable each tool
+  manually via `PATCH /tools/<tool-id>` with `{"is_active": true}`.
 
 To minimise nuisance deactivations, ensure your upstream tool service:
 
@@ -436,6 +462,6 @@ Pagination works the same way as earnings: pass `next_cursor` as `cursor`.
 | Error | Resolution |
 |---|---|
 | `422 settlement wallet` on publish | Complete Step 2 first |
-| `422 invalid checksum` | Use EIP-55 format (mixed-case hex) |
+| `422 invalid settlement wallet` | Use a valid `0x` + 40 hex address; Teardrop stores the checksummed form automatically |
 | Withdrawal stays `pending` for >30 min | The auto-sweep runs every 24 hours by default (configurable via `MARKETPLACE_SWEEP_INTERVAL_SECONDS`); if still stuck after a full sweep cycle, contact support who can trigger an admin reset |
 | `429 Too Many Requests` on catalog | Back off for 60 seconds (`Retry-After` header) |

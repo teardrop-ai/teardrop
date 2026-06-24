@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from marketplace.context import _get_pool
-from marketplace.models import AuthorConfig, MarketplaceCategory, MarketplaceTool, validate_eip55_address
+from marketplace.models import AuthorConfig, MarketplaceCategory, MarketplaceTool, normalize_eip55_address
 from teardrop.cache import TTLCache
 
 _CATALOG_SORT_COLUMNS = {
@@ -38,7 +38,7 @@ async def set_author_config(
     """Create or update the author's marketplace configuration."""
     pool = _get_pool()
 
-    wallet_error = validate_eip55_address(settlement_wallet)
+    normalized_wallet, wallet_error = normalize_eip55_address(settlement_wallet)
     if wallet_error is not None:
         raise ValueError(wallet_error)
 
@@ -54,13 +54,13 @@ async def set_author_config(
                 updated_at = EXCLUDED.updated_at
         """,
         org_id,
-        settlement_wallet,
+        normalized_wallet,
         now,
     )
 
     return AuthorConfig(
         org_id=org_id,
-        settlement_wallet=settlement_wallet,
+        settlement_wallet=normalized_wallet,
         created_at=now,
         updated_at=now,
     )

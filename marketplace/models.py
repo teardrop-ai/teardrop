@@ -98,20 +98,31 @@ class MarketplaceSubscription(BaseModel):
     subscribed_schema_hash: str | None = None
 
 
-def validate_eip55_address(address: str) -> str | None:
-    """Validate an Ethereum address. Returns error message or None if valid."""
+def normalize_eip55_address(address: str) -> tuple[str | None, str | None]:
+    """Return the canonical EIP-55 form of an address, or an error message."""
     if not _EIP55_PATTERN.match(address):
-        return "Invalid Ethereum address format (expected 0x + 40 hex characters)"
+        return None, "Invalid Ethereum address format (expected 0x + 40 hex characters)"
 
     try:
         from web3 import Web3
 
-        if address != Web3.to_checksum_address(address.lower()):
-            return "Address fails EIP-55 checksum — use checksummed format"
+        normalized_address = Web3.to_checksum_address(address.lower())
     except Exception:
-        return "Address checksum validation failed"
+        return None, "Address checksum validation failed"
 
-    if address == "0x" + "0" * 40:
-        return "Zero address is not a valid settlement wallet"
+    if normalized_address == "0x" + "0" * 40:
+        return None, "Zero address is not a valid settlement wallet"
+
+    return normalized_address, None
+
+
+def validate_eip55_address(address: str) -> str | None:
+    """Validate an Ethereum address. Returns error message or None if valid."""
+    normalized_address, error = normalize_eip55_address(address)
+    if error is not None:
+        return error
+
+    if address != normalized_address:
+        return "Address fails EIP-55 checksum — use checksummed format"
 
     return None

@@ -30,6 +30,7 @@ from marketplace import (
     set_author_config,
     validate_eip55_address,
 )
+from marketplace.models import normalize_eip55_address
 
 _NOW = datetime.now(timezone.utc)
 
@@ -89,6 +90,20 @@ class TestValidateEip55Address:
         assert err is not None
 
 
+class TestNormalizeEip55Address:
+    def test_lowercase_address_is_normalized(self):
+        normalized, err = normalize_eip55_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed")
+
+        assert err is None
+        assert normalized == "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+
+    def test_invalid_address_returns_error(self):
+        normalized, err = normalize_eip55_address("0x1234")
+
+        assert normalized is None
+        assert err is not None
+
+
 # ─── set_author_config ────────────────────────────────────────────────────────
 
 
@@ -115,6 +130,20 @@ class TestSetAuthorConfig:
         )
         assert isinstance(config, AuthorConfig)
         assert config.settlement_wallet == _VALID_ADDR
+
+    @pytest.mark.anyio
+    async def test_lowercase_wallet_is_stored_in_checksum_form(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        config = await set_author_config(
+            "org-1",
+            settlement_wallet="0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+        )
+
+        assert config.settlement_wallet == "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+        assert mock_pool.execute.await_args.args[2] == "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
 
 
 # ─── record_tool_call_earnings ────────────────────────────────────────────────

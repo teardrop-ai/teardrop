@@ -418,9 +418,30 @@ async def notify_subscribers_of_deactivation(qualified_tool_name: str, reason: s
     await _call_async(_NOTIFY_SUBSCRIBERS_OF_DEACTIVATION_ORIG, qualified_tool_name, reason)
 
 
-async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str | None = None) -> None:
-    """Auto-deactivate a community tool that breached health/error thresholds and notify subscribers."""
-    await _call_async(_AUTO_DEACTIVATE_TOOL_FOR_HEALTH_ORIG, tool_id, qualified_tool_name)
+async def auto_deactivate_tool_for_health(
+    tool_id: str,
+    qualified_tool_name: str | None = None,
+    *,
+    event_actor_id: str = "system:circuit_breaker",
+    event_reason: str = "circuit_breaker_tripped",
+    notification_reason: str = "automatic — repeated webhook failures",
+    capture_sentry: bool = True,
+) -> None:
+    """Auto-deactivate a community tool and notify subscribers.
+
+    Defaults preserve the existing circuit-breaker semantics. Keyword overrides
+    let callers reuse the same deactivation path for other automated causes,
+    such as a disabled or deleted backing MCP server.
+    """
+    await _call_async(
+        _AUTO_DEACTIVATE_TOOL_FOR_HEALTH_ORIG,
+        tool_id,
+        qualified_tool_name,
+        event_actor_id=event_actor_id,
+        event_reason=event_reason,
+        notification_reason=notification_reason,
+        capture_sentry=capture_sentry,
+    )
 
 
 def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:

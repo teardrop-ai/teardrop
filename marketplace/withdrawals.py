@@ -415,8 +415,21 @@ async def notify_subscribers_of_deactivation(
     await asyncio.gather(*coros, return_exceptions=True)
 
 
-async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str | None = None) -> None:
-    """Mark a tool is_active=FALSE after the circuit breaker trips."""
+async def auto_deactivate_tool_for_health(
+    tool_id: str,
+    qualified_tool_name: str | None = None,
+    *,
+    event_actor_id: str = "system:circuit_breaker",
+    event_reason: str = "circuit_breaker_tripped",
+    notification_reason: str = "automatic — repeated webhook failures",
+    capture_sentry: bool = True,
+) -> None:
+    """Deactivate an unhealthy or unavailable tool and notify subscribers.
+
+    Defaults preserve the original circuit-breaker semantics. Callers may
+    override the audit actor/reason and notification text for other automated
+    deactivation causes, such as a disabled or deleted backing MCP server.
+    """
     pool = _get_pool()
 
     row = await pool.fetchrow(
@@ -443,8 +456,8 @@ async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str
         tool_id,
         name,
         "failed",
-        actor_id="system:circuit_breaker",
-        detail={"reason": "circuit_breaker_tripped"},
+        actor_id=event_actor_id,
+        detail={"reason": event_reason},
     )
 
     await invalidate_org_tools_cache(org_id)
@@ -465,23 +478,25 @@ async def auto_deactivate_tool_for_health(tool_id: str, qualified_tool_name: str
         qualified_tool_name,
     )
 
-    try:
-        with sentry_sdk.new_scope() as scope:
-            scope.set_tag("tool_id", str(tool_id))
-            scope.set_tag("org_id", str(org_id))
-            scope.set_tag("circuit_breaker", "tripped")
-            sentry_sdk.capture_message(
-                f"Circuit breaker tripped: {qualified_tool_name}",
-                level="warning",
-            )
-    except Exception:
-        logger.debug("sentry capture failed in auto_deactivate", exc_info=True)
+    if capture_sentry:
+        try:
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("tool_id", str(tool_id))
+                scope.set_tag("org_id", str(org_id))
+                scope.set_tag("deactivation_reason", event_reason)
+                scope.set_tag("circuit_breaker", "tripped")
+                sentry_sdk.capture_message(
+                    f"Circuit breaker tripped: {qualified_tool_name}",
+                    level="warning",
+                )
+        except Exception:
+            logger.debug("sentry capture failed in auto_deactivate", exc_info=True)
 
     try:
         asyncio.create_task(
             notify_subscribers_of_deactivation(
                 qualified_tool_name,
-                "automatic — repeated webhook failures",
+                notification_reason,
             )
         )
     except Exception:

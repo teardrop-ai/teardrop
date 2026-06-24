@@ -66,7 +66,7 @@ Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
 - Public catalog responses include `category`, `total_calls`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
 - Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages at `GET /marketplace/catalog/{org_slug}/{tool_name}`, author profiles at `GET /marketplace/authors/{org_slug}`, and LLM-friendly discovery at `GET /marketplace/llms.txt`
-- Marketplace authors can register external MCP servers and turn discovered tools into listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`
+- Marketplace authors can register external MCP servers and turn discovered tools into listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`; publish may omit `input_schema` and `output_schema` to reuse the server's normalized discovery result
 - Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`
 - Agent runs that call these tools incur their marketplace prices (in addition to token costs)
 - Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls
@@ -850,6 +850,8 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
 | `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and SEO surfaces |
 | `POST` | `/marketplace/author-config` | Bearer | Create or update author settlement wallet |
 | `GET` | `/marketplace/author-config` | Bearer | Get author settlement wallet config |
+| `POST` | `/marketplace/import/preview` | Bearer | Preview importable MCP tools, normalized schemas, and publish blockers |
+| `POST` | `/marketplace/import/publish` | Bearer | Admin-only publish of MCP-backed marketplace tools |
 | `GET` | `/marketplace/balance` | Bearer | Author earnings balance |
 | `GET` | `/marketplace/earnings` | Bearer | Author earnings history |
 | `GET` | `/marketplace/earnings/by-tool` | Bearer | Author earnings grouped by tool |
@@ -860,6 +862,8 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
 | `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unsubscribe from a marketplace tool |
 
 `GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, or `popularity`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls` is sourced from non-financial aggregate stats and is recorded only after successful paid tool calls, not from the immutable earnings ledger.
+
+`POST /marketplace/author-config` accepts any valid `0x` + 40-hex Ethereum/Base address and stores the canonical EIP-55 checksummed form. `POST /marketplace/import/publish` may omit `input_schema` and `output_schema`; when omitted, Teardrop reuses the normalized or synthesized schemas from live MCP discovery.
 
 ### Wallets
 
@@ -971,6 +975,7 @@ Connect external MCP servers to your org. Their tools are discovered and made av
 | `PATCH` | `/mcp/servers/{server_id}` | Bearer | Update an MCP server |
 | `DELETE` | `/mcp/servers/{server_id}` | Bearer | Remove an MCP server |
 | `POST` | `/mcp/servers/{server_id}/discover` | Bearer | Trigger tool re-discovery from an MCP server |
+| `POST` | `/mcp/servers/{server_id}/test-tool` | Bearer | Diagnostic: invoke one MCP tool without billing, audit, or circuit-breaker effects |
 
 ### A2A Delegation
 

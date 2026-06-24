@@ -90,6 +90,8 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
         "teardrop.routers.marketplace.get_current_pricing",
         AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
     )
+    # Member role + no author config → both blockers surfaced.
+    monkeypatch.setattr("teardrop.routers.marketplace.get_author_config", AsyncMock(return_value=None))
 
     resp = await api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
 
@@ -97,6 +99,9 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
     data = resp.json()
     assert data["server_id"] == "srv-1"
     assert data["slots_remaining"] == config.get_settings().max_org_tools
+    assert data["can_publish"] is False
+    assert "requires_org_admin" in data["blockers"]
+    assert "settlement_wallet_missing" in data["blockers"]
     item = data["tools"][0]
     assert item["remote_tool_name"] == "Remote Tool"
     assert item["proposed_name"] == "remote_tool"
@@ -107,6 +112,57 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
     assert item["suggested_base_price_usdc"] == 12_345
     assert item["output_schema"]["type"] == "object"
     assert data["errors"] == []
+
+
+@pytest.mark.anyio
+async def test_preview_marketplace_import_admin_with_wallet_can_publish(admin_api_client, monkeypatch, marketplace_enabled):
+    """Admin role + registered settlement wallet → can_publish=True, no blockers."""
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.discover_mcp_tools",
+        AsyncMock(return_value=[{"name": "t", "description": "d", "input_schema": {}, "output_schema": None}]),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.get_current_pricing",
+        AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.get_author_config",
+        AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", settlement_wallet="0x" + "a" * 40)),
+    )
+
+    resp = await admin_api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["can_publish"] is True
+    assert data["blockers"] == []
+
+
+@pytest.mark.anyio
+async def test_preview_marketplace_import_admin_missing_wallet(admin_api_client, monkeypatch, marketplace_enabled):
+    """Admin role but no settlement wallet → settlement_wallet_missing blocker."""
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.discover_mcp_tools",
+        AsyncMock(return_value=[{"name": "t", "description": "d", "input_schema": {}, "output_schema": None}]),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.get_current_pricing",
+        AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.get_author_config", AsyncMock(return_value=None))
+
+    resp = await admin_api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["can_publish"] is False
+    assert data["blockers"] == ["settlement_wallet_missing"]
 
 
 @pytest.mark.anyio
@@ -164,6 +220,60 @@ async def test_publish_marketplace_import_admin_partial_success(admin_api_client
     assert data["created"][0]["tool"]["mcp_server_id"] == "srv-1"
     assert len(data["errors"]) == 1
     assert data["errors"][0]["status_code"] == 409
+
+
+@pytest.mark.anyio
+async def test_publish_marketplace_import_derives_missing_schemas(admin_api_client, monkeypatch, marketplace_enabled):
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.discover_mcp_tools",
+        AsyncMock(
+            return_value=[
+                {
+                    "name": "remote_tool",
+                    "description": "Lookup customer data",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"query": {"type": ["string", "null"], "format": "uri"}},
+                        "required": ["query"],
+                    },
+                    "output_schema": None,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
+    create_mock = AsyncMock(return_value=_created_tool("remote_tool"))
+    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
+
+    resp = await admin_api_client.post(
+        "/marketplace/import/publish",
+        json={
+            "server_id": "srv-1",
+            "tools": [
+                {
+                    "remote_tool_name": "remote_tool",
+                    "name": "remote_tool",
+                    "description": "Lookup customer data",
+                    "base_price_usdc": 10,
+                }
+            ],
+        },
+    )
+
+    assert resp.status_code == 201
+    create_kwargs = create_mock.await_args.kwargs
+    assert create_kwargs["input_schema"] == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    assert create_kwargs["output_schema"] == {
+        "type": "object",
+        "properties": {},
+        "description": "Lookup customer data",
+    }
 
 
 @pytest.mark.anyio
