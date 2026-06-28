@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Scheduled run CRUD and worker-facing queries."""
+"""Scheduled run + event trigger CRUD and worker-facing queries."""
 
 from __future__ import annotations
 
@@ -13,6 +13,17 @@ from scheduling.models import ScheduledRun, ScheduledRunResult
 
 _UNSET = object()
 
+# Canonical column projection for the ``scheduled_runs`` table. Kept in one place
+# so interval schedules and event triggers map identically onto ``ScheduledRun``.
+# ``secret_hash`` is deliberately excluded — it is only selected by the dispatch
+# lookup and popped before model construction so it is never serialized.
+_RUN_COLUMNS = (
+    "id, org_id, user_id, name, prompt, schedule_kind, interval_seconds, "
+    "cron_expr, enabled, callback_url, trigger_token, next_run_at, last_run_at, "
+    "consecutive_failures, created_at, updated_at"
+)
+_RUN_COLUMNS_SR = ", ".join(f"sr.{col.strip()}" for col in _RUN_COLUMNS.split(","))
+
 
 def _row_to_scheduled_run(row: Any) -> ScheduledRun:
     return ScheduledRun(**dict(row))
@@ -22,9 +33,13 @@ def _row_to_scheduled_run_result(row: Any) -> ScheduledRunResult:
     return ScheduledRunResult(**dict(row))
 
 
-async def count_scheduled_runs(org_id: str) -> int:
+async def count_scheduled_runs(org_id: str, schedule_kind: str = "interval") -> int:
     pool = _get_pool()
-    value = await pool.fetchval("SELECT COUNT(*) FROM scheduled_runs WHERE org_id = $1", org_id)
+    value = await pool.fetchval(
+        "SELECT COUNT(*) FROM scheduled_runs WHERE org_id = $1 AND schedule_kind = $2",
+        org_id,
+        schedule_kind,
+    )
     return int(value or 0)
 
 
@@ -42,15 +57,13 @@ async def create_scheduled_run(
     now = datetime.now(timezone.utc)
     next_run_at = now + timedelta(seconds=interval_seconds)
     row = await pool.fetchrow(
-        """
+        f"""
         INSERT INTO scheduled_runs (
             id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
             cron_expr, enabled, callback_url, next_run_at, created_at, updated_at
         )
         VALUES ($1, $2, $3, $4, $5, 'interval', $6, NULL, TRUE, $7, $8, $9, $9)
-        RETURNING id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-                  cron_expr, enabled, callback_url, next_run_at, last_run_at,
-                  consecutive_failures, created_at, updated_at
+        RETURNING {_RUN_COLUMNS}
         """,
         run_id,
         org_id,
@@ -65,15 +78,65 @@ async def create_scheduled_run(
     return _row_to_scheduled_run(row)
 
 
+async def create_event_trigger(
+    *,
+    org_id: str,
+    user_id: str,
+    name: str,
+    prompt: str,
+    callback_url: str | None,
+    trigger_token: str,
+    secret_hash: str,
+) -> ScheduledRun:
+    """Insert an event-triggered run. Interval/next_run columns stay NULL so the
+    polling worker (which filters ``schedule_kind = 'interval'``) ignores it."""
+    pool = _get_pool()
+    run_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    row = await pool.fetchrow(
+        f"""
+        INSERT INTO scheduled_runs (
+            id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
+            cron_expr, enabled, callback_url, trigger_token, secret_hash,
+            next_run_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 'event', NULL, NULL, TRUE, $6, $7, $8, NULL, $9, $9)
+        RETURNING {_RUN_COLUMNS}
+        """,
+        run_id,
+        org_id,
+        user_id,
+        name,
+        prompt,
+        callback_url,
+        trigger_token,
+        secret_hash,
+        now,
+    )
+    return _row_to_scheduled_run(row)
+
+
 async def list_scheduled_runs(org_id: str) -> list[ScheduledRun]:
     pool = _get_pool()
     rows = await pool.fetch(
-        """
-        SELECT id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-               cron_expr, enabled, callback_url, next_run_at, last_run_at,
-               consecutive_failures, created_at, updated_at
+        f"""
+        SELECT {_RUN_COLUMNS}
         FROM scheduled_runs
-        WHERE org_id = $1
+        WHERE org_id = $1 AND schedule_kind = 'interval'
+        ORDER BY created_at DESC, id DESC
+        """,
+        org_id,
+    )
+    return [_row_to_scheduled_run(row) for row in rows]
+
+
+async def list_event_triggers(org_id: str) -> list[ScheduledRun]:
+    pool = _get_pool()
+    rows = await pool.fetch(
+        f"""
+        SELECT {_RUN_COLUMNS}
+        FROM scheduled_runs
+        WHERE org_id = $1 AND schedule_kind = 'event'
         ORDER BY created_at DESC, id DESC
         """,
         org_id,
@@ -84,10 +147,8 @@ async def list_scheduled_runs(org_id: str) -> list[ScheduledRun]:
 async def get_scheduled_run(schedule_id: str, org_id: str) -> ScheduledRun | None:
     pool = _get_pool()
     row = await pool.fetchrow(
-        """
-        SELECT id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-               cron_expr, enabled, callback_url, next_run_at, last_run_at,
-               consecutive_failures, created_at, updated_at
+        f"""
+        SELECT {_RUN_COLUMNS}
         FROM scheduled_runs
         WHERE id = $1 AND org_id = $2
         """,
@@ -95,6 +156,28 @@ async def get_scheduled_run(schedule_id: str, org_id: str) -> ScheduledRun | Non
         org_id,
     )
     return _row_to_scheduled_run(row) if row is not None else None
+
+
+async def get_event_trigger_for_dispatch(trigger_token: str) -> tuple[ScheduledRun, str | None] | None:
+    """Resolve an inbound trigger token to its row plus the stored secret hash.
+
+    Returns ``None`` when no event trigger matches. The secret hash is returned
+    separately and never embedded in the serialized model.
+    """
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        f"""
+        SELECT {_RUN_COLUMNS}, secret_hash
+        FROM scheduled_runs
+        WHERE trigger_token = $1 AND schedule_kind = 'event'
+        """,
+        trigger_token,
+    )
+    if row is None:
+        return None
+    data = dict(row)
+    secret_hash = data.pop("secret_hash", None)
+    return _row_to_scheduled_run(data), secret_hash
 
 
 async def update_scheduled_run(
@@ -127,7 +210,10 @@ async def update_scheduled_run(
         enabled_placeholder = _add(enabled)
         updates.append(f"enabled = {enabled_placeholder}")
         if enabled is True and interval_seconds is _UNSET:
-            updates.append("next_run_at = NOW() + (interval_seconds * INTERVAL '1 second')")
+            updates.append(
+                "next_run_at = CASE WHEN schedule_kind = 'interval' "
+                "THEN NOW() + (interval_seconds * INTERVAL '1 second') ELSE next_run_at END"
+            )
     if callback_url is not _UNSET:
         updates.append(f"callback_url = {_add(callback_url)}")
 
@@ -138,15 +224,31 @@ async def update_scheduled_run(
     row = await pool.fetchrow(
         f"""
         UPDATE scheduled_runs
-        SET {', '.join(updates)}
+        SET {", ".join(updates)}
         WHERE id = $1 AND org_id = $2
-        RETURNING id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-                  cron_expr, enabled, callback_url, next_run_at, last_run_at,
-                  consecutive_failures, created_at, updated_at
+        RETURNING {_RUN_COLUMNS}
         """,
         *params,
     )
     return _row_to_scheduled_run(row) if row is not None else None
+
+
+async def rotate_event_trigger_secret(schedule_id: str, org_id: str, secret_hash: str) -> bool:
+    """Replace the stored secret hash for an event trigger. Returns False when no
+    matching event trigger exists for the org."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        UPDATE scheduled_runs
+        SET secret_hash = $3, updated_at = NOW()
+        WHERE id = $1 AND org_id = $2 AND schedule_kind = 'event'
+        RETURNING id
+        """,
+        schedule_id,
+        org_id,
+        secret_hash,
+    )
+    return row is not None
 
 
 async def delete_scheduled_run(schedule_id: str, org_id: str) -> bool:
@@ -215,6 +317,45 @@ async def record_scheduled_run_result(
     return _row_to_scheduled_run_result(row)
 
 
+async def reserve_event_dispatch(schedule_id: str, idempotency_key: str, run_id: str) -> tuple[str, bool]:
+    """Insert-first idempotency reservation for an inbound event dispatch.
+
+    Returns ``(run_id, True)`` when the reservation is newly created (caller
+    should execute), or ``(existing_run_id, False)`` when the key was already
+    reserved (caller should treat as a duplicate and skip execution).
+    """
+    pool = _get_pool()
+    inserted = await pool.fetchval(
+        """
+        INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (schedule_id, idempotency_key) DO NOTHING
+        RETURNING run_id
+        """,
+        schedule_id,
+        idempotency_key,
+        run_id,
+    )
+    if inserted is not None:
+        return str(inserted), True
+    existing = await pool.fetchval(
+        "SELECT run_id FROM event_dispatch_keys WHERE schedule_id = $1 AND idempotency_key = $2",
+        schedule_id,
+        idempotency_key,
+    )
+    return (str(existing) if existing is not None else run_id), False
+
+
+async def get_existing_dispatch(schedule_id: str, idempotency_key: str) -> str | None:
+    pool = _get_pool()
+    value = await pool.fetchval(
+        "SELECT run_id FROM event_dispatch_keys WHERE schedule_id = $1 AND idempotency_key = $2",
+        schedule_id,
+        idempotency_key,
+    )
+    return str(value) if value is not None else None
+
+
 async def mark_scheduled_run_skipped(schedule_id: str) -> None:
     pool = _get_pool()
     await pool.execute(
@@ -242,16 +383,14 @@ async def mark_scheduled_run_succeeded(schedule_id: str) -> None:
 async def mark_scheduled_run_failed(schedule_id: str, *, max_consecutive_failures: int) -> ScheduledRun | None:
     pool = _get_pool()
     row = await pool.fetchrow(
-        """
+        f"""
         UPDATE scheduled_runs
         SET last_run_at = NOW(),
             consecutive_failures = consecutive_failures + 1,
             enabled = CASE WHEN consecutive_failures + 1 >= $2 THEN FALSE ELSE enabled END,
             updated_at = NOW()
         WHERE id = $1
-        RETURNING id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-                  cron_expr, enabled, callback_url, next_run_at, last_run_at,
-                  consecutive_failures, created_at, updated_at
+        RETURNING {_RUN_COLUMNS}
         """,
         schedule_id,
         max_consecutive_failures,
@@ -264,7 +403,7 @@ async def claim_due_schedules(limit: int) -> list[ScheduledRun]:
     async with pool.acquire() as conn:
         async with conn.transaction():
             rows = await conn.fetch(
-                """
+                f"""
                 WITH due AS (
                     SELECT id
                     FROM scheduled_runs
@@ -280,10 +419,7 @@ async def claim_due_schedules(limit: int) -> list[ScheduledRun]:
                     updated_at = NOW()
                 FROM due
                 WHERE sr.id = due.id
-                RETURNING sr.id, sr.org_id, sr.user_id, sr.name, sr.prompt, sr.schedule_kind,
-                          sr.interval_seconds, sr.cron_expr, sr.enabled, sr.callback_url,
-                          sr.next_run_at, sr.last_run_at, sr.consecutive_failures,
-                          sr.created_at, sr.updated_at
+                RETURNING {_RUN_COLUMNS_SR}
                 """,
                 limit,
             )

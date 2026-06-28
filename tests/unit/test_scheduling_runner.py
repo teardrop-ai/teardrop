@@ -143,3 +143,42 @@ async def test_execute_scheduled_run_marks_failure(monkeypatch, test_settings):
 
     assert result.status == "failed"
     mark_failed.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_execute_event_run_uses_caller_run_id_and_records(monkeypatch, test_settings):
+    test_settings.scheduled_runs_execution_timeout_seconds = 5
+    monkeypatch.setattr("scheduling.runner.get_settings", lambda: test_settings)
+    monkeypatch.setattr("scheduling.runner.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.get_current_pricing", AsyncMock(return_value=SimpleNamespace(run_price_usdc=1000)))
+    monkeypatch.setattr(
+        "scheduling.runner.verify_credit",
+        AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
+    )
+    run_once = AsyncMock(
+        return_value=AgentRunOnceResult(
+            task_state="completed",
+            response_state="completed",
+            output_text="done",
+            duration_ms=25,
+            usage_event=SimpleNamespace(cost_usdc=123),
+            usage_data={},
+            llm_config=None,
+            marketplace_stats_billable=False,
+        )
+    )
+    monkeypatch.setattr("scheduling.runner.run_agent_once", run_once)
+    record_mock = AsyncMock(return_value=_stored_result())
+    monkeypatch.setattr("scheduling.runner.record_scheduled_run_result", record_mock)
+    monkeypatch.setattr("scheduling.runner.mark_scheduled_run_succeeded", AsyncMock(return_value=None))
+
+    from scheduling.runner import execute_event_run
+
+    result = await execute_event_run(_schedule(), prompt="rendered prompt", run_id="evt-run-1")
+
+    assert result.status == "completed"
+    # The caller-supplied run_id (idempotency anchor) must be used verbatim.
+    assert run_once.await_args.kwargs["run_id"] == "evt-run-1"
+    assert run_once.await_args.kwargs["user_message"] == "rendered prompt"
+    assert run_once.await_args.kwargs["user_role"] == "event"
+    assert record_mock.await_args.kwargs["run_id"] == "evt-run-1"

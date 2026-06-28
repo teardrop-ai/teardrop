@@ -63,7 +63,22 @@ async def _deliver_callback(callback_url: str, payload: dict[str, object], sched
         logger.warning("scheduled callback dispatch failed schedule_id=%s host=%s", schedule_id, host, exc_info=True)
 
 
-async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
+async def _run_and_record(
+    schedule: ScheduledRun,
+    *,
+    prompt: str,
+    run_id: str,
+    thread_id: str,
+    user_role: str,
+    metadata: dict[str, object],
+) -> ScheduledRunResult:
+    """Shared execution core for both scheduled and event-triggered runs.
+
+    Verifies credit, executes the agent via the source-agnostic ``run_agent_once``
+    engine, records the result, updates failure/success state, and delivers the
+    optional SSRF-checked callback. The only run-source-specific inputs are the
+    resolved prompt, run identity, thread id, user role, and metadata.
+    """
     settings = get_settings()
     org_llm_cfg = await get_org_llm_config_cached(schedule.org_id)
     is_byok = bool(org_llm_cfg and org_llm_cfg.is_byok)
@@ -73,7 +88,6 @@ async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
     min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)
     billing = await verify_credit(schedule.org_id, min_required)
 
-    run_id = str(uuid.uuid4())
     if not billing.verified:
         result = await record_scheduled_run_result(
             schedule_id=schedule.id,
@@ -92,16 +106,16 @@ async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
         user_id=schedule.user_id,
         usage_user_id=schedule.user_id,
         usage_org_id=schedule.org_id,
-        user_message=schedule.prompt,
+        user_message=prompt,
         run_id=run_id,
-        thread_id=f"scheduled:{schedule.id}:{run_id}",
+        thread_id=thread_id,
         billing=billing,
         is_byok=is_byok,
         org_llm_cfg=org_llm_cfg,
         platform_fee=platform_fee,
         timeout_seconds=float(settings.scheduled_runs_execution_timeout_seconds),
-        metadata={"scheduled_run_id": schedule.id, "scheduled_run_name": schedule.name},
-        user_role="scheduled",
+        metadata=metadata,
+        user_role=user_role,
         emit_ui=False,
     )
     error_text = result.output_text if result.task_state != "completed" else ""
@@ -137,3 +151,28 @@ async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
             schedule.id,
         )
     return stored
+
+
+async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
+    run_id = str(uuid.uuid4())
+    return await _run_and_record(
+        schedule,
+        prompt=schedule.prompt,
+        run_id=run_id,
+        thread_id=f"scheduled:{schedule.id}:{run_id}",
+        user_role="scheduled",
+        metadata={"scheduled_run_id": schedule.id, "scheduled_run_name": schedule.name},
+    )
+
+
+async def execute_event_run(schedule: ScheduledRun, *, prompt: str, run_id: str) -> ScheduledRunResult:
+    """Execute a reactive event-triggered run with a pre-rendered prompt and a
+    caller-reserved ``run_id`` (so inbound idempotency holds across retries)."""
+    return await _run_and_record(
+        schedule,
+        prompt=prompt,
+        run_id=run_id,
+        thread_id=f"event:{schedule.id}:{run_id}",
+        user_role="event",
+        metadata={"event_trigger_id": schedule.id, "event_trigger_name": schedule.name},
+    )

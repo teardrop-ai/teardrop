@@ -70,4 +70,3 @@ async def test_scheduled_runs_tick_respects_concurrency_cap(monkeypatch):
     await scheduled_runs_tick()
 
     assert max_in_flight <= 2
-

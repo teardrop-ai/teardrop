@@ -18,6 +18,7 @@ def register_routers(app: FastAPI) -> None:
         a2a_messages,
         admin,
         agent,
+        agent_event_triggers,
         agent_schedules,
         auth,
         billing,
@@ -37,6 +38,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(wallets.router)
     app.include_router(agent.router)
     app.include_router(agent_schedules.router)
+    app.include_router(agent_event_triggers.router)
     app.include_router(a2a_messages.router)
     app.include_router(billing.router)
     app.include_router(org_tools.router)

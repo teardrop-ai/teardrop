@@ -41,4 +41,3 @@ async def scheduled_runs_tick() -> None:
     semaphore = asyncio.Semaphore(concurrency)
     logger.info("scheduled_runs_tick claimed=%d concurrency=%d", len(schedules), concurrency)
     await asyncio.gather(*(_execute_isolated(schedule, semaphore) for schedule in schedules))
-

@@ -16,11 +16,12 @@ class ScheduledRun(BaseModel):
     name: str
     prompt: str
     schedule_kind: str = "interval"
-    interval_seconds: int
+    interval_seconds: int | None = None
     cron_expr: str | None = None
     enabled: bool = True
     callback_url: str | None = None
-    next_run_at: datetime
+    trigger_token: str | None = None
+    next_run_at: datetime | None = None
     last_run_at: datetime | None = None
     consecutive_failures: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

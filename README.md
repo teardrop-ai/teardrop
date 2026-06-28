@@ -124,6 +124,34 @@ When scheduled executions are due, the worker claims a batch using a row-locking
 
 ---
 
+### Event-Triggered (Reactive) Runs
+
+Beyond fixed intervals, organizations can register **event triggers** that run the agent in response to inbound webhooks (e.g. an on-chain event, a CRM update, a CI signal). An event trigger stores a prompt *template*; the inbound JSON payload is interpolated into it at dispatch time. Event triggers reuse the same execution core, credit billing, result history, and callback delivery as scheduled runs.
+
+**Event-trigger settings** (configure in `.env` or system environment):
+```
+EVENT_TRIGGERS_ENABLED=true                         # Toggle reactive event-triggered runs (inbound ingress)
+EVENT_TRIGGERS_MAX_PER_ORG=20                       # Max event triggers allowed per org (active + inactive)
+EVENT_TRIGGERS_MAX_CONCURRENCY=8                    # Max in-flight inbound runs per process (beyond this → HTTP 429)
+EVENT_TRIGGERS_PROMPT_MAX_CHARS=12000               # Max rendered prompt length after payload interpolation
+```
+
+**Management APIs (org-scoped JWT, under `/agent/event-triggers`):**
+- `POST /agent/event-triggers` — Create a trigger; the signing **secret is returned once** (only its SHA-256 hash is stored)
+- `GET /agent/event-triggers` — List triggers for the authenticated org
+- `GET /agent/event-triggers/{id}` — Get a single trigger
+- `PATCH /agent/event-triggers/{id}` — Update name, prompt template, `enabled`, or `callback_url`
+- `DELETE /agent/event-triggers/{id}` — Delete a trigger
+- `POST /agent/event-triggers/{id}/rotate-secret` — Rotate the signing secret (returns the new secret once)
+- `GET /agent/event-triggers/{id}/runs` — Query run results (cursor pagination)
+
+**Inbound dispatch (public, secret-authenticated):**
+- `POST /agent/events/{trigger_token}` — Fire the trigger. Authenticate with the per-trigger secret via the `X-Teardrop-Trigger-Secret` header (constant-time compared). Optional `X-Idempotency-Key` (or an `idempotency_key` body field) gives at-most-once execution across webhook retries. The JSON body is rendered into the prompt template via `{{field}}` placeholders (`{{event_json}}` injects the full payload); substitution is scalar-only and length-capped to resist prompt/format-string injection. The agent runs in the background and the endpoint returns `202 Accepted` with a `run_id`; results are retrievable via the runs endpoint and the optional callback. Inbound load is bounded by `EVENT_TRIGGERS_MAX_CONCURRENCY` (returns `429` when saturated) and a 64 KB payload cap.
+
+Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly.
+
+---
+
 ## Requirements
 
 - Python 3.12+

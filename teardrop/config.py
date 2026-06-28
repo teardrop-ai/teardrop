@@ -694,6 +694,27 @@ class Settings(BaseSettings):
             "Keep at or below pg_pool_max_size headroom to avoid starving API traffic."
         ),
     )
+    event_triggers_enabled: bool = Field(
+        default=False,
+        description="Enable reactive event-triggered agent runs (inbound webhook ingress).",
+    )
+    event_triggers_max_per_org: int = Field(
+        default=20,
+        description="Maximum number of event triggers (active + inactive) allowed per org.",
+    )
+    event_triggers_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Maximum number of in-flight event-triggered executions per process. "
+            "Inbound dispatches beyond this return HTTP 429 back-pressure."
+        ),
+    )
+    event_triggers_prompt_max_chars: int = Field(
+        default=12_000,
+        ge=1,
+        description="Maximum length of a rendered event-trigger prompt after payload interpolation.",
+    )
     marketplace_max_sweep_retries: int = Field(
         default=5,
         description=(
