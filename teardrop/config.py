@@ -662,6 +662,38 @@ class Settings(BaseSettings):
         default=86400,
         description="Interval in seconds between marketplace auto-sweep runs (default: 24h)",
     )
+    scheduled_runs_enabled: bool = Field(
+        default=False,
+        description="Enable unattended scheduled agent runs for authenticated orgs.",
+    )
+    scheduled_runs_tick_interval_seconds: int = Field(
+        default=60,
+        description="Polling interval in seconds for the scheduled run worker.",
+    )
+    scheduled_runs_min_interval_seconds: int = Field(
+        default=300,
+        description="Minimum allowed interval for scheduled runs in seconds.",
+    )
+    scheduled_runs_max_per_org: int = Field(
+        default=20,
+        description="Maximum number of active+inactive scheduled runs allowed per org.",
+    )
+    scheduled_runs_max_consecutive_failures: int = Field(
+        default=5,
+        description="Auto-disable a scheduled run after this many consecutive execution failures.",
+    )
+    scheduled_runs_execution_timeout_seconds: int = Field(
+        default=120,
+        description="Timeout in seconds for a single scheduled agent execution.",
+    )
+    scheduled_runs_max_concurrency: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Maximum number of scheduled agent executions to run concurrently per worker tick. "
+            "Keep at or below pg_pool_max_size headroom to avoid starving API traffic."
+        ),
+    )
     marketplace_max_sweep_retries: int = Field(
         default=5,
         description=(

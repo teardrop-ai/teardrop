@@ -10,10 +10,8 @@ billing rails.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import time
 import uuid
 from copy import deepcopy
 from typing import Any
@@ -21,26 +19,20 @@ from typing import Any
 import jwt
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
 
-from agent.state import AgentState
 from billing import BillingResult, build_402_headers, build_402_response_body, get_byok_platform_fee
 from billing.context import _get_pool
-from marketplace import record_marketplace_tool_usage_many
 from shared.audit import insert_event_row
 from shared.request_ip import client_ip_from_request
 from teardrop.a2a_client import A2AArtifact, A2AMessage, A2APart, A2ATask, A2ATaskStatus
-from teardrop.agent_event_loop import _coerce_stream_text
-from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot
-from teardrop.agent_runtime import _prepare_run_context, _record_marketplace_earnings, _run_billing_gate
+from teardrop.agent_runtime import _run_billing_gate, run_agent_once
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
 from teardrop.public_url import public_base_url
 from teardrop.rate_limit import _check_rate_limit, _enforce_rate_limit
-from teardrop.usage import UsageEvent, record_usage_event
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -285,33 +277,6 @@ def _message_text(message: A2AMessage) -> str:
     return combined
 
 
-def _snapshot_values(snapshot_or_state: Any) -> dict[str, Any]:
-    if snapshot_or_state is None:
-        return {}
-    if isinstance(snapshot_or_state, dict):
-        return snapshot_or_state
-    if hasattr(snapshot_or_state, "values") and isinstance(snapshot_or_state.values, dict):
-        return snapshot_or_state.values
-    if hasattr(snapshot_or_state, "model_dump"):
-        dumped = snapshot_or_state.model_dump()
-        return dumped if isinstance(dumped, dict) else {}
-    return {}
-
-
-def _extract_final_agent_text(messages: list[Any]) -> str:
-    for message in reversed(messages):
-        if getattr(message, "type", "") != "ai":
-            continue
-        text = _coerce_stream_text(getattr(message, "content", "")).strip()
-        if text:
-            return text
-    for message in reversed(messages):
-        text = _coerce_stream_text(getattr(message, "content", "")).strip()
-        if text:
-            return text
-    return ""
-
-
 def _anonymous_usage_identity(billing: BillingResult, run_id: str) -> tuple[str, str]:
     payer = getattr(billing.payment_payload, "payer", "") if billing.payment_payload is not None else ""
     payer_str = str(payer).strip()
@@ -396,58 +361,6 @@ async def _record_inbound_event(
         )
     except Exception:
         logger.warning("Failed to record inbound A2A audit event run_id=%s", run_id, exc_info=True)
-
-
-async def _record_failure_usage_event(
-    *,
-    graph: Any,
-    config: dict[str, Any],
-    run_id: str,
-    scoped_thread_id: str,
-    payload: dict[str, Any] | None,
-    billing: BillingResult,
-    user_id: str,
-    org_id: str,
-    duration_ms: int,
-    llm_config: dict[str, Any] | None,
-    platform_fee: int,
-) -> UsageEvent:
-    _, usage_data = await fetch_usage_snapshot(
-        graph=graph,
-        config=config,
-        run_id=run_id,
-        settings=settings,
-    )
-    usage_user_id, usage_org_id = _usage_identity(
-        payload=payload,
-        billing=billing,
-        user_id=user_id,
-        org_id=org_id,
-        run_id=run_id,
-    )
-    usage_event = UsageEvent(
-        user_id=usage_user_id,
-        org_id=usage_org_id,
-        thread_id=scoped_thread_id,
-        run_id=run_id,
-        tokens_in=usage_data.get("tokens_in", 0),
-        tokens_out=usage_data.get("tokens_out", 0),
-        cache_read_tokens=usage_data.get("cache_read_tokens", 0),
-        cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
-        tool_calls=usage_data.get("tool_calls", 0),
-        tool_names=usage_data.get("tool_names", []),
-        billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
-        billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-        failed_tool_calls=usage_data.get("failed_tool_calls", 0),
-        failed_tool_names=usage_data.get("failed_tool_names", []),
-        duration_ms=duration_ms,
-        cost_usdc=0,
-        platform_fee_usdc=0 if platform_fee > 0 else 0,
-        provider=llm_config["provider"] if llm_config else settings.agent_provider,
-        model=llm_config["model"] if llm_config else settings.agent_model,
-    )
-    await record_usage_event(usage_event)
-    return usage_event
 
 
 def _build_task_response(
@@ -624,232 +537,41 @@ async def message_send(request: Request) -> JSONResponse:
                 )
             return gate_response
 
-    start_time = time.monotonic()
-    mem_settings = get_settings()
-    ctx = await _prepare_run_context(
-        org_id=org_id,
-        user_message=user_message,
+    usage_user_id, usage_org_id = _usage_identity(
+        payload=payload,
         billing=billing,
-        mem_settings=mem_settings,
+        user_id=user_id,
+        org_id=org_id,
+        run_id=run_id,
     )
-    graph = ctx.graph
-    org_lc_tools = ctx.org_lc_tools
-    org_tools_by_name = ctx.org_tools_by_name
-    mp_by_name = ctx.mp_by_name
-    recalled = ctx.recalled
-    llm_config = ctx.llm_config
-    org_name = ctx.org_name
-    credit_balance_usdc = ctx.credit_balance_usdc
-
-    initial_state = AgentState(
-        messages=[HumanMessage(content=user_message)],
+    result = await run_agent_once(
+        org_id=org_id,
+        user_id=user_id,
+        usage_user_id=usage_user_id,
+        usage_org_id=usage_org_id,
+        user_message=user_message,
+        run_id=run_id,
+        thread_id=scoped_thread_id,
+        billing=billing,
+        is_byok=is_byok,
+        org_llm_cfg=org_llm_cfg,
+        platform_fee=platform_fee,
+        timeout_seconds=float(settings.a2a_inbound_timeout_seconds),
         metadata={
             **body.metadata,
-            "thread_id": scoped_thread_id,
-            "run_id": run_id,
-            "user_id": user_id,
-            "org_id": org_id,
-            "_usage": {
-                "tokens_in": 0,
-                "tokens_out": 0,
-                "cache_read_tokens": 0,
-                "cache_creation_tokens": 0,
-                "tool_calls": 0,
-                "tool_names": [],
-                "billable_tool_calls": 0,
-                "billable_tool_names": [],
-                "failed_tool_calls": 0,
-                "failed_tool_names": [],
-            },
-            "_excluded_tool_names": [],
-            "_memories": recalled,
-            "_llm_config": llm_config,
-            "_org_name": org_name,
-            "_user_role": payload.get("role", "anonymous") if payload else "anonymous",
-            "_user_wallet_address": payload.get("address") if payload else None,
-            "_credit_balance_usdc": credit_balance_usdc,
-            "_jwt_token": _extract_bearer_token(request),
-            "emit_ui": False,
             "a2a_context_id": body.context_id,
             "a2a_task_id": body.task_id,
             "a2a_auth_method": auth_method,
         },
+        user_role=payload.get("role", "anonymous") if payload else "anonymous",
+        user_wallet_address=payload.get("address") if payload else None,
+        jwt_token=_extract_bearer_token(request),
+        emit_ui=False,
     )
-    config = {
-        "configurable": {
-            "thread_id": scoped_thread_id,
-            "_org_tools": org_lc_tools,
-            "_org_tools_by_name": org_tools_by_name,
-        }
-    }
-
-    invoke_result: Any = None
-    try:
-        invoke_result = await asyncio.wait_for(
-            graph.ainvoke(initial_state, config),
-            timeout=float(settings.a2a_inbound_timeout_seconds),
-        )
-    except asyncio.TimeoutError:
-        logger.warning("a2a inbound execution timed out run_id=%s", run_id)
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        usage_event = await _record_failure_usage_event(
-            graph=graph,
-            config=config,
-            run_id=run_id,
-            scoped_thread_id=scoped_thread_id,
-            payload=payload,
-            billing=billing,
-            user_id=user_id,
-            org_id=org_id,
-            duration_ms=duration_ms,
-            llm_config=llm_config,
-            platform_fee=platform_fee,
-        )
-        await _record_inbound_event(
-            run_id=run_id,
-            usage_event_id=usage_event.id,
-            caller_org_id=caller_org_id,
-            caller_user_id=caller_user_id,
-            caller_address=_payment_caller_address(billing),
-            caller_ip=caller_ip,
-            auth_method=audit_auth_method,
-            context_id=body.context_id,
-            task_id=resolved_task_id,
-            task_state="timeout",
-            cost_usdc=0,
-            settlement_tx="",
-            billing_method=billing.billing_method if billing.verified else "",
-            duration_ms=duration_ms,
-            error="Task timed out.",
-        )
-        return _build_task_response(
-            request_body=body,
-            task_id=resolved_task_id,
-            task_state="failed",
-            output_text="Task failed.",
-            rpc_id=rpc_id,
-        )
-    except Exception:
-        logger.exception("a2a inbound execution failed run_id=%s", run_id)
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        usage_event = await _record_failure_usage_event(
-            graph=graph,
-            config=config,
-            run_id=run_id,
-            scoped_thread_id=scoped_thread_id,
-            payload=payload,
-            billing=billing,
-            user_id=user_id,
-            org_id=org_id,
-            duration_ms=duration_ms,
-            llm_config=llm_config,
-            platform_fee=platform_fee,
-        )
-        await _record_inbound_event(
-            run_id=run_id,
-            usage_event_id=usage_event.id,
-            caller_org_id=caller_org_id,
-            caller_user_id=caller_user_id,
-            caller_address=_payment_caller_address(billing),
-            caller_ip=caller_ip,
-            auth_method=audit_auth_method,
-            context_id=body.context_id,
-            task_id=resolved_task_id,
-            task_state="failed",
-            cost_usdc=0,
-            settlement_tx="",
-            billing_method=billing.billing_method if billing.verified else "",
-            duration_ms=duration_ms,
-            error="Task failed.",
-        )
-        return _build_task_response(
-            request_body=body,
-            task_id=resolved_task_id,
-            task_state="failed",
-            output_text="Task failed.",
-            rpc_id=rpc_id,
-        )
-
-    duration_ms = int((time.monotonic() - start_time) * 1000)
-    state_snapshot, usage_data = await fetch_usage_snapshot(
-        graph=graph,
-        config=config,
-        run_id=run_id,
-        settings=settings,
-    )
-    values = _snapshot_values(state_snapshot) or _snapshot_values(invoke_result)
-    messages = values.get("messages", []) if isinstance(values, dict) else []
-    output_text = _extract_final_agent_text(messages)
-    task_status_value = str(values.get("task_status", "completed")).lower()
-    task_state = "failed" if task_status_value.endswith("failed") else "completed"
-    if not output_text:
-        output_text = "Task failed." if task_state == "failed" else "Task completed."
-
-    cost_usdc = await calculate_run_cost(
-        usage_data=usage_data,
-        llm_config=llm_config,
-        settings=settings,
-    )
-
-    if payload is None:
-        anon_user_id, anon_org_id = _anonymous_usage_identity(billing, run_id)
-        user_id = anon_user_id
-        org_id = anon_org_id
-
-    usage_event = UsageEvent(
-        user_id=user_id,
-        org_id=org_id,
-        thread_id=scoped_thread_id,
-        run_id=run_id,
-        tokens_in=usage_data.get("tokens_in", 0),
-        tokens_out=usage_data.get("tokens_out", 0),
-        cache_read_tokens=usage_data.get("cache_read_tokens", 0),
-        cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
-        tool_calls=usage_data.get("tool_calls", 0),
-        tool_names=usage_data.get("tool_names", []),
-        billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
-        billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-        failed_tool_calls=usage_data.get("failed_tool_calls", 0),
-        failed_tool_names=usage_data.get("failed_tool_names", []),
-        duration_ms=duration_ms,
-        cost_usdc=cost_usdc,
-        platform_fee_usdc=platform_fee,
-        provider=llm_config["provider"] if llm_config else settings.agent_provider,
-        model=llm_config["model"] if llm_config else settings.agent_model,
-    )
-    await record_usage_event(usage_event)
-
-    settlement_result: dict[str, Any] = {}
-    delegation_spend = usage_data.get("delegation_spend_usdc", 0)
-    async for _ignored in dispatch_settlement(
-        billing=billing,
-        is_byok=is_byok,
-        settings=settings,
-        org_llm_cfg=org_llm_cfg,
-        usage_data=usage_data,
-        usage_event=usage_event,
-        platform_fee=platform_fee,
-        cost_usdc=cost_usdc,
-        delegation_spend=delegation_spend,
-        org_id=org_id,
-        run_id=run_id,
-        result=settlement_result,
-    ):
-        pass
-
-    if settlement_result.get("marketplace_stats_billable", False):
-        await _record_marketplace_earnings(
-            mp_by_name=mp_by_name,
-            tool_names_used=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-            caller_org_id=org_id,
-        )
-        billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
-        if isinstance(billable_tool_names, list):
-            asyncio.create_task(record_marketplace_tool_usage_many([str(name) for name in billable_tool_names]))
 
     await _record_inbound_event(
         run_id=run_id,
-        usage_event_id=usage_event.id,
+        usage_event_id=result.usage_event.id,
         caller_org_id=caller_org_id,
         caller_user_id=caller_user_id,
         caller_address=_payment_caller_address(billing),
@@ -857,18 +579,18 @@ async def message_send(request: Request) -> JSONResponse:
         auth_method=audit_auth_method,
         context_id=body.context_id,
         task_id=resolved_task_id,
-        task_state=task_state,
-        cost_usdc=cost_usdc,
+        task_state=result.task_state,
+        cost_usdc=result.usage_event.cost_usdc,
         settlement_tx=billing.tx_hash if billing.verified else "",
         billing_method=billing.billing_method if billing.verified else "",
-        duration_ms=duration_ms,
-        error=output_text if task_state == "failed" else "",
+        duration_ms=result.duration_ms,
+        error=result.output_text if result.task_state != "completed" else "",
     )
 
     return _build_task_response(
         request_body=body,
         task_id=resolved_task_id,
-        task_state=task_state,
-        output_text=output_text,
+        task_state=result.response_state,
+        output_text="Task failed." if result.task_state == "timeout" else result.output_text,
         rpc_id=rpc_id,
     )

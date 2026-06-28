@@ -90,14 +90,14 @@ def _patch_success_path(monkeypatch, test_settings, *, billing_enabled: bool = T
     test_settings.rate_limit_org_agent_rpm = 1_000
     monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
     monkeypatch.setattr("teardrop.routers.a2a_messages.get_org_llm_config_cached", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.a2a_messages._prepare_run_context", AsyncMock(return_value=_mock_ctx()))
+    monkeypatch.setattr("teardrop.agent_runtime._prepare_run_context", AsyncMock(return_value=_mock_ctx()))
     monkeypatch.setattr(
-        "teardrop.routers.a2a_messages.fetch_usage_snapshot",
+        "teardrop.agent_runtime.fetch_usage_snapshot",
         AsyncMock(return_value=(_snapshot(), {"tokens_in": 12, "tokens_out": 8, "tool_calls": 0, "tool_names": []})),
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.calculate_run_cost", AsyncMock(return_value=12_345))
-    monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.a2a_messages.dispatch_settlement", _noop_dispatch_settlement)
+    monkeypatch.setattr("teardrop.agent_runtime.calculate_run_cost", AsyncMock(return_value=12_345))
+    monkeypatch.setattr("teardrop.agent_runtime.record_usage_event", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.agent_runtime.dispatch_settlement", _noop_dispatch_settlement)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", AsyncMock(return_value=None))
 
 
@@ -394,12 +394,12 @@ async def test_message_send_execution_failure_records_audit(anon_client, test_se
     usage_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
     monkeypatch.setattr("teardrop.routers.a2a_messages.get_org_llm_config_cached", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.a2a_messages._prepare_run_context", AsyncMock(return_value=_failing_ctx()))
+    monkeypatch.setattr("teardrop.agent_runtime._prepare_run_context", AsyncMock(return_value=_failing_ctx()))
     monkeypatch.setattr(
-        "teardrop.routers.a2a_messages.fetch_usage_snapshot",
+        "teardrop.agent_runtime.fetch_usage_snapshot",
         AsyncMock(return_value=(_snapshot("Task failed.", "failed"), {"tokens_in": 9, "tokens_out": 3})),
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", usage_mock)
+    monkeypatch.setattr("teardrop.agent_runtime.record_usage_event", usage_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
 
     resp = await anon_client.post(
@@ -431,12 +431,12 @@ async def test_message_send_timeout_records_zero_cost_usage(anon_client, test_se
     usage_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
     monkeypatch.setattr("teardrop.routers.a2a_messages.get_org_llm_config_cached", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.a2a_messages._prepare_run_context", AsyncMock(return_value=_hanging_ctx()))
+    monkeypatch.setattr("teardrop.agent_runtime._prepare_run_context", AsyncMock(return_value=_hanging_ctx()))
     monkeypatch.setattr(
-        "teardrop.routers.a2a_messages.fetch_usage_snapshot",
+        "teardrop.agent_runtime.fetch_usage_snapshot",
         AsyncMock(return_value=(_snapshot("Task failed.", "failed"), {"tokens_in": 4, "tokens_out": 2})),
     )
-    monkeypatch.setattr("teardrop.routers.a2a_messages.record_usage_event", usage_mock)
+    monkeypatch.setattr("teardrop.agent_runtime.record_usage_event", usage_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
 
     resp = await anon_client.post(

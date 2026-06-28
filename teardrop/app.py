@@ -66,6 +66,7 @@ from org_tools import (
     close_org_tools_db,
     init_org_tools_db,
 )
+from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_tick
 from scripts.generate_keys import generate_keypair
 
 # Shared dependencies / SIWE / app metadata live in dedicated modules so router
@@ -538,6 +539,7 @@ async def lifespan(app: FastAPI):
     await init_llm_config_db(pool)
     await init_benchmarks_db(pool)
     await init_agent_wallets_db(pool)
+    await init_scheduling_db(pool)
 
     # Initialize global RPC semaphore to limit concurrent eth_calls across all agent runs.
     init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
@@ -557,6 +559,17 @@ async def lifespan(app: FastAPI):
         from marketplace import _marketplace_sweep_loop
 
         bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
+    if settings.scheduled_runs_enabled:
+        bg_tasks.append(
+            asyncio.create_task(
+                _run_periodic(
+                    "scheduled runs",
+                    scheduled_runs_tick,
+                    settings.scheduled_runs_tick_interval_seconds,
+                    monitor_slug="scheduled-runs",
+                )
+            )
+        )
     if settings.agent_cache_prewarm_enabled:
         bg_tasks.append(asyncio.create_task(_prewarm_cache_prefixes(pool)))
     bg_tasks.append(asyncio.create_task(_refresh_token_cleanup_loop()))
@@ -576,6 +589,7 @@ async def lifespan(app: FastAPI):
     await close_benchmarks_db()
     await close_llm_config_db()
     await close_marketplace_db()
+    await close_scheduling_db()
     await close_memory_db()
     await close_mcp_client_db()
     await close_org_tools_db()

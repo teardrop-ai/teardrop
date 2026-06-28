@@ -97,6 +97,33 @@ When an org requests a withdrawal, Teardrop:
 
 ---
 
+### Unattended (Scheduled) Agent Runs
+
+Organizations can schedule recurring, unattended agent runs with integrated credit-only billing, stored execution history, and real-time status callbacks.
+
+**Scheduled runs settings** (configure in `.env` or system environment):
+```
+SCHEDULED_RUNS_ENABLED=true                         # Toggle unattended scheduled run background worker
+SCHEDULED_RUNS_TICK_INTERVAL_SECONDS=60             # Polling interval in seconds to claim due runs
+SCHEDULED_RUNS_MIN_INTERVAL_SECONDS=300             # Minimum interval in seconds (default: 5 minutes)
+SCHEDULED_RUNS_MAX_PER_ORG=20                       # Max schedules allowed per org (active + inactive)
+SCHEDULED_RUNS_MAX_CONSECUTIVE_FAILURES=5           # Auto-disable consecutive execution failures threshold
+SCHEDULED_RUNS_EXECUTION_TIMEOUT_SECONDS=120        # Timeout in seconds for a single scheduled agent execution
+SCHEDULED_RUNS_MAX_CONCURRENCY=4                    # Max scheduled executions run concurrently per tick (<= pg pool headroom)
+```
+
+**Developer APIs (under `/agent/schedules`):**
+- `POST /agent/schedules` — Register a new scheduled prompt and interval
+- `GET /agent/schedules` — List current schedules for the authenticated org
+- `GET /agent/schedules/{id}` — Get single schedule configuration
+- `PATCH /agent/schedules/{id}` — Partially update schedule properties (e.g. toggle `enabled` or adjust `interval_seconds`)
+- `DELETE /agent/schedules/{id}` — Permanently delete a schedule definition
+- `GET /agent/schedules/{id}/runs` — Query run results (with cursor-based pagination)
+
+When scheduled executions are due, the worker claims a batch using a row-locking query (`FOR UPDATE SKIP LOCKED`) and advances each run's `next_run_at` atomically at claim time. Claimed runs execute concurrently up to `SCHEDULED_RUNS_MAX_CONCURRENCY`, with per-run failure isolation so one error never aborts the rest of the batch. Each execution prepares a dedicated agent thread, verifies credits, and runs the agent. Completed, failed, timed-out, and credit-skipped runs are archived under `scheduled_run_results`. If configured, execution results are dispatched to an HTTPS-only, SSRF-checked callback URL. Because claims use `SKIP LOCKED`, multiple worker instances can run side by side to scale throughput horizontally.
+
+---
+
 ## Requirements
 
 - Python 3.12+
