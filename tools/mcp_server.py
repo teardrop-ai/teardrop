@@ -29,6 +29,12 @@ from tools import registry
 
 logger = logging.getLogger(__name__)
 
+MCP_SERVER_DESCRIPTION = (
+    "The native infrastructure layer for autonomous economic agents. "
+    "Teardrop exposes its curated Web3, data, and utility tools "
+    "over MCP with public discovery and authenticated execution."
+)
+
 
 def _signature_annotation_for_field(field_info: Any) -> Any:
     base_annotation = field_info.annotation if field_info.annotation is not None else Any
@@ -69,11 +75,7 @@ s = get_settings()
 mcp = fastmcp.FastMCP(
     name="Teardrop",
     version=APP_VERSION,
-    instructions=(
-        "The open API and billing gateway for autonomous economic agents. "
-        "Teardrop exposes its curated Web3, data, and utility tools "
-        "over MCP with public discovery and authenticated execution."
-    ),
+    instructions=MCP_SERVER_DESCRIPTION,
     website_url=s.app_base_url if s.app_base_url else None,
     icons=[{"src": s.agent_card_icon_url}] if s.agent_card_icon_url else None,
 )
