@@ -70,7 +70,7 @@ mcp = fastmcp.FastMCP(
     name="Teardrop",
     version=APP_VERSION,
     instructions=(
-        "The native infrastructure layer for autonomous economic agents. "
+        "The open API and billing gateway for autonomous economic agents. "
         "Teardrop exposes its curated Web3, data, and utility tools "
         "over MCP with public discovery and authenticated execution."
     ),

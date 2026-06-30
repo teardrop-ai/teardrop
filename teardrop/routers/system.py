@@ -216,7 +216,7 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
 
 def _mcp_server_description() -> str:
     return (
-        "The native infrastructure layer for autonomous economic agents. "
+        "The open API and billing gateway for autonomous economic agents. "
         "Teardrop is a task-manager agent API with AG-UI streaming, "
         "MCP tool discovery, and optional paid marketplace access."
     )

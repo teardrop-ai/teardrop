@@ -12,7 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from marketplace.catalog import PLATFORM_SLUG, get_marketplace_tool_by_name, get_platform_tool_price
+from marketplace._catalog_pricing import get_platform_tool_price
+from marketplace.catalog import PLATFORM_SLUG, get_marketplace_tool_by_name
 from marketplace.context import _get_pool
 
 logger = logging.getLogger(__name__)

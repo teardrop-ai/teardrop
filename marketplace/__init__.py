@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 
 import asyncpg
 
+import marketplace._catalog_pricing as _catalog_pricing
 import marketplace.catalog as _catalog
 import marketplace.context as _ctx
 import marketplace.earnings as _earnings
@@ -50,12 +51,12 @@ _GET_MARKETPLACE_CATALOG_TOOL_ORIG = _catalog.get_marketplace_catalog_tool
 _GET_MARKETPLACE_AUTHOR_SUMMARY_ORIG = _catalog.get_marketplace_author_summary
 _BUILD_CATALOG_CURSOR_ORIG = _catalog._build_catalog_cursor
 _GET_MARKETPLACE_TOOL_BY_NAME_ORIG = _catalog.get_marketplace_tool_by_name
-_GET_PLATFORM_TOOL_CACHE_ORIG = _catalog._get_platform_tool_cache
-_GET_ORG_TOOL_PRICE_CACHE_ORIG = _catalog._get_org_tool_price_cache
-_INVALIDATE_PLATFORM_TOOL_CACHE_ORIG = _catalog._invalidate_platform_tool_cache
-_INVALIDATE_ALL_ORG_TOOL_PRICE_CACHE_ORIG = _catalog._invalidate_all_org_tool_price_cache
-_GET_PLATFORM_TOOL_PRICE_ORIG = _catalog.get_platform_tool_price
-_GET_ORG_TOOL_PRICE_BY_QUALIFIED_NAME_ORIG = _catalog.get_org_tool_price_by_qualified_name
+_GET_PLATFORM_TOOL_CACHE_ORIG = _catalog_pricing._get_platform_tool_cache
+_GET_ORG_TOOL_PRICE_CACHE_ORIG = _catalog_pricing._get_org_tool_price_cache
+_INVALIDATE_PLATFORM_TOOL_CACHE_ORIG = _catalog_pricing._invalidate_platform_tool_cache
+_INVALIDATE_ALL_ORG_TOOL_PRICE_CACHE_ORIG = _catalog_pricing._invalidate_all_org_tool_price_cache
+_GET_PLATFORM_TOOL_PRICE_ORIG = _catalog_pricing.get_platform_tool_price
+_GET_ORG_TOOL_PRICE_BY_QUALIFIED_NAME_ORIG = _catalog_pricing.get_org_tool_price_by_qualified_name
 
 _RECORD_TOOL_CALL_EARNINGS_ORIG = _earnings.record_tool_call_earnings
 _GET_AUTHOR_BALANCE_ORIG = _earnings.get_author_balance

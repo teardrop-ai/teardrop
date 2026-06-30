@@ -119,6 +119,7 @@ Use `speedy-coder` for implementation.
 Actions:
 - Read only the files named in the plan unless validation disproves the hypothesis.
 - Make the smallest plausible edit first.
+- Always run validation using the project virtual environment commands: `.venv\Scripts\python -m pytest` (Windows) or `.venv/bin/python -m pytest` (Unix). Never use system, global, or conda-based python directly to avoid missing dependencies or LangGraph configuration issues.
 - After the first substantive edit, run the narrowest available validation before further patching.
 - Preserve Teardrop invariants and existing style.
 
@@ -132,6 +133,10 @@ If the touched area includes:
 Purpose: try to block bad changes before they spread.
 
 Use `ruthless-critic-verifier` for this phase.
+
+Validation tiering:
+- **Fast-Track Verification (Always)**: Execute pytest on the immediate local test domain (e.g., `tests/unit/test_<slice>.py`) using the project venv wrapper first. Do not sweep broad, unrelated tests on the first execution.
+- **Slow-Track Evaluation (Conditional)**: If the change alters core tool behavior, model routing, planner prompts, or overall run cost, proceed to run evals/tasks validations using `teardrop-eval-harness` *after* all unit verifications are green.
 
 Always check:
 - correctness against the requested behavior
@@ -149,7 +154,10 @@ VERIFY output must be one of:
 - `PENDING`: validation could not run or evidence is incomplete
 
 If BLOCK:
-- write findings into `block_findings`
+- write findings into `block_findings` using this format:
+    - error_type: (test_fail | invariant_violation | logic_error | missing_test)
+    - snippet: (specific traceback line, assertion, or exact failing test name)
+    - edit_target: (the specific file, function, module or line range)
 - retry PLAN once using those findings as the new constraint set
 - if the second VERIFY still blocks, stop and ask the user to re-scope or choose a direction
 
