@@ -289,10 +289,13 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS` | Seconds to wait for on-chain tx receipt after CDP transfer (default: `90`). Base mainnet can experience 60–90s delays under congestion. |
 | `MARKETPLACE_AUTO_SWEEP_ENABLED` | `true` to auto-sweep org earnings on a schedule |
 | `MARKETPLACE_SWEEP_INTERVAL_SECONDS` | Sweep cadence in seconds (default: `86400` = 1 day) |
+| `REPUTATION_ROLLUP_ENABLED` | `true` to enable periodic recomputation of reputation metrics from tool call event logs (default: `false`) |
+| `REPUTATION_ROLLUP_INTERVAL_SECONDS` | Interval in seconds between reputation rollup passes (default: `3600` = 1 hour) |
 | `MARKETPLACE_CATALOG_URL` | Public URL of the marketplace catalog used in tool-deactivation emails (optional) |
 | `TOOL_BREAKER_ENABLED` | `true` to auto-deactivate marketplace tools whose webhooks repeatedly fail (default: `true`) |
 | `TOOL_BREAKER_THRESHOLD` | Consecutive failures within the window that trip the breaker (default: `5`) |
 | `TOOL_BREAKER_WINDOW_SECONDS` | Sliding-window duration in seconds for failure counting (default: `600`) |
+| `TOOL_CALL_EVENT_LOGGING_ENABLED` | `true` to persist per-tool-call telemetry (latency, success, error classes, param hashes) for future ML modeling and reputation rolls (default: `true`) |
 | `BYOK_TIER_PRICING_ENABLED` | `true` to use per-token orchestration pricing for BYOK orgs (seeded by migration 041). When `false`, uses legacy flat `byok_platform_fee_usdc`. Default: `false` for backward compatibility. |
 | `OPENROUTER_API_KEY` | Required if `AGENT_PROVIDER=openrouter` |
 | `COINGECKO_API_KEY` | CoinGecko API key for live price data (optional; rate-limited without key) |
@@ -1201,6 +1204,7 @@ python -m migrations.runner
 | `006_credit_ledger.sql` | Immutable debit/top-up audit trail (`org_credit_ledger`) |
 | `007_stripe_webhook_events.sql` | Stripe webhook idempotency table (`stripe_webhook_events`) |
 | `008_usdc_topup_events.sql` | USDC on-chain top-up events (`usdc_topup_events`) |
+| `009_a2a_delegation.sql` | A2A delegation allowlist support for remote agents (`a2a_allowed_agents`) |
 | `009_tool_pricing_overrides.sql` | Per-tool pricing overrides; seeds web_search, get_token_price, get_wallet_portfolio rates |
 | `010_org_tools.sql` | Per-org custom webhook tools (`org_tools`) and audit events |
 | `011_org_memories.sql` | Enables `pgvector`; creates `org_memories` table with HNSW index |
@@ -1236,6 +1240,7 @@ python -m migrations.runner
 | `037_fix_haiku_pricing.sql` | Corrects Claude Haiku 4.5 token pricing to $0.80/$4.00 per 1k |
 | `038_org_llm_config_allow_openrouter.sql` | Expands provider CHECK constraint to allow `openrouter` in `org_llm_config` |
 | `039_new_model_pricing_seed.sql` | Pricing for DeepSeek V3.2 (superseded), Gemini 3 Flash Preview, and Claude Sonnet 4.6 |
+| `040_marketplace_catalog_indexes.sql` | Compiles composite and pricing indexing for marketplace search/filters |
 | `040_v4_flash_pricing.sql` | Replaces DeepSeek V3.2 pricing with V4 Flash (same Teardrop rates, lower provider cost) |
 | `041_byok_tier_pricing.sql` | BYOK tier pricing: adds `is_byok BOOLEAN` to `pricing_rules`; seeds 5 provider-level BYOK rows at 50 atomic USDC/1k tokens |
 | `042_org_tool_schema_hash.sql` | Org tool schema_hash + last_schema_changed_at tracking for change detection |
@@ -1255,6 +1260,14 @@ python -m migrations.runner
 | `056_web_search_price_alignment.sql` | Aligns `web_search` marketplace price to 15,000 atomic USDC ($0.015) |
 | `057_credit_ledger_debit_index.sql` | Partial index `idx_credit_ledger_debit_time` on `org_credit_ledger(org_id, created_at DESC) WHERE operation='debit'` |
 | `058_marketplace_dashboard_catalog.sql` | Public marketplace dashboard metadata: tool categories, aggregate call stats, catalog indexes, and platform category seeds |
+| `059_x402_payment_nonces.sql` | x402 payment-header replay guard table (`x402_payment_nonces`) |
+| `060_org_tools_partial_unique_name.sql` | Swaps table-level UNIQUE tool name constraint for partial index on active tools only |
+| `061_marketplace_catalog_search.sql` | Trigram indexes for marketplace catalog free-text search (trgm across tool/author metadata) |
+| `062_a2a_inbound_events.sql` | Inbound A2A audit ledger table (`a2a_inbound_events`) for caller identity and billing outcomes |
+| `063_org_tools_mcp_backed.sql` | Extends `org_tools` to support MCP-backed tool references alongside webhooks |
+| `064_scheduled_runs.sql` | Schedules and execution logs for recurring prompt runs (`scheduled_runs` & `scheduled_run_results`) |
+| `065_event_triggers.sql` | Event-triggered reactive prompt runs via webhook dispatches (adds `trigger_token` & `secret_hash`) |
+| `066_tool_call_events.sql` | Telemetry event logs (`tool_call_events`) for ML parameters and reputation tracking/user ratings (`run_feedback`) |
 
 ### Neon (production)
 

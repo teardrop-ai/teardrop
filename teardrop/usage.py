@@ -162,6 +162,47 @@ async def record_usage_event(event: UsageEvent) -> None:
         logger.exception("Failed to record usage event run_id=%s", event.run_id)
 
 
+async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict]) -> None:
+    """Insert per-tool-call telemetry rows. Logs errors but never raises — this is
+    best-effort ML/observability telemetry and must not block the SSE stream.
+
+    ``entries`` is the ``_tool_call_log`` accumulator built by
+    ``agent.node_executor.tool_executor_node`` — each item has keys: tool_name,
+    success, error_class, elapsed_ms, billable, args_hash. Raw tool arguments are
+    never stored here, only the truncated hash already computed for within-run
+    dedup (``agent.node_executor._call_signature``).
+    """
+    if not entries:
+        return
+    try:
+        pool = _get_pool()
+        now = datetime.now(timezone.utc)
+        await pool.executemany(
+            """
+            INSERT INTO tool_call_events
+                (id, run_id, org_id, tool_name, success, error_class, elapsed_ms, billable, args_hash, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """,
+            [
+                (
+                    str(uuid.uuid4()),
+                    run_id,
+                    org_id,
+                    str(entry.get("tool_name", "")),
+                    bool(entry.get("success", True)),
+                    str(entry.get("error_class", "")),
+                    int(entry.get("elapsed_ms", 0)),
+                    bool(entry.get("billable", True)),
+                    str(entry.get("args_hash", "")),
+                    now,
+                )
+                for entry in entries
+            ],
+        )
+    except Exception:
+        logger.exception("Failed to record tool_call_events run_id=%s", run_id)
+
+
 # ─── Read ─────────────────────────────────────────────────────────────────────
 
 

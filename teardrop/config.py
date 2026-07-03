@@ -521,6 +521,14 @@ class Settings(BaseSettings):
         ge=60,
         description="Sliding window for the failure counter (seconds).",
     )
+    tool_call_event_logging_enabled: bool = Field(
+        default=True,
+        description=(
+            "Persist per-tool-call telemetry (latency, success, error_class) to the "
+            "tool_call_events table after each run. Foundation data for future ML "
+            "classifiers and the marketplace reputation rollup; never gates billing."
+        ),
+    )
 
     # ── LLM Config Encryption ─────────────────────────────────────────────────
     llm_config_encryption_key: str = Field(
@@ -661,6 +669,17 @@ class Settings(BaseSettings):
     marketplace_sweep_interval_seconds: int = Field(
         default=86400,
         description="Interval in seconds between marketplace auto-sweep runs (default: 24h)",
+    )
+    reputation_rollup_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable background task that recomputes marketplace_tool_call_stats "
+            "reputation_score/total_failures/total_latency_ms from tool_call_events."
+        ),
+    )
+    reputation_rollup_interval_seconds: int = Field(
+        default=3600,
+        description="Interval in seconds between reputation rollup passes (default: 1h)",
     )
     scheduled_runs_enabled: bool = Field(
         default=False,

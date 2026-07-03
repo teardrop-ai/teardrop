@@ -66,6 +66,7 @@ _GET_AUTHOR_EARNINGS_BY_TOOL_ORIG = _earnings.get_author_earnings_by_tool
 _RECORD_MARKETPLACE_TOOL_CALL_ORIG = _stats.record_marketplace_tool_call
 _RECORD_MARKETPLACE_TOOL_USAGE_ORIG = _stats.record_marketplace_tool_usage
 _RECORD_MARKETPLACE_TOOL_USAGE_MANY_ORIG = _stats.record_marketplace_tool_usage_many
+_RECORD_RUN_FEEDBACK_ORIG = _stats.record_run_feedback
 
 _SUBSCRIBE_TO_TOOL_ORIG = _subscriptions.subscribe_to_tool
 _UNSUBSCRIBE_FROM_TOOL_ORIG = _subscriptions.unsubscribe_from_tool
@@ -91,6 +92,7 @@ _SWEEP_WITHDRAWAL_ID_ORIG = _worker._sweep_withdrawal_id
 _SWEEP_BACKOFF_SECONDS_ORIG = _worker._sweep_backoff_seconds
 _MARKETPLACE_SWEEP_ONCE_ORIG = _worker.marketplace_sweep_once
 _MARKETPLACE_SWEEP_LOOP_ORIG = _worker._marketplace_sweep_loop
+_REPUTATION_ROLLUP_ONCE_ORIG = _worker.reputation_rollup_once
 
 # Root-level mutable compatibility state patched by tests.
 _pool: asyncpg.Pool | None = _ctx._pool
@@ -324,6 +326,27 @@ async def record_marketplace_tool_usage_many(tool_names: list[str]) -> None:
     await _call_async(_RECORD_MARKETPLACE_TOOL_USAGE_MANY_ORIG, tool_names)
 
 
+async def record_run_feedback(
+    *,
+    run_id: str,
+    org_id: str,
+    user_id: str,
+    qualified_tool_name: str,
+    rating: int,
+    comment: str = "",
+) -> dict:
+    """Record a ground-truth quality signal (-1/0/1) for a tool call within a run."""
+    return await _call_async(
+        _RECORD_RUN_FEEDBACK_ORIG,
+        run_id=run_id,
+        org_id=org_id,
+        user_id=user_id,
+        qualified_tool_name=qualified_tool_name,
+        rating=rating,
+        comment=comment,
+    )
+
+
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
     """Subscribe an org to a community tool (``org_slug/tool_name``), enabling billed calls."""
     return await _call_async(_SUBSCRIBE_TO_TOOL_ORIG, org_id, qualified_tool_name)
@@ -463,6 +486,14 @@ async def marketplace_sweep_once() -> int:
     return await _call_async(_MARKETPLACE_SWEEP_ONCE_ORIG)
 
 
+async def reputation_rollup_once() -> int:
+    """Recompute marketplace_tool_call_stats reputation/failure/latency aggregates
+    from the tool_call_events ledger. Idempotent — safe to re-run. Returns the
+    number of tools upserted.
+    """
+    return await _call_async(_REPUTATION_ROLLUP_ONCE_ORIG)
+
+
 async def _marketplace_sweep_loop() -> None:
     await _call_async(_MARKETPLACE_SWEEP_LOOP_ORIG)
 
@@ -500,6 +531,7 @@ __all__ = [
     "record_marketplace_tool_call",
     "record_marketplace_tool_usage",
     "record_marketplace_tool_usage_many",
+    "record_run_feedback",
     "subscribe_to_tool",
     "unsubscribe_from_tool",
     "get_org_subscriptions",
@@ -523,4 +555,5 @@ __all__ = [
     "_sweep_backoff_seconds",
     "marketplace_sweep_once",
     "_marketplace_sweep_loop",
+    "reputation_rollup_once",
 ]

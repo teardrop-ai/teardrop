@@ -184,6 +184,93 @@ async def marketplace_sweep_once() -> int:
     return processed
 
 
+async def reputation_rollup_once() -> int:
+    """Recompute tool-quality aggregates and reputation scores for the catalog.
+
+    Reads the full ``tool_call_events`` ledger and *overwrites* (never
+    increments) ``total_failures``, ``total_latency_ms``, and
+    ``reputation_score`` on ``marketplace_tool_call_stats`` — this makes the
+    rollup idempotent and safe to re-run over the same data. ``total_calls``
+    is owned exclusively by ``record_marketplace_tool_call`` and is never
+    touched here.
+
+    Bare (unqualified) tool names in ``tool_call_events`` are assumed to be
+    platform tools, mirroring the normalization already used by
+    ``record_marketplace_tool_usage``. A stray aggregate row may be created for
+    an internal/unpublished tool name — harmless, since marketplace catalog
+    queries only surface rows that also join to a published/active tool.
+
+    v1 scoring: ``reputation_score = 0.6 * success_rate + 0.4 * popularity_norm``
+    where ``popularity_norm`` is log-scaled call volume relative to the
+    busiest tool. Recency weighting and an incremental watermark (to avoid
+    full-table aggregation) are left as future work — call volume is low
+    enough at this stage that a full scan is cheap.
+
+    Returns the number of tools upserted.
+    """
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        WITH agg AS (
+            SELECT
+                CASE WHEN tool_name LIKE '%/%' THEN tool_name ELSE 'platform/' || tool_name END
+                    AS qualified_tool_name,
+                CASE WHEN tool_name LIKE '%/%' THEN 'community' ELSE 'platform' END
+                    AS tool_type,
+                COUNT(*) FILTER (WHERE success) AS successes,
+                COUNT(*) FILTER (WHERE NOT success) AS failures,
+                COALESCE(SUM(elapsed_ms), 0)::BIGINT AS total_latency_ms
+            FROM tool_call_events
+            GROUP BY 1, 2
+        ),
+        scored AS (
+            SELECT
+                qualified_tool_name,
+                tool_type,
+                failures,
+                total_latency_ms,
+                CASE WHEN (successes + failures) = 0 THEN 1.0
+                     ELSE successes::NUMERIC / (successes + failures) END AS success_rate,
+                LN(1 + successes + failures) AS log_volume
+            FROM agg
+        )
+        SELECT
+            qualified_tool_name,
+            tool_type,
+            failures,
+            total_latency_ms,
+            success_rate,
+            CASE WHEN MAX(log_volume) OVER () = 0 THEN 0
+                 ELSE log_volume / MAX(log_volume) OVER () END AS popularity_norm
+        FROM scored
+        """
+    )
+
+    for row in rows:
+        success_rate = float(row["success_rate"])
+        popularity_norm = float(row["popularity_norm"])
+        reputation_score = round(0.6 * success_rate + 0.4 * popularity_norm, 6)
+        await pool.execute(
+            """
+            INSERT INTO marketplace_tool_call_stats
+                (qualified_tool_name, tool_type, total_failures, total_latency_ms, reputation_score, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (qualified_tool_name) DO UPDATE
+                SET total_failures = EXCLUDED.total_failures,
+                    total_latency_ms = EXCLUDED.total_latency_ms,
+                    reputation_score = EXCLUDED.reputation_score,
+                    updated_at = EXCLUDED.updated_at
+            """,
+            row["qualified_tool_name"],
+            row["tool_type"],
+            int(row["failures"]),
+            int(row["total_latency_ms"]),
+            reputation_score,
+        )
+
+    return len(rows)
+
+
 async def _marketplace_sweep_loop() -> None:
     """Background task: periodically auto-process qualifying withdrawals."""
     settings = get_settings()

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from billing import (
     get_current_pricing,
+    get_invoice_by_run,
     get_tool_pricing_overrides,
 )
 from marketplace import (
@@ -30,6 +31,7 @@ from marketplace import (
     get_marketplace_author_summary,
     get_marketplace_catalog,
     get_marketplace_catalog_tool,
+    record_run_feedback,
     request_withdrawal,
     set_author_config,
 )
@@ -651,7 +653,7 @@ async def get_marketplace_withdrawals(
     )
 
 
-_CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc", "popularity"})
+_CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc", "popularity", "reputation"})
 
 
 def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
@@ -667,6 +669,7 @@ def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
         "tool_type": tool.tool_type,
         "category": tool.category,
         "total_calls": tool.total_calls,
+        "reputation_score": tool.reputation_score,
         "health_status": tool.health_status,
         "is_healthy": tool.is_healthy,
         # author_slug is the canonical filter key; author is kept for
@@ -781,6 +784,58 @@ async def get_marketplace_catalog_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace tool not found.")
 
     return JSONResponse(content={"tool": _serialize_marketplace_tool(tool)}, headers={"Cache-Control": "public, max-age=60"})
+
+
+class RunFeedbackRequest(BaseModel):
+    run_id: str = Field(..., min_length=1, max_length=128)
+    rating: int = Field(..., ge=-1, le=1, description="-1 (bad), 0 (neutral), or 1 (good)")
+    comment: str = Field(default="", max_length=1000)
+
+
+@router.post("/marketplace/tools/{org_slug}/{tool_name}/feedback", tags=["Marketplace"])
+async def submit_marketplace_tool_feedback(
+    org_slug: str,
+    tool_name: str,
+    body: RunFeedbackRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Submit a ground-truth quality signal (-1/0/1) for a tool call within a run.
+
+    Scoped to the authenticated user's own run: ``get_invoice_by_run`` must
+    confirm the run belongs to the caller before feedback is accepted, so a
+    caller cannot submit feedback for runs they never made. This is the first
+    labeled signal available for future ML quality/reputation classifiers.
+    """
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    user_id = payload["sub"]
+    org_id = _require_org_id(payload)
+
+    invoice = await get_invoice_by_run(body.run_id, user_id)
+    if invoice is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found for this account.")
+
+    feedback = await record_run_feedback(
+        run_id=body.run_id,
+        org_id=org_id,
+        user_id=user_id,
+        qualified_tool_name=f"{org_slug}/{tool_name}",
+        rating=body.rating,
+        comment=body.comment,
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "id": feedback["id"],
+            "run_id": feedback["run_id"],
+            "qualified_tool_name": feedback["qualified_tool_name"],
+            "rating": feedback["rating"],
+            "created_at": feedback["created_at"].isoformat(),
+        },
+    )
 
 
 @router.get("/marketplace/authors/{org_slug}", tags=["Marketplace"])

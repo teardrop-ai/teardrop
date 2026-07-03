@@ -81,6 +81,7 @@ class MarketplaceTool(BaseModel):
     author_org_slug: str
     tool_type: Literal["platform", "community"] = "community"
     total_calls: int = 0
+    reputation_score: float = 0.0
     health_status: MarketplaceHealthStatus = "healthy"
     is_healthy: bool = True
     category: MarketplaceCategory = ""

@@ -489,14 +489,33 @@ async def tool_executor_node(state: AgentState, config=None) -> dict[str, Any]:
     completed_sigs.extend(_call_signature(c["name"], c["args"]) for c in dedup_calls if c["name"] in platform_tool_names)
     usage["_completed_calls"] = completed_sigs
 
-    for result in results:
+    # ── Per-call telemetry log (ML/reputation foundation) ─────────────────
+    # `results` is produced by asyncio.gather() over `dedup_calls`, so the two
+    # lists share order/length — zip is safe. Never persists raw tool_args,
+    # only the dedup hash (see _call_signature) to avoid leaking wallet
+    # addresses/secrets that may appear in tool arguments.
+    tool_call_log: list[dict[str, Any]] = list(usage.get("_tool_call_log", []))
+
+    for dedup_call, result in zip(dedup_calls, results):
         name = result["name"]
         tool_call_counts[name] = int(tool_call_counts.get(name, 0)) + 1
         if name == "get_defi_positions":
             defi_positions_covered.update(_covered_defi_keys_from_result(result.get("content", "")))
+        error_class = result.get("error_class")
+        tool_call_log.append(
+            {
+                "tool_name": name,
+                "success": error_class is None,
+                "error_class": error_class or "",
+                "elapsed_ms": int(result.get("elapsed_ms", 0)),
+                "billable": bool(result.get("billable", True)),
+                "args_hash": _call_signature(dedup_call["name"], dedup_call["args"]).split(":", 1)[-1],
+            }
+        )
 
     usage["_tool_call_counts"] = tool_call_counts
     usage["_defi_positions_covered"] = sorted(defi_positions_covered)
+    usage["_tool_call_log"] = tool_call_log
 
     usage["tool_calls"] = usage.get("tool_calls", 0) + len(dedup_calls)
     usage["custom_tool_calls"] = custom_tool_calls + sum(1 for c in dedup_calls if c["name"] not in platform_tool_names)

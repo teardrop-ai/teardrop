@@ -99,3 +99,39 @@ async def record_marketplace_tool_usage_many(tool_names: list[str]) -> None:
             await record_marketplace_tool_usage(str(tool_name))
         except Exception:
             logger.debug("Failed to record marketplace tool usage for %s", tool_name, exc_info=True)
+
+
+async def record_run_feedback(
+    *,
+    run_id: str,
+    org_id: str,
+    user_id: str,
+    qualified_tool_name: str,
+    rating: int,
+    comment: str = "",
+) -> dict:
+    """Record a ground-truth quality signal (-1/0/1) for a tool call within a run.
+
+    This is the first labeled feedback signal available for future ML quality
+    and reputation classifiers. Callers must verify the run belongs to the
+    submitting user (e.g. via ``billing.get_invoice_by_run``) before calling
+    this — it performs no ownership check itself.
+    """
+    import uuid
+
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        INSERT INTO run_feedback (id, run_id, org_id, user_id, qualified_tool_name, rating, comment)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, run_id, org_id, user_id, qualified_tool_name, rating, comment, created_at
+        """,
+        str(uuid.uuid4()),
+        run_id,
+        org_id,
+        user_id,
+        qualified_tool_name,
+        rating,
+        comment,
+    )
+    return dict(row)

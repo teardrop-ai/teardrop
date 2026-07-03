@@ -12,6 +12,7 @@ import asyncpg
 
 from agent.cache_prewarm import prewarm_org_prefix
 from billing import cleanup_expired_payment_nonces, process_pending_settlements
+from marketplace import reputation_rollup_once
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import cleanup_expired_memories
@@ -100,6 +101,12 @@ async def _x402_nonce_cleanup_iter() -> None:
         logger.info("x402 nonce cleanup: deleted %d expired payment claims", deleted)
 
 
+async def _reputation_rollup_iter() -> None:
+    upserted = await reputation_rollup_once()
+    if upserted:
+        logger.info("Reputation rollup: upserted %d tool aggregates", upserted)
+
+
 async def _settlement_retry_loop() -> None:
     """Periodically retry failed settlements (runs as background task)."""
     await _run_periodic(
@@ -137,6 +144,16 @@ async def _x402_nonce_cleanup_loop() -> None:
         _x402_nonce_cleanup_iter,
         settings.refresh_token_cleanup_interval_seconds,
         monitor_slug="x402-nonce-cleanup",
+    )
+
+
+async def _reputation_rollup_loop() -> None:
+    """Periodically recompute marketplace reputation aggregates (runs as background task)."""
+    await _run_periodic(
+        "Reputation rollup",
+        _reputation_rollup_iter,
+        settings.reputation_rollup_interval_seconds,
+        monitor_slug="reputation-rollup",
     )
 
 

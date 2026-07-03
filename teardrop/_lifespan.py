@@ -24,6 +24,7 @@ from teardrop._background_tasks import (
     _memory_cleanup_loop,
     _prewarm_cache_prefixes,
     _refresh_token_cleanup_loop,
+    _reputation_rollup_loop,
     _run_periodic,
     _settlement_retry_loop,
     _x402_nonce_cleanup_loop,
@@ -108,6 +109,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             from marketplace import _marketplace_sweep_loop
 
             bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
+        if settings.reputation_rollup_enabled:
+            bg_tasks.append(asyncio.create_task(_reputation_rollup_loop()))
         if settings.scheduled_runs_enabled:
             bg_tasks.append(
                 asyncio.create_task(

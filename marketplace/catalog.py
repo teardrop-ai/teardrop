@@ -21,6 +21,7 @@ _CATALOG_SORT_COLUMNS = {
     "price_asc": "base_price_usdc ASC, qualified_name ASC",
     "price_desc": "base_price_usdc DESC, qualified_name ASC",
     "popularity": "total_calls DESC, qualified_name ASC",
+    "reputation": "reputation_score DESC, qualified_name ASC",
 }
 
 _VALID_CATEGORIES = {"", "defi", "search", "data", "communication", "utility"}
@@ -169,7 +170,8 @@ async def get_marketplace_catalog(
                 o.slug AS author_org_slug,
                 'community' AS tool_type,
                 COALESCE(t.category, '') AS category,
-                COALESCE(s.total_calls, 0)::BIGINT AS total_calls
+                COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
+                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score
             FROM org_tools t
             JOIN orgs o ON o.id = t.org_id
             LEFT JOIN marketplace_tool_call_stats s ON s.qualified_tool_name = (o.slug || '/' || t.name)
@@ -209,7 +211,8 @@ async def get_marketplace_catalog(
                 '{PLATFORM_SLUG}' AS author_org_slug,
                 'platform' AS tool_type,
                 COALESCE(p.category, '') AS category,
-                COALESCE(s.total_calls, 0)::BIGINT AS total_calls
+                COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
+                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score
             FROM marketplace_platform_tools p
             LEFT JOIN marketplace_tool_call_stats s ON s.qualified_tool_name = ('{PLATFORM_SLUG}/' || p.tool_name)
             WHERE {where_sql}
@@ -236,6 +239,12 @@ async def get_marketplace_catalog(
             key_ref = _add_param(int(cursor_sort_key))
             name_ref = _add_param(str(cursor_name))
             cursor_clause = f"WHERE (total_calls < {key_ref} OR (total_calls = {key_ref} AND qualified_name > {name_ref}))"
+        elif sort == "reputation":
+            key_ref = _add_param(float(cursor_sort_key))
+            name_ref = _add_param(str(cursor_name))
+            cursor_clause = (
+                f"WHERE (reputation_score < {key_ref} OR (reputation_score = {key_ref} AND qualified_name > {name_ref}))"
+            )
 
     limit_ref = _add_param(limit)
     union_sql = " UNION ALL ".join(selects) if selects else "SELECT NULL WHERE FALSE"
@@ -266,6 +275,7 @@ async def get_marketplace_catalog(
         base_price = int(_row_get(row, "base_price_usdc", 0) or 0)
         cost = tool_overrides.get(qualified, tool_overrides.get(name, base_price or default_tool_cost))
         total_calls = int(_row_get(row, "total_calls", 0) or 0)
+        reputation_score = float(_row_get(row, "reputation_score", 0) or 0)
         health_status = await _tool_health_status(_row_get(row, "tool_id"), str(_row_get(row, "tool_type", "community")))
 
         sort_key: Any
@@ -273,6 +283,8 @@ async def get_marketplace_catalog(
             sort_key = base_price
         elif sort == "popularity":
             sort_key = total_calls
+        elif sort == "reputation":
+            sort_key = reputation_score
         else:
             sort_key = qualified
 
@@ -289,6 +301,7 @@ async def get_marketplace_catalog(
                 author_org_slug=str(_row_get(row, "author_org_slug", "")),
                 tool_type=str(_row_get(row, "tool_type", "community")),
                 total_calls=total_calls,
+                reputation_score=reputation_score,
                 health_status=health_status,
                 is_healthy=health_status == "healthy",
                 category=str(_row_get(row, "category", "") or ""),
@@ -406,6 +419,8 @@ def _build_catalog_cursor(tool: MarketplaceTool, sort: str) -> str:
         data = {"sort_key": tool.cost_usdc, "name": tool.qualified_name}
     elif sort == "popularity":
         data = {"sort_key": tool.total_calls, "name": tool.qualified_name}
+    elif sort == "reputation":
+        data = {"sort_key": tool.reputation_score, "name": tool.qualified_name}
     else:
         data = {"sort_key": tool.qualified_name, "name": tool.qualified_name}
     return _b64.b64encode(_json.dumps(data).encode()).decode()

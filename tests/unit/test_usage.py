@@ -58,6 +58,67 @@ class TestRecordUsageEvent:
             await record_usage_event(event)
 
 
+# ─── record_tool_call_events ──────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestRecordToolCallEvents:
+    async def test_inserts_one_row_per_entry(self):
+        from teardrop.usage import record_tool_call_events
+
+        pool = _pool()
+        pool.executemany = AsyncMock(return_value=None)
+        entries = [
+            {
+                "tool_name": "get_datetime",
+                "success": True,
+                "error_class": "",
+                "elapsed_ms": 42,
+                "billable": True,
+                "args_hash": "abc123",
+            },
+            {
+                "tool_name": "broken_tool",
+                "success": False,
+                "error_class": "timeout",
+                "elapsed_ms": 500,
+                "billable": False,
+                "args_hash": "def456",
+            },
+        ]
+        with patch.object(usage_module, "_pool", pool):
+            await record_tool_call_events("run-1", "org-1", entries)
+
+        pool.executemany.assert_called_once()
+        sql, rows = pool.executemany.call_args.args
+        assert "tool_call_events" in sql
+        assert len(rows) == 2
+        assert rows[0][1] == "run-1"  # run_id
+        assert rows[0][2] == "org-1"  # org_id
+        assert rows[0][3] == "get_datetime"  # tool_name
+        assert rows[1][4] is False  # success
+        assert rows[1][5] == "timeout"  # error_class
+
+    async def test_empty_entries_is_noop(self):
+        from teardrop.usage import record_tool_call_events
+
+        pool = _pool()
+        pool.executemany = AsyncMock(return_value=None)
+        with patch.object(usage_module, "_pool", pool):
+            await record_tool_call_events("run-1", "org-1", [])
+
+        pool.executemany.assert_not_called()
+
+    async def test_db_error_is_swallowed(self):
+        from teardrop.usage import record_tool_call_events
+
+        pool = _pool()
+        pool.executemany = AsyncMock(side_effect=Exception("DB gone"))
+        with patch.object(usage_module, "_pool", pool):
+            # Must not raise
+            await record_tool_call_events("run-1", "org-1", [{"tool_name": "x"}])
+
+
 # ─── get_usage_by_user / get_usage_by_org ────────────────────────────────────
 
 

@@ -1069,6 +1069,72 @@ class TestToolExecutorNode:
         assert usage["tool_calls"] == 1
         assert mock_tool.ainvoke.call_count == 1
 
+    async def test_tool_call_log_records_success_and_failure(self, test_settings):
+        """_tool_call_log is the per-call telemetry accumulator persisted after
+        the run by teardrop.usage.record_tool_call_events (ML/reputation data).
+
+        Note: an *unregistered* tool name never reaches execution -- it is
+        pre-empted into a TOOL_UNAVAILABLE skipped_message before dedup_calls
+        is built (see the "tool_unavailable" pre-check above), so it never
+        appears in _tool_call_log. To exercise a genuine failure entry we use
+        a registered tool whose ainvoke() raises.
+        """
+        calls = [
+            {"id": "c1", "name": "calculate", "args": {"expression": "2+2"}},
+            {"id": "c2", "name": "failing_tool", "args": {}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        mock_calc = MagicMock()
+        mock_calc.ainvoke = AsyncMock(return_value={"result": 4.0})
+        mock_failing = MagicMock()
+        mock_failing.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+
+        state = _make_state(messages=[last_msg])
+        with patch.object(nodes_module, "_cached_tools_by_name", {"calculate": mock_calc, "failing_tool": mock_failing}):
+            result = await tool_executor_node(state)
+
+        tool_call_log = result["metadata"]["_usage"]["_tool_call_log"]
+        assert len(tool_call_log) == 2
+
+        by_name = {entry["tool_name"]: entry for entry in tool_call_log}
+        assert by_name["calculate"]["success"] is True
+        assert by_name["calculate"]["error_class"] == ""
+        assert by_name["calculate"]["billable"] is True
+        assert isinstance(by_name["calculate"]["elapsed_ms"], int)
+        assert by_name["calculate"]["args_hash"]  # non-empty hash, not raw args
+
+        assert by_name["failing_tool"]["success"] is False
+        assert by_name["failing_tool"]["error_class"]
+        assert by_name["failing_tool"]["billable"] is False
+
+    async def test_tool_call_log_accumulates_across_iterations(self, test_settings):
+        call = {"id": "c1", "name": "calculate", "args": {"expression": "1+1"}}
+        last_msg = _make_ai_message(tool_calls=[call])
+
+        mock_calc = MagicMock()
+        mock_calc.ainvoke = AsyncMock(return_value={"result": 2.0})
+
+        existing_entry = {
+            "tool_name": "get_datetime",
+            "success": True,
+            "error_class": "",
+            "elapsed_ms": 5,
+            "billable": True,
+            "args_hash": "priorhash",
+        }
+        state = _make_state(
+            messages=[last_msg],
+            metadata={"_usage": {"_tool_call_log": [existing_entry]}},
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {"calculate": mock_calc}):
+            result = await tool_executor_node(state)
+
+        tool_call_log = result["metadata"]["_usage"]["_tool_call_log"]
+        assert len(tool_call_log) == 2
+        assert tool_call_log[0] == existing_entry
+        assert tool_call_log[1]["tool_name"] == "calculate"
+
     async def test_org_tool_is_not_deduplicated(self, test_settings):
         calls = [
             {"id": "c1", "name": "org__send_invoice", "args": {"invoice_id": "inv-1"}},

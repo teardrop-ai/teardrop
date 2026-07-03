@@ -74,7 +74,7 @@ from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.llm_config import get_org_llm_config_cached
 from teardrop.memory import extract_and_store_memories
 from teardrop.rate_limit import _enforce_rate_limit
-from teardrop.usage import UsageEvent, record_usage_event
+from teardrop.usage import UsageEvent, record_tool_call_events, record_usage_event
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -277,6 +277,14 @@ async def agent_run(
             model=llm_config["model"] if llm_config else settings.agent_model,
         )
         await record_usage_event(usage_event)
+
+        # ── Per-tool-call telemetry (ML/reputation foundation, non-financial) ──
+        # Recorded unconditionally (not gated on settlement) so failures are
+        # captured too — this is telemetry, not a billing ledger.
+        if settings.tool_call_event_logging_enabled:
+            tool_call_log = usage_data.get("_tool_call_log", [])
+            if isinstance(tool_call_log, list) and tool_call_log:
+                asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log))
 
         # ── Extract and store memories (fire-and-forget) ─────────────────
         if mem_settings.memory_enabled and state_snapshot is not None:
