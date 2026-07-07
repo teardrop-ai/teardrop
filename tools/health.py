@@ -16,10 +16,29 @@ from __future__ import annotations
 
 import logging
 
+import sentry_sdk
+
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _log_redis_unavailable(op: str, tool_id: str, exc: BaseException | None = None) -> None:
+    """Surface breaker disablement loudly — the breaker is fail-open without Redis."""
+    logger.error(
+        "tool_health.%s: Redis unavailable — circuit breaker is DISABLED (fail-open) tool_id=%s",
+        op,
+        tool_id,
+    )
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("component", "tool_health")
+        scope.set_tag("tool_id", str(tool_id))
+        scope.set_tag("redis_op", op)
+        sentry_sdk.capture_message(
+            f"tool_health: Redis unavailable; circuit breaker disabled for tool_id={tool_id}",
+            level="error",
+        )
 
 
 def _fail_key(tool_id: str) -> str:
@@ -36,6 +55,7 @@ async def record_success(tool_id: str) -> None:
         return
     redis = get_redis()
     if redis is None:
+        _log_redis_unavailable("record_success", tool_id)
         return
     try:
         await redis.delete(_fail_key(tool_id))
@@ -55,6 +75,7 @@ async def record_failure(tool_id: str) -> bool:
         return False
     redis = get_redis()
     if redis is None:
+        _log_redis_unavailable("record_failure", tool_id)
         return False
 
     threshold = settings.tool_breaker_threshold
@@ -68,6 +89,10 @@ async def record_failure(tool_id: str) -> bool:
             await redis.expire(key, window)
         if count >= threshold:
             await redis.setex(_trip_key(tool_id), window, "1")
+            sentry_sdk.capture_message(
+                f"tool_health: circuit breaker tripped tool_id={tool_id} count={count} threshold={threshold} window={window}s",
+                level="warning",
+            )
             return True
     except Exception as exc:  # pragma: no cover — best effort
         logger.warning("tool_health.record_failure redis error tool_id=%s: %s", tool_id, exc)
@@ -81,6 +106,7 @@ async def is_breaker_tripped(tool_id: str) -> bool:
         return False
     redis = get_redis()
     if redis is None:
+        _log_redis_unavailable("is_breaker_tripped", tool_id)
         return False
     try:
         return bool(await redis.exists(_trip_key(tool_id)))
@@ -95,6 +121,7 @@ async def clear_breaker(tool_id: str) -> None:
         return
     redis = get_redis()
     if redis is None:
+        _log_redis_unavailable("clear_breaker", tool_id)
         return
     try:
         await redis.delete(_fail_key(tool_id), _trip_key(tool_id))

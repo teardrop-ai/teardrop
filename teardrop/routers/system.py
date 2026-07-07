@@ -307,6 +307,9 @@ def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
     }
 
 
+# ─── Health & Ops ─────────────────────────────────────────────────────────
+
+
 @router.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     return RedirectResponse(url="/docs")
@@ -355,6 +358,7 @@ async def health_check(request: Request) -> JSONResponse:
             "postgres": postgres,
             "redis": redis_status,
         }
+        # ─── JWKS & x402 Discovery ────────────────────────────────────────────────
     )
 
 
@@ -385,6 +389,7 @@ async def jwks() -> JSONResponse:
                 }
             ],
         }
+        # ─── A2A Agent Card ───────────────────────────────────────────────────────
     )
 
 
@@ -404,6 +409,9 @@ async def x402_discovery(request: Request) -> Response:
 async def x402_discovery_json(request: Request) -> Response:
     """Legacy JSON alias for x402 discovery metadata."""
     return _json_discovery_response(request, _build_x402_discovery_content(request))
+
+
+# ─── MCP OAuth Protected-Resource Discovery ────────────────────────────────
 
 
 @router.get("/.well-known/agent.json", include_in_schema=False, tags=["A2A"])

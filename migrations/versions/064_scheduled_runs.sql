@@ -1,3 +1,8 @@
+-- Migration 064: scheduled runs
+-- Domain: scheduling
+-- Invariant: scheduled_runs drives cron/interval agent execution; claims use SKIP LOCKED for multi-worker safety
+-- Tables: scheduled_runs
+
 CREATE TABLE IF NOT EXISTS scheduled_runs (
     id TEXT PRIMARY KEY,
     org_id TEXT NOT NULL,

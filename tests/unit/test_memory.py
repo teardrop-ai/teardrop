@@ -397,8 +397,8 @@ class TestExtractAndStoreMemories:
             patch.object(memory_module, "_generate_embedding", _mock_embedding()),
             patch.object(
                 memory_module,
-                "_extract_facts",
-                AsyncMock(return_value=["fact one", "fact two"]),
+                "_extract_facts_and_decision",
+                AsyncMock(return_value=(["fact one", "fact two"], None)),
             ),
         ):
             count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
@@ -408,7 +408,9 @@ class TestExtractAndStoreMemories:
     async def test_skips_extraction_for_stateless_lookup_runs(self, test_settings):
         with (
             patch.object(memory_module, "_is_stateless_lookup_run", return_value=True),
-            patch.object(memory_module, "_extract_facts", AsyncMock(return_value=["fact one"])) as extract_mock,
+            patch.object(
+                memory_module, "_extract_facts_and_decision", AsyncMock(return_value=(["fact one"], None))
+            ) as extract_mock,
         ):
             count = await memory_module.extract_and_store_memories(
                 "org-1",
@@ -537,7 +539,7 @@ class TestCleanupExpiredMemories:
         assert count == 0
 
     async def test_returns_zero_on_no_facts(self, test_settings):
-        with patch.object(memory_module, "_extract_facts", AsyncMock(return_value=[])):
+        with patch.object(memory_module, "_extract_facts_and_decision", AsyncMock(return_value=([], None))):
             count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")
 
         assert count == 0
@@ -545,7 +547,7 @@ class TestCleanupExpiredMemories:
     async def test_never_raises(self, test_settings):
         with patch.object(
             memory_module,
-            "_extract_facts",
+            "_extract_facts_and_decision",
             AsyncMock(side_effect=Exception("boom")),
         ):
             count = await memory_module.extract_and_store_memories("org-1", "user-1", [], "run-1")

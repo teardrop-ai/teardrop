@@ -295,6 +295,7 @@ async def get_marketplace_catalog(
                 display_name=str(_row_get(row, "display_name", name) or name),
                 description=str(_row_get(row, "description", "")),
                 marketplace_description=str(_row_get(row, "marketplace_description", "") or _row_get(row, "description", "")),
+                short_description=str(_row_get(row, "description", "")),
                 input_schema=raw_schema or {},
                 cost_usdc=cost,
                 author_org_name=str(_row_get(row, "author_org_name", "")),

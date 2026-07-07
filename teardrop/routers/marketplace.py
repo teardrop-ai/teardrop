@@ -3,6 +3,14 @@
 """Marketplace REST routes: author config/earnings/withdrawals, public catalog
 browsing, and subscriptions.
 
+Sub-domains (each with its own section below):
+  1. Author Config          — set/get settlement wallet for payouts
+  2. MCP Import & Publish   — preview and publish external MCP tools to catalog
+  3. Author Earnings        — balance, history, per-tool aggregates (atomic USDC)
+  4. Author Withdrawals     — request payout to settlement wallet
+  5. Public Catalog         — browse/search marketplace, author discovery
+  6. Subscriptions          — subscribe/unsubscribe to published tools
+
 Extracted verbatim from ``teardrop.app`` with no logic changes. Billing, x402,
 SSRF, circuit-breaker, and subscription-gate semantics are preserved exactly.
 The MCP JSON-RPC gateway (POST /mcp/v1) lives in ``teardrop.routers.marketplace_mcp``.
@@ -219,6 +227,9 @@ def _preview_import_tool(
     }
 
 
+# ─── Author Config (settlement wallet payout destination) ─────────────────
+
+
 @router.post("/marketplace/author-config", tags=["Marketplace"])
 async def set_marketplace_author_config(
     body: SetAuthorConfigRequest,
@@ -286,6 +297,7 @@ async def get_marketplace_author_config_endpoint(
             "created_at": config.created_at.isoformat(),
             "updated_at": config.updated_at.isoformat(),
         }
+        # ─── MCP Import & Publish (preview + publish remote MCP tools) ────────────
     )
 
 
@@ -498,6 +510,7 @@ async def publish_marketplace_import(
     return JSONResponse(
         status_code=response_status,
         content={"server_id": body.server_id, "created": created, "errors": errors},
+        # ─── Author Earnings & Balance (atomic USDC ledger) ──────────────────────
     )
 
 
@@ -575,6 +588,7 @@ async def get_marketplace_earnings_by_tool_endpoint(
                 for tool in tools
             ]
         }
+        # ─── Author Withdrawals (on-chain USDC payout to settlement wallet) ────────
     )
 
 
@@ -685,6 +699,8 @@ def _format_atomic_usdc(amount_usdc: int) -> str:
 
 
 def _escape_llms_text(value: Any) -> str:
+    # ─── Public Catalog & Author Discovery (browse/search marketplace) ─────────
+
     return str(value or "").replace("\r", " ").replace("\n", " ").replace("|", "-").strip()
 
 
@@ -825,6 +841,16 @@ async def submit_marketplace_tool_feedback(
         rating=body.rating,
         comment=body.comment,
     )
+
+    # Best-effort: attach this rating to the run's decision-graph record too
+    # (if one exists and hasn't already been labeled). Never blocks or fails
+    # the feedback submission — decision-graph backfill is non-critical.
+    try:
+        from teardrop.memory import backfill_decision_outcome  # noqa: PLC0415
+
+        await backfill_decision_outcome(body.run_id, org_id, body.rating, source="feedback")
+    except Exception:
+        logger.debug("Decision outcome backfill failed for run_id=%s", body.run_id, exc_info=True)
 
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,

@@ -7,11 +7,14 @@ Provides:
 - init_memory_db()              — register pgvector types on startup
 - store_memory()                — embed + INSERT (fire-and-forget safe)
 - recall_memories()             — cosine-similarity search over org memories
-- extract_and_store_memories()  — LLM-based fact extraction + batch store
+- extract_and_store_memories()  — LLM-based fact + decision extraction, batch store
 - list_memories()               — cursor-paginated listing
 - delete_memory()               — org-scoped single delete
 - delete_all_org_memories()     — admin purge
 - count_memories()              — count per org
+- store_run_decision()          — persist one decision-graph record per run
+- list_run_decisions()          — cursor-paginated decision listing
+- backfill_decision_outcome()   — attach a ground-truth outcome label
 """
 
 from __future__ import annotations
@@ -64,6 +67,13 @@ _STATELESS_TOOLS: frozenset[str] = frozenset(
     }
 )
 _WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+
+# Decision-graph slot snapshot: only these top-level slot keys are persisted
+# with a run_decisions row (see agent/slots.py writers). This prevents raw
+# tool-call arguments (wallet addresses, API keys) from ever being stored —
+# slots already summarize tool outputs into safe, structured facts.
+_SLOTS_SNAPSHOT_ALLOWLIST: frozenset[str] = frozenset({"balances", "risk", "quotes", "positions", "yields", "tvl"})
+_SLOTS_SNAPSHOT_MAX_BYTES = 8192
 
 
 async def init_memory_db(pool: asyncpg.Pool) -> None:
@@ -398,30 +408,194 @@ async def cleanup_expired_memories() -> int:
         return 0
 
 
+# ─── Decision graph (run_decisions) ──────────────────────────────────────────
+
+
+def _sanitize_slots_snapshot(slots: dict[str, Any] | None) -> dict[str, Any]:
+    """Allowlist-filter slots before persistence.
+
+    Drops any key not in ``_SLOTS_SNAPSHOT_ALLOWLIST`` and refuses to store a
+    snapshot larger than ``_SLOTS_SNAPSHOT_MAX_BYTES`` (returns ``{}`` instead
+    of truncating mid-structure, which could silently corrupt nested facts).
+    """
+    if not isinstance(slots, dict):
+        return {}
+    filtered = {k: v for k, v in slots.items() if k in _SLOTS_SNAPSHOT_ALLOWLIST}
+    if not filtered:
+        return {}
+    try:
+        encoded = json.dumps(filtered)
+    except (TypeError, ValueError):
+        return {}
+    if len(encoded) > _SLOTS_SNAPSHOT_MAX_BYTES:
+        return {}
+    return filtered
+
+
+async def store_run_decision(
+    *,
+    org_id: str,
+    user_id: str,
+    run_id: str,
+    decision: dict[str, Any],
+    tool_names: list[str] | None = None,
+    slots: dict[str, Any] | None = None,
+) -> bool:
+    """Persist one decision-graph record for a run. Returns False on failure or duplicate.
+
+    At most one row per ``run_id`` (``ON CONFLICT DO NOTHING``) — a run
+    produces a single decision summary. Never raises — logs and returns
+    False on any error, matching :func:`store_memory`'s fire-and-forget
+    contract.
+    """
+    try:
+        pool = _get_pool()
+        snapshot = _sanitize_slots_snapshot(slots)
+        confidence = decision.get("confidence")
+        result = await pool.fetchrow(
+            """
+            INSERT INTO run_decisions
+                (id, run_id, org_id, user_id, task_class, action, reasoning,
+                 confidence, slots_snapshot, tool_names, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+            ON CONFLICT (run_id) DO NOTHING
+            RETURNING id
+            """,
+            str(uuid.uuid4()),
+            run_id,
+            org_id,
+            user_id,
+            str(decision.get("task_class", ""))[:60],
+            str(decision.get("action", ""))[:120],
+            str(decision.get("reasoning", ""))[:500],
+            float(confidence) if isinstance(confidence, (int, float)) else None,
+            json.dumps(snapshot),
+            list(tool_names or []),
+            datetime.now(timezone.utc),
+        )
+        return result is not None
+    except Exception:
+        logger.exception("Failed to store run decision for run_id=%s", run_id)
+        return False
+
+
+async def list_run_decisions(
+    org_id: str,
+    limit: int = 50,
+    cursor: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """List decision records for an org, newest-first, cursor-paginated."""
+    pool = _get_pool()
+
+    if cursor is None:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, task_class, action, reasoning, confidence,
+                   tool_names, outcome, outcome_source, created_at
+            FROM run_decisions
+            WHERE org_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            org_id,
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, run_id, task_class, action, reasoning, confidence,
+                   tool_names, outcome, outcome_source, created_at
+            FROM run_decisions
+            WHERE org_id = $1 AND created_at < $3
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            org_id,
+            limit,
+            cursor,
+        )
+
+    return [dict(r) for r in rows]
+
+
+async def backfill_decision_outcome(run_id: str, org_id: str, rating: int, source: str = "feedback") -> bool:
+    """Attach a ground-truth outcome label (-1/0/1) to an existing decision record.
+
+    Org-scoped to prevent cross-org writes. Only sets the outcome once
+    (``WHERE outcome = 0``) so the first label wins and a decision cannot be
+    silently relabeled. Never raises.
+    """
+    try:
+        pool = _get_pool()
+        result = await pool.execute(
+            """
+            UPDATE run_decisions
+            SET outcome = $3, outcome_source = $4, outcome_at = NOW()
+            WHERE run_id = $1 AND org_id = $2 AND outcome = 0
+            """,
+            run_id,
+            org_id,
+            rating,
+            source,
+        )
+        return result == "UPDATE 1"
+    except Exception:
+        logger.exception("Failed to backfill decision outcome for run_id=%s", run_id)
+        return False
+
+
 # ─── Fact extraction (LLM-based) ─────────────────────────────────────────────
 
 _EXTRACT_FACTS_PROMPT = """\
-You are a factual-memory extractor. Given a conversation between a user and an \
-AI assistant, extract up to 5 key factual statements worth remembering for \
-future interactions. Focus on:
+You are a factual-memory extractor and decision summarizer. Given a conversation between a user and an \
+AI assistant, extract two things:
+
+1. Up to 5 key factual statements worth remembering for future interactions. Focus on:
 - User preferences, constraints, or recurring requests
 - Domain-specific facts the user shared (wallet addresses, project names, etc.)
 - Decisions made or conclusions reached
 
+2. A single structured summary of the primary decision or recommendation the assistant made in
+this conversation, if any (e.g. a risk flag, a recommendation, an analysis conclusion). Omit it
+(use null) if the conversation was a simple lookup with no judgment call.
+
 Rules:
 - Each fact must be a single, self-contained sentence (max 500 characters).
 - Do NOT include greetings, pleasantries, or meta-commentary.
-- If the conversation contains no memorable facts, return an empty list.
+- If the conversation contains no memorable facts, return an empty list for facts.
+- "action" is a short label (max 120 chars), "reasoning" is max 500 chars, "task_class" is a
+  short category label (e.g. "liquidation_risk", "portfolio_lookup"), "confidence" is a float 0-1.
 
 Respond with ONLY a JSON object:
-{"facts": ["fact one", "fact two", ...]}
+{"facts": ["fact one", "fact two", ...], "decision":
+  {"action": "...", "reasoning": "...", "task_class": "...", "confidence": 0.8} | null}
 """
 
 
-async def _extract_facts(messages: list[Any]) -> list[str]:
-    """Use the configured LLM to extract key facts from a conversation.
+def _parse_decision(raw_decision: Any) -> dict[str, Any] | None:
+    """Validate and truncate a raw decision object parsed from the LLM response."""
+    if not isinstance(raw_decision, dict):
+        return None
+    action = str(raw_decision.get("action", ""))[:120]
+    reasoning = str(raw_decision.get("reasoning", ""))[:500]
+    if not action and not reasoning:
+        return None
+    confidence_raw = raw_decision.get("confidence")
+    confidence = max(0.0, min(1.0, float(confidence_raw))) if isinstance(confidence_raw, (int, float)) else None
+    return {
+        "action": action,
+        "reasoning": reasoning,
+        "task_class": str(raw_decision.get("task_class", ""))[:60],
+        "confidence": confidence,
+    }
 
-    Returns a list of fact strings (max 5). Returns empty list on any error.
+
+async def _extract_facts_and_decision(messages: list[Any]) -> tuple[list[str], dict[str, Any] | None]:
+    """Use the configured LLM to extract facts and a structured decision summary.
+
+    Single LLM call serves both ``org_memories`` (facts) and ``run_decisions``
+    (decision) to avoid doubling per-run LLM cost. Returns ``([], None)`` on
+    any error, empty conversation, or unparseable response. Never raises.
     """
     try:
         from agent.llm import get_llm
@@ -435,7 +609,7 @@ async def _extract_facts(messages: list[Any]) -> list[str]:
                 transcript_lines.append(f"{role}: {content[:1000]}")
 
         if not transcript_lines:
-            return []
+            return [], None
 
         transcript = "\n".join(transcript_lines)
         prompt = f"{_EXTRACT_FACTS_PROMPT}\n\nConversation:\n{transcript}"
@@ -450,14 +624,20 @@ async def _extract_facts(messages: list[Any]) -> list[str]:
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         data = json.loads(raw)
-        facts = data.get("facts", [])
+        facts = [str(f)[:500] for f in data.get("facts", [])[:5] if f]
+        decision = _parse_decision(data.get("decision"))
 
-        # Enforce limits.
-        return [str(f)[:500] for f in facts[:5] if f]
+        return facts, decision
 
     except Exception:
-        logger.debug("Fact extraction failed", exc_info=True)
-        return []
+        logger.debug("Fact/decision extraction failed", exc_info=True)
+        return [], None
+
+
+async def _extract_facts(messages: list[Any]) -> list[str]:
+    """Backward-compatible facts-only accessor. Delegates to the combined extractor."""
+    facts, _ = await _extract_facts_and_decision(messages)
+    return facts
 
 
 async def extract_and_store_memories(
@@ -466,22 +646,37 @@ async def extract_and_store_memories(
     messages: list[Any],
     run_id: str,
     tool_names_used: list[str] | None = None,
+    slots: dict[str, Any] | None = None,
 ) -> int:
-    """Extract facts from a conversation and store each as a memory.
+    """Extract facts and a decision summary from a conversation; store both.
 
-    Returns the number of memories successfully stored.
-    Fire-and-forget safe — never raises.
+    Facts are stored as individual ``org_memories`` rows (unchanged contract:
+    returns the number of memories successfully stored). The decision summary
+    is additionally stored once as a ``run_decisions`` row when present — the
+    foundation for outcome-linked tool reputation. Both writes are
+    independently best-effort. Fire-and-forget safe — never raises.
     """
     try:
         if tool_names_used and _is_stateless_lookup_run(messages, tool_names_used):
             logger.debug("Skipping memory extraction for stateless lookup run org_id=%s run_id=%s", org_id, run_id)
             return 0
 
-        facts = await _extract_facts(messages)
+        facts, decision = await _extract_facts_and_decision(messages)
         entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
         stored = sum(1 for entry in entries if entry is not None)
         if stored > 0:
             logger.info("Stored %d memories for org_id=%s run_id=%s", stored, org_id, run_id)
+
+        if decision is not None:
+            await store_run_decision(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+                decision=decision,
+                tool_names=tool_names_used,
+                slots=slots,
+            )
+
         return stored
     except Exception:
         logger.exception("extract_and_store_memories failed for run_id=%s", run_id)

@@ -174,6 +174,7 @@ async def get_subscribed_tools_catalog(
                 display_name=r["name"],
                 description=r["description"],
                 marketplace_description=r["marketplace_description"] or r["description"],
+                short_description=r["description"],
                 input_schema=raw_schema,
                 cost_usdc=cost,
                 author_org_name=r["org_name"],

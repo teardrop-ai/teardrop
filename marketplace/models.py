@@ -75,6 +75,7 @@ class MarketplaceTool(BaseModel):
     display_name: str = ""
     description: str
     marketplace_description: str
+    short_description: str = ""
     input_schema: dict[str, Any]
     cost_usdc: int
     author_org_name: str
