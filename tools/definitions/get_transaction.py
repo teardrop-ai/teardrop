@@ -74,5 +74,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "transaction"],
     input_schema=GetTransactionInput,
     output_schema=GetTransactionOutput,
+    show_on_agent_card=False,
     implementation=get_transaction,
 )

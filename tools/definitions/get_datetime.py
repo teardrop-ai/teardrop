@@ -48,5 +48,6 @@ TOOL = ToolDefinition(
     tags=["datetime", "utility"],
     input_schema=GetDatetimeInput,
     output_schema=GetDatetimeOutput,
+    show_on_agent_card=False,
     implementation=get_datetime,
 )

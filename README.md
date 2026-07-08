@@ -651,6 +651,8 @@ The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway un
 
 The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. `supportedInterfaces` now advertises both the streaming AG-UI surface (`/agent/run`) and the blocking inbound A2A surface (`/message:send`).
 
+The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
+
 Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`.
 
 ### Inbound A2A entrypoint
@@ -840,6 +842,9 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `POST` | `/message:send` | Bearer or x402 | Blocking inbound A2A endpoint for external agents (when enabled) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
+| `GET` | `/agent/tool-exclusions` | Bearer | List the org's persisted tool exclusions |
+| `POST` | `/agent/tool-exclusions` | Bearer | Persist a tool exclusion (merged with per-request `tool_policy.exclude_names` on every run) |
+| `DELETE` | `/agent/tool-exclusions/{tool_name}` | Bearer | Remove a persisted tool exclusion |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
 | `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators |
 | `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |

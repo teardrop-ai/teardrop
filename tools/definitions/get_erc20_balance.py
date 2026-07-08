@@ -108,5 +108,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "erc20", "token", "balance"],
     input_schema=GetErc20BalanceInput,
     output_schema=GetErc20BalanceOutput,
+    show_on_agent_card=False,
     implementation=get_erc20_balance,
 )

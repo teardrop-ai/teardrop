@@ -53,5 +53,6 @@ TOOL = ToolDefinition(
     tags=["text", "analysis", "statistics"],
     input_schema=SummarizeTextInput,
     output_schema=SummarizeTextOutput,
+    show_on_agent_card=False,
     implementation=count_text_stats,
 )

@@ -131,6 +131,51 @@ def test_to_a2a_skills_shape():
     assert "version" in skill
 
 
+def test_show_on_agent_card_defaults_true():
+    tool = _make_tool()
+    assert tool.show_on_agent_card is True
+
+
+def test_to_a2a_skills_excludes_hidden_tools():
+    reg = ToolRegistry()
+    reg.register(_make_tool(name="visible_tool"))
+    hidden = _make_tool(name="hidden_tool")
+    hidden.show_on_agent_card = False
+    reg.register(hidden)
+
+    skills = reg.to_a2a_skills()
+    names = {s["name"] for s in skills}
+    assert "visible_tool" in names
+    assert "hidden_tool" not in names
+
+
+def test_to_a2a_tool_list_excludes_hidden_tools():
+    reg = ToolRegistry()
+    reg.register(_make_tool(name="visible_tool"))
+    hidden = _make_tool(name="hidden_tool")
+    hidden.show_on_agent_card = False
+    reg.register(hidden)
+
+    tools = reg.to_a2a_tool_list()
+    names = {t["name"] for t in tools}
+    assert "visible_tool" in names
+    assert "hidden_tool" not in names
+
+
+def test_hidden_tool_still_available_via_langchain_and_mcp():
+    """show_on_agent_card only trims the public A2A card — the tool must
+    remain fully callable via LangChain binding and MCP export."""
+    reg = ToolRegistry()
+    hidden = _make_tool(name="hidden_tool")
+    hidden.show_on_agent_card = False
+    reg.register(hidden)
+
+    lc_names = {t.name for t in reg.to_langchain_tools()}
+    mcp_names = {t["name"] for t in reg.to_mcp_tool_defs()}
+    assert "hidden_tool" in lc_names
+    assert "hidden_tool" in mcp_names
+
+
 def test_duplicate_registration_overwrites_with_warning(caplog):
     import logging
 

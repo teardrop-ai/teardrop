@@ -279,5 +279,6 @@ TOOL = ToolDefinition(
     tags=["finance", "currency", "crypto", "conversion"],
     input_schema=ConvertCurrencyInput,
     output_schema=ConvertCurrencyOutput,
+    show_on_agent_card=False,
     implementation=convert_currency,
 )

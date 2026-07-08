@@ -75,6 +75,7 @@ from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.llm_config import get_org_llm_config_cached
 from teardrop.memory import backfill_decision_outcome, extract_and_store_memories, list_run_decisions
 from teardrop.rate_limit import _enforce_rate_limit
+from teardrop.tool_exclusions import add_org_tool_exclusion, list_org_tool_exclusions, remove_org_tool_exclusion
 from teardrop.usage import UsageEvent, record_tool_call_events, record_usage_event
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,7 @@ async def agent_run(
         excluded_tools: frozenset[str] = frozenset()
         if body.tool_policy and body.tool_policy.exclude_names:
             excluded_tools = frozenset(_normalize_exclusion_name(name) for name in body.tool_policy.exclude_names)
+        excluded_tools |= frozenset(ctx.persisted_excluded_tools)
 
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
@@ -458,6 +460,61 @@ async def list_agent_tools(
         )
 
     return JSONResponse(content={"tools": [t.model_dump() for t in tools]})
+
+
+# ─── /agent/tool-exclusions ────────────────────────────────────────────────────
+# Durable, org-scoped "hide this tool from my agent" preference. Complements the
+# per-request ToolPolicy.exclude_names: persisted exclusions apply to every run
+# (including scheduled/event-triggered runs) without the caller resending them.
+# Advisory only — never referenced by billing/settlement.
+
+
+class ToolExclusionRequest(BaseModel):
+    tool_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Internal tool name to exclude (unprefixed, e.g. 'web_search', not 'platform/web_search').",
+    )
+
+
+@router.get("/agent/tool-exclusions", tags=["Agent"])
+async def get_agent_tool_exclusions(
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """List the authenticated org's persisted tool exclusions."""
+    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
+    tool_names = await list_org_tool_exclusions(org_id)
+    return JSONResponse(content={"tool_names": tool_names})
+
+
+@router.post("/agent/tool-exclusions", tags=["Agent"])
+async def create_agent_tool_exclusion(
+    body: ToolExclusionRequest,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Persist a tool exclusion for the authenticated org."""
+    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
+    normalized = _normalize_exclusion_name(body.tool_name.strip())
+    try:
+        await add_org_tool_exclusion(org_id, normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return JSONResponse(content={"status": "added", "tool_name": normalized})
+
+
+@router.delete("/agent/tool-exclusions/{tool_name}", tags=["Agent"])
+async def delete_agent_tool_exclusion(
+    tool_name: str,
+    payload: dict = Depends(require_auth),
+) -> JSONResponse:
+    """Remove a persisted tool exclusion for the authenticated org."""
+    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
+    normalized = _normalize_exclusion_name(tool_name.strip())
+    removed = await remove_org_tool_exclusion(org_id, normalized)
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool exclusion not found.")
+    return JSONResponse(content={"status": "removed", "tool_name": normalized})
 
 
 # ─── /agent/decisions, /agent/runs/{run_id}/outcome ───────────────────────────

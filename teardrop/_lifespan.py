@@ -35,6 +35,7 @@ from teardrop.cache import close_redis, init_redis
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
+from teardrop.tool_exclusions import close_tool_exclusions_db, init_tool_exclusions_db
 from teardrop.usage import close_usage_db, init_usage_db
 from teardrop.users import close_user_db, init_user_db
 from teardrop.wallets import close_wallets_db, init_wallets_db
@@ -92,6 +93,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await init_benchmarks_db(pool)
         await init_agent_wallets_db(pool)
         await init_scheduling_db(pool)
+        await init_tool_exclusions_db(pool)
 
         init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
         init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
@@ -141,6 +143,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await close_llm_config_db()
         await close_marketplace_db()
         await close_scheduling_db()
+        await close_tool_exclusions_db()
         await close_memory_db()
         await close_mcp_client_db()
         await close_org_tools_db()

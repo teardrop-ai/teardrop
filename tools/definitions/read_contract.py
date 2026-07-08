@@ -203,5 +203,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "contract", "abi", "defi"],
     input_schema=ReadContractInput,
     output_schema=ReadContractOutput,
+    show_on_agent_card=False,
     implementation=read_contract,
 )

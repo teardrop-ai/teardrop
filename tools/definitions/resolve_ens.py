@@ -120,5 +120,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "ens", "identity"],
     input_schema=ResolveEnsInput,
     output_schema=ResolveEnsOutput,
+    show_on_agent_card=False,
     implementation=resolve_ens,
 )

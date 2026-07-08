@@ -47,6 +47,16 @@ class ToolDefinition(BaseModel):
     annotations: dict[str, Any] | None = Field(default=None, description="Optional MCP tool annotations (readOnlyHint, etc.)")
     timeout_seconds: float | None = Field(default=None, description="Optional per-call timeout override")
     max_calls_per_run: int | None = Field(default=None, description="Optional per-run call cap")
+    show_on_agent_card: bool = Field(
+        default=True,
+        description=(
+            "Whether this tool is advertised in the public A2A agent-card "
+            "(skills/tools sections). Commoditized utility/low-level RPC "
+            "primitives are set False to keep the card focused on Teardrop's "
+            "differentiated capabilities; the tool remains fully callable via "
+            "MCP (to_mcp_server_card_tools) and GET /agent/tools regardless."
+        ),
+    )
     implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
 
     # Deprecation lifecycle
@@ -159,9 +169,16 @@ class ToolRegistry:
     # ── Export: A2A ───────────────────────────────────────────────────────────
 
     def to_a2a_skills(self) -> list[dict[str, Any]]:
-        """Generate the ``skills`` section for the A2A agent card."""
+        """Generate the ``skills`` section for the A2A agent card.
+
+        Only tools with ``show_on_agent_card=True`` are included — this is a
+        public discoverability surface, not the full tool inventory (see
+        ``GET /agent/tools`` and ``to_mcp_server_card_tools`` for that).
+        """
         skills: list[dict[str, Any]] = []
         for tool in self.list_latest(include_deprecated=True):
+            if not tool.show_on_agent_card:
+                continue
             skill: dict[str, Any] = {
                 "id": tool.name,
                 "name": tool.name,
@@ -177,9 +194,15 @@ class ToolRegistry:
         return skills
 
     def to_a2a_tool_list(self) -> list[dict[str, Any]]:
-        """Generate a detailed ``tools`` section with JSON Schema for the A2A card."""
+        """Generate a detailed ``tools`` section with JSON Schema for the A2A card.
+
+        Only tools with ``show_on_agent_card=True`` are included (see
+        ``to_a2a_skills`` for rationale).
+        """
         tools: list[dict[str, Any]] = []
         for tool in self.list_latest(include_deprecated=True):
+            if not tool.show_on_agent_card:
+                continue
             entry: dict[str, Any] = {
                 "name": tool.name,
                 "version": tool.version,

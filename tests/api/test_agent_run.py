@@ -287,6 +287,52 @@ async def test_agent_run_tool_policy_rejects_overlong_entry(api_client):
     assert resp.status_code == 422
 
 
+@pytest.mark.anyio
+async def test_agent_run_merges_persisted_and_request_exclusions(api_client, monkeypatch):
+    """Persisted org tool exclusions must be unioned with per-request exclude_names."""
+    captured: dict = {}
+
+    async def _spy_astream_events(state_dict, config=None, version=None):
+        captured["excluded"] = state_dict.get("metadata", {}).get("_excluded_tool_names", [])
+        return
+        yield
+
+    mock_graph = MagicMock()
+    mock_graph.astream_events = _spy_astream_events
+    mock_graph.aget_state = AsyncMock(return_value=MagicMock(values={}))
+
+    mock_settings = MagicMock()
+    mock_settings.billing_enabled = False
+    mock_settings.billable_auth_methods = []
+    mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
+    mock_settings.app_env = "test"
+    mock_settings.agent_provider = "anthropic"
+    mock_settings.agent_model = "claude-3-5-sonnet-20241022"
+
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
+    monkeypatch.setattr("teardrop.agent_runtime.settings", mock_settings)
+    monkeypatch.setattr("teardrop.agent_runtime.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("teardrop.agent_runtime.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.agent_runtime.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr(
+        "teardrop.agent_runtime.list_org_tool_exclusions",
+        AsyncMock(return_value=["get_block", "calculate"]),
+    )
+    monkeypatch.setattr("teardrop.routers.agent.record_usage_event", AsyncMock())
+    monkeypatch.setattr("teardrop.agent_post_run.calculate_run_cost_usdc", AsyncMock(return_value=0))
+
+    resp = await api_client.post(
+        "/agent/run",
+        json={"message": "hello", "tool_policy": {"exclude_names": ["platform/web_search"]}},
+    )
+
+    assert resp.status_code == 200
+    assert set(captured.get("excluded", [])) == {"web_search", "get_block", "calculate"}
+
+
 # ─── Marketplace earnings gated on confirmed settlement ──────────────────────
 
 

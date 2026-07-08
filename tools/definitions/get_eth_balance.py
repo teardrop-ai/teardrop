@@ -62,5 +62,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "balance"],
     input_schema=GetEthBalanceInput,
     output_schema=GetEthBalanceOutput,
+    show_on_agent_card=False,
     implementation=get_eth_balance,
 )

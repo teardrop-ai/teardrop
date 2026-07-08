@@ -50,6 +50,7 @@ from teardrop.config import Settings, get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import recall_memories
 from teardrop.public_url import public_base_url
+from teardrop.tool_exclusions import list_org_tool_exclusions
 from teardrop.usage import UsageEvent, record_usage_event
 from teardrop.users import get_org_by_id
 
@@ -75,6 +76,7 @@ class _RunContext:
         "llm_config",
         "org_name",
         "credit_balance_usdc",
+        "persisted_excluded_tools",
     )
 
     def __init__(
@@ -88,6 +90,7 @@ class _RunContext:
         llm_config: dict | None,
         org_name: str,
         credit_balance_usdc: int | None,
+        persisted_excluded_tools: list[str] | None = None,
     ) -> None:
         self.graph = graph
         self.org_lc_tools = org_lc_tools
@@ -97,6 +100,7 @@ class _RunContext:
         self.llm_config = llm_config
         self.org_name = org_name
         self.credit_balance_usdc = credit_balance_usdc
+        self.persisted_excluded_tools = persisted_excluded_tools or []
 
 
 @dataclass(slots=True)
@@ -226,6 +230,7 @@ async def run_agent_once(
         billing=billing,
         mem_settings=runtime_settings,
     )
+    merged_excluded_tools = frozenset(excluded_tool_names or []) | frozenset(ctx.persisted_excluded_tools)
 
     initial_state = AgentState(
         messages=[HumanMessage(content=user_message)],
@@ -236,7 +241,7 @@ async def run_agent_once(
             "user_id": user_id,
             "org_id": org_id,
             "_usage": _usage_metadata_template(),
-            "_excluded_tool_names": list(excluded_tool_names or []),
+            "_excluded_tool_names": list(merged_excluded_tools),
             "_memories": ctx.recalled,
             "_llm_config": ctx.llm_config,
             "_org_name": ctx.org_name,
@@ -479,6 +484,15 @@ async def _prepare_run_context(
             logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
             return None
 
+    async def _safe_tool_exclusions() -> list[str]:
+        if not org_id:
+            return []
+        try:
+            return await list_org_tool_exclusions(org_id)
+        except Exception:
+            logger.debug("Persisted tool exclusion fetch failed for org_id=%s", org_id, exc_info=True)
+            return []
+
     (
         graph,
         (org_lc_tools, org_tools_by_name),
@@ -488,6 +502,7 @@ async def _prepare_run_context(
         llm_config,
         org_name,
         credit_balance_usdc,
+        persisted_excluded_tools,
     ) = await asyncio.gather(
         get_graph(),
         _safe_org_tools(),
@@ -497,6 +512,7 @@ async def _prepare_run_context(
         _safe_llm_config(),
         _safe_org_name(),
         _safe_credit_balance(),
+        _safe_tool_exclusions(),
     )
 
     # Merge MCP + marketplace tools after gather (cheap dict/list ops).
@@ -538,6 +554,7 @@ async def _prepare_run_context(
         llm_config=llm_config,
         org_name=org_name,
         credit_balance_usdc=credit_balance_usdc,
+        persisted_excluded_tools=persisted_excluded_tools,
     )
 
 

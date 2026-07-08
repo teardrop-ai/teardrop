@@ -123,5 +123,6 @@ TOOL = ToolDefinition(
     tags=["math", "arithmetic", "calculation"],
     input_schema=CalculateInput,
     output_schema=CalculateOutput,
+    show_on_agent_card=False,
     implementation=calculate,
 )

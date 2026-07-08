@@ -71,5 +71,6 @@ TOOL = ToolDefinition(
     tags=["web3", "ethereum", "block"],
     input_schema=GetBlockInput,
     output_schema=GetBlockOutput,
+    show_on_agent_card=False,
     implementation=get_block,
 )
