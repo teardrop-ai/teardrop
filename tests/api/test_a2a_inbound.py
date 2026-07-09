@@ -31,6 +31,7 @@ def _mock_ctx() -> SimpleNamespace:
         llm_config=None,
         org_name="",
         credit_balance_usdc=None,
+        persisted_excluded_tools=[],
     )
 
 
@@ -57,6 +58,7 @@ def _failing_ctx() -> SimpleNamespace:
         llm_config=None,
         org_name="",
         credit_balance_usdc=None,
+        persisted_excluded_tools=[],
     )
 
 
@@ -74,6 +76,7 @@ def _hanging_ctx() -> SimpleNamespace:
         llm_config=None,
         org_name="",
         credit_balance_usdc=None,
+        persisted_excluded_tools=[],
     )
 
 
