@@ -34,8 +34,10 @@ def _mock_user(is_verified: bool = False) -> User:
 
 @pytest.mark.anyio
 async def test_verify_email_happy_path(anon_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value="user-123"))
-    monkeypatch.setattr("teardrop.routers.auth.mark_user_verified", AsyncMock())
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
 
     resp = await anon_client.get("/auth/verify-email?token=valid-token")
 
@@ -45,7 +47,10 @@ async def test_verify_email_happy_path(anon_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_verify_email_invalid_token(anon_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=(None, None, False)),
+    )
 
     resp = await anon_client.get("/auth/verify-email?token=bad-token")
 
@@ -53,14 +58,117 @@ async def test_verify_email_invalid_token(anon_client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_verify_email_calls_mark_verified(anon_client, monkeypatch):
-    mark_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.auth.consume_verification_token", AsyncMock(return_value="user-abc"))
-    monkeypatch.setattr("teardrop.routers.auth.mark_user_verified", mark_mock)
+async def test_verify_email_calls_verify_and_enqueue(anon_client, monkeypatch):
+    verify_mock = AsyncMock(return_value=("user-abc", "org-1", False))
+    monkeypatch.setattr("teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit", verify_mock)
 
     await anon_client.get("/auth/verify-email?token=tok")
 
-    mark_mock.assert_awaited_once_with("user-abc")
+    verify_mock.assert_awaited_once()
+    call_args = verify_mock.await_args.args
+    assert call_args[0] == "tok"
+
+
+@pytest.mark.anyio
+async def test_verify_email_grants_onboarding_credit_when_enabled(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_usdc", 500_000)
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
+    grant_mock = AsyncMock(return_value=500_000)
+    monkeypatch.setattr("teardrop.routers.auth.grant_onboarding_credit", grant_mock)
+    monkeypatch.setattr("teardrop.routers.auth.clear_onboarding_credit_outbox", AsyncMock())
+
+    resp = await anon_client.get("/auth/verify-email?token=valid-token")
+
+    assert resp.status_code == 200
+    grant_mock.assert_awaited_once_with("org-1", 500_000)
+
+
+@pytest.mark.anyio
+async def test_verify_email_clears_outbox_after_immediate_grant(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_usdc", 500_000)
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
+    monkeypatch.setattr("teardrop.routers.auth.grant_onboarding_credit", AsyncMock(return_value=500_000))
+    clear_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth.clear_onboarding_credit_outbox", clear_mock)
+
+    resp = await anon_client.get("/auth/verify-email?token=valid-token")
+
+    assert resp.status_code == 200
+    clear_mock.assert_awaited_once_with("org-1")
+
+
+@pytest.mark.anyio
+async def test_verify_email_succeeds_when_onboarding_grant_fails(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_usdc", 500_000)
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.auth.grant_onboarding_credit",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+    clear_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth.clear_onboarding_credit_outbox", clear_mock)
+
+    resp = await anon_client.get("/auth/verify-email?token=valid-token")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"verified": True}
+    # The durable outbox row (enqueued atomically during verification) is left
+    # intact for the background retry worker -- it must not be cleared here.
+    clear_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_verify_email_does_not_grant_when_feature_disabled(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", False)
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
+    grant_mock = AsyncMock(return_value=500_000)
+    monkeypatch.setattr("teardrop.routers.auth.grant_onboarding_credit", grant_mock)
+
+    resp = await anon_client.get("/auth/verify-email?token=valid-token")
+
+    assert resp.status_code == 200
+    grant_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_verify_email_grant_failure_is_sanitized(anon_client, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_usdc", 500_000)
+    monkeypatch.setattr(
+        "teardrop.routers.auth.verify_user_and_enqueue_onboarding_credit",
+        AsyncMock(return_value=("user-123", "org-1", False)),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.auth.grant_onboarding_credit",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr("teardrop.routers.auth.clear_onboarding_credit_outbox", AsyncMock())
+    caplog.set_level(logging.WARNING)
+
+    await anon_client.get("/auth/verify-email?token=valid-token")
+
+    auth_logs = [rec for rec in caplog.records if rec.name == "teardrop.routers.auth"]
+    assert any("Onboarding credit grant unavailable" in rec.message for rec in auth_logs)
+    for rec in auth_logs:
+        assert "database unavailable" not in rec.message
+        assert "Traceback" not in rec.message
 
 
 # ─── POST /auth/resend-verification ──────────────────────────────────────────

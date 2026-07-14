@@ -28,6 +28,7 @@ from teardrop.users.accounts import (  # noqa: F401  (re-exported for backward c
     create_user,
     get_org_by_id,
     get_org_by_name,
+    get_org_id_for_user,
     get_user_by_email,
     get_user_by_org_id,
     register_org_and_user,
@@ -72,4 +73,5 @@ from teardrop.users.verification import (  # noqa: F401  (re-exported for backwa
     create_verification_token,
     get_org_invite,
     mark_user_verified,
+    verify_user_and_enqueue_onboarding_credit,
 )

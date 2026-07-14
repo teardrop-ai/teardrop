@@ -475,6 +475,135 @@ class TestVerificationTokens:
         pool.execute.assert_called_once()
 
 
+# ─── atomic verify + onboarding-credit outbox enqueue ─────────────────────────
+
+
+@pytest.mark.anyio
+class TestVerifyUserAndEnqueueOnboardingCredit:
+    async def test_invalid_token_returns_none(self):
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        conn.fetchrow = AsyncMock(return_value=None)
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, already_verified = await verify_user_and_enqueue_onboarding_credit("missing", True, 500_000)
+        assert user_id is None
+        assert org_id is None
+        assert already_verified is False
+
+    async def test_expired_token_returns_none(self):
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        conn.fetchrow = AsyncMock(
+            return_value={
+                "user_id": "u-1",
+                "expires_at": datetime(2000, 1, 1, tzinfo=timezone.utc),
+                "used": False,
+            }
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, _ = await verify_user_and_enqueue_onboarding_credit("expired", True, 500_000)
+        assert user_id is None
+        assert org_id is None
+
+    async def test_already_used_token_returns_none(self):
+        from datetime import timedelta
+
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        conn.fetchrow = AsyncMock(
+            return_value={
+                "user_id": "u-1",
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+                "used": True,
+            }
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, _ = await verify_user_and_enqueue_onboarding_credit("used-tok", True, 500_000)
+        assert user_id is None
+        assert org_id is None
+
+    async def test_valid_token_marks_verified_and_enqueues_outbox_when_enabled(self):
+        from datetime import timedelta
+
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        now = datetime.now(timezone.utc)
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"user_id": "u-1", "expires_at": now + timedelta(hours=1), "used": False},
+                {"org_id": "org-1", "is_verified": False},
+            ]
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, already_verified = await verify_user_and_enqueue_onboarding_credit("valid-tok", True, 500_000)
+        assert user_id == "u-1"
+        assert org_id == "org-1"
+        assert already_verified is False
+        # token consume UPDATE, user verified UPDATE, outbox INSERT
+        assert conn.execute.call_count == 3
+        outbox_sql = conn.execute.call_args_list[-1].args[0]
+        assert "org_onboarding_credit_outbox" in outbox_sql
+
+    async def test_valid_token_skips_outbox_when_disabled(self):
+        from datetime import timedelta
+
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        now = datetime.now(timezone.utc)
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"user_id": "u-1", "expires_at": now + timedelta(hours=1), "used": False},
+                {"org_id": "org-1", "is_verified": False},
+            ]
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, _ = await verify_user_and_enqueue_onboarding_credit("valid-tok", False, 500_000)
+        assert user_id == "u-1"
+        assert org_id == "org-1"
+        # token consume UPDATE + user verified UPDATE only, no outbox insert
+        assert conn.execute.call_count == 2
+
+    async def test_already_verified_user_flag_is_reported(self):
+        from datetime import timedelta
+
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        now = datetime.now(timezone.utc)
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"user_id": "u-1", "expires_at": now + timedelta(hours=1), "used": False},
+                {"org_id": "org-1", "is_verified": True},
+            ]
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            _, _, already_verified = await verify_user_and_enqueue_onboarding_credit("valid-tok", False, 500_000)
+        assert already_verified is True
+
+    async def test_missing_user_row_returns_none(self):
+        from datetime import timedelta
+
+        from teardrop.users import verify_user_and_enqueue_onboarding_credit
+
+        pool, conn = _make_transactional_pool()
+        now = datetime.now(timezone.utc)
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"user_id": "u-1", "expires_at": now + timedelta(hours=1), "used": False},
+                None,
+            ]
+        )
+        with patch.object(users_module.base, "_pool", pool):
+            user_id, org_id, _ = await verify_user_and_enqueue_onboarding_credit("valid-tok", True, 500_000)
+        assert user_id is None
+        assert org_id is None
+
+
 # ─── org invites ──────────────────────────────────────────────────────────────
 
 

@@ -360,7 +360,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if not tool_name:
             return None
 
-        from billing import get_current_pricing, get_tool_pricing_overrides, resolve_tool_cost, verify_credit
+        from billing import (
+            get_current_pricing,
+            get_tool_pricing_overrides,
+            is_promotional_credit,
+            resolve_tool_cost,
+            verify_credit,
+        )
 
         overrides = await get_tool_pricing_overrides()
         pricing = await get_current_pricing()
@@ -373,6 +379,25 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # do not apply to anonymous per-call x402 payments.
         if is_x402:
             return (org_id, tool_cost, tool_name, req_id)
+
+        # Verified-email promotional credit must not create author earnings
+        # through a direct marketplace MCP call. Platform tools are not
+        # author-owned and remain available on this rail.
+        if (
+            settings.onboarding_credit_enabled
+            and "/" in tool_name
+            and not tool_name.startswith("platform/")
+            and await is_promotional_credit(org_id)
+        ):
+            logger.info("mcp promotional credit blocked marketplace tool org_id=%s tool=%s", org_id, tool_name)
+            return JSONResponse(
+                status_code=403,
+                content=_jsonrpc_error(
+                    req_id,
+                    -32003,
+                    "Marketplace author tools require a funded credit balance.",
+                ),
+            )
 
         # Subscription gate: marketplace tools require an active subscription.
         if "/" in tool_name and settings.marketplace_enabled:

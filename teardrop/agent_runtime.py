@@ -37,6 +37,7 @@ from billing import (
     get_credit_balance,
     get_current_pricing,
     get_tool_pricing_overrides,
+    is_promotional_credit,
     resolve_tool_cost,
     verify_credit,
     verify_payment,
@@ -76,6 +77,7 @@ class _RunContext:
         "llm_config",
         "org_name",
         "credit_balance_usdc",
+        "is_promotional_credit",
         "persisted_excluded_tools",
     )
 
@@ -90,6 +92,7 @@ class _RunContext:
         llm_config: dict | None,
         org_name: str,
         credit_balance_usdc: int | None,
+        is_promotional_credit: bool = False,
         persisted_excluded_tools: list[str] | None = None,
     ) -> None:
         self.graph = graph
@@ -100,6 +103,7 @@ class _RunContext:
         self.llm_config = llm_config
         self.org_name = org_name
         self.credit_balance_usdc = credit_balance_usdc
+        self.is_promotional_credit = is_promotional_credit
         self.persisted_excluded_tools = persisted_excluded_tools or []
 
 
@@ -230,7 +234,11 @@ async def run_agent_once(
         billing=billing,
         mem_settings=runtime_settings,
     )
-    merged_excluded_tools = frozenset(excluded_tool_names or []) | frozenset(ctx.persisted_excluded_tools)
+    merged_excluded_tools = (
+        frozenset(excluded_tool_names or [])
+        | frozenset(ctx.persisted_excluded_tools)
+        | (frozenset(ctx.mp_by_name) if getattr(ctx, "is_promotional_credit", False) else frozenset())
+    )
 
     initial_state = AgentState(
         messages=[HumanMessage(content=user_message)],
@@ -378,7 +386,9 @@ async def run_agent_once(
     ):
         pass
 
-    marketplace_stats_billable = settlement_result.get("marketplace_stats_billable", False)
+    marketplace_stats_billable = settlement_result.get("marketplace_stats_billable", False) and not getattr(
+        ctx, "is_promotional_credit", False
+    )
     if marketplace_stats_billable:
         await _record_marketplace_earnings(
             mp_by_name=ctx.mp_by_name,
@@ -484,6 +494,15 @@ async def _prepare_run_context(
             logger.debug("Credit balance fetch failed for org_id=%s", org_id, exc_info=True)
             return None
 
+    async def _safe_promotional_credit() -> bool:
+        if not (mem_settings.onboarding_credit_enabled and billing.verified and billing.billing_method == "credit"):
+            return False
+        try:
+            return await is_promotional_credit(org_id)
+        except Exception:
+            logger.debug("Promotional credit state fetch failed for org_id=%s", org_id, exc_info=True)
+            return False
+
     async def _safe_tool_exclusions() -> list[str]:
         if not org_id:
             return []
@@ -502,6 +521,7 @@ async def _prepare_run_context(
         llm_config,
         org_name,
         credit_balance_usdc,
+        promotional_credit,
         persisted_excluded_tools,
     ) = await asyncio.gather(
         get_graph(),
@@ -512,6 +532,7 @@ async def _prepare_run_context(
         _safe_llm_config(),
         _safe_org_name(),
         _safe_credit_balance(),
+        _safe_promotional_credit(),
         _safe_tool_exclusions(),
     )
 
@@ -554,6 +575,7 @@ async def _prepare_run_context(
         llm_config=llm_config,
         org_name=org_name,
         credit_balance_usdc=credit_balance_usdc,
+        is_promotional_credit=promotional_credit,
         persisted_excluded_tools=persisted_excluded_tools,
     )
 

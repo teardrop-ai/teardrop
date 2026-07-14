@@ -16,6 +16,8 @@ from teardrop.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
+_ONBOARDING_GRANT_REASON = "onboarding_grant"
+
 
 class BillingCreditService:
     """Encapsulates org credit balance verification and mutations."""
@@ -192,6 +194,147 @@ class BillingCreditService:
                     reason,
                 )
         return new_balance
+
+    async def grant_onboarding_credit(self, org_id: str, amount_usdc: int) -> int:
+        """Grant one idempotent verified-email credit balance in one transaction.
+
+        The grant marker, balance upsert, and immutable ledger row intentionally
+        share a transaction. A duplicate org marker is a no-op, while any
+        failure rolls back the marker so a later retry can safely recover.
+        Returns the amount granted, or ``0`` when the grant already exists.
+        """
+        if amount_usdc <= 0:
+            raise ValueError("onboarding credit amount must be positive")
+
+        pool = self._get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                ledger_entry_id = str(uuid.uuid4())
+                grant_row = await conn.fetchrow(
+                    """
+                    INSERT INTO org_onboarding_credit_grants (org_id, amount_usdc, ledger_entry_id)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (org_id) DO NOTHING
+                    RETURNING amount_usdc
+                    """,
+                    org_id,
+                    amount_usdc,
+                    ledger_entry_id,
+                )
+                if grant_row is None:
+                    return 0
+
+                granted_amount = int(grant_row["amount_usdc"])
+                credit_row = await conn.fetchrow(
+                    """
+                    INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                    VALUES ($1, $2, NOW())
+                    ON CONFLICT (org_id) DO UPDATE
+                        SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                            updated_at = NOW()
+                    RETURNING balance_usdc
+                    """,
+                    org_id,
+                    granted_amount,
+                )
+                new_balance = int(credit_row["balance_usdc"])
+                await conn.execute(
+                    """
+                    INSERT INTO org_credit_ledger
+                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                    VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                    """,
+                    ledger_entry_id,
+                    org_id,
+                    granted_amount,
+                    new_balance,
+                    _ONBOARDING_GRANT_REASON,
+                )
+        return granted_amount
+
+    async def clear_onboarding_credit_outbox(self, org_id: str) -> None:
+        """Remove a completed/no-longer-needed onboarding-credit outbox entry."""
+        pool = self._get_pool()
+        await pool.execute(
+            "DELETE FROM org_onboarding_credit_outbox WHERE org_id = $1",
+            org_id,
+        )
+
+    async def process_onboarding_credit_outbox(self, limit: int = 50) -> int:
+        """Retry queued onboarding-credit grants; returns the count successfully granted.
+
+        Each pending outbox row is retried via the idempotent
+        ``grant_onboarding_credit``, whose unique ``org_id`` marker makes
+        concurrent/duplicate processing safe (a second attempt is simply a
+        no-op). On success the outbox row is removed; on failure the attempt
+        count and a sanitized error are recorded so the row remains for the
+        next retry pass.
+        """
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT org_id, amount_usdc
+            FROM org_onboarding_credit_outbox
+            ORDER BY created_at
+            LIMIT $1
+            """,
+            limit,
+        )
+
+        processed = 0
+        for row in rows:
+            org_id = row["org_id"]
+            amount_usdc = int(row["amount_usdc"])
+            try:
+                await self.grant_onboarding_credit(org_id, amount_usdc)
+                await self.clear_onboarding_credit_outbox(org_id)
+                processed += 1
+            except Exception as exc:
+                logger.warning("Onboarding credit outbox retry failed org_id=%s", org_id)
+                try:
+                    await pool.execute(
+                        """
+                        UPDATE org_onboarding_credit_outbox
+                        SET attempts = attempts + 1,
+                            last_error = $2,
+                            updated_at = NOW()
+                        WHERE org_id = $1
+                        """,
+                        org_id,
+                        str(exc)[:500],
+                    )
+                except Exception:
+                    logger.warning("Failed to record onboarding credit outbox retry state org_id=%s", org_id)
+        return processed
+
+    async def is_promotional_credit(self, org_id: str) -> bool:
+        """Return whether an org still has grant-only prepaid credit.
+
+        Any later top-up other than the exact ledger row linked from the
+        immutable onboarding-grant marker—such as an admin, Stripe, on-chain,
+        or refund top-up—converts the org to the normal credit path.
+        """
+        pool = self._get_pool()
+        row = await pool.fetchrow(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM org_onboarding_credit_grants
+                WHERE org_id = $1
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM org_credit_ledger
+                                WHERE org_id = g.org_id
+                  AND operation = 'topup'
+                                    AND id <> g.ledger_entry_id
+            ) AS is_promotional
+                        FROM org_onboarding_credit_grants AS g
+                        WHERE g.org_id = $1
+            """,
+            org_id,
+        )
+        return bool(row["is_promotional"]) if row is not None else False
 
     async def get_credit_history(
         self,

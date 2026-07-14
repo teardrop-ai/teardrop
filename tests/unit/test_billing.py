@@ -19,10 +19,14 @@ from billing import (
     atomic_usdc_to_price_str,
     build_usdc_topup_requirements,
     calculate_run_cost_usdc,
+    clear_onboarding_credit_outbox,
     credit_usdc_topup,
     debit_credit,
     get_credit_balance,
     get_org_spending_config,
+    grant_onboarding_credit,
+    is_promotional_credit,
+    process_onboarding_credit_outbox,
     reset_exhausted_settlement,
     settle_payment,
     verify_and_settle_usdc_topup,
@@ -656,6 +660,131 @@ class TestAdminTopupCredit:
         pool._conn.execute.assert_called_once()
         call_sql = pool._conn.execute.call_args.args[0]
         assert "org_credit_ledger" in call_sql
+
+
+@pytest.mark.anyio
+class TestOnboardingCredit:
+    async def test_grant_updates_balance_and_ledger_atomically(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"amount_usdc": 500_000},
+                {"balance_usdc": 500_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            granted = await grant_onboarding_credit("org-1", 500_000)
+
+        assert granted == 500_000
+        assert pool._conn.fetchrow.await_count == 2
+        assert pool._conn.execute.await_count == 1
+        ledger_sql = pool._conn.execute.call_args.args[0]
+        assert "org_credit_ledger" in ledger_sql
+        assert pool._conn.execute.call_args.args[-1] == "onboarding_grant"
+        assert pool._conn.fetchrow.call_args_list[0].args[-1] == pool._conn.execute.call_args.args[1]
+
+    async def test_duplicate_grant_is_noop(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(return_value=None)
+        with patch.object(billing_module, "_pool", pool):
+            granted = await grant_onboarding_credit("org-1", 500_000)
+
+        assert granted == 0
+        pool._conn.execute.assert_not_awaited()
+
+    async def test_promotional_state_requires_no_real_topup(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"is_promotional": True})
+        with patch.object(billing_module, "_pool", pool):
+            promotional = await is_promotional_credit("org-1")
+
+        assert promotional is True
+        query = pool.fetchrow.call_args.args[0]
+        assert "org_onboarding_credit_grants" in query
+        assert "org_credit_ledger" in query
+
+    async def test_non_promotional_state_after_real_topup(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"is_promotional": False})
+        with patch.object(billing_module, "_pool", pool):
+            promotional = await is_promotional_credit("org-1")
+
+        assert promotional is False
+
+    async def test_grant_rejects_non_positive_amount(self):
+        with pytest.raises(ValueError, match="must be positive"):
+            await grant_onboarding_credit("org-1", 0)
+
+    async def test_grant_rejects_negative_amount(self):
+        with pytest.raises(ValueError, match="must be positive"):
+            await grant_onboarding_credit("org-1", -100_000)
+
+    async def test_real_topup_using_onboarding_reason_removes_promotional_state(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(return_value={"is_promotional": False})
+        with patch.object(billing_module, "_pool", pool):
+            promotional = await is_promotional_credit("org-1")
+
+        assert promotional is False
+        query = pool.fetchrow.call_args.args[0]
+        assert "id <> g.ledger_entry_id" in query
+        assert pool.fetchrow.call_args.args[1:] == ("org-1",)
+
+
+@pytest.mark.anyio
+class TestOnboardingCreditOutbox:
+    """Durable retry path for onboarding grants that failed immediately after verification."""
+
+    async def test_process_outbox_grants_and_clears_pending_row(self):
+        pool = _pool_mock()
+        pool.fetch = AsyncMock(return_value=[{"org_id": "org-1", "amount_usdc": 500_000}])
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"amount_usdc": 500_000},
+                {"balance_usdc": 500_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            processed = await process_onboarding_credit_outbox()
+
+        assert processed == 1
+        delete_sql = pool.execute.call_args.args[0]
+        assert "DELETE" in delete_sql
+        assert "org_onboarding_credit_outbox" in delete_sql
+        assert pool.execute.call_args.args[1] == "org-1"
+
+    async def test_process_outbox_retains_row_and_records_error_on_failure(self):
+        pool = _pool_mock()
+        pool.fetch = AsyncMock(return_value=[{"org_id": "org-1", "amount_usdc": 500_000}])
+        pool._conn.fetchrow = AsyncMock(side_effect=RuntimeError("database unavailable"))
+        with patch.object(billing_module, "_pool", pool):
+            processed = await process_onboarding_credit_outbox()
+
+        assert processed == 0
+        update_sql = pool.execute.call_args.args[0]
+        assert "UPDATE" in update_sql
+        assert "attempts = attempts + 1" in update_sql
+        assert pool.execute.call_args.args[1] == "org-1"
+        assert "database unavailable" in pool.execute.call_args.args[2]
+
+    async def test_process_outbox_is_noop_when_empty(self):
+        pool = _pool_mock()
+        pool.fetch = AsyncMock(return_value=[])
+        with patch.object(billing_module, "_pool", pool):
+            processed = await process_onboarding_credit_outbox()
+
+        assert processed == 0
+        pool.execute.assert_not_awaited()
+
+    async def test_clear_outbox_deletes_row(self):
+        pool = _pool_mock()
+        with patch.object(billing_module, "_pool", pool):
+            await clear_onboarding_credit_outbox("org-1")
+
+        pool.execute.assert_awaited_once()
+        delete_sql = pool.execute.call_args.args[0]
+        assert "DELETE" in delete_sql
+        assert pool.execute.call_args.args[1] == "org-1"
 
 
 @pytest.mark.anyio

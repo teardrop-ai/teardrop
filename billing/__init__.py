@@ -242,6 +242,26 @@ async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") ->
     return await _get_credit_service().admin_topup_credit(org_id, amount_usdc, reason)
 
 
+async def grant_onboarding_credit(org_id: str, amount_usdc: int) -> int:
+    """Grant one idempotent verified-email credit balance and return its amount."""
+    return await _get_credit_service().grant_onboarding_credit(org_id, amount_usdc)
+
+
+async def clear_onboarding_credit_outbox(org_id: str) -> None:
+    """Remove a completed/no-longer-needed onboarding-credit outbox entry."""
+    return await _get_credit_service().clear_onboarding_credit_outbox(org_id)
+
+
+async def process_onboarding_credit_outbox(limit: int = 50) -> int:
+    """Retry queued onboarding-credit grants; returns the count successfully granted."""
+    return await _get_credit_service().process_onboarding_credit_outbox(limit)
+
+
+async def is_promotional_credit(org_id: str) -> bool:
+    """Return whether the org has only its one-time onboarding credit."""
+    return await _get_credit_service().is_promotional_credit(org_id)
+
+
 async def get_credit_history(
     org_id: str,
     operation: str | None = None,
@@ -660,6 +680,10 @@ __all__ = [
     "verify_credit",
     "debit_credit",
     "admin_topup_credit",
+    "grant_onboarding_credit",
+    "clear_onboarding_credit_outbox",
+    "process_onboarding_credit_outbox",
+    "is_promotional_credit",
     "get_credit_balance",
     "get_credit_history",
     # delegation

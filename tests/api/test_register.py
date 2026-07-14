@@ -54,6 +54,29 @@ async def test_register_happy_path(anon_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_register_response_unchanged_when_onboarding_credit_enabled(anon_client, monkeypatch):
+    """Onboarding credit must not leak into the /register response."""
+    org, user = _mock_org(), _mock_user()
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_enabled", True)
+    monkeypatch.setattr("teardrop.routers.auth.settings.onboarding_credit_usdc", 500_000)
+    monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", AsyncMock(return_value=(org, user)))
+    monkeypatch.setattr("teardrop.routers.auth.create_verification_token", AsyncMock(return_value="tok123"))
+    monkeypatch.setattr("teardrop.routers.auth.send_verification_email", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.auth.create_refresh_token", AsyncMock(return_value="rt-abc"))
+
+    resp = await anon_client.post(
+        "/register",
+        json={"org_name": "Alice Inc", "email": "alice@example.com", "password": "strongpass1"},
+    )
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert set(body.keys()) == {"access_token", "token_type", "refresh_token", "expires_in"}
+    assert "credit" not in body
+    assert "onboarding" not in body
+
+
+@pytest.mark.anyio
 async def test_register_issues_verification_token(anon_client, monkeypatch):
     """register() must call create_verification_token to fire the verification flow."""
     org, user = _mock_org(), _mock_user()

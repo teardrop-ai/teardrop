@@ -22,6 +22,7 @@ from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_t
 from scripts.generate_keys import generate_keypair
 from teardrop._background_tasks import (
     _memory_cleanup_loop,
+    _onboarding_credit_outbox_loop,
     _prewarm_cache_prefixes,
     _refresh_token_cleanup_loop,
     _reputation_rollup_loop,
@@ -105,6 +106,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         if settings.billing_enabled:
             bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
             bg_tasks.append(asyncio.create_task(_x402_nonce_cleanup_loop()))
+        if settings.billing_enabled and settings.onboarding_credit_enabled:
+            bg_tasks.append(asyncio.create_task(_onboarding_credit_outbox_loop()))
         if settings.memory_enabled and settings.memory_ttl_days > 0:
             bg_tasks.append(asyncio.create_task(_memory_cleanup_loop()))
         if settings.marketplace_auto_sweep_enabled:

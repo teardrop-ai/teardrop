@@ -170,6 +170,8 @@ async def agent_run(
         if body.tool_policy and body.tool_policy.exclude_names:
             excluded_tools = frozenset(_normalize_exclusion_name(name) for name in body.tool_policy.exclude_names)
         excluded_tools |= frozenset(ctx.persisted_excluded_tools)
+        if getattr(ctx, "is_promotional_credit", False):
+            excluded_tools |= frozenset(ctx.mp_by_name)
 
         initial_state = AgentState(
             messages=[HumanMessage(content=body.message)],
@@ -331,7 +333,9 @@ async def agent_run(
             result=_settlement_result,
         ):
             yield _sse
-        marketplace_stats_billable = _settlement_result.get("marketplace_stats_billable", False)
+        marketplace_stats_billable = _settlement_result.get("marketplace_stats_billable", False) and not getattr(
+            ctx, "is_promotional_credit", False
+        )
 
         # ── Record marketplace tool earnings + usage stats ───────────────
         # Both are gated on ``marketplace_stats_billable`` (True only after a

@@ -359,6 +359,23 @@ class Settings(BaseSettings):
             "This acts as a safety reserve above the flat run floor."
         ),
     )
+    onboarding_credit_enabled: bool = Field(
+        default=False,
+        description="Grant one prepaid onboarding credit after successful email verification.",
+    )
+    onboarding_credit_usdc: int = Field(
+        default=500_000,
+        gt=0,
+        le=10_000_000,
+        description=("One-time verified-email onboarding grant in atomic USDC (1,000,000 atomic USDC = $1.00)."),
+    )
+    onboarding_credit_retry_interval_seconds: int = Field(
+        default=60,
+        description=(
+            "Background worker poll interval for retrying onboarding-credit grants that "
+            "failed immediately after email verification (durable outbox retry)."
+        ),
+    )
     x402_facilitator_url: str = Field(
         default="https://x402.org/facilitator",
         description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",

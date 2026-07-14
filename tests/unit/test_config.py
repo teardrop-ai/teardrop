@@ -13,6 +13,19 @@ def test_default_env_is_development(monkeypatch):
     config.get_settings.cache_clear()
     s = Settings()
     assert s.app_env == "development"
+
+
+def test_onboarding_credit_is_disabled_by_default():
+    s = Settings()
+    assert s.onboarding_credit_enabled is False
+    assert s.onboarding_credit_usdc == 500_000
+
+
+def test_onboarding_credit_amount_is_bounded():
+    with pytest.raises(ValueError):
+        Settings(onboarding_credit_usdc=0)
+    with pytest.raises(ValueError):
+        Settings(onboarding_credit_usdc=10_000_001)
     config.get_settings.cache_clear()
 
 

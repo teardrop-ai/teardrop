@@ -35,6 +35,7 @@ from billing import (
     debit_credit,
     get_current_pricing,
     get_tool_pricing_overrides,
+    is_promotional_credit,
     verify_credit,
 )
 from marketplace import (
@@ -286,11 +287,6 @@ async def mcp_jsonrpc_handler(
         if not tool_name:
             return JSONResponse(content=_jsonrpc_error(req_id, -32602, "Missing tool name"))
 
-        # Determine tool cost
-        overrides = await get_tool_pricing_overrides()
-        pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_cost if pricing else 0
-
         # Check if it's a marketplace tool (qualified_name = "org_slug/tool_name")
         is_marketplace_tool = "/" in tool_name
         if is_marketplace_tool:
@@ -309,6 +305,26 @@ async def mcp_jsonrpc_handler(
                         f"Not subscribed to marketplace tool '{tool_name}'. Subscribe via POST /marketplace/subscriptions.",
                     )
                 )
+
+            # Verified-email promotional credit cannot be used to generate
+            # marketplace author earnings through this direct JSON-RPC route.
+            if s.billing_enabled and s.onboarding_credit_enabled and await is_promotional_credit(org_id):
+                logger.info("mcp/v1 promotional credit blocked marketplace tool org_id=%s tool=%s", org_id, tool_name)
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32003,
+                        "Marketplace author tools require a funded credit balance.",
+                    ),
+                    status_code=403,
+                )
+
+        # Determine tool cost only after marketplace access restrictions have
+        # passed. Built-in tools have no such gate and follow the same pricing
+        # resolution path.
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_cost if pricing else 0
 
         # Price resolution: admin override (qualified) > admin override (bare) > author price > default
         tool_cost = overrides.get(tool_name, overrides.get(actual_tool_name, default_cost))

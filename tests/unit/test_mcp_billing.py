@@ -120,6 +120,33 @@ async def test_billing_rejects_insufficient_credits(billing_client, test_jwt_tok
 
 
 @pytest.mark.asyncio
+async def test_promotional_credit_rejects_qualified_marketplace_tool(billing_client, monkeypatch, test_jwt_token):
+    """Direct MCP calls cannot turn grant-only credit into author earnings."""
+    monkeypatch.setenv("ONBOARDING_CREDIT_ENABLED", "true")
+
+    async with billing_client() as client:
+        with (
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=_FakePricing()),
+            patch("billing.resolve_tool_cost", new_callable=AsyncMock, return_value=1_000),
+            patch("billing.is_promotional_credit", new_callable=AsyncMock, return_value=True),
+            patch("billing.verify_credit", new_callable=AsyncMock) as mock_verify,
+        ):
+            resp = await client.post(
+                "/tools/mcp",
+                content=_tools_call_body("acme/weather"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {test_jwt_token}",
+                },
+            )
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == -32003
+    mock_verify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_billing_debits_on_success(billing_client, test_jwt_token):
     """Successful tools/call debits credits with correct amount and reason."""
     async with billing_client() as client:

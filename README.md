@@ -97,6 +97,36 @@ When an org requests a withdrawal, Teardrop:
 
 ---
 
+### Verified-Email Onboarding Credit
+
+Teardrop can grant a small prepaid credit balance to newly verified organizations so a first agent run is possible without immediately setting up a wallet or card. This is **disabled by default** and is intended only as a conversion aid, not as a source of withdrawable marketplace earnings.
+
+**How it works:**
+- The grant is awarded only after a user successfully consumes a single-use email verification token (`GET /auth/verify-email`).
+- Token consumption, marking the user verified, and enqueueing onboarding-credit eligibility are committed atomically in one transaction, so a valid token is never "spent" without a durable record of the org's eligibility.
+- The grant amount is immutable and recorded in `org_onboarding_credit_grants`.
+- The balance, ledger row, and grant marker are written in one transaction.
+- Duplicate verifications are harmless: the grant marker makes the operation idempotent.
+- If the immediate grant attempt fails (e.g. a transient DB error), the request still returns `{ "verified": true }` and the failure is logged at warning level without a traceback. The durable outbox row created during verification ensures a background worker (`ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS`, default 60s) retries the grant until it succeeds — the credit can never be permanently lost due to a transient failure.
+
+**Restrictions on promotional credit:**
+- Promotional credit can be used for platform tools, org webhook tools, MCP tools, and the base agent run cost.
+- It **cannot** call marketplace author tools (qualified names such as `acme/weather`) through `POST /agent/run`, the SSE streaming route, `GET /tools/mcp`, or `POST /mcp/v1`.
+- Marketplace author earnings and usage statistics are suppressed for promotional runs even if a tool bypasses planner filtering.
+- A real top-up (Stripe, on-chain USDC, admin top-up, or refund) converts the org to normal credit status and removes the marketplace restriction.
+- x402-paid SIWE calls are unaffected and never treated as promotional.
+
+**Environment variables:**
+```
+ONBOARDING_CREDIT_ENABLED=false   # Set to true to enable verified-email grants
+ONBOARDING_CREDIT_USDC=500000     # Default $0.50 in atomic USDC (max $10.00)
+ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS=60  # Background retry poll interval for failed grants
+```
+
+Check `GET /billing/balance` after verification to see the granted balance. Once the promotional balance is exhausted, use the existing Stripe or on-chain USDC top-up flows.
+
+---
+
 ### Unattended (Scheduled) Agent Runs
 
 Organizations can schedule recurring, unattended agent runs with integrated credit-only billing, stored execution history, and real-time status callbacks.
@@ -271,6 +301,9 @@ The repo includes a `render.yaml` that configures a Render web service. Set thes
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
 | `DATABASE_URL` | Neon Postgres connection string |
 | `BILLING_ENABLED` | `true` to activate x402 payments |
+| `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
+| `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
+| `ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS` | Poll interval for retrying failed onboarding-credit grants (default: `60`) |
 | `X402_PAY_TO_ADDRESS` | Treasury wallet (USDC recipient) |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
 | `X402_SCHEME` | Payment scheme: `exact` (default) or `upto` (usage-based via Permit2) |

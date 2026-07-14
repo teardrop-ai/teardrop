@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from billing import clear_onboarding_credit_outbox, grant_onboarding_credit
 from shared.captcha import verify_turnstile
 from shared.email import send_invite_email, send_verification_email
 from teardrop import rate_limit as _rate_limit
@@ -25,7 +26,6 @@ from teardrop.siwe import _handle_siwe_login
 from teardrop.users import (
     User,
     consume_org_invite,
-    consume_verification_token,
     create_client_credential,
     create_org_invite,
     create_refresh_token,
@@ -38,11 +38,11 @@ from teardrop.users import (
     get_refresh_token_successor,
     get_user_by_email,
     list_org_client_credentials,
-    mark_user_verified,
     register_org_and_user,
     revoke_refresh_token,
     rotate_refresh_token,
     verify_secret,
+    verify_user_and_enqueue_onboarding_credit,
 )
 from teardrop.wallets import create_nonce
 
@@ -314,14 +314,36 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
 
 @router.get("/auth/verify-email", tags=["Auth"])
 async def verify_email(token: str = Query(...)) -> JSONResponse:
-    """Verify an email address via a one-time token."""
-    user_id = await consume_verification_token(token)
+    """Verify an email address via a one-time token.
+
+    Token consumption, verification, and onboarding-credit eligibility are
+    recorded atomically in a single transaction (see
+    ``verify_user_and_enqueue_onboarding_credit``), so a durable outbox row
+    exists even if the immediate grant attempt below fails. A background
+    worker (``process_onboarding_credit_outbox``) retries any outstanding
+    outbox rows until the grant succeeds, so a transient billing failure here
+    can never permanently strand an eligible organisation's credit.
+    """
+    user_id, org_id, _already_verified = await verify_user_and_enqueue_onboarding_credit(
+        token,
+        settings.onboarding_credit_enabled,
+        settings.onboarding_credit_usdc,
+    )
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Verification token is invalid, expired, or already used.",
         )
-    await mark_user_verified(user_id)
+    if settings.onboarding_credit_enabled and org_id is not None:
+        try:
+            await grant_onboarding_credit(org_id, settings.onboarding_credit_usdc)
+            await clear_onboarding_credit_outbox(org_id)
+        except Exception:
+            # Verification is authoritative; a transient billing failure must
+            # not turn a consumed, valid verification token into a 5xx response.
+            # The durable outbox row enqueued above ensures the background
+            # retry worker completes the grant later.
+            logger.warning("Onboarding credit grant unavailable after email verification; queued for retry")
     return JSONResponse(content={"verified": True})
 
 

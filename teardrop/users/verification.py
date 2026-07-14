@@ -62,6 +62,70 @@ async def mark_user_verified(user_id: str) -> None:
     )
 
 
+async def verify_user_and_enqueue_onboarding_credit(
+    token: str,
+    onboarding_credit_enabled: bool,
+    amount_usdc: int,
+) -> tuple[str | None, str | None, bool]:
+    """Atomically consume token, mark user verified, fetch org ID, and enqueue onboarding credit if enabled.
+
+    All updates are performed in a single transaction. If any database write fails,
+    the entire transaction is rolled back, preserving the token's unconsumed state.
+    Returns:
+        (user_id, org_id, already_verified)
+    """
+    pool = _get_pool()
+    now = datetime.now(timezone.utc)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 1. Fetch, lock, and validate verification token
+            token_row = await conn.fetchrow(
+                "SELECT user_id, expires_at, used FROM email_verification_tokens WHERE token = $1 FOR UPDATE",
+                token,
+            )
+            if token_row is None or token_row["used"] or token_row["expires_at"] < now:
+                return None, None, False
+
+            user_id = token_row["user_id"]
+
+            # 2. Consume token
+            await conn.execute(
+                "UPDATE email_verification_tokens SET used = TRUE WHERE token = $1",
+                token,
+            )
+
+            # 3. Fetch user and check if verified, and get their org_id
+            user_row = await conn.fetchrow(
+                "SELECT org_id, is_verified FROM users WHERE id = $1 FOR UPDATE",
+                user_id,
+            )
+            if user_row is None:
+                return None, None, False
+
+            org_id = user_row["org_id"]
+            already_verified = bool(user_row["is_verified"])
+
+            # 4. Mark user verified
+            await conn.execute(
+                "UPDATE users SET is_verified = TRUE WHERE id = $1",
+                user_id,
+            )
+
+            # 5. Enqueue onboarding credit in outbox if enabled
+            if onboarding_credit_enabled and org_id is not None:
+                await conn.execute(
+                    """
+                    INSERT INTO org_onboarding_credit_outbox (org_id, amount_usdc, attempts, created_at, updated_at)
+                    VALUES ($1, $2, 0, NOW(), NOW())
+                    ON CONFLICT (org_id) DO NOTHING
+                    """,
+                    org_id,
+                    amount_usdc,
+                )
+
+            return user_id, org_id, already_verified
+
+
 # ─── Org invites ──────────────────────────────────────────────────────────────
 
 _INVITE_TOKEN_TTL_HOURS = 72  # 3 days

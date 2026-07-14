@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 import asyncpg
 
 from agent.cache_prewarm import prewarm_org_prefix
-from billing import cleanup_expired_payment_nonces, process_pending_settlements
+from billing import cleanup_expired_payment_nonces, process_onboarding_credit_outbox, process_pending_settlements
 from marketplace import reputation_rollup_once
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
@@ -83,6 +83,12 @@ async def _settlement_retry_iter() -> None:
         logger.info("Settlement retry: processed %d pending settlements", processed)
 
 
+async def _onboarding_credit_outbox_iter() -> None:
+    processed = await process_onboarding_credit_outbox()
+    if processed:
+        logger.info("Onboarding credit retry: processed %d pending grants", processed)
+
+
 async def _memory_cleanup_iter() -> None:
     deleted = await cleanup_expired_memories()
     if deleted:
@@ -114,6 +120,16 @@ async def _settlement_retry_loop() -> None:
         _settlement_retry_iter,
         settings.settlement_retry_interval_seconds,
         monitor_slug="settlement-retry",
+    )
+
+
+async def _onboarding_credit_outbox_loop() -> None:
+    """Periodically retry failed onboarding-credit grants (runs as background task)."""
+    await _run_periodic(
+        "Onboarding credit retry",
+        _onboarding_credit_outbox_iter,
+        settings.onboarding_credit_retry_interval_seconds,
+        monitor_slug="onboarding-credit-retry",
     )
 
 

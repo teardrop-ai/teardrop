@@ -95,6 +95,13 @@ async def get_user_by_email(email: str) -> User | None:
     return user
 
 
+async def get_org_id_for_user(user_id: str) -> str | None:
+    """Return the organisation ID for a user, or ``None`` when not found."""
+    pool = _get_pool()
+    row = await pool.fetchrow("SELECT org_id FROM users WHERE id = $1", user_id)
+    return str(row["org_id"]) if row is not None else None
+
+
 async def get_org_by_id(org_id: str) -> Org | None:
     """Look up an organisation by its ID. Returns None if not found."""
     pool = _get_pool()
