@@ -1,0 +1,62 @@
+name: Spec
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  spec:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/teardrop_test
+      APP_ENV: test
+      JWT_CLIENT_ID: test-client
+      JWT_CLIENT_SECRET: ci-test-secret
+      ANTHROPIC_API_KEY: dummy-key
+      LANGSMITH_TRACING: "false"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate RSA test keys
+        run: python scripts/generate_keys.py
+
+      - name: Export API spec artifacts
+        run: python -m scripts.export_api_spec
+
+      - name: Fail if spec/ is out of date
+        run: |
+          # `git add -N` (intent-to-add) so newly-generated/untracked files under
+          # spec/ are included in the diff below; without it, `git diff` silently
+          # ignores untracked files and this check would be a no-op.
+          git add -N spec/
+          git diff --exit-code -- spec/ || {
+            echo "::error::spec/openapi.json or spec/events.schema.json is stale. Run 'python -m scripts.export_api_spec' and commit the result.";
+            exit 1;
+          }
+
+      - name: Trigger TS SDK Dispatch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.SDK_DISPATCH_TOKEN }}
+          repository: ${{ github.repository_owner }}/teardrop-sdk-ts
+          event-type: backend_spec_updated
+
+      - name: Trigger Python SDK Dispatch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.SDK_DISPATCH_TOKEN }}
+          repository: ${{ github.repository_owner }}/teardrop-sdk
+          event-type: backend_spec_updated

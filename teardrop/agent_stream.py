@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import BaseModel
+
 # ─── AG-UI event helpers ──────────────────────────────────────────────────────
 
 
@@ -47,6 +49,150 @@ _EV_BILLING_SETTLEMENT = "BILLING_SETTLEMENT"
 _EV_ERROR = "ERROR"
 _EV_DONE = "DONE"
 _EV_CUSTOM = "Custom"  # ag-ui Custom event for application-defined structured payloads
+
+
+# ─── SSE event payload schemas (documentation/spec-export only) ─────────────
+# These Pydantic models describe the ``data`` dict shape emitted alongside
+# each ``_EV_*`` event type above. They are NOT used on the hot streaming
+# path (call sites still yield plain dicts via ``_sse_event``) — they exist
+# solely so ``scripts/export_api_spec.py`` can emit a machine-readable
+# ``spec/events.schema.json`` for downstream SDK codegen, since OpenAPI does
+# not describe SSE frame contracts. Keep in sync with the ``_sse_event(...)``
+# call sites in ``agent_event_loop.py``, ``agent_post_run.py``, and
+# ``routers/agent.py`` when adding/changing an event's fields.
+
+
+class RunStartedData(BaseModel):
+    run_id: str
+    thread_id: str
+
+
+class RunFinishedData(BaseModel):
+    run_id: str
+
+
+class DoneData(BaseModel):
+    run_id: str
+
+
+class ErrorData(BaseModel):
+    run_id: str
+    error: str
+
+
+class TextMessageStartData(BaseModel):
+    message_id: str
+
+
+class TextMessageContentData(BaseModel):
+    message_id: str
+    delta: str
+
+
+class TextMessageEndData(BaseModel):
+    message_id: str
+
+
+class ToolCallStartData(BaseModel):
+    tool_call_id: str
+    tool_name: str
+    args: dict[str, Any]
+
+
+class ToolCallEndData(BaseModel):
+    tool_call_id: str
+    tool_name: str
+    output: str
+
+
+class SurfaceUpdateData(BaseModel):
+    surface_id: str
+    components: list[dict[str, Any]]
+
+
+class UsageSummaryData(BaseModel):
+    run_id: str
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    tool_calls: int
+    duration_ms: int
+    cost_usdc: int
+    platform_fee_usdc: int
+    delegation_cost_usdc: int
+
+
+class BillingSettlementData(BaseModel):
+    run_id: str
+    amount_usdc: int
+    tx_hash: str
+    network: str
+    delegation_cost_usdc: int
+    platform_fee_usdc: int
+
+
+class ToolOutputCustomValue(BaseModel):
+    tool_call_id: str
+    tool_name: str
+    data: Any
+
+
+class ToolOutputCustomEvent(BaseModel):
+    """``Custom`` event with ``name="TOOL_OUTPUT"`` — structured tool result."""
+
+    name: str = "TOOL_OUTPUT"
+    value: ToolOutputCustomValue
+
+
+class AgentWarningCustomValue(BaseModel):
+    type: str
+    message: str
+
+
+class AgentWarningCustomEvent(BaseModel):
+    """``Custom`` event with ``name="AGENT_WARNING"`` — non-fatal client-facing warning."""
+
+    name: str = "AGENT_WARNING"
+    value: AgentWarningCustomValue
+
+
+# Maps each ``_EV_*`` event-type string to the Pydantic model(s) describing its
+# ``data`` payload. ``_EV_CUSTOM`` maps to a list because the ``Custom`` event
+# type carries a discriminated ``name`` field with more than one known shape.
+EVENT_SCHEMAS: dict[str, type[BaseModel] | list[type[BaseModel]]] = {
+    _EV_RUN_STARTED: RunStartedData,
+    _EV_RUN_FINISHED: RunFinishedData,
+    _EV_TEXT_MSG_START: TextMessageStartData,
+    _EV_TEXT_MSG_CONTENT: TextMessageContentData,
+    _EV_TEXT_MSG_END: TextMessageEndData,
+    _EV_TOOL_CALL_START: ToolCallStartData,
+    _EV_TOOL_CALL_END: ToolCallEndData,
+    _EV_STATE_SNAPSHOT: dict,  # reserved AG-UI event type; not currently emitted
+    _EV_SURFACE_UPDATE: SurfaceUpdateData,
+    _EV_USAGE_SUMMARY: UsageSummaryData,
+    _EV_BILLING_SETTLEMENT: BillingSettlementData,
+    _EV_ERROR: ErrorData,
+    _EV_DONE: DoneData,
+    _EV_CUSTOM: [ToolOutputCustomEvent, AgentWarningCustomEvent],
+}
+
+
+def get_event_json_schemas() -> dict[str, Any]:
+    """Return a JSON-serializable map of event type -> JSON Schema (or list of schemas).
+
+    Used by ``scripts/export_api_spec.py`` to emit ``spec/events.schema.json`` —
+    the SSE-contract counterpart to FastAPI's auto-generated ``openapi.json``.
+    """
+    schemas: dict[str, Any] = {}
+    for event_type, model in EVENT_SCHEMAS.items():
+        if model is dict:
+            schemas[event_type] = {"type": "object"}  # reserved, no fixed shape yet
+        elif isinstance(model, list):
+            schemas[event_type] = [m.model_json_schema() for m in model]
+        else:
+            schemas[event_type] = model.model_json_schema()
+    return schemas
 
 
 # ─── A2UI stream filter ──────────────────────────────────────────────────────

@@ -1,0 +1,361 @@
+{
+  "events": {
+    "BILLING_SETTLEMENT": {
+      "properties": {
+        "amount_usdc": {
+          "title": "Amount Usdc",
+          "type": "integer"
+        },
+        "delegation_cost_usdc": {
+          "title": "Delegation Cost Usdc",
+          "type": "integer"
+        },
+        "network": {
+          "title": "Network",
+          "type": "string"
+        },
+        "platform_fee_usdc": {
+          "title": "Platform Fee Usdc",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "tx_hash": {
+          "title": "Tx Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "amount_usdc",
+        "tx_hash",
+        "network",
+        "delegation_cost_usdc",
+        "platform_fee_usdc"
+      ],
+      "title": "BillingSettlementData",
+      "type": "object"
+    },
+    "Custom": [
+      {
+        "$defs": {
+          "ToolOutputCustomValue": {
+            "properties": {
+              "data": {
+                "title": "Data"
+              },
+              "tool_call_id": {
+                "title": "Tool Call Id",
+                "type": "string"
+              },
+              "tool_name": {
+                "title": "Tool Name",
+                "type": "string"
+              }
+            },
+            "required": [
+              "tool_call_id",
+              "tool_name",
+              "data"
+            ],
+            "title": "ToolOutputCustomValue",
+            "type": "object"
+          }
+        },
+        "description": "``Custom`` event with ``name=\"TOOL_OUTPUT\"`` \u2014 structured tool result.",
+        "properties": {
+          "name": {
+            "default": "TOOL_OUTPUT",
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/ToolOutputCustomValue"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ToolOutputCustomEvent",
+        "type": "object"
+      },
+      {
+        "$defs": {
+          "AgentWarningCustomValue": {
+            "properties": {
+              "message": {
+                "title": "Message",
+                "type": "string"
+              },
+              "type": {
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ],
+            "title": "AgentWarningCustomValue",
+            "type": "object"
+          }
+        },
+        "description": "``Custom`` event with ``name=\"AGENT_WARNING\"`` \u2014 non-fatal client-facing warning.",
+        "properties": {
+          "name": {
+            "default": "AGENT_WARNING",
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/AgentWarningCustomValue"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "AgentWarningCustomEvent",
+        "type": "object"
+      }
+    ],
+    "DONE": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "DoneData",
+      "type": "object"
+    },
+    "ERROR": {
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "error"
+      ],
+      "title": "ErrorData",
+      "type": "object"
+    },
+    "RUN_FINISHED": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "RunFinishedData",
+      "type": "object"
+    },
+    "RUN_STARTED": {
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "thread_id"
+      ],
+      "title": "RunStartedData",
+      "type": "object"
+    },
+    "STATE_SNAPSHOT": {
+      "type": "object"
+    },
+    "SURFACE_UPDATE": {
+      "properties": {
+        "components": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "surface_id": {
+          "title": "Surface Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "surface_id",
+        "components"
+      ],
+      "title": "SurfaceUpdateData",
+      "type": "object"
+    },
+    "TEXT_MESSAGE_CONTENT": {
+      "properties": {
+        "delta": {
+          "title": "Delta",
+          "type": "string"
+        },
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "delta"
+      ],
+      "title": "TextMessageContentData",
+      "type": "object"
+    },
+    "TEXT_MESSAGE_END": {
+      "properties": {
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id"
+      ],
+      "title": "TextMessageEndData",
+      "type": "object"
+    },
+    "TEXT_MESSAGE_START": {
+      "properties": {
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id"
+      ],
+      "title": "TextMessageStartData",
+      "type": "object"
+    },
+    "TOOL_CALL_END": {
+      "properties": {
+        "output": {
+          "title": "Output",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_call_id",
+        "tool_name",
+        "output"
+      ],
+      "title": "ToolCallEndData",
+      "type": "object"
+    },
+    "TOOL_CALL_START": {
+      "properties": {
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        },
+        "tool_call_id": {
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool_call_id",
+        "tool_name",
+        "args"
+      ],
+      "title": "ToolCallStartData",
+      "type": "object"
+    },
+    "USAGE_SUMMARY": {
+      "properties": {
+        "cache_creation_tokens": {
+          "title": "Cache Creation Tokens",
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "title": "Cache Read Tokens",
+          "type": "integer"
+        },
+        "cost_usdc": {
+          "title": "Cost Usdc",
+          "type": "integer"
+        },
+        "delegation_cost_usdc": {
+          "title": "Delegation Cost Usdc",
+          "type": "integer"
+        },
+        "duration_ms": {
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "platform_fee_usdc": {
+          "title": "Platform Fee Usdc",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "tokens_in": {
+          "title": "Tokens In",
+          "type": "integer"
+        },
+        "tokens_out": {
+          "title": "Tokens Out",
+          "type": "integer"
+        },
+        "tool_calls": {
+          "title": "Tool Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "tokens_in",
+        "tokens_out",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "tool_calls",
+        "duration_ms",
+        "cost_usdc",
+        "platform_fee_usdc",
+        "delegation_cost_usdc"
+      ],
+      "title": "UsageSummaryData",
+      "type": "object"
+    }
+  },
+  "version": "1.2.0"
+}
