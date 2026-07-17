@@ -392,7 +392,7 @@ class AgentToolItem(BaseModel):
     input_schema: dict[str, Any]
 
 
-@router.get("/agent/tools", tags=["Agent"])
+@router.get("/agent/tools", tags=["Agent"], response_model=list[AgentToolItem])
 async def list_agent_tools(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -482,7 +482,21 @@ class ToolExclusionRequest(BaseModel):
     )
 
 
-@router.get("/agent/tool-exclusions", tags=["Agent"])
+class ToolExclusionListResponse(BaseModel):
+    tool_names: list[str] = Field(..., description="Persisted tool exclusions for the authenticated org.")
+
+
+class ToolExclusionActionResponse(BaseModel):
+    status: Literal["added"] = Field(..., description="Outcome of the exclusion write.")
+    tool_name: str = Field(..., description="Normalized (unprefixed) tool name that was excluded.")
+
+
+class ToolExclusionRemovedResponse(BaseModel):
+    status: Literal["removed"]
+    tool_name: str = Field(..., description="Normalized (unprefixed) tool name that was removed.")
+
+
+@router.get("/agent/tool-exclusions", tags=["Agent"], response_model=ToolExclusionListResponse)
 async def get_agent_tool_exclusions(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -492,7 +506,7 @@ async def get_agent_tool_exclusions(
     return JSONResponse(content={"tool_names": tool_names})
 
 
-@router.post("/agent/tool-exclusions", tags=["Agent"])
+@router.post("/agent/tool-exclusions", tags=["Agent"], response_model=ToolExclusionActionResponse)
 async def create_agent_tool_exclusion(
     body: ToolExclusionRequest,
     payload: dict = Depends(require_auth),
@@ -507,7 +521,7 @@ async def create_agent_tool_exclusion(
     return JSONResponse(content={"status": "added", "tool_name": normalized})
 
 
-@router.delete("/agent/tool-exclusions/{tool_name}", tags=["Agent"])
+@router.delete("/agent/tool-exclusions/{tool_name}", tags=["Agent"], response_model=ToolExclusionRemovedResponse)
 async def delete_agent_tool_exclusion(
     tool_name: str,
     payload: dict = Depends(require_auth),
@@ -530,7 +544,27 @@ class RunOutcomeRequest(BaseModel):
     rating: int = Field(..., ge=-1, le=1, description="-1 (bad outcome), 0 (neutral), or 1 (good outcome)")
 
 
-@router.get("/agent/decisions", tags=["Agent"])
+class AgentDecisionRecord(BaseModel):
+    id: str = Field(..., description="Decision record ID (UUID string).")
+    run_id: str = Field(..., description="Run this decision summarizes.")
+    task_class: str = Field(default="", description="Auto-classified task type; empty string if unclassified.")
+    action: str = Field(default="", description="Action the planner took.")
+    reasoning: str = Field(default="", description="Planner's stated reasoning for the action.")
+    confidence: float | None = Field(default=None, description="Planner confidence score, if recorded.")
+    tool_names: list[str] = Field(default_factory=list, description="Tools used while making this decision.")
+    outcome: int = Field(..., ge=-1, le=1, description="-1 (bad), 0 (neutral/unlabeled), or 1 (good).")
+    outcome_source: str = Field(default="", description="Origin of the outcome label (e.g. 'feedback'); empty if unlabeled.")
+    created_at: str = Field(..., description="ISO 8601 creation timestamp.")
+
+
+class AgentDecisionListResponse(BaseModel):
+    items: list[AgentDecisionRecord]
+    next_cursor: str | None = Field(
+        default=None, description="ISO datetime cursor for the next page; null when no more items remain."
+    )
+
+
+@router.get("/agent/decisions", tags=["Agent"], response_model=AgentDecisionListResponse)
 async def list_agent_decisions(
     payload: dict = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=200),
@@ -568,7 +602,11 @@ async def list_agent_decisions(
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
 
-@router.patch("/agent/runs/{run_id}/outcome", tags=["Agent"])
+class RunOutcomeResponse(BaseModel):
+    status: Literal["recorded"]
+
+
+@router.patch("/agent/runs/{run_id}/outcome", tags=["Agent"], response_model=RunOutcomeResponse)
 async def set_agent_run_outcome(
     run_id: str,
     body: RunOutcomeRequest,

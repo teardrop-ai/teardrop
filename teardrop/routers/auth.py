@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import logging
 import re
+from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -64,6 +65,13 @@ class TokenRequest(BaseModel):
     siwe_signature: str | None = None
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"]
+    expires_in: int = Field(..., description="Access token lifetime in seconds.")
+    refresh_token: str | None = Field(default=None, description="Present for email/SIWE flows; omitted for client_credentials.")
+
+
 async def _issue_email_token_pair(user: User) -> dict:
     """Canonical access + refresh token issuance for email-authenticated users.
 
@@ -94,7 +102,7 @@ async def _issue_email_token_pair(user: User) -> dict:
     }
 
 
-@router.post("/token", tags=["Auth"])
+@router.post("/token", tags=["Auth"], response_model=TokenResponse)
 async def token(body: TokenRequest, request: Request) -> JSONResponse:
     """Tri-mode token endpoint.
 
@@ -198,7 +206,18 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
     )
 
 
-@router.get("/auth/me", tags=["Auth"])
+class AuthMeResponse(BaseModel):
+    user_id: str
+    org_id: str
+    role: str
+    auth_method: str
+    email: str
+    org_name: str | None = Field(default=None, description="Present when org_id is set.")
+    address: str | None = Field(default=None, description="Wallet address; present only for SIWE sessions.")
+    chain_id: int | None = Field(default=None, description="Present only for SIWE sessions.")
+
+
+@router.get("/auth/me", tags=["Auth"], response_model=AuthMeResponse)
 async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
     """Return identity claims for the currently authenticated user.
 
@@ -226,7 +245,11 @@ async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
     return JSONResponse(content=body)
 
 
-@router.get("/auth/siwe/nonce", tags=["Auth"])
+class SiweNonceResponse(BaseModel):
+    nonce: str
+
+
+@router.get("/auth/siwe/nonce", tags=["Auth"], response_model=SiweNonceResponse)
 async def siwe_nonce(request: Request) -> JSONResponse:
     """Generate a single-use nonce for SIWE authentication."""
     client_ip = request.client.host if request.client else "unknown"
@@ -264,7 +287,7 @@ class RegisterRequest(BaseModel):
         return v
 
 
-@router.post("/register", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+@router.post("/register", tags=["Auth"], status_code=status.HTTP_201_CREATED, response_model=TokenResponse)
 async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     """Self-serve org and user registration. Returns a JWT immediately.
 
@@ -312,7 +335,11 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
     )
 
 
-@router.get("/auth/verify-email", tags=["Auth"])
+class VerifyEmailResponse(BaseModel):
+    verified: Literal[True]
+
+
+@router.get("/auth/verify-email", tags=["Auth"], response_model=VerifyEmailResponse)
 async def verify_email(token: str = Query(...)) -> JSONResponse:
     """Verify an email address via a one-time token.
 
@@ -351,7 +378,11 @@ class ResendVerificationRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=320)
 
 
-@router.post("/auth/resend-verification", tags=["Auth"])
+class ResendVerificationResponse(BaseModel):
+    message: str
+
+
+@router.post("/auth/resend-verification", tags=["Auth"], response_model=ResendVerificationResponse)
 async def resend_verification(body: ResendVerificationRequest, request: Request) -> JSONResponse:
     """Re-send a verification email. Always returns 200 to prevent email oracle attacks."""
     client_ip = request.client.host if request.client else "unknown"
@@ -371,7 +402,7 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
-@router.post("/auth/refresh", tags=["Auth"])
+@router.post("/auth/refresh", tags=["Auth"], response_model=TokenResponse)
 async def refresh_token_endpoint(body: RefreshRequest, request: Request) -> JSONResponse:
     """Exchange a refresh token for a new access token and rotated refresh token.
 
@@ -432,7 +463,7 @@ class LogoutRequest(BaseModel):
     refresh_token: str
 
 
-@router.post("/auth/logout", tags=["Auth"])
+@router.post("/auth/logout", tags=["Auth"], status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def logout(
     body: LogoutRequest,
     payload: dict = Depends(require_auth),
@@ -465,7 +496,13 @@ class CreateInviteRequest(BaseModel):
         return "user" if v == "member" else v
 
 
-@router.post("/org/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+class CreateInviteResponse(BaseModel):
+    token: str
+    invite_url: str | None = Field(default=None, description="Null when APP_BASE_URL is not configured.")
+    expires_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.post("/org/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED, response_model=CreateInviteResponse)
 async def create_invite(
     body: CreateInviteRequest,
     payload: dict = Depends(require_auth),
@@ -498,7 +535,7 @@ class AcceptInviteRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=128)
 
 
-@router.post("/register/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED)
+@router.post("/register/invite", tags=["Auth"], status_code=status.HTTP_201_CREATED, response_model=TokenResponse)
 async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JSONResponse:
     """Accept an org invite token and create a new user account."""
     client_ip = request.client.host if request.client else "unknown"
@@ -544,7 +581,18 @@ async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JS
 # ─── Org credentials endpoints (member-accessible) ──────────────────────────
 
 
-@router.get("/org/credentials", tags=["Credentials"])
+class OrgCredentialItem(BaseModel):
+    client_id: str = Field(..., description="M2M client ID.")
+    created_at: str = Field(..., description="ISO 8601 timestamp the credential was created/rotated.")
+
+
+class OrgCredentialRegenerateResponse(BaseModel):
+    client_id: str = Field(..., description="Newly issued M2M client ID.")
+    client_secret: str = Field(..., description="Plaintext client secret — shown once, never retrievable again.")
+    created_at: str = Field(..., description="ISO 8601 timestamp of this rotation.")
+
+
+@router.get("/org/credentials", tags=["Credentials"], response_model=list[OrgCredentialItem])
 async def get_org_credentials(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -558,7 +606,12 @@ async def get_org_credentials(
     return JSONResponse(content=[{"client_id": c.client_id, "created_at": c.created_at.isoformat()} for c in credentials])
 
 
-@router.post("/org/credentials/regenerate", tags=["Credentials"])
+@router.post(
+    "/org/credentials/regenerate",
+    tags=["Credentials"],
+    response_model=OrgCredentialRegenerateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def regenerate_org_credentials(
     payload: dict = Depends(require_org_admin),
 ) -> JSONResponse:

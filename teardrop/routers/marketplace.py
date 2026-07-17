@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -68,6 +68,13 @@ class SetAuthorConfigRequest(BaseModel):
     settlement_wallet: str = Field(..., min_length=42, max_length=42)
 
 
+class MarketplaceAuthorConfigResponse(BaseModel):
+    org_id: str
+    settlement_wallet: str | None = None
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unconfigured.")
+    updated_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unconfigured.")
+
+
 class MarketplaceImportPreviewRequest(BaseModel):
     server_id: str = Field(..., min_length=1, max_length=128)
     tool_names: list[str] | None = None
@@ -87,6 +94,77 @@ class MarketplaceImportPublishToolRequest(BaseModel):
 class MarketplaceImportPublishRequest(BaseModel):
     server_id: str = Field(..., min_length=1, max_length=128)
     tools: list[MarketplaceImportPublishToolRequest] = Field(..., min_length=1, max_length=50)
+
+
+class ImportPreviewSchemaStatus(BaseModel):
+    input: str = Field(..., description="'supported', 'partial', or 'synthesized'.")
+    output: str = Field(..., description="'supported', 'partial', or 'synthesized'.")
+
+
+class ImportPreviewDroppedFeatures(BaseModel):
+    input: list[str] = Field(default_factory=list, description="Input schema features dropped during normalization.")
+    output: list[str] = Field(default_factory=list, description="Output schema features dropped during normalization.")
+
+
+class MarketplaceImportPreviewTool(BaseModel):
+    remote_tool_name: str = Field(..., description="Tool name as reported by the remote MCP server.")
+    proposed_name: str = Field(..., description="Teardrop-compatible name proposed for publishing.")
+    description: str
+    marketplace_description: str
+    input_schema: dict[str, Any] = Field(..., description="Normalized Draft 7 input schema.")
+    output_schema: dict[str, Any] = Field(..., description="Normalized (or synthesized) Draft 7 output schema.")
+    schema_status: ImportPreviewSchemaStatus
+    dropped_schema_features: ImportPreviewDroppedFeatures
+    name_adjusted: bool = Field(..., description="True if the proposed name differs from the remote tool name.")
+    name_collision_resolved: bool = Field(..., description="True if the name was renamed to resolve a collision.")
+    quota_exceeded: bool = Field(..., description="True if importing this tool would exceed the org tool quota.")
+    publishable: bool = Field(..., description="Shortcut for 'not quota_exceeded'.")
+    suggested_base_price_usdc: int = Field(..., description="Recommended marketplace price in atomic USDC.")
+    category: str = Field(default="", description="Suggested marketplace category; blank during preview.")
+    warnings: list[str] = Field(default_factory=list, description="Human-readable notes about schema/name adjustments.")
+
+
+class MarketplaceImportPreviewError(BaseModel):
+    remote_tool_name: str
+    status_code: int
+    error: str
+
+
+class MarketplaceImportPreviewResponse(BaseModel):
+    server_id: str
+    slots_remaining: int = Field(..., description="Org tool slots remaining before hitting the quota.")
+    can_publish: bool = Field(..., description="False if the caller/org cannot currently publish (see blockers).")
+    blockers: list[str] = Field(default_factory=list, description="Reasons publishing is blocked, e.g. 'requires_org_admin'.")
+    tools: list[MarketplaceImportPreviewTool]
+    errors: list[MarketplaceImportPreviewError]
+
+
+class MarketplaceImportPublishedTool(BaseModel):
+    id: str
+    name: str
+    org_id: str
+    publish_as_mcp: bool
+    mcp_server_id: str | None = None
+    mcp_tool_name: str | None = None
+    base_price_usdc: int
+
+
+class MarketplaceImportPublishCreatedItem(BaseModel):
+    remote_tool_name: str
+    tool: MarketplaceImportPublishedTool
+
+
+class MarketplaceImportPublishError(BaseModel):
+    remote_tool_name: str
+    name: str
+    status_code: int
+    error: str
+
+
+class MarketplaceImportPublishResponse(BaseModel):
+    server_id: str
+    created: list[MarketplaceImportPublishCreatedItem]
+    errors: list[MarketplaceImportPublishError]
 
 
 def _sanitize_import_tool_name(value: str) -> str:
@@ -230,7 +308,7 @@ def _preview_import_tool(
 # ─── Author Config (settlement wallet payout destination) ─────────────────
 
 
-@router.post("/marketplace/author-config", tags=["Marketplace"])
+@router.post("/marketplace/author-config", tags=["Marketplace"], response_model=MarketplaceAuthorConfigResponse)
 async def set_marketplace_author_config(
     body: SetAuthorConfigRequest,
     payload: dict = Depends(require_org_admin),
@@ -272,7 +350,7 @@ async def set_marketplace_author_config(
     )
 
 
-@router.get("/marketplace/author-config", tags=["Marketplace"])
+@router.get("/marketplace/author-config", tags=["Marketplace"], response_model=MarketplaceAuthorConfigResponse)
 async def get_marketplace_author_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -301,7 +379,7 @@ async def get_marketplace_author_config_endpoint(
     )
 
 
-@router.post("/marketplace/import/preview", tags=["Marketplace"])
+@router.post("/marketplace/import/preview", tags=["Marketplace"], response_model=MarketplaceImportPreviewResponse)
 async def preview_marketplace_import(
     body: MarketplaceImportPreviewRequest,
     payload: dict = Depends(require_auth),
@@ -385,7 +463,7 @@ async def preview_marketplace_import(
     )
 
 
-@router.post("/marketplace/import/publish", tags=["Marketplace"])
+@router.post("/marketplace/import/publish", tags=["Marketplace"], response_model=MarketplaceImportPublishResponse)
 async def publish_marketplace_import(
     body: MarketplaceImportPublishRequest,
     payload: dict = Depends(require_org_admin),
@@ -514,7 +592,12 @@ async def publish_marketplace_import(
     )
 
 
-@router.get("/marketplace/balance", tags=["Marketplace"])
+class MarketplaceBalanceResponse(BaseModel):
+    org_id: str
+    balance_usdc: int
+
+
+@router.get("/marketplace/balance", tags=["Marketplace"], response_model=MarketplaceBalanceResponse)
 async def get_marketplace_balance(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -525,7 +608,23 @@ async def get_marketplace_balance(
     return JSONResponse(content={"org_id": org_id, "balance_usdc": balance})
 
 
-@router.get("/marketplace/earnings", tags=["Marketplace"])
+class MarketplaceEarningEntry(BaseModel):
+    id: str
+    tool_name: str
+    caller_org_id: str
+    total_cost_usdc: int
+    author_share_usdc: int
+    platform_share_usdc: int
+    status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class MarketplaceEarningsResponse(BaseModel):
+    earnings: list[MarketplaceEarningEntry]
+    next_cursor: str | None = None
+
+
+@router.get("/marketplace/earnings", tags=["Marketplace"], response_model=MarketplaceEarningsResponse)
 async def get_marketplace_earnings(
     payload: dict = Depends(require_auth),
     cursor: str | None = Query(default=None),
@@ -562,7 +661,21 @@ async def get_marketplace_earnings(
     )
 
 
-@router.get("/marketplace/earnings/by-tool", tags=["Marketplace"])
+class MarketplaceEarningsByToolEntry(BaseModel):
+    tool_name: str
+    total_calls: int
+    total_amount_usdc: int
+    total_author_share_usdc: int
+    pending_author_share_usdc: int
+    settled_author_share_usdc: int
+    total_platform_share_usdc: int
+
+
+class MarketplaceEarningsByToolResponse(BaseModel):
+    tools: list[MarketplaceEarningsByToolEntry]
+
+
+@router.get("/marketplace/earnings/by-tool", tags=["Marketplace"], response_model=MarketplaceEarningsByToolResponse)
 async def get_marketplace_earnings_by_tool_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -596,7 +709,21 @@ class WithdrawRequest(BaseModel):
     amount_usdc: int = Field(..., gt=0)
 
 
-@router.post("/marketplace/withdraw", tags=["Marketplace"])
+class MarketplaceWithdrawalResponse(BaseModel):
+    id: str
+    org_id: str
+    amount_usdc: int
+    wallet: str
+    status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.post(
+    "/marketplace/withdraw",
+    tags=["Marketplace"],
+    response_model=MarketplaceWithdrawalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def request_marketplace_withdrawal(
     body: WithdrawRequest,
     payload: dict = Depends(require_org_admin),
@@ -634,7 +761,22 @@ async def request_marketplace_withdrawal(
     )
 
 
-@router.get("/marketplace/withdrawals", tags=["Marketplace"])
+class MarketplaceWithdrawalHistoryItem(BaseModel):
+    id: str
+    amount_usdc: int
+    wallet: str
+    tx_hash: str | None = None
+    status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+    settled_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until settled.")
+
+
+class MarketplaceWithdrawalsListResponse(BaseModel):
+    withdrawals: list[MarketplaceWithdrawalHistoryItem]
+    next_cursor: str | None = None
+
+
+@router.get("/marketplace/withdrawals", tags=["Marketplace"], response_model=MarketplaceWithdrawalsListResponse)
 async def get_marketplace_withdrawals(
     payload: dict = Depends(require_auth),
     cursor: str | None = Query(default=None),
@@ -668,6 +810,34 @@ async def get_marketplace_withdrawals(
 
 
 _CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc", "popularity", "reputation"})
+
+
+class MarketplaceToolSummary(BaseModel):
+    name: str
+    qualified_name: str
+    tool_name: str
+    display_name: str
+    description: str = Field(..., description="Marketplace-facing description.")
+    short_description: str = Field(..., description="Internal/short description.")
+    input_schema: dict[str, Any]
+    cost_usdc: int
+    tool_type: str
+    category: str
+    total_calls: int
+    reputation_score: float
+    health_status: str
+    is_healthy: bool
+    author: str = Field(..., description="Display name; kept for backward compatibility.")
+    author_slug: str = Field(..., description="Canonical author org slug filter key.")
+
+
+class MarketplaceCatalogResponse(BaseModel):
+    tools: list[MarketplaceToolSummary]
+    next_cursor: str | None = None
+
+
+class MarketplaceCatalogDetailResponse(BaseModel):
+    tool: MarketplaceToolSummary
 
 
 def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
@@ -704,7 +874,7 @@ def _escape_llms_text(value: Any) -> str:
     return str(value or "").replace("\r", " ").replace("\n", " ").replace("|", "-").strip()
 
 
-@router.get("/marketplace/catalog", tags=["Marketplace"])
+@router.get("/marketplace/catalog", tags=["Marketplace"], response_model=MarketplaceCatalogResponse)
 async def get_marketplace_catalog_endpoint(
     request: Request,
     org_slug: str | None = None,
@@ -778,7 +948,11 @@ async def get_marketplace_catalog_endpoint(
     )
 
 
-@router.get("/marketplace/catalog/{org_slug}/{tool_name}", tags=["Marketplace"])
+@router.get(
+    "/marketplace/catalog/{org_slug}/{tool_name}",
+    tags=["Marketplace"],
+    response_model=MarketplaceCatalogDetailResponse,
+)
 async def get_marketplace_catalog_detail(
     request: Request,
     org_slug: str,
@@ -808,7 +982,20 @@ class RunFeedbackRequest(BaseModel):
     comment: str = Field(default="", max_length=1000)
 
 
-@router.post("/marketplace/tools/{org_slug}/{tool_name}/feedback", tags=["Marketplace"])
+class RunFeedbackResponse(BaseModel):
+    id: str = Field(..., description="Feedback record ID.")
+    run_id: str
+    qualified_tool_name: str = Field(..., description="'{org_slug}/{tool_name}' the feedback applies to.")
+    rating: int = Field(..., ge=-1, le=1)
+    created_at: str = Field(..., description="ISO 8601 creation timestamp.")
+
+
+@router.post(
+    "/marketplace/tools/{org_slug}/{tool_name}/feedback",
+    tags=["Marketplace"],
+    response_model=RunFeedbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def submit_marketplace_tool_feedback(
     org_slug: str,
     tool_name: str,
@@ -864,7 +1051,16 @@ async def submit_marketplace_tool_feedback(
     )
 
 
-@router.get("/marketplace/authors/{org_slug}", tags=["Marketplace"])
+class MarketplaceAuthorProfileResponse(BaseModel):
+    org_slug: str
+    org_name: str
+    tool_count: int
+    total_calls: int
+    tools: list[MarketplaceToolSummary]
+    next_cursor: str | None = None
+
+
+@router.get("/marketplace/authors/{org_slug}", tags=["Marketplace"], response_model=MarketplaceAuthorProfileResponse)
 async def get_marketplace_author_profile(
     request: Request,
     org_slug: str,
@@ -985,7 +1181,20 @@ class SubscribeRequest(BaseModel):
     qualified_tool_name: str = Field(..., min_length=3, max_length=128, pattern=r"^[a-z0-9_-]+/[a-z0-9_]+$")
 
 
-@router.post("/marketplace/subscriptions", tags=["Marketplace"])
+class MarketplaceSubscriptionResponse(BaseModel):
+    id: str
+    org_id: str
+    qualified_tool_name: str
+    is_active: bool
+    subscribed_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.post(
+    "/marketplace/subscriptions",
+    tags=["Marketplace"],
+    response_model=MarketplaceSubscriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def subscribe_to_marketplace_tool(
     body: SubscribeRequest,
     payload: dict = Depends(require_auth),
@@ -1015,7 +1224,17 @@ async def subscribe_to_marketplace_tool(
     )
 
 
-@router.get("/marketplace/subscriptions", tags=["Marketplace"])
+class MarketplaceSubscriptionItem(BaseModel):
+    id: str
+    qualified_tool_name: str
+    subscribed_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class MarketplaceSubscriptionListResponse(BaseModel):
+    subscriptions: list[MarketplaceSubscriptionItem]
+
+
+@router.get("/marketplace/subscriptions", tags=["Marketplace"], response_model=MarketplaceSubscriptionListResponse)
 async def list_marketplace_subscriptions(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -1038,7 +1257,11 @@ async def list_marketplace_subscriptions(
     )
 
 
-@router.delete("/marketplace/subscriptions/{subscription_id}", tags=["Marketplace"])
+class UnsubscribeResponse(BaseModel):
+    unsubscribed: Literal[True]
+
+
+@router.delete("/marketplace/subscriptions/{subscription_id}", tags=["Marketplace"], response_model=UnsubscribeResponse)
 async def unsubscribe_from_marketplace_tool(
     subscription_id: str,
     payload: dict = Depends(require_auth),

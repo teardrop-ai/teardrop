@@ -171,7 +171,7 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
     }
 
 
-@router.post("/tools", tags=["Tools"])
+@router.post("/tools", tags=["Tools"], response_model=OrgToolResponse, status_code=status.HTTP_201_CREATED)
 async def create_tool(
     body: CreateOrgToolRequest,
     payload: dict = Depends(require_auth),
@@ -264,7 +264,7 @@ async def create_tool(
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=_org_tool_to_response(tool))
 
 
-@router.get("/tools", tags=["Tools"])
+@router.get("/tools", tags=["Tools"], response_model=list[OrgToolResponse])
 async def list_tools(
     payload: dict = Depends(require_auth),
     active_only: bool = Query(default=True, description="When false, includes inactive (paused) tools in the response."),
@@ -275,7 +275,7 @@ async def list_tools(
     return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
 
 
-@router.get("/tools/{tool_id}", tags=["Tools"])
+@router.get("/tools/{tool_id}", tags=["Tools"], response_model=OrgToolResponse)
 async def get_tool(
     tool_id: str,
     payload: dict = Depends(require_auth),
@@ -288,7 +288,7 @@ async def get_tool(
     return JSONResponse(content=_org_tool_to_response(tool))
 
 
-@router.patch("/tools/{tool_id}", tags=["Tools"])
+@router.patch("/tools/{tool_id}", tags=["Tools"], response_model=OrgToolResponse)
 async def patch_tool(
     tool_id: str,
     body: UpdateOrgToolRequest,
@@ -376,7 +376,11 @@ async def patch_tool(
     return JSONResponse(content=_org_tool_to_response(tool))
 
 
-@router.delete("/tools/{tool_id}", tags=["Tools"])
+class ToolDeletedResponse(BaseModel):
+    status: Literal["deleted"]
+
+
+@router.delete("/tools/{tool_id}", tags=["Tools"], response_model=ToolDeletedResponse)
 async def remove_tool(
     tool_id: str,
     payload: dict = Depends(require_auth),

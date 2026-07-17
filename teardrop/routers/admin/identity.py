@@ -22,6 +22,11 @@ class CreateOrgRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
 
 
+class CreateOrgResponse(BaseModel):
+    id: str
+    name: str
+
+
 class CreateUserRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=320)
     secret: str = Field(..., min_length=8, max_length=128)
@@ -29,7 +34,16 @@ class CreateUserRequest(BaseModel):
     role: str = "user"
 
 
-@router.post("/admin/orgs", tags=["Admin", "Admin / Identity"])
+class CreateUserResponse(BaseModel):
+    id: str
+    email: str
+    org_id: str
+    role: str
+
+
+@router.post(
+    "/admin/orgs", tags=["Admin", "Admin / Identity"], response_model=CreateOrgResponse, status_code=status.HTTP_201_CREATED
+)
 async def admin_create_org(
     body: CreateOrgRequest,
     _admin: dict = Depends(require_admin),
@@ -42,7 +56,12 @@ async def admin_create_org(
     )
 
 
-@router.post("/admin/users", tags=["Admin", "Admin / Identity"])
+@router.post(
+    "/admin/users",
+    tags=["Admin", "Admin / Identity"],
+    response_model=CreateUserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def admin_create_user(
     body: CreateUserRequest,
     _admin: dict = Depends(require_admin),
@@ -64,7 +83,19 @@ class CreateClientCredentialsRequest(BaseModel):
     org_id: str
 
 
-@router.post("/admin/client-credentials", tags=["Admin", "Admin / Identity"])
+class CreateClientCredentialsResponse(BaseModel):
+    client_id: str
+    client_secret: str = Field(..., description="Plaintext secret — shown once, only its hash is persisted.")
+    org_id: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.post(
+    "/admin/client-credentials",
+    tags=["Admin", "Admin / Identity"],
+    response_model=CreateClientCredentialsResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def admin_create_client_credentials(
     body: CreateClientCredentialsRequest,
     _admin: dict = Depends(require_admin),

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -64,7 +65,23 @@ def _llm_config_to_response(cfg: OrgLlmConfig) -> dict:
     }
 
 
-@router.get("/llm-config", tags=["LLM Config"])
+class LlmConfigResponse(BaseModel):
+    configured: bool
+    org_id: str | None = Field(default=None, description="Present when configured=true.")
+    provider: str
+    model: str
+    has_api_key: bool | None = Field(default=None, description="Present when configured=true.")
+    api_base: str | None = None
+    max_tokens: int | None = Field(default=None, description="Present when configured=true.")
+    temperature: float | None = Field(default=None, description="Present when configured=true.")
+    timeout_seconds: int | None = Field(default=None, description="Present when configured=true.")
+    routing_preference: str | None = Field(default=None, description="Present when configured=true.")
+    is_byok: bool | None = Field(default=None, description="Present when configured=true.")
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp; present when configured=true.")
+    updated_at: str | None = Field(default=None, description="ISO 8601 timestamp; present when configured=true.")
+
+
+@router.get("/llm-config", tags=["LLM Config"], response_model=LlmConfigResponse)
 async def get_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -82,7 +99,7 @@ async def get_llm_config_endpoint(
     return JSONResponse(content={"configured": True, **_llm_config_to_response(cfg)})
 
 
-@router.put("/llm-config", tags=["LLM Config"])
+@router.put("/llm-config", tags=["LLM Config"], response_model=LlmConfigResponse)
 async def upsert_llm_config_endpoint(
     body: UpsertLlmConfigRequest,
     payload: dict = Depends(require_auth),
@@ -184,7 +201,11 @@ async def upsert_llm_config_endpoint(
     )
 
 
-@router.delete("/llm-config", tags=["LLM Config"])
+class LlmConfigDeletedResponse(BaseModel):
+    status: Literal["deleted"]
+
+
+@router.delete("/llm-config", tags=["LLM Config"], response_model=LlmConfigDeletedResponse)
 async def delete_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -199,7 +220,14 @@ async def delete_llm_config_endpoint(
 # ─── Model benchmarks endpoints ──────────────────────────────────────────────
 
 
-@router.get("/models/benchmarks", tags=["Models"])
+class ModelBenchmarksResponse(BaseModel):
+    models: list[dict[str, Any]] = Field(
+        ..., description="Model catalogue entries merged with live pricing/benchmark data; shape varies by provider."
+    )
+    updated_at: str | None = Field(default=None, description="ISO 8601 timestamp; null on query failure.")
+
+
+@router.get("/models/benchmarks", tags=["Models"], response_model=ModelBenchmarksResponse)
 async def get_models_benchmarks() -> JSONResponse:
     """Public: model catalogue with live operational benchmarks."""
     try:
@@ -210,7 +238,7 @@ async def get_models_benchmarks() -> JSONResponse:
     return JSONResponse(content=data)
 
 
-@router.get("/models/benchmarks/org", tags=["Models"])
+@router.get("/models/benchmarks/org", tags=["Models"], response_model=ModelBenchmarksResponse)
 async def get_org_models_benchmarks(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:

@@ -1,6 +1,213 @@
 {
   "components": {
     "schemas": {
+      "A2AAgentDeletedResponse": {
+        "properties": {
+          "deleted": {
+            "description": "The deleted agent's id.",
+            "title": "Deleted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "A2AAgentDeletedResponse",
+        "type": "object"
+      },
+      "A2AAgentListItem": {
+        "properties": {
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if unavailable.",
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jwt_forward": {
+            "title": "Jwt Forward",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "max_cost_usdc": {
+            "title": "Max Cost Usdc",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "require_x402": {
+            "title": "Require X402",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "agent_url",
+          "max_cost_usdc",
+          "require_x402",
+          "jwt_forward"
+        ],
+        "title": "A2AAgentListItem",
+        "type": "object"
+      },
+      "A2AAgentResponse": {
+        "properties": {
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jwt_forward": {
+            "title": "Jwt Forward",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "max_cost_usdc": {
+            "title": "Max Cost Usdc",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "require_x402": {
+            "title": "Require X402",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "agent_url",
+          "max_cost_usdc",
+          "require_x402",
+          "jwt_forward"
+        ],
+        "title": "A2AAgentResponse",
+        "type": "object"
+      },
+      "A2ADelegationEvent": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "billing_method": {
+            "title": "Billing Method",
+            "type": "string"
+          },
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if unavailable.",
+            "title": "Created At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settlement_tx": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Tx"
+          },
+          "task_status": {
+            "title": "Task Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "agent_url",
+          "task_status",
+          "cost_usdc",
+          "billing_method"
+        ],
+        "title": "A2ADelegationEvent",
+        "type": "object"
+      },
       "AcceptInviteRequest": {
         "properties": {
           "email": {
@@ -26,6 +233,305 @@
           "password"
         ],
         "title": "AcceptInviteRequest",
+        "type": "object"
+      },
+      "AdminMemoryItem": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "user_id",
+          "created_at"
+        ],
+        "title": "AdminMemoryItem",
+        "type": "object"
+      },
+      "AdminMemoryListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminMemoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "AdminMemoryListResponse",
+        "type": "object"
+      },
+      "AdminMemoryPurgeResponse": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "status": {
+            "const": "purged",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "deleted"
+        ],
+        "title": "AdminMemoryPurgeResponse",
+        "type": "object"
+      },
+      "AdminTopupResponse": {
+        "properties": {
+          "new_balance_usdc": {
+            "title": "New Balance Usdc",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "new_balance_usdc"
+        ],
+        "title": "AdminTopupResponse",
+        "type": "object"
+      },
+      "AdminWithdrawalActionResponse": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "amount_usdc",
+          "status"
+        ],
+        "title": "AdminWithdrawalActionResponse",
+        "type": "object"
+      },
+      "AdminWithdrawalItem": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null until settled.",
+            "title": "Settled At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "wallet": {
+            "title": "Wallet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "amount_usdc",
+          "wallet",
+          "status",
+          "created_at"
+        ],
+        "title": "AdminWithdrawalItem",
+        "type": "object"
+      },
+      "AdminWithdrawalListResponse": {
+        "properties": {
+          "withdrawals": {
+            "items": {
+              "$ref": "#/components/schemas/AdminWithdrawalItem"
+            },
+            "title": "Withdrawals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "withdrawals"
+        ],
+        "title": "AdminWithdrawalListResponse",
+        "type": "object"
+      },
+      "AgentDecisionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentDecisionRecord"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO datetime cursor for the next page; null when no more items remain.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentDecisionListResponse",
+        "type": "object"
+      },
+      "AgentDecisionRecord": {
+        "properties": {
+          "action": {
+            "default": "",
+            "description": "Action the planner took.",
+            "title": "Action",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Planner confidence score, if recorded.",
+            "title": "Confidence"
+          },
+          "created_at": {
+            "description": "ISO 8601 creation timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "description": "Decision record ID (UUID string).",
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "-1 (bad), 0 (neutral/unlabeled), or 1 (good).",
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Outcome",
+            "type": "integer"
+          },
+          "outcome_source": {
+            "default": "",
+            "description": "Origin of the outcome label (e.g. 'feedback'); empty if unlabeled.",
+            "title": "Outcome Source",
+            "type": "string"
+          },
+          "reasoning": {
+            "default": "",
+            "description": "Planner's stated reasoning for the action.",
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Run this decision summarizes.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "task_class": {
+            "default": "",
+            "description": "Auto-classified task type; empty string if unclassified.",
+            "title": "Task Class",
+            "type": "string"
+          },
+          "tool_names": {
+            "description": "Tools used while making this decision.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "outcome",
+          "created_at"
+        ],
+        "title": "AgentDecisionRecord",
         "type": "object"
       },
       "AgentRunRequest": {
@@ -71,6 +577,355 @@
         "title": "AgentRunRequest",
         "type": "object"
       },
+      "AgentToolItem": {
+        "properties": {
+          "access_mode": {
+            "enum": [
+              "included",
+              "subscribed"
+            ],
+            "title": "Access Mode",
+            "type": "string"
+          },
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "qualified_name": {
+            "title": "Qualified Name",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "platform",
+              "org",
+              "marketplace"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "qualified_name",
+          "source",
+          "access_mode",
+          "display_name",
+          "description",
+          "cost_usdc",
+          "input_schema"
+        ],
+        "title": "AgentToolItem",
+        "type": "object"
+      },
+      "AgentWalletDeactivatedResponse": {
+        "properties": {
+          "status": {
+            "const": "deactivated",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AgentWalletDeactivatedResponse",
+        "type": "object"
+      },
+      "AgentWalletResponse": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "balance_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only if the on-chain balance fetch failed.",
+            "title": "Balance Error"
+          },
+          "balance_usdc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only present when include_balance=true was requested.",
+            "title": "Balance Usdc"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "wallet_type": {
+            "title": "Wallet Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "address",
+          "chain_id",
+          "wallet_type",
+          "is_active",
+          "created_at"
+        ],
+        "title": "AgentWalletResponse",
+        "type": "object"
+      },
+      "AuthMeResponse": {
+        "properties": {
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Wallet address; present only for SIWE sessions.",
+            "title": "Address"
+          },
+          "auth_method": {
+            "title": "Auth Method",
+            "type": "string"
+          },
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only for SIWE sessions.",
+            "title": "Chain Id"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "org_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when org_id is set.",
+            "title": "Org Name"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "org_id",
+          "role",
+          "auth_method",
+          "email"
+        ],
+        "title": "AuthMeResponse",
+        "type": "object"
+      },
+      "BillingBalanceResponse": {
+        "properties": {
+          "balance_usdc": {
+            "title": "Balance Usdc",
+            "type": "integer"
+          },
+          "daily_spend_usdc": {
+            "title": "Daily Spend Usdc",
+            "type": "integer"
+          },
+          "is_paused": {
+            "title": "Is Paused",
+            "type": "boolean"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "spending_limit_active": {
+            "title": "Spending Limit Active",
+            "type": "boolean"
+          },
+          "spending_limit_usdc": {
+            "title": "Spending Limit Usdc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "org_id",
+          "balance_usdc",
+          "spending_limit_usdc",
+          "spending_limit_active",
+          "is_paused",
+          "daily_spend_usdc"
+        ],
+        "title": "BillingBalanceResponse",
+        "type": "object"
+      },
+      "BillingHistoryItem": {
+        "properties": {
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "platform_fee_usdc": {
+            "title": "Platform Fee Usdc",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settlement_status": {
+            "title": "Settlement Status",
+            "type": "string"
+          },
+          "settlement_tx": {
+            "title": "Settlement Tx",
+            "type": "string"
+          },
+          "tokens_in": {
+            "title": "Tokens In",
+            "type": "integer"
+          },
+          "tokens_out": {
+            "title": "Tokens Out",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "tool_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "tokens_in",
+          "tokens_out",
+          "tool_calls",
+          "tool_names",
+          "duration_ms",
+          "cost_usdc",
+          "platform_fee_usdc",
+          "settlement_tx",
+          "settlement_status",
+          "created_at"
+        ],
+        "title": "BillingHistoryItem",
+        "type": "object"
+      },
+      "BillingPricingResponse": {
+        "properties": {
+          "billing_enabled": {
+            "title": "Billing Enabled",
+            "type": "boolean"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "x402 network name; only present when billing is enabled.",
+            "title": "Network"
+          },
+          "pricing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PricingRuleWithOverrides"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted/null when billing is disabled or no pricing rule is configured."
+          }
+        },
+        "required": [
+          "billing_enabled"
+        ],
+        "title": "BillingPricingResponse",
+        "type": "object"
+      },
       "CompleteWithdrawalRequest": {
         "properties": {
           "tx_hash": {
@@ -84,6 +939,25 @@
           "tx_hash"
         ],
         "title": "CompleteWithdrawalRequest",
+        "type": "object"
+      },
+      "CompleteWithdrawalResponse": {
+        "properties": {
+          "status": {
+            "const": "completed",
+            "title": "Status",
+            "type": "string"
+          },
+          "tx_hash": {
+            "title": "Tx Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "tx_hash"
+        ],
+        "title": "CompleteWithdrawalResponse",
         "type": "object"
       },
       "CreateA2AAgentRequest": {
@@ -149,6 +1023,36 @@
         "title": "CreateClientCredentialsRequest",
         "type": "object"
       },
+      "CreateClientCredentialsResponse": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_secret": {
+            "description": "Plaintext secret \u2014 shown once, only its hash is persisted.",
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "client_secret",
+          "org_id",
+          "created_at"
+        ],
+        "title": "CreateClientCredentialsResponse",
+        "type": "object"
+      },
       "CreateEventTriggerRequest": {
         "properties": {
           "callback_url": {
@@ -204,6 +1108,37 @@
           }
         },
         "title": "CreateInviteRequest",
+        "type": "object"
+      },
+      "CreateInviteResponse": {
+        "properties": {
+          "expires_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "invite_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when APP_BASE_URL is not configured.",
+            "title": "Invite Url"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "title": "CreateInviteResponse",
         "type": "object"
       },
       "CreateMcpServerRequest": {
@@ -278,6 +1213,24 @@
           "name"
         ],
         "title": "CreateOrgRequest",
+        "type": "object"
+      },
+      "CreateOrgResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "CreateOrgResponse",
         "type": "object"
       },
       "CreateOrgToolRequest": {
@@ -475,6 +1428,373 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "CreateUserResponse": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "org_id",
+          "role"
+        ],
+        "title": "CreateUserResponse",
+        "type": "object"
+      },
+      "CreditHistoryEntry": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "balance_usdc_after": {
+            "title": "Balance Usdc After",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "operation",
+          "amount_usdc",
+          "balance_usdc_after",
+          "reason",
+          "created_at"
+        ],
+        "title": "CreditHistoryEntry",
+        "type": "object"
+      },
+      "CreditHistoryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CreditHistoryEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO datetime cursor for the next page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CreditHistoryResponse",
+        "type": "object"
+      },
+      "EventDispatchResponse": {
+        "properties": {
+          "result_path": {
+            "description": "Path to fetch this run's result: /agent/event-triggers/{id}/runs.",
+            "title": "Result Path",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "duplicate"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "schedule_id",
+          "result_path"
+        ],
+        "title": "EventDispatchResponse",
+        "type": "object"
+      },
+      "EventTriggerCreatedResponse": {
+        "properties": {
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url"
+          },
+          "consecutive_failures": {
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "event_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'/agent/events/{trigger_token}'; null if unset.",
+            "title": "Event Path"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null until first run.",
+            "title": "Last Run At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "secret": {
+            "description": "Plaintext trigger secret \u2014 shown once, only its hash is persisted.",
+            "title": "Secret",
+            "type": "string"
+          },
+          "trigger_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Token"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "user_id",
+          "name",
+          "prompt",
+          "schedule_kind",
+          "enabled",
+          "consecutive_failures",
+          "created_at",
+          "updated_at",
+          "secret"
+        ],
+        "title": "EventTriggerCreatedResponse",
+        "type": "object"
+      },
+      "EventTriggerItem": {
+        "properties": {
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url"
+          },
+          "consecutive_failures": {
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "event_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'/agent/events/{trigger_token}'; null if unset.",
+            "title": "Event Path"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null until first run.",
+            "title": "Last Run At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "trigger_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Token"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "user_id",
+          "name",
+          "prompt",
+          "schedule_kind",
+          "enabled",
+          "consecutive_failures",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EventTriggerItem",
+        "type": "object"
+      },
+      "EventTriggerListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventTriggerItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "EventTriggerListResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -486,6 +1806,153 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImportPreviewDroppedFeatures": {
+        "properties": {
+          "input": {
+            "description": "Input schema features dropped during normalization.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Input",
+            "type": "array"
+          },
+          "output": {
+            "description": "Output schema features dropped during normalization.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Output",
+            "type": "array"
+          }
+        },
+        "title": "ImportPreviewDroppedFeatures",
+        "type": "object"
+      },
+      "ImportPreviewSchemaStatus": {
+        "properties": {
+          "input": {
+            "description": "'supported', 'partial', or 'synthesized'.",
+            "title": "Input",
+            "type": "string"
+          },
+          "output": {
+            "description": "'supported', 'partial', or 'synthesized'.",
+            "title": "Output",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input",
+          "output"
+        ],
+        "title": "ImportPreviewSchemaStatus",
+        "type": "object"
+      },
+      "InvoiceItem": {
+        "properties": {
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "platform_fee_usdc": {
+            "title": "Platform Fee Usdc",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settlement_status": {
+            "title": "Settlement Status",
+            "type": "string"
+          },
+          "settlement_tx": {
+            "title": "Settlement Tx",
+            "type": "string"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "tokens_in": {
+            "title": "Tokens In",
+            "type": "integer"
+          },
+          "tokens_out": {
+            "title": "Tokens Out",
+            "type": "integer"
+          },
+          "tool_calls": {
+            "title": "Tool Calls",
+            "type": "integer"
+          },
+          "tool_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "tokens_in",
+          "tokens_out",
+          "tool_calls",
+          "tool_names",
+          "duration_ms",
+          "cost_usdc",
+          "platform_fee_usdc",
+          "settlement_tx",
+          "settlement_status",
+          "created_at",
+          "thread_id"
+        ],
+        "title": "InvoiceItem",
+        "type": "object"
+      },
+      "InvoiceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InvoiceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO datetime cursor for the next page.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "InvoiceListResponse",
         "type": "object"
       },
       "LinkWalletRequest": {
@@ -506,6 +1973,185 @@
         "title": "LinkWalletRequest",
         "type": "object"
       },
+      "LinkWalletResponse": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "address",
+          "chain_id"
+        ],
+        "title": "LinkWalletResponse",
+        "type": "object"
+      },
+      "LlmConfigDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LlmConfigDeletedResponse",
+        "type": "object"
+      },
+      "LlmConfigResponse": {
+        "properties": {
+          "api_base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Base"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; present when configured=true.",
+            "title": "Created At"
+          },
+          "has_api_key": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Has Api Key"
+          },
+          "is_byok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Is Byok"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Max Tokens"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "org_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Org Id"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "routing_preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Routing Preference"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Temperature"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Timeout Seconds"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; present when configured=true.",
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "configured",
+          "provider",
+          "model"
+        ],
+        "title": "LlmConfigResponse",
+        "type": "object"
+      },
       "LogoutRequest": {
         "properties": {
           "refresh_token": {
@@ -517,6 +2163,316 @@
           "refresh_token"
         ],
         "title": "LogoutRequest",
+        "type": "object"
+      },
+      "MarketplaceAuthorConfigResponse": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if unconfigured.",
+            "title": "Created At"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "settlement_wallet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Wallet"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if unconfigured.",
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "org_id"
+        ],
+        "title": "MarketplaceAuthorConfigResponse",
+        "type": "object"
+      },
+      "MarketplaceAuthorProfileResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "org_name": {
+            "title": "Org Name",
+            "type": "string"
+          },
+          "org_slug": {
+            "title": "Org Slug",
+            "type": "string"
+          },
+          "tool_count": {
+            "title": "Tool Count",
+            "type": "integer"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceToolSummary"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "total_calls": {
+            "title": "Total Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "org_slug",
+          "org_name",
+          "tool_count",
+          "total_calls",
+          "tools"
+        ],
+        "title": "MarketplaceAuthorProfileResponse",
+        "type": "object"
+      },
+      "MarketplaceBalanceResponse": {
+        "properties": {
+          "balance_usdc": {
+            "title": "Balance Usdc",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "balance_usdc"
+        ],
+        "title": "MarketplaceBalanceResponse",
+        "type": "object"
+      },
+      "MarketplaceCatalogDetailResponse": {
+        "properties": {
+          "tool": {
+            "$ref": "#/components/schemas/MarketplaceToolSummary"
+          }
+        },
+        "required": [
+          "tool"
+        ],
+        "title": "MarketplaceCatalogDetailResponse",
+        "type": "object"
+      },
+      "MarketplaceCatalogResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceToolSummary"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools"
+        ],
+        "title": "MarketplaceCatalogResponse",
+        "type": "object"
+      },
+      "MarketplaceEarningEntry": {
+        "properties": {
+          "author_share_usdc": {
+            "title": "Author Share Usdc",
+            "type": "integer"
+          },
+          "caller_org_id": {
+            "title": "Caller Org Id",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "platform_share_usdc": {
+            "title": "Platform Share Usdc",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "total_cost_usdc": {
+            "title": "Total Cost Usdc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "tool_name",
+          "caller_org_id",
+          "total_cost_usdc",
+          "author_share_usdc",
+          "platform_share_usdc",
+          "status",
+          "created_at"
+        ],
+        "title": "MarketplaceEarningEntry",
+        "type": "object"
+      },
+      "MarketplaceEarningsByToolEntry": {
+        "properties": {
+          "pending_author_share_usdc": {
+            "title": "Pending Author Share Usdc",
+            "type": "integer"
+          },
+          "settled_author_share_usdc": {
+            "title": "Settled Author Share Usdc",
+            "type": "integer"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "total_amount_usdc": {
+            "title": "Total Amount Usdc",
+            "type": "integer"
+          },
+          "total_author_share_usdc": {
+            "title": "Total Author Share Usdc",
+            "type": "integer"
+          },
+          "total_calls": {
+            "title": "Total Calls",
+            "type": "integer"
+          },
+          "total_platform_share_usdc": {
+            "title": "Total Platform Share Usdc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tool_name",
+          "total_calls",
+          "total_amount_usdc",
+          "total_author_share_usdc",
+          "pending_author_share_usdc",
+          "settled_author_share_usdc",
+          "total_platform_share_usdc"
+        ],
+        "title": "MarketplaceEarningsByToolEntry",
+        "type": "object"
+      },
+      "MarketplaceEarningsByToolResponse": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceEarningsByToolEntry"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools"
+        ],
+        "title": "MarketplaceEarningsByToolResponse",
+        "type": "object"
+      },
+      "MarketplaceEarningsResponse": {
+        "properties": {
+          "earnings": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceEarningEntry"
+            },
+            "title": "Earnings",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "earnings"
+        ],
+        "title": "MarketplaceEarningsResponse",
+        "type": "object"
+      },
+      "MarketplaceImportPreviewError": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "remote_tool_name": {
+            "title": "Remote Tool Name",
+            "type": "string"
+          },
+          "status_code": {
+            "title": "Status Code",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "remote_tool_name",
+          "status_code",
+          "error"
+        ],
+        "title": "MarketplaceImportPreviewError",
         "type": "object"
       },
       "MarketplaceImportPreviewRequest": {
@@ -548,6 +2504,196 @@
         "title": "MarketplaceImportPreviewRequest",
         "type": "object"
       },
+      "MarketplaceImportPreviewResponse": {
+        "properties": {
+          "blockers": {
+            "description": "Reasons publishing is blocked, e.g. 'requires_org_admin'.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "can_publish": {
+            "description": "False if the caller/org cannot currently publish (see blockers).",
+            "title": "Can Publish",
+            "type": "boolean"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceImportPreviewError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          },
+          "slots_remaining": {
+            "description": "Org tool slots remaining before hitting the quota.",
+            "title": "Slots Remaining",
+            "type": "integer"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceImportPreviewTool"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "server_id",
+          "slots_remaining",
+          "can_publish",
+          "tools",
+          "errors"
+        ],
+        "title": "MarketplaceImportPreviewResponse",
+        "type": "object"
+      },
+      "MarketplaceImportPreviewTool": {
+        "properties": {
+          "category": {
+            "default": "",
+            "description": "Suggested marketplace category; blank during preview.",
+            "title": "Category",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "dropped_schema_features": {
+            "$ref": "#/components/schemas/ImportPreviewDroppedFeatures"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "description": "Normalized Draft 7 input schema.",
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "marketplace_description": {
+            "title": "Marketplace Description",
+            "type": "string"
+          },
+          "name_adjusted": {
+            "description": "True if the proposed name differs from the remote tool name.",
+            "title": "Name Adjusted",
+            "type": "boolean"
+          },
+          "name_collision_resolved": {
+            "description": "True if the name was renamed to resolve a collision.",
+            "title": "Name Collision Resolved",
+            "type": "boolean"
+          },
+          "output_schema": {
+            "additionalProperties": true,
+            "description": "Normalized (or synthesized) Draft 7 output schema.",
+            "title": "Output Schema",
+            "type": "object"
+          },
+          "proposed_name": {
+            "description": "Teardrop-compatible name proposed for publishing.",
+            "title": "Proposed Name",
+            "type": "string"
+          },
+          "publishable": {
+            "description": "Shortcut for 'not quota_exceeded'.",
+            "title": "Publishable",
+            "type": "boolean"
+          },
+          "quota_exceeded": {
+            "description": "True if importing this tool would exceed the org tool quota.",
+            "title": "Quota Exceeded",
+            "type": "boolean"
+          },
+          "remote_tool_name": {
+            "description": "Tool name as reported by the remote MCP server.",
+            "title": "Remote Tool Name",
+            "type": "string"
+          },
+          "schema_status": {
+            "$ref": "#/components/schemas/ImportPreviewSchemaStatus"
+          },
+          "suggested_base_price_usdc": {
+            "description": "Recommended marketplace price in atomic USDC.",
+            "title": "Suggested Base Price Usdc",
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "Human-readable notes about schema/name adjustments.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "remote_tool_name",
+          "proposed_name",
+          "description",
+          "marketplace_description",
+          "input_schema",
+          "output_schema",
+          "schema_status",
+          "dropped_schema_features",
+          "name_adjusted",
+          "name_collision_resolved",
+          "quota_exceeded",
+          "publishable",
+          "suggested_base_price_usdc"
+        ],
+        "title": "MarketplaceImportPreviewTool",
+        "type": "object"
+      },
+      "MarketplaceImportPublishCreatedItem": {
+        "properties": {
+          "remote_tool_name": {
+            "title": "Remote Tool Name",
+            "type": "string"
+          },
+          "tool": {
+            "$ref": "#/components/schemas/MarketplaceImportPublishedTool"
+          }
+        },
+        "required": [
+          "remote_tool_name",
+          "tool"
+        ],
+        "title": "MarketplaceImportPublishCreatedItem",
+        "type": "object"
+      },
+      "MarketplaceImportPublishError": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "remote_tool_name": {
+            "title": "Remote Tool Name",
+            "type": "string"
+          },
+          "status_code": {
+            "title": "Status Code",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "remote_tool_name",
+          "name",
+          "status_code",
+          "error"
+        ],
+        "title": "MarketplaceImportPublishError",
+        "type": "object"
+      },
       "MarketplaceImportPublishRequest": {
         "properties": {
           "server_id": {
@@ -571,6 +2717,35 @@
           "tools"
         ],
         "title": "MarketplaceImportPublishRequest",
+        "type": "object"
+      },
+      "MarketplaceImportPublishResponse": {
+        "properties": {
+          "created": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceImportPublishCreatedItem"
+            },
+            "title": "Created",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceImportPublishError"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "created",
+          "errors"
+        ],
+        "title": "MarketplaceImportPublishResponse",
         "type": "object"
       },
       "MarketplaceImportPublishToolRequest": {
@@ -661,6 +2836,727 @@
         "title": "MarketplaceImportPublishToolRequest",
         "type": "object"
       },
+      "MarketplaceImportPublishedTool": {
+        "properties": {
+          "base_price_usdc": {
+            "title": "Base Price Usdc",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "mcp_server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server Id"
+          },
+          "mcp_tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Tool Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "publish_as_mcp": {
+            "title": "Publish As Mcp",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "org_id",
+          "publish_as_mcp",
+          "base_price_usdc"
+        ],
+        "title": "MarketplaceImportPublishedTool",
+        "type": "object"
+      },
+      "MarketplaceSubscriptionItem": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "qualified_tool_name": {
+            "title": "Qualified Tool Name",
+            "type": "string"
+          },
+          "subscribed_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Subscribed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "qualified_tool_name",
+          "subscribed_at"
+        ],
+        "title": "MarketplaceSubscriptionItem",
+        "type": "object"
+      },
+      "MarketplaceSubscriptionListResponse": {
+        "properties": {
+          "subscriptions": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceSubscriptionItem"
+            },
+            "title": "Subscriptions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "subscriptions"
+        ],
+        "title": "MarketplaceSubscriptionListResponse",
+        "type": "object"
+      },
+      "MarketplaceSubscriptionResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "qualified_tool_name": {
+            "title": "Qualified Tool Name",
+            "type": "string"
+          },
+          "subscribed_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Subscribed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "qualified_tool_name",
+          "is_active",
+          "subscribed_at"
+        ],
+        "title": "MarketplaceSubscriptionResponse",
+        "type": "object"
+      },
+      "MarketplaceSweepResponse": {
+        "properties": {
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed"
+        ],
+        "title": "MarketplaceSweepResponse",
+        "type": "object"
+      },
+      "MarketplaceToolSummary": {
+        "properties": {
+          "author": {
+            "description": "Display name; kept for backward compatibility.",
+            "title": "Author",
+            "type": "string"
+          },
+          "author_slug": {
+            "description": "Canonical author org slug filter key.",
+            "title": "Author Slug",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "description": {
+            "description": "Marketplace-facing description.",
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "health_status": {
+            "title": "Health Status",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "is_healthy": {
+            "title": "Is Healthy",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "qualified_name": {
+            "title": "Qualified Name",
+            "type": "string"
+          },
+          "reputation_score": {
+            "title": "Reputation Score",
+            "type": "number"
+          },
+          "short_description": {
+            "description": "Internal/short description.",
+            "title": "Short Description",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "tool_type": {
+            "title": "Tool Type",
+            "type": "string"
+          },
+          "total_calls": {
+            "title": "Total Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "qualified_name",
+          "tool_name",
+          "display_name",
+          "description",
+          "short_description",
+          "input_schema",
+          "cost_usdc",
+          "tool_type",
+          "category",
+          "total_calls",
+          "reputation_score",
+          "health_status",
+          "is_healthy",
+          "author",
+          "author_slug"
+        ],
+        "title": "MarketplaceToolSummary",
+        "type": "object"
+      },
+      "MarketplaceWithdrawalHistoryItem": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null until settled.",
+            "title": "Settled At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Hash"
+          },
+          "wallet": {
+            "title": "Wallet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amount_usdc",
+          "wallet",
+          "status",
+          "created_at"
+        ],
+        "title": "MarketplaceWithdrawalHistoryItem",
+        "type": "object"
+      },
+      "MarketplaceWithdrawalResponse": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "wallet": {
+            "title": "Wallet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "amount_usdc",
+          "wallet",
+          "status",
+          "created_at"
+        ],
+        "title": "MarketplaceWithdrawalResponse",
+        "type": "object"
+      },
+      "MarketplaceWithdrawalsListResponse": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "withdrawals": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceWithdrawalHistoryItem"
+            },
+            "title": "Withdrawals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "withdrawals"
+        ],
+        "title": "MarketplaceWithdrawalsListResponse",
+        "type": "object"
+      },
+      "McpDiscoverResponse": {
+        "properties": {
+          "server_id": {
+            "title": "Server Id",
+            "type": "string"
+          },
+          "tools": {
+            "description": "Raw MCP tool definitions as reported by the remote server.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "server_id",
+          "tools"
+        ],
+        "title": "McpDiscoverResponse",
+        "type": "object"
+      },
+      "McpServerDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "McpServerDeletedResponse",
+        "type": "object"
+      },
+      "McpServerResponse": {
+        "properties": {
+          "auth_header_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Header Name"
+          },
+          "auth_type": {
+            "title": "Auth Type",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "has_auth": {
+            "title": "Has Auth",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "url",
+          "auth_type",
+          "has_auth",
+          "auth_header_name",
+          "is_active",
+          "timeout_seconds",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "McpServerResponse",
+        "type": "object"
+      },
+      "MemoryCreatedResponse": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "created_at"
+        ],
+        "title": "MemoryCreatedResponse",
+        "type": "object"
+      },
+      "MemoryDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "MemoryDeletedResponse",
+        "type": "object"
+      },
+      "MemoryListItem": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "created_at"
+        ],
+        "title": "MemoryListItem",
+        "type": "object"
+      },
+      "MemoryListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "MemoryListResponse",
+        "type": "object"
+      },
+      "ModelBenchmarksResponse": {
+        "properties": {
+          "models": {
+            "description": "Model catalogue entries merged with live pricing/benchmark data; shape varies by provider.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null on query failure.",
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "title": "ModelBenchmarksResponse",
+        "type": "object"
+      },
+      "OrgA2AAgentDeletedResponse": {
+        "properties": {
+          "deleted": {
+            "description": "The deleted agent's id.",
+            "title": "Deleted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "OrgA2AAgentDeletedResponse",
+        "type": "object"
+      },
+      "OrgA2AAgentListItem": {
+        "properties": {
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if unavailable.",
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jwt_forward": {
+            "title": "Jwt Forward",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "max_cost_usdc": {
+            "title": "Max Cost Usdc",
+            "type": "integer"
+          },
+          "require_x402": {
+            "title": "Require X402",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "agent_url",
+          "max_cost_usdc",
+          "require_x402",
+          "jwt_forward"
+        ],
+        "title": "OrgA2AAgentListItem",
+        "type": "object"
+      },
+      "OrgA2AAgentResponse": {
+        "properties": {
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jwt_forward": {
+            "title": "Jwt Forward",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "max_cost_usdc": {
+            "title": "Max Cost Usdc",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "require_x402": {
+            "title": "Require X402",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "agent_url",
+          "max_cost_usdc",
+          "require_x402",
+          "jwt_forward"
+        ],
+        "title": "OrgA2AAgentResponse",
+        "type": "object"
+      },
       "OrgCreateA2AAgentRequest": {
         "properties": {
           "agent_url": {
@@ -704,6 +3600,372 @@
           "agent_url"
         ],
         "title": "OrgCreateA2AAgentRequest",
+        "type": "object"
+      },
+      "OrgCredentialItem": {
+        "properties": {
+          "client_id": {
+            "description": "M2M client ID.",
+            "title": "Client Id",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp the credential was created/rotated.",
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "created_at"
+        ],
+        "title": "OrgCredentialItem",
+        "type": "object"
+      },
+      "OrgCredentialRegenerateResponse": {
+        "properties": {
+          "client_id": {
+            "description": "Newly issued M2M client ID.",
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_secret": {
+            "description": "Plaintext client secret \u2014 shown once, never retrievable again.",
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp of this rotation.",
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "client_secret",
+          "created_at"
+        ],
+        "title": "OrgCredentialRegenerateResponse",
+        "type": "object"
+      },
+      "OrgSpendingConfigResponse": {
+        "properties": {
+          "balance_usdc": {
+            "title": "Balance Usdc",
+            "type": "integer"
+          },
+          "daily_spend_usdc": {
+            "title": "Daily Spend Usdc",
+            "type": "integer"
+          },
+          "is_paused": {
+            "title": "Is Paused",
+            "type": "boolean"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "spending_limit_usdc": {
+            "title": "Spending Limit Usdc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "org_id",
+          "balance_usdc",
+          "spending_limit_usdc",
+          "is_paused",
+          "daily_spend_usdc"
+        ],
+        "title": "OrgSpendingConfigResponse",
+        "type": "object"
+      },
+      "OrgToolResponse": {
+        "properties": {
+          "base_price_usdc": {
+            "title": "Base Price Usdc",
+            "type": "integer"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_auth": {
+            "title": "Has Auth",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "marketplace_description": {
+            "title": "Marketplace Description",
+            "type": "string"
+          },
+          "mcp_server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Server Id"
+          },
+          "mcp_tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Tool Name"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Schema"
+          },
+          "publish_as_mcp": {
+            "title": "Publish As Mcp",
+            "type": "boolean"
+          },
+          "timeout_seconds": {
+            "title": "Timeout Seconds",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "webhook_method": {
+            "title": "Webhook Method",
+            "type": "string"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "description",
+          "input_schema",
+          "output_schema",
+          "webhook_url",
+          "webhook_method",
+          "mcp_server_id",
+          "mcp_tool_name",
+          "has_auth",
+          "timeout_seconds",
+          "is_active",
+          "publish_as_mcp",
+          "marketplace_description",
+          "category",
+          "base_price_usdc",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrgToolResponse",
+        "type": "object"
+      },
+      "PendingSettlementItem": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "billing_method": {
+            "title": "Billing Method",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "max_retries": {
+            "title": "Max Retries",
+            "type": "integer"
+          },
+          "next_retry_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if not scheduled.",
+            "title": "Next Retry At"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "usage_event_id": {
+            "title": "Usage Event Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "usage_event_id",
+          "org_id",
+          "run_id",
+          "billing_method",
+          "amount_usdc",
+          "retry_count",
+          "max_retries",
+          "status",
+          "created_at"
+        ],
+        "title": "PendingSettlementItem",
+        "type": "object"
+      },
+      "PendingSettlementsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingSettlementItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PendingSettlementsResponse",
+        "type": "object"
+      },
+      "PricingRuleWithOverrides": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_from": {
+            "format": "date-time",
+            "title": "Effective From",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_price_usdc": {
+            "title": "Run Price Usdc",
+            "type": "integer"
+          },
+          "tokens_in_cost_per_1k": {
+            "default": 0,
+            "title": "Tokens In Cost Per 1K",
+            "type": "integer"
+          },
+          "tokens_out_cost_per_1k": {
+            "default": 0,
+            "title": "Tokens Out Cost Per 1K",
+            "type": "integer"
+          },
+          "tool_call_cost": {
+            "default": 0,
+            "title": "Tool Call Cost",
+            "type": "integer"
+          },
+          "tool_overrides": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "tool_name -> cost_usdc overrides.",
+            "title": "Tool Overrides",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "run_price_usdc"
+        ],
+        "title": "PricingRuleWithOverrides",
         "type": "object"
       },
       "RefreshRequest": {
@@ -775,6 +4037,56 @@
         "title": "ResendVerificationRequest",
         "type": "object"
       },
+      "ResendVerificationResponse": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ResendVerificationResponse",
+        "type": "object"
+      },
+      "RevenueSummaryResponse": {
+        "properties": {
+          "total_revenue_usdc": {
+            "title": "Total Revenue Usdc",
+            "type": "integer"
+          },
+          "total_settlements": {
+            "title": "Total Settlements",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_settlements",
+          "total_revenue_usdc"
+        ],
+        "title": "RevenueSummaryResponse",
+        "type": "object"
+      },
+      "RotateSecretResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "secret": {
+            "description": "New plaintext trigger secret \u2014 shown once, only its hash is persisted.",
+            "title": "Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "secret"
+        ],
+        "title": "RotateSecretResponse",
+        "type": "object"
+      },
       "RunFeedbackRequest": {
         "properties": {
           "comment": {
@@ -804,6 +4116,44 @@
         "title": "RunFeedbackRequest",
         "type": "object"
       },
+      "RunFeedbackResponse": {
+        "properties": {
+          "created_at": {
+            "description": "ISO 8601 creation timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "description": "Feedback record ID.",
+            "title": "Id",
+            "type": "string"
+          },
+          "qualified_tool_name": {
+            "description": "'{org_slug}/{tool_name}' the feedback applies to.",
+            "title": "Qualified Tool Name",
+            "type": "string"
+          },
+          "rating": {
+            "maximum": 1.0,
+            "minimum": -1.0,
+            "title": "Rating",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "qualified_tool_name",
+          "rating",
+          "created_at"
+        ],
+        "title": "RunFeedbackResponse",
+        "type": "object"
+      },
       "RunOutcomeRequest": {
         "properties": {
           "rating": {
@@ -820,6 +4170,237 @@
         "title": "RunOutcomeRequest",
         "type": "object"
       },
+      "RunOutcomeResponse": {
+        "properties": {
+          "status": {
+            "const": "recorded",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "RunOutcomeResponse",
+        "type": "object"
+      },
+      "ScheduleDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ScheduleDeletedResponse",
+        "type": "object"
+      },
+      "ScheduledRunItem": {
+        "properties": {
+          "callback_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Url"
+          },
+          "consecutive_failures": {
+            "title": "Consecutive Failures",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null until first run.",
+            "title": "Last Run At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_run_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Next Run At",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "user_id",
+          "name",
+          "prompt",
+          "schedule_kind",
+          "interval_seconds",
+          "enabled",
+          "next_run_at",
+          "consecutive_failures",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScheduledRunItem",
+        "type": "object"
+      },
+      "ScheduledRunListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduledRunItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ScheduledRunListResponse",
+        "type": "object"
+      },
+      "ScheduledRunResultItem": {
+        "properties": {
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "output_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Text"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "org_id",
+          "run_id",
+          "status",
+          "cost_usdc",
+          "created_at"
+        ],
+        "title": "ScheduledRunResultItem",
+        "type": "object"
+      },
+      "ScheduledRunResultsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduledRunResultItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ScheduledRunResultsResponse",
+        "type": "object"
+      },
       "SetAuthorConfigRequest": {
         "properties": {
           "settlement_wallet": {
@@ -833,6 +4414,66 @@
           "settlement_wallet"
         ],
         "title": "SetAuthorConfigRequest",
+        "type": "object"
+      },
+      "SettlementBalanceResponse": {
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string"
+          },
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "balance_usdc": {
+            "title": "Balance Usdc",
+            "type": "integer"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account",
+          "address",
+          "chain_id",
+          "balance_usdc"
+        ],
+        "title": "SettlementBalanceResponse",
+        "type": "object"
+      },
+      "SettlementRetryResponse": {
+        "properties": {
+          "settlement_id": {
+            "title": "Settlement Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "settlement_id",
+          "status"
+        ],
+        "title": "SettlementRetryResponse",
+        "type": "object"
+      },
+      "SiweNonceResponse": {
+        "properties": {
+          "nonce": {
+            "title": "Nonce",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce"
+        ],
+        "title": "SiweNonceResponse",
         "type": "object"
       },
       "SpendingConfigUpdate": {
@@ -878,6 +4519,32 @@
         "title": "StoreMemoryRequest",
         "type": "object"
       },
+      "StripeSessionStatusResponse": {
+        "properties": {
+          "new_balance_fmt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Formatted new balance (e.g. '$12.34'); present only when status is 'complete'.",
+            "title": "New Balance Fmt"
+          },
+          "status": {
+            "description": "'open', 'complete', or 'expired'.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "StripeSessionStatusResponse",
+        "type": "object"
+      },
       "StripeTopupRequest": {
         "properties": {
           "amount_cents": {
@@ -902,6 +4569,24 @@
         "title": "StripeTopupRequest",
         "type": "object"
       },
+      "StripeTopupSessionResponse": {
+        "properties": {
+          "client_secret": {
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_secret",
+          "session_id"
+        ],
+        "title": "StripeTopupSessionResponse",
+        "type": "object"
+      },
       "SubscribeRequest": {
         "properties": {
           "qualified_tool_name": {
@@ -916,6 +4601,92 @@
           "qualified_tool_name"
         ],
         "title": "SubscribeRequest",
+        "type": "object"
+      },
+      "SweepStatusItem": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_sweep_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sweep Error"
+          },
+          "next_sweep_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null if not scheduled.",
+            "title": "Next Sweep At"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "sweep_attempt_count": {
+            "title": "Sweep Attempt Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "amount_usdc",
+          "status",
+          "sweep_attempt_count",
+          "created_at"
+        ],
+        "title": "SweepStatusItem",
+        "type": "object"
+      },
+      "SweepStatusResponse": {
+        "properties": {
+          "exhausted": {
+            "items": {
+              "$ref": "#/components/schemas/SweepStatusItem"
+            },
+            "title": "Exhausted",
+            "type": "array"
+          },
+          "pending": {
+            "items": {
+              "$ref": "#/components/schemas/SweepStatusItem"
+            },
+            "title": "Pending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pending",
+          "exhausted"
+        ],
+        "title": "SweepStatusResponse",
         "type": "object"
       },
       "TestMcpToolRequest": {
@@ -1170,6 +4941,115 @@
         "title": "TokenRequest",
         "type": "object"
       },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_in": {
+            "description": "Access token lifetime in seconds.",
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present for email/SIWE flows; omitted for client_credentials.",
+            "title": "Refresh Token"
+          },
+          "token_type": {
+            "const": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "title": "TokenResponse",
+        "type": "object"
+      },
+      "ToolDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ToolDeletedResponse",
+        "type": "object"
+      },
+      "ToolExclusionActionResponse": {
+        "properties": {
+          "status": {
+            "const": "added",
+            "description": "Outcome of the exclusion write.",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "description": "Normalized (unprefixed) tool name that was excluded.",
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "tool_name"
+        ],
+        "title": "ToolExclusionActionResponse",
+        "type": "object"
+      },
+      "ToolExclusionListResponse": {
+        "properties": {
+          "tool_names": {
+            "description": "Persisted tool exclusions for the authenticated org.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tool_names"
+        ],
+        "title": "ToolExclusionListResponse",
+        "type": "object"
+      },
+      "ToolExclusionRemovedResponse": {
+        "properties": {
+          "status": {
+            "const": "removed",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "description": "Normalized (unprefixed) tool name that was removed.",
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "tool_name"
+        ],
+        "title": "ToolExclusionRemovedResponse",
+        "type": "object"
+      },
       "ToolExclusionRequest": {
         "properties": {
           "tool_name": {
@@ -1201,6 +5081,24 @@
         "title": "ToolPolicy",
         "type": "object"
       },
+      "ToolPricingDeleteResponse": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted",
+          "tool_name"
+        ],
+        "title": "ToolPricingDeleteResponse",
+        "type": "object"
+      },
       "ToolPricingOverrideRequest": {
         "properties": {
           "cost_usdc": {
@@ -1229,6 +5127,34 @@
         "title": "ToolPricingOverrideRequest",
         "type": "object"
       },
+      "ToolPricingOverrideResponse": {
+        "properties": {
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tool_name",
+          "cost_usdc",
+          "description",
+          "updated"
+        ],
+        "title": "ToolPricingOverrideResponse",
+        "type": "object"
+      },
       "TopupRequest": {
         "properties": {
           "amount_usdc": {
@@ -1246,6 +5172,20 @@
           "amount_usdc"
         ],
         "title": "TopupRequest",
+        "type": "object"
+      },
+      "UnsubscribeResponse": {
+        "properties": {
+          "unsubscribed": {
+            "const": true,
+            "title": "Unsubscribed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "unsubscribed"
+        ],
+        "title": "UnsubscribeResponse",
         "type": "object"
       },
       "UpdateEventTriggerRequest": {
@@ -1688,6 +5628,38 @@
         "title": "UpsertLlmConfigRequest",
         "type": "object"
       },
+      "UsageSummary": {
+        "description": "Aggregated usage totals for a date range.",
+        "properties": {
+          "total_duration_ms": {
+            "default": 0,
+            "title": "Total Duration Ms",
+            "type": "integer"
+          },
+          "total_runs": {
+            "default": 0,
+            "title": "Total Runs",
+            "type": "integer"
+          },
+          "total_tokens_in": {
+            "default": 0,
+            "title": "Total Tokens In",
+            "type": "integer"
+          },
+          "total_tokens_out": {
+            "default": 0,
+            "title": "Total Tokens Out",
+            "type": "integer"
+          },
+          "total_tool_calls": {
+            "default": 0,
+            "title": "Total Tool Calls",
+            "type": "integer"
+          }
+        },
+        "title": "UsageSummary",
+        "type": "object"
+      },
       "UsdcTopupRequest": {
         "properties": {
           "amount_usdc": {
@@ -1708,6 +5680,58 @@
           "payment_header"
         ],
         "title": "UsdcTopupRequest",
+        "type": "object"
+      },
+      "UsdcTopupRequirementsResponse": {
+        "properties": {
+          "accepts": {
+            "description": "x402 PaymentRequirements objects (external x402-spec shape).",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Accepts",
+            "type": "array"
+          },
+          "x402Version": {
+            "title": "X402Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accepts",
+          "x402Version"
+        ],
+        "title": "UsdcTopupRequirementsResponse",
+        "type": "object"
+      },
+      "UsdcTopupResponse": {
+        "properties": {
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "balance_usdc": {
+            "title": "Balance Usdc",
+            "type": "integer"
+          },
+          "status": {
+            "const": "credited",
+            "title": "Status",
+            "type": "string"
+          },
+          "tx_hash": {
+            "title": "Tx Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "amount_usdc",
+          "balance_usdc",
+          "tx_hash"
+        ],
+        "title": "UsdcTopupResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -1750,6 +5774,67 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VerifyEmailResponse": {
+        "properties": {
+          "verified": {
+            "const": true,
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified"
+        ],
+        "title": "VerifyEmailResponse",
+        "type": "object"
+      },
+      "WalletDeletedResponse": {
+        "properties": {
+          "status": {
+            "const": "deleted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WalletDeletedResponse",
+        "type": "object"
+      },
+      "WalletItem": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_primary": {
+            "title": "Is Primary",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "address",
+          "chain_id",
+          "is_primary",
+          "created_at"
+        ],
+        "title": "WalletItem",
+        "type": "object"
+      },
       "WithdrawRequest": {
         "properties": {
           "amount_usdc": {
@@ -1762,6 +5847,25 @@
           "amount_usdc"
         ],
         "title": "WithdrawRequest",
+        "type": "object"
+      },
+      "WithdrawalResetResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "id"
+        ],
+        "title": "WithdrawalResetResponse",
         "type": "object"
       }
     },
@@ -1928,7 +6032,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgA2AAgentListItem"
+                  },
+                  "title": "Response List A2A Agents A2A Agents Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -1958,10 +6068,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgA2AAgentResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2007,7 +6119,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgA2AAgentDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2054,7 +6168,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/A2ADelegationEvent"
+                  },
+                  "title": "Response List Delegation Events A2A Delegations Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2096,10 +6216,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/A2AAgentResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2146,7 +6268,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/A2AAgentDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2193,7 +6317,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/A2AAgentListItem"
+                  },
+                  "title": "Response Admin List A2A Agents Admin A2A Agents  Org Id  Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2257,7 +6387,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PendingSettlementsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2304,7 +6436,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementRetryResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2374,7 +6508,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RevenueSummaryResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2417,10 +6553,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreateClientCredentialsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2466,7 +6604,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTopupResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2523,7 +6663,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteWithdrawalResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2570,7 +6712,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWithdrawalActionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2617,7 +6761,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResetResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2653,7 +6799,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementBalanceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2679,7 +6827,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceSweepResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2716,7 +6866,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResetResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2752,7 +6904,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SweepStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2796,7 +6950,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWithdrawalListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2843,7 +6999,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/McpServerResponse"
+                  },
+                  "title": "Response Admin List Mcp Servers Admin Mcp Servers  Org Id  Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2890,7 +7052,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMemoryPurgeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2947,7 +7111,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMemoryListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -2990,10 +7156,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreateOrgResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3040,7 +7208,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSpendingConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3095,7 +7265,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSpendingConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3141,7 +7313,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolPricingOverrideResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3188,7 +7362,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolPricingDeleteResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3235,7 +7411,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgToolResponse"
+                  },
+                  "title": "Response Admin List Tools Admin Tools  Org Id  Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3314,7 +7496,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
               }
             },
             "description": "Successful Response"
@@ -3393,7 +7577,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
               }
             },
             "description": "Successful Response"
@@ -3436,10 +7622,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUserResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3507,7 +7695,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDecisionListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3541,7 +7731,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventTriggerListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3570,10 +7762,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventTriggerCreatedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3618,7 +7812,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3661,7 +7857,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventTriggerItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -3714,7 +7912,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventTriggerItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -3759,7 +7959,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RotateSecretResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3834,7 +8036,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunResultsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3912,7 +8116,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventDispatchResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4008,7 +8214,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RunOutcomeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4042,7 +8250,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4071,10 +8281,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4119,7 +8331,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4162,7 +8376,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4215,7 +8431,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4290,7 +8508,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduledRunResultsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4325,7 +8545,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExclusionListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4358,7 +8580,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExclusionActionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4404,7 +8628,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExclusionRemovedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4439,7 +8665,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentToolItem"
+                  },
+                  "title": "Response List Agent Tools Agent Tools Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4471,12 +8703,7 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
+          "204": {
             "description": "Successful Response"
           },
           "422": {
@@ -4509,7 +8736,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AuthMeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4544,7 +8773,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4584,7 +8815,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ResendVerificationResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4614,7 +8847,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SiweNonceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4645,7 +8880,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyEmailResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4675,7 +8912,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BillingBalanceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4744,7 +8983,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreditHistoryResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4791,7 +9032,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BillingHistoryItem"
+                  },
+                  "title": "Response Billing History Billing History Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4837,7 +9084,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4900,7 +9149,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InvoiceListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4935,7 +9186,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BillingPricingResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4965,7 +9218,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StripeTopupSessionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5013,7 +9268,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/StripeSessionStatusResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5058,7 +9315,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsdcTopupResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5108,7 +9367,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsdcTopupRequirementsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5163,7 +9424,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConfigDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5186,7 +9449,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5219,7 +9484,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LlmConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5254,7 +9521,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAuthorConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5287,7 +9556,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAuthorConfigResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5371,7 +9642,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAuthorProfileResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5401,7 +9674,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceBalanceResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5516,7 +9791,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceCatalogResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5566,7 +9843,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceCatalogDetailResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5643,7 +9922,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceEarningsResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5678,7 +9959,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceEarningsByToolResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5713,7 +9996,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceImportPreviewResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5758,7 +10043,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceImportPublishResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5793,7 +10080,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceSubscriptionListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5823,10 +10112,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceSubscriptionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5872,7 +10163,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UnsubscribeResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5934,10 +10227,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RunFeedbackResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5979,10 +10274,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceWithdrawalResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6047,7 +10344,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceWithdrawalsListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6082,7 +10381,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/McpServerResponse"
+                  },
+                  "title": "Response List Mcp Servers Mcp Servers Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6112,10 +10417,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6161,7 +10468,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6205,7 +10514,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6259,7 +10570,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6305,7 +10618,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/McpDiscoverResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6455,7 +10770,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6495,10 +10812,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryCreatedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6544,7 +10863,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6599,7 +10920,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBenchmarksResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6619,7 +10942,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBenchmarksResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6644,7 +10969,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgCredentialItem"
+                  },
+                  "title": "Response Get Org Credentials Org Credentials Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6666,10 +10997,12 @@
         "description": "Rotate org M2M credentials: delete all existing and issue a new pair.\n\nAdmin-only: this destroys every existing machine credential for the org and\nreveals the replacement secret, so it must not be available to ordinary\nmembers. The new client_secret is returned exactly once \u2014 store it\nimmediately.",
         "operationId": "regenerate_org_credentials_org_credentials_regenerate_post",
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgCredentialRegenerateResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6704,7 +11037,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CreateInviteResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6749,7 +11084,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6789,7 +11126,9 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6829,7 +11168,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -6873,7 +11214,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrgToolResponse"
+                  },
+                  "title": "Response List Tools Tools Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -6913,10 +11260,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgToolResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7009,7 +11358,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ToolDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7053,7 +11404,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgToolResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7107,7 +11460,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OrgToolResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7176,7 +11531,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
               }
             },
             "description": "Successful Response"
@@ -7229,7 +11586,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentWalletDeactivatedResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7290,7 +11649,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentWalletResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7338,10 +11699,12 @@
           }
         ],
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentWalletResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7383,10 +11746,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LinkWalletResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -7421,7 +11786,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WalletItem"
+                  },
+                  "title": "Response List Wallets Wallets Me Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -7457,7 +11828,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/WalletDeletedResponse"
+                }
               }
             },
             "description": "Successful Response"

@@ -23,6 +23,7 @@ import json
 import logging
 import secrets
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -45,7 +46,11 @@ from scheduling import (
 )
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
-from teardrop.routers.agent_schedules import _validate_callback_url
+from teardrop.routers.agent_schedules import (
+    ScheduleDeletedResponse,
+    ScheduledRunResultsResponse,
+    _validate_callback_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,43 @@ class UpdateEventTriggerRequest(BaseModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=8_000)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
+
+
+class EventTriggerItem(BaseModel):
+    id: str
+    org_id: str
+    user_id: str
+    name: str
+    prompt: str
+    schedule_kind: str
+    enabled: bool
+    callback_url: str | None = None
+    trigger_token: str | None = None
+    event_path: str | None = Field(default=None, description="'/agent/events/{trigger_token}'; null if unset.")
+    consecutive_failures: int
+    last_run_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until first run.")
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+    updated_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class EventTriggerCreatedResponse(EventTriggerItem):
+    secret: str = Field(..., description="Plaintext trigger secret — shown once, only its hash is persisted.")
+
+
+class EventTriggerListResponse(BaseModel):
+    items: list[EventTriggerItem]
+
+
+class RotateSecretResponse(BaseModel):
+    id: str
+    secret: str = Field(..., description="New plaintext trigger secret — shown once, only its hash is persisted.")
+
+
+class EventDispatchResponse(BaseModel):
+    run_id: str
+    status: Literal["accepted", "duplicate"]
+    schedule_id: str
+    result_path: str = Field(..., description="Path to fetch this run's result: /agent/event-triggers/{id}/runs.")
 
 
 def _hash_secret(secret: str) -> str:
@@ -150,7 +192,12 @@ def _require_enabled() -> None:
 _NO_ORG = "No org_id in token — event triggers require an org-scoped credential."
 
 
-@router.post("/agent/event-triggers", tags=["Agent"])
+@router.post(
+    "/agent/event-triggers",
+    tags=["Agent"],
+    response_model=EventTriggerCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_event_trigger_endpoint(
     body: CreateEventTriggerRequest,
     payload: dict = Depends(require_auth),
@@ -181,7 +228,7 @@ async def create_event_trigger_endpoint(
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=content)
 
 
-@router.get("/agent/event-triggers", tags=["Agent"])
+@router.get("/agent/event-triggers", tags=["Agent"], response_model=EventTriggerListResponse)
 async def list_event_triggers_endpoint(payload: dict = Depends(require_auth)) -> JSONResponse:
     _require_enabled()
     org_id = _require_org_id(payload, _NO_ORG)
@@ -196,7 +243,7 @@ async def _get_owned_event_trigger(schedule_id: str, org_id: str):
     return schedule
 
 
-@router.get("/agent/event-triggers/{schedule_id}", tags=["Agent"])
+@router.get("/agent/event-triggers/{schedule_id}", tags=["Agent"], response_model=EventTriggerItem)
 async def get_event_trigger_endpoint(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
     _require_enabled()
     org_id = _require_org_id(payload, _NO_ORG)
@@ -204,7 +251,7 @@ async def get_event_trigger_endpoint(schedule_id: str, payload: dict = Depends(r
     return JSONResponse(content=_serialize_event_trigger(schedule))
 
 
-@router.patch("/agent/event-triggers/{schedule_id}", tags=["Agent"])
+@router.patch("/agent/event-triggers/{schedule_id}", tags=["Agent"], response_model=EventTriggerItem)
 async def update_event_trigger_endpoint(
     schedule_id: str,
     body: UpdateEventTriggerRequest,
@@ -226,7 +273,7 @@ async def update_event_trigger_endpoint(
     return JSONResponse(content=_serialize_event_trigger(schedule))
 
 
-@router.delete("/agent/event-triggers/{schedule_id}", tags=["Agent"])
+@router.delete("/agent/event-triggers/{schedule_id}", tags=["Agent"], response_model=ScheduleDeletedResponse)
 async def delete_event_trigger_endpoint(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
     _require_enabled()
     org_id = _require_org_id(payload, _NO_ORG)
@@ -237,7 +284,7 @@ async def delete_event_trigger_endpoint(schedule_id: str, payload: dict = Depend
     return JSONResponse(content={"status": "deleted"})
 
 
-@router.post("/agent/event-triggers/{schedule_id}/rotate-secret", tags=["Agent"])
+@router.post("/agent/event-triggers/{schedule_id}/rotate-secret", tags=["Agent"], response_model=RotateSecretResponse)
 async def rotate_event_trigger_secret_endpoint(
     schedule_id: str,
     payload: dict = Depends(require_auth),
@@ -252,7 +299,7 @@ async def rotate_event_trigger_secret_endpoint(
     return JSONResponse(content={"id": schedule_id, "secret": secret})
 
 
-@router.get("/agent/event-triggers/{schedule_id}/runs", tags=["Agent"])
+@router.get("/agent/event-triggers/{schedule_id}/runs", tags=["Agent"], response_model=ScheduledRunResultsResponse)
 async def list_event_trigger_runs(
     schedule_id: str,
     payload: dict = Depends(require_auth),
@@ -271,7 +318,7 @@ async def list_event_trigger_runs(
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
 
-@router.post("/agent/events/{trigger_token}", tags=["Agent"])
+@router.post("/agent/events/{trigger_token}", tags=["Agent"], response_model=EventDispatchResponse)
 async def dispatch_event(
     trigger_token: str,
     request: Request,

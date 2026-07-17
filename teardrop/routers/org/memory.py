@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -27,7 +28,20 @@ class StoreMemoryRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=500)
 
 
-@router.get("/memories", tags=["Memory"])
+class MemoryListItem(BaseModel):
+    id: str
+    content: str
+    source_run_id: str | None = None
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class MemoryListResponse(BaseModel):
+    items: list[MemoryListItem]
+    total: int
+    next_cursor: str | None = None
+
+
+@router.get("/memories", tags=["Memory"], response_model=MemoryListResponse)
 async def list_memories_endpoint(
     payload: dict = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=200),
@@ -54,7 +68,13 @@ async def list_memories_endpoint(
     return JSONResponse(content={"items": serialized, "total": total, "next_cursor": next_cursor})
 
 
-@router.post("/memories", tags=["Memory"])
+class MemoryCreatedResponse(BaseModel):
+    id: str
+    content: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.post("/memories", tags=["Memory"], response_model=MemoryCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def store_memory_endpoint(
     body: StoreMemoryRequest,
     payload: dict = Depends(require_auth),
@@ -79,7 +99,11 @@ async def store_memory_endpoint(
     )
 
 
-@router.delete("/memories/{memory_id}", tags=["Memory"])
+class MemoryDeletedResponse(BaseModel):
+    status: Literal["deleted"]
+
+
+@router.delete("/memories/{memory_id}", tags=["Memory"], response_model=MemoryDeletedResponse)
 async def delete_memory_endpoint(
     memory_id: str,
     payload: dict = Depends(require_auth),

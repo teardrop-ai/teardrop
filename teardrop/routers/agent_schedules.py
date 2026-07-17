@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -39,6 +40,48 @@ class UpdateScheduledRunRequest(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=1)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
+
+
+class ScheduledRunItem(BaseModel):
+    id: str
+    org_id: str
+    user_id: str
+    name: str
+    prompt: str
+    schedule_kind: str
+    interval_seconds: int
+    enabled: bool
+    callback_url: str | None = None
+    next_run_at: str = Field(..., description="ISO 8601 timestamp.")
+    last_run_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until first run.")
+    consecutive_failures: int
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+    updated_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class ScheduledRunListResponse(BaseModel):
+    items: list[ScheduledRunItem]
+
+
+class ScheduledRunResultItem(BaseModel):
+    id: str
+    schedule_id: str
+    org_id: str
+    run_id: str
+    status: str
+    output_text: str | None = None
+    cost_usdc: int
+    error: str | None = None
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class ScheduledRunResultsResponse(BaseModel):
+    items: list[ScheduledRunResultItem]
+    next_cursor: str | None = None
+
+
+class ScheduleDeletedResponse(BaseModel):
+    status: Literal["deleted"]
 
 
 def _serialize_schedule(schedule) -> dict[str, object]:
@@ -102,7 +145,7 @@ def _validate_interval(interval_seconds: int) -> None:
         )
 
 
-@router.post("/agent/schedules", tags=["Agent"])
+@router.post("/agent/schedules", tags=["Agent"], response_model=ScheduledRunItem, status_code=status.HTTP_201_CREATED)
 async def create_agent_schedule(
     body: CreateScheduledRunRequest,
     payload: dict = Depends(require_auth),
@@ -129,7 +172,7 @@ async def create_agent_schedule(
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=_serialize_schedule(schedule))
 
 
-@router.get("/agent/schedules", tags=["Agent"])
+@router.get("/agent/schedules", tags=["Agent"], response_model=ScheduledRunListResponse)
 async def list_agent_schedules(payload: dict = Depends(require_auth)) -> JSONResponse:
     if not settings.scheduled_runs_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled runs are disabled.")
@@ -138,7 +181,7 @@ async def list_agent_schedules(payload: dict = Depends(require_auth)) -> JSONRes
     return JSONResponse(content={"items": [_serialize_schedule(schedule) for schedule in schedules]})
 
 
-@router.get("/agent/schedules/{schedule_id}", tags=["Agent"])
+@router.get("/agent/schedules/{schedule_id}", tags=["Agent"], response_model=ScheduledRunItem)
 async def get_agent_schedule(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
     if not settings.scheduled_runs_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled runs are disabled.")
@@ -149,7 +192,7 @@ async def get_agent_schedule(schedule_id: str, payload: dict = Depends(require_a
     return JSONResponse(content=_serialize_schedule(schedule))
 
 
-@router.patch("/agent/schedules/{schedule_id}", tags=["Agent"])
+@router.patch("/agent/schedules/{schedule_id}", tags=["Agent"], response_model=ScheduledRunItem)
 async def update_agent_schedule_endpoint(
     schedule_id: str,
     body: UpdateScheduledRunRequest,
@@ -184,7 +227,7 @@ async def update_agent_schedule_endpoint(
     return JSONResponse(content=_serialize_schedule(schedule))
 
 
-@router.delete("/agent/schedules/{schedule_id}", tags=["Agent"])
+@router.delete("/agent/schedules/{schedule_id}", tags=["Agent"], response_model=ScheduleDeletedResponse)
 async def delete_agent_schedule_endpoint(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
     if not settings.scheduled_runs_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled runs are disabled.")
@@ -195,7 +238,7 @@ async def delete_agent_schedule_endpoint(schedule_id: str, payload: dict = Depen
     return JSONResponse(content={"status": "deleted"})
 
 
-@router.get("/agent/schedules/{schedule_id}/runs", tags=["Agent"])
+@router.get("/agent/schedules/{schedule_id}/runs", tags=["Agent"], response_model=ScheduledRunResultsResponse)
 async def list_agent_schedule_runs(
     schedule_id: str,
     payload: dict = Depends(require_auth),

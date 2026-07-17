@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -26,10 +27,11 @@ from billing import (
     handle_stripe_webhook,
     verify_and_settle_usdc_topup,
 )
+from billing.models import PricingRule
 from teardrop import rate_limit as _rate_limit
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
-from teardrop.usage import get_usage_by_user
+from teardrop.usage import UsageSummary, get_usage_by_user
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -40,7 +42,7 @@ router = APIRouter()
 # ─── Usage endpoints ─────────────────────────────────────────────────────────
 
 
-@router.get("/usage/me", tags=["Usage"])
+@router.get("/usage/me", tags=["Usage"], response_model=UsageSummary)
 async def usage_me(
     payload: dict = Depends(require_auth),
     start: str | None = None,
@@ -57,7 +59,19 @@ async def usage_me(
 # ─── Billing endpoints ───────────────────────────────────────────────────────
 
 
-@router.get("/billing/pricing", tags=["Billing"])
+class PricingRuleWithOverrides(PricingRule):
+    tool_overrides: dict[str, int] = Field(default_factory=dict, description="tool_name -> cost_usdc overrides.")
+
+
+class BillingPricingResponse(BaseModel):
+    billing_enabled: bool
+    pricing: PricingRuleWithOverrides | None = Field(
+        default=None, description="Omitted/null when billing is disabled or no pricing rule is configured."
+    )
+    network: str | None = Field(default=None, description="x402 network name; only present when billing is enabled.")
+
+
+@router.get("/billing/pricing", tags=["Billing"], response_model=BillingPricingResponse)
 async def billing_pricing() -> JSONResponse:
     """Return current pricing rules (public)."""
     if not settings.billing_enabled:
@@ -84,7 +98,22 @@ async def billing_pricing() -> JSONResponse:
     )
 
 
-@router.get("/billing/history", tags=["Billing"])
+class BillingHistoryItem(BaseModel):
+    id: str
+    run_id: str
+    tokens_in: int
+    tokens_out: int
+    tool_calls: int
+    tool_names: list[str]
+    duration_ms: int
+    cost_usdc: int
+    platform_fee_usdc: int
+    settlement_tx: str
+    settlement_status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+@router.get("/billing/history", tags=["Billing"], response_model=list[BillingHistoryItem])
 async def billing_history(
     payload: dict = Depends(require_auth),
     limit: int = 50,
@@ -94,7 +123,16 @@ async def billing_history(
     return JSONResponse(content=[{**row, "created_at": row["created_at"].isoformat()} for row in history])
 
 
-@router.get("/billing/balance", tags=["Billing"])
+class BillingBalanceResponse(BaseModel):
+    org_id: str
+    balance_usdc: int
+    spending_limit_usdc: int
+    spending_limit_active: bool
+    is_paused: bool
+    daily_spend_usdc: int
+
+
+@router.get("/billing/balance", tags=["Billing"], response_model=BillingBalanceResponse)
 async def billing_balance(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -113,7 +151,16 @@ async def billing_balance(
     )
 
 
-@router.get("/billing/invoices", tags=["Billing"])
+class InvoiceItem(BillingHistoryItem):
+    thread_id: str
+
+
+class InvoiceListResponse(BaseModel):
+    items: list[InvoiceItem]
+    next_cursor: str | None = Field(default=None, description="ISO datetime cursor for the next page.")
+
+
+@router.get("/billing/invoices", tags=["Billing"], response_model=InvoiceListResponse)
 async def billing_invoices(
     payload: dict = Depends(require_auth),
     limit: int = 50,
@@ -129,7 +176,7 @@ async def billing_invoices(
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
 
-@router.get("/billing/invoice/{run_id}", tags=["Billing"])
+@router.get("/billing/invoice/{run_id}", tags=["Billing"], response_model=InvoiceItem)
 async def billing_invoice_by_run(
     run_id: str,
     payload: dict = Depends(require_auth),
@@ -141,7 +188,22 @@ async def billing_invoice_by_run(
     return JSONResponse(content={**invoice, "created_at": invoice["created_at"].isoformat()})
 
 
-@router.get("/billing/credit-history", tags=["Billing"])
+class CreditHistoryEntry(BaseModel):
+    id: str
+    org_id: str
+    operation: str
+    amount_usdc: int
+    balance_usdc_after: int
+    reason: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class CreditHistoryResponse(BaseModel):
+    items: list[CreditHistoryEntry]
+    next_cursor: str | None = Field(default=None, description="ISO datetime cursor for the next page.")
+
+
+@router.get("/billing/credit-history", tags=["Billing"], response_model=CreditHistoryResponse)
 async def billing_credit_history(
     payload: dict = Depends(require_auth),
     operation: str | None = None,
@@ -184,7 +246,12 @@ class StripeTopupRequest(BaseModel):
         return v
 
 
-@router.post("/billing/topup/stripe", tags=["Billing"])
+class StripeTopupSessionResponse(BaseModel):
+    client_secret: str
+    session_id: str
+
+
+@router.post("/billing/topup/stripe", tags=["Billing"], response_model=StripeTopupSessionResponse)
 async def billing_topup_stripe(
     body: StripeTopupRequest,
     payload: dict = Depends(require_auth),
@@ -236,7 +303,14 @@ async def billing_topup_webhook(request: Request) -> JSONResponse:
     return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok"})
 
 
-@router.get("/billing/topup/stripe/status", tags=["Billing"])
+class StripeSessionStatusResponse(BaseModel):
+    status: str = Field(..., description="'open', 'complete', or 'expired'.")
+    new_balance_fmt: str | None = Field(
+        default=None, description="Formatted new balance (e.g. '$12.34'); present only when status is 'complete'."
+    )
+
+
+@router.get("/billing/topup/stripe/status", tags=["Billing"], response_model=StripeSessionStatusResponse)
 async def billing_topup_stripe_status(
     session_id: str = Query(..., description="Stripe Checkout session ID"),
     payload: dict = Depends(require_auth),
@@ -276,7 +350,12 @@ async def billing_topup_stripe_status(
 # ─── USDC on-chain top-up endpoints ──────────────────────────────────────────
 
 
-@router.get("/billing/topup/usdc/requirements", tags=["Billing"])
+class UsdcTopupRequirementsResponse(BaseModel):
+    accepts: list[dict[str, Any]] = Field(..., description="x402 PaymentRequirements objects (external x402-spec shape).")
+    x402Version: int  # noqa: N815 - field name mirrors the x402 protocol wire format
+
+
+@router.get("/billing/topup/usdc/requirements", tags=["Billing"], response_model=UsdcTopupRequirementsResponse)
 async def billing_usdc_topup_requirements(
     amount_usdc: int = Query(
         ...,
@@ -320,7 +399,14 @@ class UsdcTopupRequest(BaseModel):
     payment_header: str = Field(..., description="Base64-encoded signed EIP-3009 PaymentPayload (X-PAYMENT format).")
 
 
-@router.post("/billing/topup/usdc", tags=["Billing"])
+class UsdcTopupResponse(BaseModel):
+    status: Literal["credited"]
+    amount_usdc: int
+    balance_usdc: int
+    tx_hash: str
+
+
+@router.post("/billing/topup/usdc", tags=["Billing"], response_model=UsdcTopupResponse)
 async def billing_topup_usdc(
     body: UsdcTopupRequest,
     payload: dict = Depends(require_auth),

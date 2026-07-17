@@ -33,7 +33,27 @@ class OrgCreateA2AAgentRequest(BaseModel):
     jwt_forward: bool = Field(default=False, description="Forward caller JWT as Authorization header to this agent")
 
 
-@router.post("/a2a/agents", tags=["A2A"])
+class OrgA2AAgentResponse(BaseModel):
+    id: str
+    org_id: str
+    agent_url: str
+    label: str | None = None
+    max_cost_usdc: int
+    require_x402: bool
+    jwt_forward: bool
+
+
+class OrgA2AAgentListItem(BaseModel):
+    id: str
+    agent_url: str
+    label: str | None = None
+    max_cost_usdc: int
+    require_x402: bool
+    jwt_forward: bool
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unavailable.")
+
+
+@router.post("/a2a/agents", tags=["A2A"], response_model=OrgA2AAgentResponse, status_code=status.HTTP_201_CREATED)
 async def add_a2a_agent(
     request: Request,
     body: OrgCreateA2AAgentRequest,
@@ -92,7 +112,7 @@ async def add_a2a_agent(
     )
 
 
-@router.get("/a2a/agents", tags=["A2A"])
+@router.get("/a2a/agents", tags=["A2A"], response_model=list[OrgA2AAgentListItem])
 async def list_a2a_agents(
     request: Request,
     payload: dict = Depends(require_auth),
@@ -121,7 +141,11 @@ async def list_a2a_agents(
     )
 
 
-@router.delete("/a2a/agents/{agent_id}", tags=["A2A"])
+class OrgA2AAgentDeletedResponse(BaseModel):
+    deleted: str = Field(..., description="The deleted agent's id.")
+
+
+@router.delete("/a2a/agents/{agent_id}", tags=["A2A"], response_model=OrgA2AAgentDeletedResponse)
 async def delete_a2a_agent(
     request: Request,
     agent_id: str,
@@ -140,7 +164,20 @@ async def delete_a2a_agent(
     return JSONResponse(content={"deleted": agent_id})
 
 
-@router.get("/a2a/delegations", tags=["A2A"])
+class A2ADelegationEvent(BaseModel):
+    id: str
+    run_id: str
+    agent_url: str
+    agent_name: str | None = None
+    task_status: str
+    cost_usdc: int
+    billing_method: str
+    settlement_tx: str | None = None
+    error: str | None = None
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unavailable.")
+
+
+@router.get("/a2a/delegations", tags=["A2A"], response_model=list[A2ADelegationEvent])
 async def list_delegation_events(
     request: Request,
     limit: int = 50,

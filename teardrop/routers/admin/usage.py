@@ -14,12 +14,12 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from teardrop.dependencies import require_admin
-from teardrop.usage import get_usage_by_org, get_usage_by_user
+from teardrop.usage import UsageSummary, get_usage_by_org, get_usage_by_user
 
 router = APIRouter()
 
 
-@router.get("/admin/usage/{user_id}", tags=["Admin", "Admin / Usage"])
+@router.get("/admin/usage/{user_id}", tags=["Admin", "Admin / Usage"], response_model=UsageSummary)
 async def admin_usage_user(
     user_id: str,
     _admin: dict = Depends(require_admin),
@@ -34,7 +34,7 @@ async def admin_usage_user(
     return JSONResponse(content=summary.model_dump())
 
 
-@router.get("/admin/usage/org/{org_id}", tags=["Admin", "Admin / Usage"])
+@router.get("/admin/usage/org/{org_id}", tags=["Admin", "Admin / Usage"], response_model=UsageSummary)
 async def admin_usage_org(
     org_id: str,
     _admin: dict = Depends(require_admin),

@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from teardrop.agent_wallets import (
     create_agent_wallet,
@@ -39,7 +40,13 @@ class LinkWalletRequest(BaseModel):
     siwe_signature: str
 
 
-@router.post("/wallets/link", tags=["Wallets"])
+class LinkWalletResponse(BaseModel):
+    id: str
+    address: str
+    chain_id: int
+
+
+@router.post("/wallets/link", tags=["Wallets"], response_model=LinkWalletResponse, status_code=status.HTTP_201_CREATED)
 async def link_wallet(
     body: LinkWalletRequest,
     payload: dict = Depends(require_auth),
@@ -64,7 +71,15 @@ async def link_wallet(
     )
 
 
-@router.get("/wallets/me", tags=["Wallets"])
+class WalletItem(BaseModel):
+    id: str
+    address: str
+    chain_id: int
+    is_primary: bool
+    created_at: str
+
+
+@router.get("/wallets/me", tags=["Wallets"], response_model=list[WalletItem])
 async def list_wallets(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -87,7 +102,18 @@ async def list_wallets(
 # ─── Agent Wallet endpoints ──────────────────────────────────────────────────
 
 
-@router.post("/wallets/agent", tags=["Agent Wallets"])
+class AgentWalletResponse(BaseModel):
+    id: str
+    address: str
+    chain_id: int
+    wallet_type: str
+    is_active: bool
+    created_at: str
+    balance_usdc: int | None = Field(default=None, description="Only present when include_balance=true was requested.")
+    balance_error: str | None = Field(default=None, description="Present only if the on-chain balance fetch failed.")
+
+
+@router.post("/wallets/agent", tags=["Agent Wallets"], response_model=AgentWalletResponse, status_code=status.HTTP_201_CREATED)
 async def provision_agent_wallet(
     payload: dict = Depends(require_auth),
     chain_id: int | None = None,
@@ -119,7 +145,7 @@ async def provision_agent_wallet(
     )
 
 
-@router.get("/wallets/agent", tags=["Agent Wallets"])
+@router.get("/wallets/agent", tags=["Agent Wallets"], response_model=AgentWalletResponse)
 async def get_agent_wallet_info(
     payload: dict = Depends(require_auth),
     chain_id: int | None = None,
@@ -156,7 +182,11 @@ async def get_agent_wallet_info(
     return JSONResponse(content=result)
 
 
-@router.delete("/wallets/agent", tags=["Agent Wallets"])
+class AgentWalletDeactivatedResponse(BaseModel):
+    status: Literal["deactivated"]
+
+
+@router.delete("/wallets/agent", tags=["Agent Wallets"], response_model=AgentWalletDeactivatedResponse)
 async def deactivate_org_agent_wallet(
     _admin: dict = Depends(require_admin),
     chain_id: int | None = None,
@@ -175,7 +205,11 @@ async def deactivate_org_agent_wallet(
     return JSONResponse(content={"status": "deactivated"})
 
 
-@router.delete("/wallets/{wallet_id}", tags=["Wallets"])
+class WalletDeletedResponse(BaseModel):
+    status: Literal["deleted"]
+
+
+@router.delete("/wallets/{wallet_id}", tags=["Wallets"], response_model=WalletDeletedResponse)
 async def unlink_wallet(
     wallet_id: str,
     payload: dict = Depends(require_auth),

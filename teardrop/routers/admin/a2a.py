@@ -29,7 +29,23 @@ class CreateA2AAgentRequest(BaseModel):
     jwt_forward: bool = Field(default=False, description="Forward caller JWT as Authorization header to this agent")
 
 
-@router.post("/admin/a2a/agents", tags=["Admin", "Admin / A2A"])
+class A2AAgentResponse(BaseModel):
+    id: str
+    org_id: str
+    agent_url: str
+    label: str | None = None
+    max_cost_usdc: int
+    require_x402: bool
+    jwt_forward: bool
+
+
+class A2AAgentListItem(A2AAgentResponse):
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unavailable.")
+
+
+@router.post(
+    "/admin/a2a/agents", tags=["Admin", "Admin / A2A"], response_model=A2AAgentResponse, status_code=status.HTTP_201_CREATED
+)
 async def admin_add_a2a_agent(
     request: Request,
     body: CreateA2AAgentRequest,
@@ -71,7 +87,7 @@ async def admin_add_a2a_agent(
     )
 
 
-@router.get("/admin/a2a/agents/{org_id}", tags=["Admin", "Admin / A2A"])
+@router.get("/admin/a2a/agents/{org_id}", tags=["Admin", "Admin / A2A"], response_model=list[A2AAgentListItem])
 async def admin_list_a2a_agents(
     request: Request,
     org_id: str,
@@ -101,7 +117,11 @@ async def admin_list_a2a_agents(
     )
 
 
-@router.delete("/admin/a2a/agents/{agent_id}", tags=["Admin", "Admin / A2A"])
+class A2AAgentDeletedResponse(BaseModel):
+    deleted: str = Field(..., description="The deleted agent's id.")
+
+
+@router.delete("/admin/a2a/agents/{agent_id}", tags=["Admin", "Admin / A2A"], response_model=A2AAgentDeletedResponse)
 async def admin_delete_a2a_agent(
     request: Request,
     agent_id: str,

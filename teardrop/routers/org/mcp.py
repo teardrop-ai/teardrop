@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -70,7 +70,30 @@ def _mcp_server_to_response(srv: OrgMcpServer) -> dict[str, Any]:
     }
 
 
-@router.post("/mcp/servers", tags=["MCP"])
+class McpServerResponse(BaseModel):
+    id: str
+    org_id: str
+    name: str
+    url: str
+    auth_type: str
+    has_auth: bool
+    auth_header_name: str | None
+    is_active: bool
+    timeout_seconds: int
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+    updated_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class McpServerDeletedResponse(BaseModel):
+    status: Literal["deleted"]
+
+
+class McpDiscoverResponse(BaseModel):
+    server_id: str
+    tools: list[dict[str, Any]] = Field(..., description="Raw MCP tool definitions as reported by the remote server.")
+
+
+@router.post("/mcp/servers", tags=["MCP"], response_model=McpServerResponse, status_code=status.HTTP_201_CREATED)
 async def create_mcp_server(
     body: CreateMcpServerRequest,
     payload: dict = Depends(require_auth),
@@ -108,7 +131,7 @@ async def create_mcp_server(
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=_mcp_server_to_response(srv))
 
 
-@router.get("/mcp/servers", tags=["MCP"])
+@router.get("/mcp/servers", tags=["MCP"], response_model=list[McpServerResponse])
 async def list_mcp_servers(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
@@ -118,7 +141,7 @@ async def list_mcp_servers(
     return JSONResponse(content=[_mcp_server_to_response(s) for s in servers])
 
 
-@router.get("/mcp/servers/{server_id}", tags=["MCP"])
+@router.get("/mcp/servers/{server_id}", tags=["MCP"], response_model=McpServerResponse)
 async def get_mcp_server(
     server_id: str,
     payload: dict = Depends(require_auth),
@@ -131,7 +154,7 @@ async def get_mcp_server(
     return JSONResponse(content=_mcp_server_to_response(srv))
 
 
-@router.patch("/mcp/servers/{server_id}", tags=["MCP"])
+@router.patch("/mcp/servers/{server_id}", tags=["MCP"], response_model=McpServerResponse)
 async def patch_mcp_server(
     server_id: str,
     body: UpdateMcpServerRequest,
@@ -172,7 +195,7 @@ async def patch_mcp_server(
     return JSONResponse(content=_mcp_server_to_response(srv))
 
 
-@router.delete("/mcp/servers/{server_id}", tags=["MCP"])
+@router.delete("/mcp/servers/{server_id}", tags=["MCP"], response_model=McpServerDeletedResponse)
 async def remove_mcp_server(
     server_id: str,
     payload: dict = Depends(require_auth),
@@ -186,7 +209,7 @@ async def remove_mcp_server(
     return JSONResponse(content={"status": "deleted"})
 
 
-@router.post("/mcp/servers/{server_id}/discover", tags=["MCP"])
+@router.post("/mcp/servers/{server_id}/discover", tags=["MCP"], response_model=McpDiscoverResponse)
 async def discover_mcp_server_tools(
     server_id: str,
     payload: dict = Depends(require_auth),

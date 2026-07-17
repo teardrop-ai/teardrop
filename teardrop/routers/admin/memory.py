@@ -8,8 +8,11 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from teardrop.dependencies import require_admin
 from teardrop.memory import count_memories, delete_all_org_memories, list_memories
@@ -17,7 +20,20 @@ from teardrop.memory import count_memories, delete_all_org_memories, list_memori
 router = APIRouter()
 
 
-@router.get("/admin/memories/org/{org_id}", tags=["Admin", "Admin / Memory"])
+class AdminMemoryItem(BaseModel):
+    id: str
+    content: str
+    user_id: str
+    source_run_id: str | None = None
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class AdminMemoryListResponse(BaseModel):
+    items: list[AdminMemoryItem]
+    total: int
+
+
+@router.get("/admin/memories/org/{org_id}", tags=["Admin", "Admin / Memory"], response_model=AdminMemoryListResponse)
 async def admin_list_org_memories(
     org_id: str,
     _admin: dict = Depends(require_admin),
@@ -39,7 +55,12 @@ async def admin_list_org_memories(
     return JSONResponse(content={"items": serialized, "total": total})
 
 
-@router.delete("/admin/memories/org/{org_id}", tags=["Admin", "Admin / Memory"])
+class AdminMemoryPurgeResponse(BaseModel):
+    status: Literal["purged"]
+    deleted: int
+
+
+@router.delete("/admin/memories/org/{org_id}", tags=["Admin", "Admin / Memory"], response_model=AdminMemoryPurgeResponse)
 async def admin_purge_org_memories(
     org_id: str,
     _admin: dict = Depends(require_admin),

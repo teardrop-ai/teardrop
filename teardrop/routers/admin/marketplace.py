@@ -8,6 +8,8 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -26,7 +28,18 @@ settings = get_settings()
 router = APIRouter()
 
 
-@router.post("/admin/marketplace/process-withdrawal/{withdrawal_id}", tags=["Admin", "Admin / Marketplace"])
+class AdminWithdrawalActionResponse(BaseModel):
+    id: str
+    org_id: str
+    amount_usdc: int
+    status: str
+
+
+@router.post(
+    "/admin/marketplace/process-withdrawal/{withdrawal_id}",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=AdminWithdrawalActionResponse,
+)
 async def admin_process_withdrawal(
     withdrawal_id: str,
     _admin: dict = Depends(require_admin),
@@ -58,7 +71,16 @@ class CompleteWithdrawalRequest(BaseModel):
     tx_hash: str = Field(..., min_length=10, max_length=100)
 
 
-@router.post("/admin/marketplace/complete-withdrawal/{withdrawal_id}", tags=["Admin", "Admin / Marketplace"])
+class CompleteWithdrawalResponse(BaseModel):
+    status: Literal["completed"]
+    tx_hash: str
+
+
+@router.post(
+    "/admin/marketplace/complete-withdrawal/{withdrawal_id}",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=CompleteWithdrawalResponse,
+)
 async def admin_complete_withdrawal(
     withdrawal_id: str,
     body: CompleteWithdrawalRequest,
@@ -78,7 +100,25 @@ async def admin_complete_withdrawal(
     return JSONResponse(content={"status": "completed", "tx_hash": body.tx_hash})
 
 
-@router.get("/admin/marketplace/withdrawals", tags=["Admin", "Admin / Marketplace"])
+class AdminWithdrawalItem(BaseModel):
+    id: str
+    org_id: str
+    amount_usdc: int
+    wallet: str
+    status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+    settled_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until settled.")
+
+
+class AdminWithdrawalListResponse(BaseModel):
+    withdrawals: list[AdminWithdrawalItem]
+
+
+@router.get(
+    "/admin/marketplace/withdrawals",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=AdminWithdrawalListResponse,
+)
 async def admin_list_withdrawals(
     org_id: str | None = Query(default=None),
     _admin: dict = Depends(require_admin),
@@ -103,7 +143,11 @@ async def admin_list_withdrawals(
     )
 
 
-@router.post("/admin/marketplace/sweep", tags=["Admin", "Admin / Marketplace"])
+class MarketplaceSweepResponse(BaseModel):
+    processed: int
+
+
+@router.post("/admin/marketplace/sweep", tags=["Admin", "Admin / Marketplace"], response_model=MarketplaceSweepResponse)
 async def admin_marketplace_sweep(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
@@ -119,7 +163,23 @@ async def admin_marketplace_sweep(
     return JSONResponse(content={"processed": count})
 
 
-@router.get("/admin/marketplace/sweep-status", tags=["Admin", "Admin / Marketplace"])
+class SweepStatusItem(BaseModel):
+    id: str
+    org_id: str
+    amount_usdc: int
+    status: str
+    sweep_attempt_count: int
+    last_sweep_error: str | None = None
+    next_sweep_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if not scheduled.")
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class SweepStatusResponse(BaseModel):
+    pending: list[SweepStatusItem]
+    exhausted: list[SweepStatusItem]
+
+
+@router.get("/admin/marketplace/sweep-status", tags=["Admin", "Admin / Marketplace"], response_model=SweepStatusResponse)
 async def admin_marketplace_sweep_status(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
@@ -155,7 +215,16 @@ async def admin_marketplace_sweep_status(
     )
 
 
-@router.post("/admin/marketplace/sweep-retry/{withdrawal_id}", tags=["Admin", "Admin / Marketplace"])
+class WithdrawalResetResponse(BaseModel):
+    status: Literal["pending"]
+    id: str
+
+
+@router.post(
+    "/admin/marketplace/sweep-retry/{withdrawal_id}",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=WithdrawalResetResponse,
+)
 async def admin_marketplace_sweep_retry(
     withdrawal_id: str,
     _admin: dict = Depends(require_admin),
@@ -172,7 +241,11 @@ async def admin_marketplace_sweep_retry(
     return JSONResponse(content={"status": "pending", "id": withdrawal_id})
 
 
-@router.post("/admin/marketplace/reset-withdrawal/{withdrawal_id}", tags=["Admin", "Admin / Marketplace"])
+@router.post(
+    "/admin/marketplace/reset-withdrawal/{withdrawal_id}",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=WithdrawalResetResponse,
+)
 async def admin_reset_withdrawal(
     withdrawal_id: str,
     _admin: dict = Depends(require_admin),
@@ -189,7 +262,18 @@ async def admin_reset_withdrawal(
     return JSONResponse(content={"status": "pending", "id": withdrawal_id})
 
 
-@router.get("/admin/marketplace/settlement-balance", tags=["Admin", "Admin / Marketplace"])
+class SettlementBalanceResponse(BaseModel):
+    account: str
+    address: str
+    chain_id: int
+    balance_usdc: int
+
+
+@router.get(
+    "/admin/marketplace/settlement-balance",
+    tags=["Admin", "Admin / Marketplace"],
+    response_model=SettlementBalanceResponse,
+)
 async def admin_marketplace_settlement_balance(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:

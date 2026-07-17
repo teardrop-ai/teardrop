@@ -14,13 +14,13 @@ from fastapi.responses import JSONResponse
 from mcp_client import list_org_mcp_servers
 from org_tools import list_org_tools
 from teardrop.dependencies import require_admin
-from teardrop.routers.org.mcp import _mcp_server_to_response
-from teardrop.routers.org.tools import _org_tool_to_response
+from teardrop.routers.org.mcp import McpServerResponse, _mcp_server_to_response
+from teardrop.routers.org.tools import OrgToolResponse, _org_tool_to_response
 
 router = APIRouter()
 
 
-@router.get("/admin/tools/{org_id}", tags=["Admin", "Admin / Tools"])
+@router.get("/admin/tools/{org_id}", tags=["Admin", "Admin / Tools"], response_model=list[OrgToolResponse])
 async def admin_list_tools(
     org_id: str,
     _admin: dict = Depends(require_admin),
@@ -30,7 +30,7 @@ async def admin_list_tools(
     return JSONResponse(content=[_org_tool_to_response(t) for t in tools])
 
 
-@router.get("/admin/mcp/servers/{org_id}", tags=["Admin", "Admin / Tools"])
+@router.get("/admin/mcp/servers/{org_id}", tags=["Admin", "Admin / Tools"], response_model=list[McpServerResponse])
 async def admin_list_mcp_servers(
     org_id: str,
     _admin: dict = Depends(require_admin),

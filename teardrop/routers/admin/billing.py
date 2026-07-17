@@ -10,6 +10,7 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -42,7 +43,14 @@ class ToolPricingOverrideRequest(BaseModel):
     description: str = Field("", max_length=500)
 
 
-@router.post("/admin/pricing/tools", tags=["Admin", "Admin / Billing"])
+class ToolPricingOverrideResponse(BaseModel):
+    tool_name: str
+    cost_usdc: int
+    description: str
+    updated: bool
+
+
+@router.post("/admin/pricing/tools", tags=["Admin", "Admin / Billing"], response_model=ToolPricingOverrideResponse)
 async def admin_upsert_tool_pricing(
     body: ToolPricingOverrideRequest,
     _admin: dict = Depends(require_admin),
@@ -82,7 +90,12 @@ async def admin_upsert_tool_pricing(
     )
 
 
-@router.delete("/admin/pricing/tools/{tool_name}", tags=["Admin", "Admin / Billing"])
+class ToolPricingDeleteResponse(BaseModel):
+    deleted: bool
+    tool_name: str
+
+
+@router.delete("/admin/pricing/tools/{tool_name}", tags=["Admin", "Admin / Billing"], response_model=ToolPricingDeleteResponse)
 async def admin_delete_tool_pricing(
     tool_name: str,
     _admin: dict = Depends(require_admin),
@@ -97,7 +110,12 @@ async def admin_delete_tool_pricing(
     return JSONResponse(content={"deleted": True, "tool_name": tool_name})
 
 
-@router.get("/admin/billing/revenue", tags=["Admin", "Admin / Billing"])
+class RevenueSummaryResponse(BaseModel):
+    total_settlements: int
+    total_revenue_usdc: int
+
+
+@router.get("/admin/billing/revenue", tags=["Admin", "Admin / Billing"], response_model=RevenueSummaryResponse)
 async def admin_billing_revenue(
     _admin: dict = Depends(require_admin),
     start: str | None = None,
@@ -116,7 +134,12 @@ class TopupRequest(BaseModel):
     amount_usdc: int = Field(..., gt=0)
 
 
-@router.post("/admin/credits/topup", tags=["Admin", "Admin / Billing"])
+class AdminTopupResponse(BaseModel):
+    org_id: str
+    new_balance_usdc: int
+
+
+@router.post("/admin/credits/topup", tags=["Admin", "Admin / Billing"], response_model=AdminTopupResponse)
 async def admin_credits_topup(
     body: TopupRequest,
     _admin: dict = Depends(require_admin),
@@ -137,7 +160,26 @@ async def admin_credits_topup(
     )
 
 
-@router.get("/admin/billing/pending", tags=["Admin", "Admin / Billing"])
+class PendingSettlementItem(BaseModel):
+    id: str
+    usage_event_id: str
+    org_id: str
+    run_id: str
+    billing_method: str
+    amount_usdc: int
+    retry_count: int
+    max_retries: int
+    next_retry_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if not scheduled.")
+    last_error: str | None = None
+    status: str
+    created_at: str = Field(..., description="ISO 8601 timestamp.")
+
+
+class PendingSettlementsResponse(BaseModel):
+    items: list[PendingSettlementItem]
+
+
+@router.get("/admin/billing/pending", tags=["Admin", "Admin / Billing"], response_model=PendingSettlementsResponse)
 async def admin_billing_pending(
     _admin: dict = Depends(require_admin),
     status_filter: str | None = Query(None, alias="status"),
@@ -155,7 +197,16 @@ async def admin_billing_pending(
     return JSONResponse(content={"items": serialized})
 
 
-@router.post("/admin/billing/pending/{settlement_id}/retry", tags=["Admin", "Admin / Billing"])
+class SettlementRetryResponse(BaseModel):
+    settlement_id: str
+    status: Literal["pending"]
+
+
+@router.post(
+    "/admin/billing/pending/{settlement_id}/retry",
+    tags=["Admin", "Admin / Billing"],
+    response_model=SettlementRetryResponse,
+)
 async def admin_billing_retry(
     settlement_id: str,
     _admin: dict = Depends(require_admin),
@@ -183,7 +234,15 @@ class SpendingConfigUpdate(BaseModel):
     is_paused: bool | None = None
 
 
-@router.get("/admin/orgs/{org_id}/spending", tags=["Admin", "Admin / Billing"])
+class OrgSpendingConfigResponse(BaseModel):
+    org_id: str
+    balance_usdc: int
+    spending_limit_usdc: int
+    is_paused: bool
+    daily_spend_usdc: int
+
+
+@router.get("/admin/orgs/{org_id}/spending", tags=["Admin", "Admin / Billing"], response_model=OrgSpendingConfigResponse)
 async def admin_get_spending(
     org_id: str,
     _admin: dict = Depends(require_admin),
@@ -193,7 +252,7 @@ async def admin_get_spending(
     return JSONResponse(content=config)
 
 
-@router.patch("/admin/orgs/{org_id}/spending", tags=["Admin", "Admin / Billing"])
+@router.patch("/admin/orgs/{org_id}/spending", tags=["Admin", "Admin / Billing"], response_model=OrgSpendingConfigResponse)
 async def admin_update_spending(
     org_id: str,
     body: SpendingConfigUpdate,
