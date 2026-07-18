@@ -10,6 +10,7 @@ import pytest
 import teardrop.agent_wallets as aw_module
 from teardrop.agent_wallets import (
     AgentWallet,
+    _cdp_account_name,
     _chain_id_to_network,
     create_agent_wallet,
     deactivate_agent_wallet,
@@ -63,6 +64,29 @@ class TestChainIdToNetwork:
             _chain_id_to_network(1)
 
 
+# ─── _cdp_account_name ────────────────────────────────────────────────────────
+
+
+class TestCdpAccountName:
+    def test_stays_within_cdp_36_char_limit_for_uuid_org_id(self):
+        """Real org_ids are Postgres UUIDs (36 chars); f'td-{org_id}' (39 chars)
+        would exceed CDP's cap and be rejected with a 400."""
+        uuid_org_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        name = _cdp_account_name(uuid_org_id)
+        assert len(name) <= 36
+
+    def test_is_alphanumeric_and_hyphen_only(self):
+        name = _cdp_account_name("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+        assert all(c.isalnum() or c == "-" for c in name)
+        assert name.startswith("td-")
+
+    def test_is_deterministic(self):
+        assert _cdp_account_name(_ORG_ID) == _cdp_account_name(_ORG_ID)
+
+    def test_different_org_ids_produce_different_names(self):
+        assert _cdp_account_name("org-a") != _cdp_account_name("org-b")
+
+
 # ─── create_agent_wallet ─────────────────────────────────────────────────────
 
 
@@ -111,6 +135,7 @@ class TestCreateAgentWallet:
         assert wallet.chain_id == 84532
         assert wallet.wallet_type == "eoa"
         pool.execute.assert_called()  # INSERT
+        mock_cdp.evm.get_or_create_account.assert_awaited_once_with(name=_cdp_account_name(_ORG_ID))
 
     @pytest.mark.asyncio
     async def test_returns_existing_wallet_idempotent(self):

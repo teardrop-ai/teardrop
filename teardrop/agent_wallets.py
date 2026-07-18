@@ -11,6 +11,7 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 import uuid
@@ -109,6 +110,19 @@ def _chain_id_to_network(chain_id: int) -> str:
     return network
 
 
+def _cdp_account_name(org_id: str) -> str:
+    """Derive a CDP-compliant account name for an org's agent wallet.
+
+    CDP EVM account names are capped at 36 characters, alphanumeric + hyphen
+    only. Teardrop ``org_id`` values are Postgres UUIDs (36 chars), so the
+    naive ``f"td-{org_id}"`` scheme (39 chars) is rejected by CDP with a 400.
+    Use a short deterministic hash instead — same org_id always maps to the
+    same CDP account name, and collisions are astronomically unlikely.
+    """
+    digest = hashlib.sha256(org_id.encode("utf-8")).hexdigest()[:24]
+    return f"td-{digest}"  # 27 chars total, well under CDP's 36-char cap
+
+
 # ─── Audit logging ────────────────────────────────────────────────────────────
 
 
@@ -161,7 +175,7 @@ async def create_agent_wallet(org_id: str, actor_id: str, chain_id: int | None =
         return existing
 
     # Provision via CDP SDK.
-    cdp_account_name = f"td-{org_id}"
+    cdp_account_name = _cdp_account_name(org_id)
     network = _chain_id_to_network(chain_id)
 
     async with _get_cdp_client() as cdp:
