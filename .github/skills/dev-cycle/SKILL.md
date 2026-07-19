@@ -43,9 +43,13 @@ research_summary: <= 500 tokens
 plan_ref: /memories/session/plan.md
 verify_status: PENDING | PASS | BLOCK
 block_findings: empty or concrete blocking findings
+version_relevant: true | false | null
+version_bump_kind: major | minor | patch | null
 ```
 
 Use short bullet points or one-line values. Do not store full transcripts.
+
+`version_relevant` and `version_bump_kind` are assessed in every PLAN phase but only applied at a release boundary (see Phase 3 and Phase 5 below).
 
 ## Phase 1: SCOPE
 
@@ -107,6 +111,11 @@ Plan requirements:
 - validation command or check
 - rollback or retry path if VERIFY blocks
 
+Versioning checkpoint (lightweight):
+- Ask: "Does this cycle change the public API, agent behavior, marketplace contract, or billing semantics?"
+- If yes, set `version_relevant: true` and record the highest required `version_bump_kind` (major/minor/patch).
+- Do NOT edit `teardrop/_meta.py` or run `scripts.export_api_spec` inside the dev-cycle. Version bumps are applied once at the release boundary after chained cycles complete.
+
 Output:
 - write the plan to `/memories/session/plan.md`
 
@@ -147,6 +156,10 @@ Always check:
 Additional checks by domain:
 - billing, Stripe, x402, credits, marketplace, MCP, A2A, SSRF: load `teardrop-domain-invariants`
 - tool behavior, planner behavior, pricing, latency, or cost changes: load `teardrop-eval-harness`
+
+Release-boundary versioning check:
+- If this is the final cycle in a chain and `version_relevant` is true, run `python scripts/bump_version.py <version_bump_kind>` once, then verify `teardrop/_meta.py` and `spec/` reflect the new version.
+- If the user has not yet decided to cut a release, leave `version_relevant` recorded and remind them to run the bump script before tagging.
 
 VERIFY output must be one of:
 - `PASS`: no blocking findings, validation is sufficient for current scope
