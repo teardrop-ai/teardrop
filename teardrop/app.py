@@ -296,12 +296,12 @@ async def add_security_headers(request: Request, call_next: Callable[[Request], 
 
 
 # ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
-from teardrop.mcp_gateway import MCPGatewayMiddleware  # noqa: E402
+from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer  # noqa: E402
 
-app.add_middleware(MCPGatewayMiddleware)
-
-# ─── MCP Streamable HTTP endpoint (Smithery / direct MCP clients) ────────────
-app.mount("/tools/mcp", mcp_app)
+# Keep the gateway on the Streamable HTTP mount only. REST endpoints such as
+# /mcp/servers/{server_id}/discover must not traverse BaseHTTPMiddleware.
+app.add_middleware(MCPPathNormalizer)
+app.mount("/tools/mcp", MCPGatewayMiddleware(mcp_app, mounted=True))
 
 # ─── Domain routers (system/discovery extracted into teardrop.routers) ───────
 from teardrop.routers import register_routers  # noqa: E402

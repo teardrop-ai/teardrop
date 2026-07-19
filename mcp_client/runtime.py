@@ -45,12 +45,21 @@ async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
     Useful for the /discover endpoint.
     """
     settings = get_settings()
-    session = await _get_or_create_session(server)
-
-    response = await asyncio.wait_for(
-        session.list_tools(),
-        timeout=float(settings.mcp_client_connect_timeout_seconds),
-    )
+    started = time.monotonic()
+    try:
+        session = await _get_or_create_session(server)
+        response = await asyncio.wait_for(
+            session.list_tools(),
+            timeout=float(settings.mcp_client_connect_timeout_seconds),
+        )
+    except Exception:
+        logger.warning(
+            "MCP tool discovery failed server_id=%s elapsed_ms=%d",
+            server.id,
+            int((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        raise
 
     tools: list[dict[str, Any]] = []
     for mcp_tool in response.tools[: settings.max_mcp_tools_per_server]:
@@ -65,6 +74,12 @@ async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
                 "output_schema": output_schema if isinstance(output_schema, dict) else None,
             }
         )
+    logger.info(
+        "MCP tool discovery succeeded server_id=%s tool_count=%d elapsed_ms=%d",
+        server.id,
+        len(tools),
+        int((time.monotonic() - started) * 1000),
+    )
     return tools
 
 

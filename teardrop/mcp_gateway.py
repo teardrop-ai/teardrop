@@ -19,6 +19,7 @@ import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
@@ -28,6 +29,20 @@ from teardrop.public_url import public_base_url
 logger = logging.getLogger(__name__)
 
 _MCP_PREFIX = "/tools/mcp"
+
+
+class MCPPathNormalizer:
+    """Normalize the bare MCP mount path without using BaseHTTPMiddleware."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope.get("path") == _MCP_PREFIX:
+            scope = dict(scope)
+            scope["path"] = f"{_MCP_PREFIX}/"
+            scope["raw_path"] = f"{_MCP_PREFIX}/".encode("utf-8")
+        await self.app(scope, receive, send)
 
 
 def _jsonrpc_error(req_id: int | str | None, code: int, message: str) -> dict:
@@ -46,6 +61,10 @@ def _mcp_402_resource(request: Request) -> dict[str, str]:
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
     """Auth + billing + x402 gateway for the MCP endpoint."""
 
+    def __init__(self, app, *, mounted: bool = False):  # noqa: ANN001
+        super().__init__(app)
+        self._mounted = mounted
+
     @staticmethod
     def _smithery_events_list_response(req_id: int | str | None) -> JSONResponse:
         return JSONResponse(
@@ -60,12 +79,15 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # FastMCP is mounted at /tools/mcp and serves its root at "/".
         # Normalizing the bare mount path avoids FastAPI falling through to
         # /tools/{tool_id} and returning a method-mismatch 405.
-        if request.scope.get("path") == _MCP_PREFIX:
+        if self._mounted:
+            request.scope["path"] = "/"
+            request.scope["raw_path"] = b"/"
+        elif request.scope.get("path") == _MCP_PREFIX:
             request.scope["path"] = f"{_MCP_PREFIX}/"
             request.scope["raw_path"] = f"{_MCP_PREFIX}/".encode("utf-8")
 
         # Only intercept MCP requests.
-        if not request.url.path.startswith(_MCP_PREFIX):
+        if not self._mounted and not request.url.path.startswith(_MCP_PREFIX):
             return await call_next(request)
 
         settings = get_settings()

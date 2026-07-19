@@ -86,3 +86,4 @@ dmypy.json
 
 # Building
 /prompts/
+.opencode/
