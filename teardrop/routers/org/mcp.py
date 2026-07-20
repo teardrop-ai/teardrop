@@ -16,6 +16,7 @@ from mcp_client import (
     create_org_mcp_server,
     delete_org_mcp_server,
     discover_mcp_tools,
+    discover_mcp_tools_with_schema,
     get_org_mcp_server,
     list_org_mcp_servers,
     update_org_mcp_server,
@@ -65,6 +66,8 @@ def _mcp_server_to_response(srv: OrgMcpServer) -> dict[str, Any]:
         "auth_header_name": srv.auth_header_name,
         "is_active": srv.is_active,
         "timeout_seconds": srv.timeout_seconds,
+        "schema_hash": srv.schema_hash or None,
+        "last_schema_changed_at": (srv.last_schema_changed_at.isoformat() if srv.last_schema_changed_at else None),
         "created_at": srv.created_at.isoformat(),
         "updated_at": srv.updated_at.isoformat(),
     }
@@ -80,6 +83,8 @@ class McpServerResponse(BaseModel):
     auth_header_name: str | None
     is_active: bool
     timeout_seconds: int
+    schema_hash: str | None = None
+    last_schema_changed_at: str | None = Field(default=None, description="ISO 8601 timestamp when inventory last changed.")
     created_at: str = Field(..., description="ISO 8601 timestamp.")
     updated_at: str = Field(..., description="ISO 8601 timestamp.")
 
@@ -90,6 +95,7 @@ class McpServerDeletedResponse(BaseModel):
 
 class McpDiscoverResponse(BaseModel):
     server_id: str
+    schema_changed: bool = Field(..., description="True when a previously discovered tool inventory changed.")
     tools: list[dict[str, Any]] = Field(..., description="Raw MCP tool definitions as reported by the remote server.")
 
 
@@ -226,13 +232,13 @@ async def discover_mcp_server_tools(
     if srv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP server not found.")
     try:
-        tools = await discover_mcp_tools(srv)
+        tools, schema_changed = await discover_mcp_tools_with_schema(srv)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to connect to MCP server: {type(exc).__name__}",
         )
-    return JSONResponse(content={"server_id": server_id, "tools": tools})
+    return JSONResponse(content={"server_id": server_id, "schema_changed": schema_changed, "tools": tools})
 
 
 # ─── Pre-publish MCP tool diagnostic probe ───────────────────────────────────

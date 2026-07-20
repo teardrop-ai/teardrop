@@ -144,6 +144,7 @@ async def get_subscribed_tools_catalog(
         FROM org_marketplace_subscriptions s
         JOIN orgs o
             ON o.slug = split_part(s.qualified_tool_name, '/', 1)
+           AND o.slug <> 'platform'
         JOIN org_tools t
             ON t.org_id = o.id
            AND t.name = split_part(s.qualified_tool_name, '/', 2)

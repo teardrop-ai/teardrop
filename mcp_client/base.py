@@ -49,6 +49,8 @@ class OrgMcpServer(BaseModel):
     auth_header_name: str | None = None
     is_active: bool
     timeout_seconds: int
+    schema_hash: str = ""
+    last_schema_changed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -143,6 +145,8 @@ def _row_to_model(row: asyncpg.Record) -> OrgMcpServer:
         auth_header_name=row["auth_header_name"],
         is_active=row["is_active"],
         timeout_seconds=row["timeout_seconds"],
+        schema_hash=row.get("schema_hash") or "",
+        last_schema_changed_at=row.get("last_schema_changed_at"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

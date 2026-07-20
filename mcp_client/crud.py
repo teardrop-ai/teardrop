@@ -133,6 +133,41 @@ async def list_org_mcp_servers(org_id: str, *, active_only: bool = True) -> list
     return [_row_to_model(r) for r in rows]
 
 
+async def record_mcp_server_schema_hash(server: OrgMcpServer, schema_hash: str) -> tuple[bool, bool]:
+    """Persist a successful inventory hash and return ``(updated, drifted)``.
+
+    The first successful discovery establishes a baseline rather than reporting
+    drift. The compare-and-swap update prevents a stale overlapping discovery
+    from replacing a newer inventory hash.
+    """
+    if server.schema_hash == schema_hash:
+        return False, False
+
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        UPDATE org_mcp_servers
+                SET schema_hash = $4,
+            last_schema_changed_at = NOW()
+        WHERE id = $1
+          AND org_id = $2
+                    AND schema_hash IS NOT DISTINCT FROM $3
+        RETURNING last_schema_changed_at
+        """,
+        server.id,
+        server.org_id,
+        server.schema_hash or None,
+        schema_hash,
+    )
+    if row is None:
+        return False, False
+
+    drifted = bool(server.schema_hash)
+    server.schema_hash = schema_hash
+    server.last_schema_changed_at = row["last_schema_changed_at"]
+    return True, drifted
+
+
 async def _deactivate_dependent_marketplace_tools(server_id: str, org_id: str) -> None:
     """Cascade-deactivate marketplace listings backed by a disabled/removed MCP server.
 

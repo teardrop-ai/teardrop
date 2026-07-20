@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -18,7 +19,13 @@ from mcp_client.base import (
     OrgMcpServer,
     logger,
 )
-from mcp_client.cache import _get_servers_cached
+from mcp_client.cache import (
+    _get_servers_cached,
+    get_mcp_tools_cache_version,
+    invalidate_mcp_cache,
+    refresh_mcp_servers,
+)
+from mcp_client.crud import record_mcp_server_schema_hash
 from mcp_client.session import _get_or_create_session
 from teardrop.config import get_settings
 from tools.shared import build_pydantic_model
@@ -38,11 +45,44 @@ def _build_pydantic_model(name: str, schema: dict[str, Any]) -> type:
 # ─── Tool Discovery + LangChain Wrapping ─────────────────────────────────────
 
 
-async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
-    """Connect to an MCP server and return raw tool definitions.
+def _mcp_tools_schema_hash(tools: list[dict[str, Any]]) -> str:
+    """Return a stable hash of safe, agent-visible MCP tool metadata."""
+    canonical_tools = [
+        {
+            "name": str(tool.get("name", "")),
+            "description": str(tool.get("description", "")),
+            "input_schema": tool.get("input_schema") if isinstance(tool.get("input_schema"), dict) else {},
+            "output_schema": tool.get("output_schema") if isinstance(tool.get("output_schema"), dict) else None,
+        }
+        for tool in tools
+    ]
+    canonical_tools.sort(key=lambda tool: (tool["name"], json.dumps(tool, sort_keys=True, separators=(",", ":"))))
+    payload = json.dumps(canonical_tools, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _track_mcp_schema_discovery(server: OrgMcpServer, tools: list[dict[str, Any]]) -> bool:
+    """Persist a successful discovery hash without making discovery depend on telemetry."""
+    try:
+        updated, schema_changed = await record_mcp_server_schema_hash(server, _mcp_tools_schema_hash(tools))
+    except Exception:
+        logger.warning("MCP schema tracking failed server_id=%s", server.id, exc_info=True)
+        return False
+
+    if updated:
+        try:
+            await invalidate_mcp_cache(server.org_id)
+        except Exception:
+            logger.warning("MCP schema cache invalidation failed server_id=%s", server.id, exc_info=True)
+    return schema_changed
+
+
+async def discover_mcp_tools_with_schema(server: OrgMcpServer) -> tuple[list[dict[str, Any]], bool]:
+    """Connect to an MCP server, return tool definitions, and report confirmed drift.
 
     Returns a list of dicts: [{"name": ..., "description": ..., "input_schema": ...}]
-    Useful for the /discover endpoint.
+    plus whether a previously known inventory changed. The initial successful
+    discovery establishes a baseline and returns ``False`` for drift.
     """
     settings = get_settings()
     started = time.monotonic()
@@ -80,6 +120,16 @@ async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
         len(tools),
         int((time.monotonic() - started) * 1000),
     )
+    return tools, await _track_mcp_schema_discovery(server, tools)
+
+
+async def discover_mcp_tools(server: OrgMcpServer) -> list[dict[str, Any]]:
+    """Connect to an MCP server and return raw tool definitions.
+
+    Kept for backward compatibility; use ``discover_mcp_tools_with_schema``
+    when callers need the drift signal.
+    """
+    tools, _ = await discover_mcp_tools_with_schema(server)
     return tools
 
 
@@ -218,8 +268,8 @@ def _wrap_mcp_tool(
 
 # ─── Per-org aggregated tool builder ──────────────────────────────────────────
 
-_tools_cache: dict[str, tuple[list[StructuredTool], dict[str, StructuredTool], float]] = {}
-# Key: org_id → (tools_list, tools_by_name, expires_at)
+_tools_cache: dict[str, tuple[list[StructuredTool], dict[str, StructuredTool], float, int | None]] = {}
+# Key: org_id → (tools_list, tools_by_name, expires_at, shared_cache_version)
 _tools_lock: asyncio.Lock | None = None
 
 
@@ -228,6 +278,80 @@ def _get_tools_lock() -> asyncio.Lock:
     if _tools_lock is None:
         _tools_lock = asyncio.Lock()
     return _tools_lock
+
+
+async def _get_current_tools_cache(
+    org_id: str,
+) -> tuple[list[StructuredTool], dict[str, StructuredTool]] | None:
+    cached = _tools_cache.get(org_id)
+    if cached is None or time.monotonic() >= cached[2]:
+        return None
+
+    shared_version = await get_mcp_tools_cache_version(org_id)
+    if shared_version is not None and shared_version != cached[3]:
+        _tools_cache.pop(org_id, None)
+        return None
+    return cached[0], cached[1]
+
+
+async def _build_mcp_tools_for_servers(
+    org_id: str,
+    servers: list[OrgMcpServer],
+) -> tuple[list[StructuredTool], dict[str, StructuredTool]]:
+    """Discover and wrap an already-resolved list of active MCP servers."""
+    from tools import registry as global_registry
+
+    all_tools: list[StructuredTool] = []
+    all_by_name: dict[str, StructuredTool] = {}
+
+    for server in servers:
+        try:
+            discovered_tools, _ = await discover_mcp_tools_with_schema(server)
+        except Exception:
+            logger.warning(
+                "MCP server '%s' (org=%s) unreachable — skipping",
+                server.name,
+                org_id,
+                exc_info=True,
+            )
+            continue
+
+        for mcp_tool in discovered_tools:
+            mcp_tool_name = str(mcp_tool["name"])
+            prefixed_name = f"{server.name}{_NAME_SEPARATOR}{mcp_tool_name}"
+
+            # Collision check: global registry
+            if global_registry.get(mcp_tool_name) is not None:
+                logger.warning(
+                    "MCP tool '%s' from server '%s' skipped — collides with global tool",
+                    mcp_tool_name,
+                    server.name,
+                )
+                continue
+
+            # Collision check: already seen in this aggregation
+            if prefixed_name in all_by_name:
+                continue
+
+            try:
+                lc_tool = _wrap_mcp_tool(
+                    server,
+                    mcp_tool_name,
+                    str(mcp_tool["description"]),
+                    mcp_tool["input_schema"],
+                    mcp_tool["output_schema"],
+                )
+                all_tools.append(lc_tool)
+                all_by_name[prefixed_name] = lc_tool
+            except Exception:
+                logger.warning(
+                    "Failed to wrap MCP tool '%s' from server '%s'",
+                    mcp_tool_name,
+                    server.name,
+                    exc_info=True,
+                )
+
+    return all_tools, all_by_name
 
 
 async def build_mcp_langchain_tools(
@@ -255,80 +379,38 @@ async def build_mcp_langchain_tools(
     settings = get_settings()
 
     # Check tool-level cache
-    now = time.monotonic()
-    cached = _tools_cache.get(org_id)
-    if cached is not None:
-        tools_list, tools_by_name, expiry = cached
-        if now < expiry:
-            return tools_list, tools_by_name
+    cached_tools = await _get_current_tools_cache(org_id)
+    if cached_tools is not None:
+        return cached_tools
 
     async with _get_tools_lock():
         # Double-check after lock
-        cached = _tools_cache.get(org_id)
-        if cached is not None and time.monotonic() < cached[2]:
-            return cached[0], cached[1]
+        cached_tools = await _get_current_tools_cache(org_id)
+        if cached_tools is not None:
+            return cached_tools
 
-        servers = await _get_servers_cached(org_id)
-        if not servers:
-            ttl = settings.mcp_client_tool_cache_ttl_seconds
-            _tools_cache[org_id] = ([], {}, time.monotonic() + ttl)
-            return [], {}
+        for attempt in range(2):
+            cache_version_before = await get_mcp_tools_cache_version(org_id)
+            servers = await refresh_mcp_servers(org_id) if cache_version_before is not None else await _get_servers_cached(org_id)
+            all_tools, all_by_name = await _build_mcp_tools_for_servers(org_id, servers)
+            cache_version_after = await get_mcp_tools_cache_version(org_id)
 
-        from tools import registry as global_registry
-
-        all_tools: list[StructuredTool] = []
-        all_by_name: dict[str, StructuredTool] = {}
-
-        for server in servers:
-            try:
-                session = await _get_or_create_session(server)
-                response = await asyncio.wait_for(
-                    session.list_tools(),
-                    timeout=float(settings.mcp_client_connect_timeout_seconds),
+            if cache_version_before == cache_version_after:
+                ttl = settings.mcp_client_tool_cache_ttl_seconds
+                _tools_cache[org_id] = (
+                    all_tools,
+                    all_by_name,
+                    time.monotonic() + ttl,
+                    cache_version_after,
                 )
-            except Exception:
-                logger.warning(
-                    "MCP server '%s' (org=%s) unreachable — skipping",
-                    server.name,
-                    org_id,
-                    exc_info=True,
-                )
-                continue
+                return all_tools, all_by_name
 
-            for mcp_tool in response.tools[: settings.max_mcp_tools_per_server]:
-                prefixed_name = f"{server.name}{_NAME_SEPARATOR}{mcp_tool.name}"
+            logger.debug(
+                "MCP tools cache version changed during build org=%s attempt=%d; rebuilding",
+                org_id,
+                attempt + 1,
+            )
 
-                # Collision check: global registry
-                if global_registry.get(mcp_tool.name) is not None:
-                    logger.warning(
-                        "MCP tool '%s' from server '%s' skipped — collides with global tool",
-                        mcp_tool.name,
-                        server.name,
-                    )
-                    continue
-
-                # Collision check: already seen in this aggregation
-                if prefixed_name in all_by_name:
-                    continue
-
-                try:
-                    lc_tool = _wrap_mcp_tool(
-                        server,
-                        mcp_tool.name,
-                        mcp_tool.description or "",
-                        mcp_tool.inputSchema or {},
-                        getattr(mcp_tool, "outputSchema", None),
-                    )
-                    all_tools.append(lc_tool)
-                    all_by_name[prefixed_name] = lc_tool
-                except Exception:
-                    logger.warning(
-                        "Failed to wrap MCP tool '%s' from server '%s'",
-                        mcp_tool.name,
-                        server.name,
-                        exc_info=True,
-                    )
-
-        ttl = settings.mcp_client_tool_cache_ttl_seconds
-        _tools_cache[org_id] = (all_tools, all_by_name, time.monotonic() + ttl)
+        # A continuously changing remote inventory is returned uncached rather
+        # than marking a stale snapshot as current.
         return all_tools, all_by_name

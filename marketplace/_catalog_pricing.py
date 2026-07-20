@@ -9,6 +9,7 @@ from teardrop.cache import TTLCache
 
 _PLATFORM_TOOL_PRICE_TTL_SECONDS = 60
 _ORG_TOOL_PRICE_TTL_SECONDS = 60
+_PLATFORM_SLUG = "platform"
 
 _platform_tool_caches: dict[str, TTLCache[int | None]] = {}
 _org_tool_price_caches: dict[str, TTLCache[int | None]] = {}
@@ -100,6 +101,8 @@ async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | Non
 
     org_slug, tool_name = qualified_name.split("/", 1)
     if not org_slug or not tool_name:
+        return None
+    if org_slug == _PLATFORM_SLUG:
         return None
 
     return await _get_org_tool_price_cache(qualified_name).get()

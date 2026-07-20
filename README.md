@@ -327,7 +327,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/auth/logout" `
 Organizations can configure their preferred LLM provider, model, routing strategy, and optionally bring their own API keys (BYOK). This unlocks:
 
 - **Multi-provider choice**: Use Anthropic, OpenAI, Google, or point at self-hosted endpoints (vLLM, Ollama, OpenRouter)
-- **Bring Your Own Key (BYOK)**: Encrypt and store your own API credentials — Teardrop never sees your keys. BYOK orgs pay platform fees for orchestration (per-token when `BYOK_TIER_PRICING_ENABLED=true`, or flat fee otherwise) in addition to their LLM provider costs.
+- **Bring Your Own Key (BYOK)**: Encrypt and store your own API credentials — Teardrop never sees your keys. BYOK orgs pay only platform orchestration fees (per-token when `BYOK_TIER_PRICING_ENABLED=true`, or a flat fee otherwise); the LLM provider is billed directly to their own key.
 - **Smart routing**: Automatically select models based on cost, speed, or quality
 - **Self-hosted support**: Use any OpenAI-compatible endpoint via `api_base` parameter
 
@@ -399,7 +399,16 @@ When you set `routing_preference` to a value other than `"default"`, Teardrop wi
 
 **Note**: If you set BYOK (custom API key), routing is disabled — you always use your configured model.
 
-**BYOK Platform Fee**: BYOK orgs are charged a flat per-run infrastructure fee (`BYOK_PLATFORM_FEE_USDC`, default `1000` = $0.001) instead of LLM token costs. The fee appears as `platform_fee_usdc` in usage events and SSE billing events.
+### LLM credit model
+
+Teardrop prepaid credits (or on-chain x402 settlement) cover the full cost of every run, but the line item depends on whether the org uses platform LLM keys or BYOK:
+
+| Mode | Who pays the LLM provider | What Teardrop debits from the org |
+|------|---------------------------|-----------------------------------|
+| Platform keys (default) | Teardrop | Full model cost from `pricing_rules` (token-in + token-out + run fee) |
+| BYOK | The org, directly through their own key | Platform orchestration fee only: flat `BYOK_PLATFORM_FEE_USDC` (default $0.001/run), or per-token orchestration pricing when `BYOK_TIER_PRICING_ENABLED=true` floored at that flat fee. The fee appears as `platform_fee_usdc` in usage events and SSE billing events. |
+
+In other words, BYOK does not eliminate the need for Teardrop credits or x402 settlement — it only removes the LLM model cost from the Teardrop bill.
 
 ---
 

@@ -343,6 +343,7 @@ async def record_delegation_event(
     billing_method: str = "credit",
     settlement_tx: str = "",
     error: str = "",
+    task_type: str = "general",
 ) -> None:
     """Append an immutable A2A delegation record (cost, status, settlement) for audit."""
     await _get_delegation_service().record_delegation_event(
@@ -355,6 +356,7 @@ async def record_delegation_event(
         billing_method,
         settlement_tx,
         error,
+        task_type,
     )
 
 

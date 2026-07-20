@@ -221,11 +221,19 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
         AsyncMock(return_value=_sample_server()),
     )
     monkeypatch.setattr(
-        "teardrop.routers.org.mcp.discover_mcp_tools",
+        "teardrop.routers.org.mcp.discover_mcp_tools_with_schema",
         AsyncMock(
-            return_value=[
-                {"name": "add", "description": "Add numbers", "input_schema": {}, "output_schema": {"type": "object"}},
-            ]
+            return_value=(
+                [
+                    {
+                        "name": "add",
+                        "description": "Add numbers",
+                        "input_schema": {},
+                        "output_schema": {"type": "object"},
+                    },
+                ],
+                True,
+            )
         ),
     )
 
@@ -233,6 +241,7 @@ async def test_discover_mcp_tools(api_client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["server_id"] == "srv-1"
+    assert data["schema_changed"] is True
     assert len(data["tools"]) == 1
     assert data["tools"][0]["name"] == "add"
     assert data["tools"][0]["output_schema"] == {"type": "object"}
@@ -270,7 +279,7 @@ async def test_discover_mcp_tools_connection_error(api_client, monkeypatch):
         AsyncMock(return_value=_sample_server()),
     )
     monkeypatch.setattr(
-        "teardrop.routers.org.mcp.discover_mcp_tools",
+        "teardrop.routers.org.mcp.discover_mcp_tools_with_schema",
         AsyncMock(side_effect=ConnectionError("refused")),
     )
 

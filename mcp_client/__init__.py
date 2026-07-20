@@ -58,6 +58,7 @@ from mcp_client.runtime import (  # noqa: F401  (re-exported for backward compat
     _wrap_mcp_tool,
     build_mcp_langchain_tools,
     discover_mcp_tools,
+    discover_mcp_tools_with_schema,
 )
 from mcp_client.session import (  # noqa: F401  (re-exported for backward compatibility)
     _close_all_sessions,
@@ -85,5 +86,6 @@ __all__ = [
     "delete_org_mcp_server",
     "invalidate_mcp_cache",
     "discover_mcp_tools",
+    "discover_mcp_tools_with_schema",
     "build_mcp_langchain_tools",
 ]

@@ -35,6 +35,22 @@ class TestDelegateToAgentInput:
             task_description="Summarise this text",
         )
         assert inp.agent_url == "https://agent.example.com"
+        assert inp.task_type == "general"
+
+    def test_task_type_is_bounded(self):
+        inp = DelegateToAgentInput(
+            agent_url="https://agent.example.com",
+            task_description="Research current market conditions",
+            task_type="research",
+        )
+        assert inp.task_type == "research"
+
+        with pytest.raises(ValidationError):
+            DelegateToAgentInput(
+                agent_url="https://agent.example.com",
+                task_description="Research current market conditions",
+                task_type="raw prompt text must not be stored",
+            )
 
     def test_agent_url_too_short(self):
         with pytest.raises(ValidationError):

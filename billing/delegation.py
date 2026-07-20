@@ -13,6 +13,13 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
+_DELEGATION_TASK_TYPES = frozenset({"general", "research", "analysis", "data_retrieval", "coding", "transaction", "automation"})
+
+
+def _normalize_task_type(task_type: str) -> str:
+    normalized = str(task_type).strip().lower()
+    return normalized if normalized in _DELEGATION_TASK_TYPES else "general"
+
 
 class BillingDelegationService:
     """Encapsulates delegation preflight checks and ledger/audit writes."""
@@ -111,6 +118,7 @@ class BillingDelegationService:
         billing_method: str = "credit",
         settlement_tx: str = "",
         error: str = "",
+        task_type: str = "general",
     ) -> None:
         """Write immutable delegation event row (best effort)."""
         try:
@@ -119,8 +127,8 @@ class BillingDelegationService:
                 """
                 INSERT INTO a2a_delegation_events
                     (id, org_id, run_id, agent_url, agent_name,
-                     task_status, cost_usdc, billing_method, settlement_tx, error, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                     task_status, cost_usdc, billing_method, settlement_tx, error, task_type, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
                 """,
                 str(uuid.uuid4()),
                 org_id,
@@ -132,6 +140,7 @@ class BillingDelegationService:
                 billing_method,
                 settlement_tx,
                 error,
+                _normalize_task_type(task_type),
             )
         except Exception:
             logger.exception(
@@ -154,7 +163,7 @@ class BillingDelegationService:
         rows = await pool.fetch(
             f"""
             SELECT id, org_id, run_id, agent_url, agent_name,
-                   task_status, cost_usdc, billing_method, settlement_tx, error, created_at
+                     task_status, cost_usdc, billing_method, settlement_tx, error, task_type, created_at
             FROM a2a_delegation_events
             WHERE org_id = $1
               {cursor_clause}

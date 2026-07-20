@@ -131,4 +131,5 @@ def _get_pool() -> asyncpg.Pool:
 
 
 def _generate_org_slug(org_name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-")[:40]
+    slug = re.sub(r"[^a-z0-9]+", "-", org_name.lower()).strip("-")[:40]
+    return "platform-org" if slug == "platform" else slug

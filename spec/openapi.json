@@ -195,6 +195,10 @@
           "task_status": {
             "title": "Task Status",
             "type": "string"
+          },
+          "task_type": {
+            "title": "Task Type",
+            "type": "string"
           }
         },
         "required": [
@@ -202,6 +206,7 @@
           "run_id",
           "agent_url",
           "task_status",
+          "task_type",
           "cost_usdc",
           "billing_method"
         ],
@@ -3196,6 +3201,11 @@
       },
       "McpDiscoverResponse": {
         "properties": {
+          "schema_changed": {
+            "description": "True when a previously discovered tool inventory changed.",
+            "title": "Schema Changed",
+            "type": "boolean"
+          },
           "server_id": {
             "title": "Server Id",
             "type": "string"
@@ -3212,6 +3222,7 @@
         },
         "required": [
           "server_id",
+          "schema_changed",
           "tools"
         ],
         "title": "McpDiscoverResponse",
@@ -3265,6 +3276,18 @@
             "title": "Is Active",
             "type": "boolean"
           },
+          "last_schema_changed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp when inventory last changed.",
+            "title": "Last Schema Changed At"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -3272,6 +3295,17 @@
           "org_id": {
             "title": "Org Id",
             "type": "string"
+          },
+          "schema_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Hash"
           },
           "timeout_seconds": {
             "title": "Timeout Seconds",
@@ -5879,7 +5913,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {

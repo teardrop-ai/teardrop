@@ -170,6 +170,7 @@ class A2ADelegationEvent(BaseModel):
     agent_url: str
     agent_name: str | None = None
     task_status: str
+    task_type: str
     cost_usdc: int
     billing_method: str
     settlement_tx: str | None = None
@@ -196,6 +197,7 @@ async def list_delegation_events(
                 "agent_url": e["agent_url"],
                 "agent_name": e["agent_name"],
                 "task_status": e["task_status"],
+                "task_type": e["task_type"],
                 "cost_usdc": e["cost_usdc"],
                 "billing_method": e["billing_method"],
                 "settlement_tx": e["settlement_tx"],

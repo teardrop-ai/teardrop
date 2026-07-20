@@ -15,6 +15,31 @@ from teardrop.config import get_settings
 _server_caches: dict[str, TTLCache[list[OrgMcpServer]]] = {}
 
 
+def _mcp_tools_cache_version_key(org_id: str) -> str:
+    return f"teardrop:org_mcp_tools_version:{org_id}"
+
+
+async def get_mcp_tools_cache_version(org_id: str) -> int | None:
+    """Return the shared wrapper-cache version, or ``None`` when Redis is unavailable."""
+    redis = get_redis()
+    if redis is None:
+        return None
+
+    try:
+        raw_version = await redis.get(_mcp_tools_cache_version_key(org_id))
+    except Exception:
+        logger.warning("Redis MCP tools cache version read failed; serving local cache", exc_info=True)
+        return None
+
+    if raw_version is None:
+        return 0
+    try:
+        return int(raw_version)
+    except (TypeError, ValueError):
+        logger.warning("Redis MCP tools cache version is invalid; serving local cache")
+        return None
+
+
 def _load_servers(org_id: str):
     """Lazy loader for the server cache (breaks the cache↔crud import cycle)."""
     from mcp_client.crud import list_org_mcp_servers
@@ -40,14 +65,25 @@ async def _get_servers_cached(org_id: str) -> list[OrgMcpServer]:
     return await _get_server_cache(org_id).get() or []
 
 
+async def refresh_mcp_servers(org_id: str) -> list[OrgMcpServer]:
+    """Refresh this worker's server snapshot without deleting the shared value."""
+    cache = _get_server_cache(org_id)
+    cache.reset()
+    return await cache.get() or []
+
+
 async def invalidate_mcp_cache(org_id: str) -> None:
-    """Clear the server list cache and tool cache for an org."""
+    """Clear local caches and advance the shared tool-wrapper cache version."""
     from mcp_client.runtime import _tools_cache
 
     await _get_server_cache(org_id).invalidate()
     _tools_cache.pop(org_id, None)
     r = get_redis()
     if r is not None:
+        try:
+            await r.incr(_mcp_tools_cache_version_key(org_id))
+        except Exception:
+            logger.warning("Redis MCP tools cache version invalidation failed (non-fatal)", exc_info=True)
         try:
             await r.delete(f"teardrop:org_mcp_tools:{org_id}")
         except Exception:

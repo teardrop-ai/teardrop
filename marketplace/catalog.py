@@ -137,7 +137,7 @@ async def get_marketplace_catalog(
     include_platform = org_slug is None or org_slug == PLATFORM_SLUG
 
     if include_community:
-        where_clauses = ["t.publish_as_mcp = TRUE", "t.is_active = TRUE"]
+        where_clauses = ["t.publish_as_mcp = TRUE", "t.is_active = TRUE", f"o.slug <> '{PLATFORM_SLUG}'"]
         if org_slug:
             where_clauses.append(f"o.slug = {_add_param(org_slug)}")
         if category is not None:
@@ -438,7 +438,8 @@ async def get_marketplace_tool_by_name(
         SELECT t.*, o.slug AS org_slug, o.name AS org_name
         FROM org_tools t
         JOIN orgs o ON o.id = t.org_id
-        WHERE t.name = $1 AND o.slug = $2 AND t.publish_as_mcp = TRUE AND t.is_active = TRUE
+                WHERE t.name = $1 AND o.slug = $2 AND o.slug <> 'platform'
+                    AND t.publish_as_mcp = TRUE AND t.is_active = TRUE
         """,
         tool_name,
         org_slug,

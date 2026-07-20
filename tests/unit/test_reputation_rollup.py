@@ -88,3 +88,21 @@ class TestReputationRollupOnce:
 
         sql_text = mock_pool.execute.call_args_list[0].args[0]
         assert "total_calls" not in sql_text
+
+    @pytest.mark.anyio
+    async def test_excludes_author_self_calls_from_reputation(self, monkeypatch):
+        """An author cannot improve a community tool's score with own-org calls."""
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await reputation_rollup_once()
+
+        sql_text = mock_pool.fetch.call_args.args[0]
+        assert "FROM org_tools t" in sql_text
+        assert "JOIN orgs o ON o.id = t.org_id" in sql_text
+        assert "JOIN catalog_tools c USING (qualified_tool_name)" in sql_text
+        assert "o.slug <> 'platform'" in sql_text
+        assert "e.org_id IS DISTINCT FROM c.author_org_id" in sql_text
+        assert "marketplace_tool_call_stats s" not in sql_text

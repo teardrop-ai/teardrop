@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -84,6 +85,17 @@ def test_row_to_model_with_auth():
     row = _make_db_row(auth_token_enc="encrypted_value")
     srv = _row_to_model(row)
     assert srv.has_auth is True
+
+
+def test_mcp_schema_hash_ignores_tool_order():
+    from mcp_client.runtime import _mcp_tools_schema_hash
+
+    tools = [
+        {"name": "lookup", "description": "Find data", "input_schema": {"type": "object"}, "output_schema": None},
+        {"name": "search", "description": "Search data", "input_schema": {"type": "object"}, "output_schema": None},
+    ]
+
+    assert _mcp_tools_schema_hash(tools) == _mcp_tools_schema_hash(list(reversed(tools)))
 
 
 # ─── CRUD tests (mocked DB pool) ─────────────────────────────────────────────
@@ -204,6 +216,71 @@ async def test_get_server_found(setup_mcp_client):
     result = await get_org_mcp_server("srv-1", "org-1")
     assert result is not None
     assert result.id == "srv-1"
+
+
+@pytest.mark.anyio
+async def test_schema_hash_baseline_is_not_reported_as_drift(setup_mcp_client):
+    pool = setup_mcp_client
+    pool.fetchrow = AsyncMock(return_value={"last_schema_changed_at": _NOW})
+
+    from mcp_client.crud import record_mcp_server_schema_hash
+
+    server = _make_server()
+    updated, drifted = await record_mcp_server_schema_hash(server, "a" * 64)
+
+    assert updated is True
+    assert drifted is False
+    assert server.schema_hash == "a" * 64
+    assert "schema_hash IS NOT DISTINCT FROM $3" in pool.fetchrow.await_args.args[0]
+    assert pool.fetchrow.await_args.args[1:] == ("srv-1", "org-1", None, "a" * 64)
+
+
+@pytest.mark.anyio
+async def test_schema_hash_stale_discovery_does_not_overwrite_newer_hash(setup_mcp_client):
+    pool = setup_mcp_client
+    pool.fetchrow = AsyncMock(return_value=None)
+
+    from mcp_client.crud import record_mcp_server_schema_hash
+
+    stale_server = _make_server(schema_hash="old-hash")
+    updated, drifted = await record_mcp_server_schema_hash(stale_server, "stale-hash")
+
+    assert updated is False
+    assert drifted is False
+    assert stale_server.schema_hash == "old-hash"
+    assert "schema_hash IS NOT DISTINCT FROM $3" in pool.fetchrow.await_args.args[0]
+
+
+@pytest.mark.anyio
+async def test_schema_hash_change_invalidates_mcp_caches(setup_mcp_client, monkeypatch):
+    import mcp_client.runtime as runtime
+
+    server = _make_server(schema_hash="old-hash")
+    session = AsyncMock()
+    session.list_tools = AsyncMock(
+        return_value=SimpleNamespace(
+            tools=[
+                SimpleNamespace(
+                    name="lookup",
+                    description="Find data",
+                    inputSchema={"type": "object"},
+                    outputSchema=None,
+                )
+            ]
+        )
+    )
+    record_hash = AsyncMock(return_value=(True, True))
+    invalidate_cache = AsyncMock()
+    monkeypatch.setattr(runtime, "_get_or_create_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(runtime, "record_mcp_server_schema_hash", record_hash)
+    monkeypatch.setattr(runtime, "invalidate_mcp_cache", invalidate_cache)
+
+    tools, schema_changed = await runtime.discover_mcp_tools_with_schema(server)
+
+    assert tools[0]["name"] == "lookup"
+    assert schema_changed is True
+    record_hash.assert_awaited_once()
+    invalidate_cache.assert_awaited_once_with("org-1")
 
 
 @pytest.mark.anyio
@@ -392,6 +469,62 @@ async def test_build_mcp_langchain_tools_no_servers(setup_mcp_client, monkeypatc
     tools, by_name = await build_mcp_langchain_tools("org-1")
     assert tools == []
     assert by_name == {}
+
+
+@pytest.mark.anyio
+async def test_shared_cache_version_invalidates_local_mcp_tools(setup_mcp_client, monkeypatch):
+    import mcp_client.runtime as runtime
+
+    runtime._tools_cache["org-1"] = (["stale"], {"stale": "stale"}, float("inf"), 1)
+    current_version = AsyncMock(return_value=2)
+    refresh_servers = AsyncMock(return_value=[])
+    monkeypatch.setattr(runtime, "get_mcp_tools_cache_version", current_version)
+    monkeypatch.setattr(runtime, "refresh_mcp_servers", refresh_servers)
+
+    tools, by_name = await runtime.build_mcp_langchain_tools("org-1")
+
+    assert tools == []
+    assert by_name == {}
+    refresh_servers.assert_awaited_once_with("org-1")
+    assert runtime._tools_cache["org-1"][3] == 2
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_cache_rebuilds_when_version_changes_during_build(setup_mcp_client, monkeypatch):
+    import mcp_client.runtime as runtime
+
+    versions = AsyncMock(side_effect=[0, 1, 1, 1])
+    refresh_servers = AsyncMock(return_value=[])
+    build_tools = AsyncMock(side_effect=[(["stale"], {"stale": "stale"}), (["fresh"], {"fresh": "fresh"})])
+    monkeypatch.setattr(runtime, "get_mcp_tools_cache_version", versions)
+    monkeypatch.setattr(runtime, "refresh_mcp_servers", refresh_servers)
+    monkeypatch.setattr(runtime, "_build_mcp_tools_for_servers", build_tools)
+
+    tools, by_name = await runtime.build_mcp_langchain_tools("org-1")
+
+    assert tools == ["fresh"]
+    assert by_name == {"fresh": "fresh"}
+    assert refresh_servers.await_count == 2
+    assert runtime._tools_cache["org-1"][0] == ["fresh"]
+    assert runtime._tools_cache["org-1"][3] == 1
+
+
+@pytest.mark.anyio
+async def test_invalidate_mcp_cache_bumps_shared_tools_version(setup_mcp_client, monkeypatch):
+    import mcp_client.cache as cache
+
+    server_cache = MagicMock()
+    server_cache.invalidate = AsyncMock()
+    redis = MagicMock()
+    redis.incr = AsyncMock(return_value=1)
+    redis.delete = AsyncMock()
+    monkeypatch.setattr(cache, "_get_server_cache", lambda _org_id: server_cache)
+    monkeypatch.setattr(cache, "get_redis", lambda: redis)
+
+    await cache.invalidate_mcp_cache("org-1")
+
+    redis.incr.assert_awaited_once_with("teardrop:org_mcp_tools_version:org-1")
+    redis.delete.assert_awaited_once_with("teardrop:org_mcp_tools:org-1")
 
 
 @pytest.mark.anyio

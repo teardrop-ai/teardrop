@@ -60,6 +60,15 @@ class TestCreateOrg:
         pool.execute.assert_called_once()
         assert "slug" in pool.execute.call_args.args[0]
 
+    async def test_reserves_platform_catalog_namespace(self):
+        from teardrop.users import create_org
+
+        pool = _pool()
+        with patch.object(users_module.base, "_pool", pool):
+            org = await create_org("Platform")
+
+        assert org.slug == "platform-org"
+
     async def test_db_error_propagates(self):
         from teardrop.users import create_org
 

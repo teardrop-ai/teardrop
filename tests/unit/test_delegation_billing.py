@@ -9,11 +9,12 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from billing import apply_platform_fee, check_delegation_budget
+from billing.delegation import BillingDelegationService
 from teardrop.a2a_client import (
     A2AAgentCard,
     A2ASendMessageResponse,
@@ -221,6 +222,33 @@ class TestGetTreasurySigner:
             get_treasury_signer()
 
 
+class TestDelegationEventTelemetry:
+    async def test_normalizes_task_type_before_persisting(self):
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        service = BillingDelegationService(
+            get_pool=lambda: mock_pool,
+            get_settings=MagicMock(),
+            get_daily_debit_spend=AsyncMock(),
+            debit_credit=AsyncMock(),
+            get_live_pricing_for_model=AsyncMock(),
+        )
+
+        await service.record_delegation_event(
+            org_id="org-1",
+            run_id="run-1",
+            agent_url="https://agent.example.com",
+            agent_name="Agent",
+            task_status="completed",
+            cost_usdc=1_000,
+            task_type="raw task details must not be stored",
+        )
+
+        args = mock_pool.execute.await_args.args
+        assert "task_type" in args[0]
+        assert args[-1] == "general"
+
+
 # ─── delegate_to_agent with billing ──────────────────────────────────────────
 
 
@@ -349,12 +377,18 @@ class TestDelegateToAgentBilling:
             patch(f"{_BILLING_MOD}.fund_delegation", mock_fund),
             patch(f"{_BILLING_MOD}.record_delegation_event", mock_record),
         ):
-            result = await delegate_to_agent("https://agent.example.com", "do work", config=config)
+            result = await delegate_to_agent(
+                "https://agent.example.com",
+                "do work",
+                task_type="research",
+                config=config,
+            )
 
         assert result["status"] == "completed"
         assert result["cost_usdc"] > 0
         mock_fund.assert_called_once()
         mock_record.assert_called_once()
+        assert mock_record.await_args.kwargs["task_type"] == "research"
 
     async def test_cost_usdc_in_output(self, test_settings, monkeypatch):
         """Output schema includes cost_usdc field even without billing."""

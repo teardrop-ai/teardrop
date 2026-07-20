@@ -5,13 +5,23 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+DelegationTaskType = Literal[
+    "general",
+    "research",
+    "analysis",
+    "data_retrieval",
+    "coding",
+    "transaction",
+    "automation",
+]
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -30,6 +40,10 @@ class DelegateToAgentInput(BaseModel):
         max_length=4096,
         description="Natural language description of the task to delegate",
     )
+    task_type: DelegationTaskType = Field(
+        default="general",
+        description="Broad task class for routing telemetry; never include user data or task text.",
+    )
 
 
 class DelegateToAgentOutput(BaseModel):
@@ -43,7 +57,13 @@ class DelegateToAgentOutput(BaseModel):
 # ─── Implementation ──────────────────────────────────────────────────────────
 
 
-async def delegate_to_agent(agent_url: str, task_description: str, *, config: dict | None = None) -> dict[str, Any]:
+async def delegate_to_agent(
+    agent_url: str,
+    task_description: str,
+    task_type: DelegationTaskType = "general",
+    *,
+    config: dict | None = None,
+) -> dict[str, Any]:
     """Delegate a task to a remote A2A agent and return the result.
 
     This tool discovers the remote agent's capabilities via its published agent
@@ -196,6 +216,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
                 task_status="failed",
                 cost_usdc=0,
                 error="Insufficient credit for delegation at debit time.",
+                task_type=task_type,
             )
             return {
                 "agent_name": card.name,
@@ -242,6 +263,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
                 task_status="failed",
                 cost_usdc=0,
                 error=str(exc),
+                task_type=task_type,
             )
         return {
             "agent_name": card.name,
@@ -270,6 +292,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
             task_status=task_state,
             cost_usdc=cost_usdc,
             billing_method="x402" if use_x402 else "credit",
+            task_type=task_type,
         )
     elif billing_enabled:
         # Remote agent did not complete — refund the pre-debit.
@@ -285,6 +308,7 @@ async def delegate_to_agent(agent_url: str, task_description: str, *, config: di
             task_status=task_state,
             cost_usdc=0,
             error=f"Remote agent state: {task_state}",
+            task_type=task_type,
         )
 
     return {

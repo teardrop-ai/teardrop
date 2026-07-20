@@ -190,15 +190,15 @@ async def reputation_rollup_once() -> int:
     Reads the full ``tool_call_events`` ledger and *overwrites* (never
     increments) ``total_failures``, ``total_latency_ms``, and
     ``reputation_score`` on ``marketplace_tool_call_stats`` — this makes the
-    rollup idempotent and safe to re-run over the same data. ``total_calls``
-    is owned exclusively by ``record_marketplace_tool_call`` and is never
-    touched here.
+    rollup idempotent and safe to re-run over the same data. Calls made by a
+    community tool's author are excluded to prevent self-traffic from
+    inflating its reputation. ``total_calls`` is owned exclusively by
+    ``record_marketplace_tool_call`` and is never touched here.
 
-    Bare (unqualified) tool names in ``tool_call_events`` are assumed to be
-    platform tools, mirroring the normalization already used by
-    ``record_marketplace_tool_usage``. A stray aggregate row may be created for
-    an internal/unpublished tool name — harmless, since marketplace catalog
-    queries only surface rows that also join to a published/active tool.
+    Events are joined to active marketplace listings before aggregation. This
+    both resolves a community tool's author from its canonical record and
+    prevents internal or unpublished tools from gaining public aggregates.
+    Bare (unqualified) names are normalized to platform names for the join.
 
     v1 scoring: ``reputation_score = 0.6 * success_rate + 0.4 * popularity_norm``
     where ``popularity_norm`` is log-scaled call volume relative to the
@@ -211,16 +211,43 @@ async def reputation_rollup_once() -> int:
     pool = _get_pool()
     rows = await pool.fetch(
         """
-        WITH agg AS (
+        WITH catalog_tools AS (
+            SELECT
+                o.slug || '/' || t.name AS qualified_tool_name,
+                'community'::TEXT AS tool_type,
+                t.org_id AS author_org_id
+            FROM org_tools t
+            JOIN orgs o ON o.id = t.org_id
+            WHERE t.publish_as_mcp = TRUE
+              AND t.is_active = TRUE
+                            AND o.slug <> 'platform'
+            UNION ALL
+            SELECT
+                'platform/' || p.tool_name AS qualified_tool_name,
+                'platform'::TEXT AS tool_type,
+                NULL::TEXT AS author_org_id
+            FROM marketplace_platform_tools p
+            WHERE p.is_active = TRUE
+        ),
+        normalized_events AS (
             SELECT
                 CASE WHEN tool_name LIKE '%/%' THEN tool_name ELSE 'platform/' || tool_name END
                     AS qualified_tool_name,
-                CASE WHEN tool_name LIKE '%/%' THEN 'community' ELSE 'platform' END
-                    AS tool_type,
+                org_id,
+                success,
+                elapsed_ms
+            FROM tool_call_events
+        ),
+        agg AS (
+            SELECT
+                c.qualified_tool_name,
+                c.tool_type,
                 COUNT(*) FILTER (WHERE success) AS successes,
                 COUNT(*) FILTER (WHERE NOT success) AS failures,
                 COALESCE(SUM(elapsed_ms), 0)::BIGINT AS total_latency_ms
-            FROM tool_call_events
+            FROM normalized_events e
+            JOIN catalog_tools c USING (qualified_tool_name)
+            WHERE c.author_org_id IS NULL OR e.org_id IS DISTINCT FROM c.author_org_id
             GROUP BY 1, 2
         ),
         scored AS (
