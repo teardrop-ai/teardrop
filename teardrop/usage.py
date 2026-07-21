@@ -16,11 +16,17 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 import asyncpg
 from pydantic import BaseModel, Field
 
+from teardrop._meta import APP_VERSION
+
 logger = logging.getLogger(__name__)
+
+TOOL_CALL_EVENT_SCHEMA_VERSION = 1
+TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a"]
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -48,6 +54,8 @@ class UsageEvent(BaseModel):
     settlement_status: str = "none"
     provider: str = ""
     model: str = ""
+    source: TelemetryRunSource = "api"
+    runner_version: str = APP_VERSION
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -59,6 +67,21 @@ class UsageSummary(BaseModel):
     total_tokens_out: int = 0
     total_tool_calls: int = 0
     total_duration_ms: int = 0
+
+
+class TelemetryCompletenessBySource(BaseModel):
+    source: TelemetryRunSource
+    total_runs: int = 0
+    usage_event_coverage: float = 0.0
+    tool_eligible_runs: int = 0
+    tool_event_coverage: float | None = None
+    decision_coverage: float = 0.0
+    outcome_label_coverage: float = 0.0
+
+
+class TelemetryCompletenessResponse(BaseModel):
+    window_days: int
+    sources: list[TelemetryCompletenessBySource]
 
 
 # ─── Database initialisation ─────────────────────────────────────────────────
@@ -89,6 +112,8 @@ async def init_usage_db(pool: asyncpg.Pool) -> None:
             failed_tool_calls INTEGER NOT NULL DEFAULT 0,
             failed_tool_names TEXT NOT NULL DEFAULT '[]',
             duration_ms INTEGER NOT NULL DEFAULT 0,
+            source      TEXT NOT NULL DEFAULT 'api',
+            runner_version TEXT NOT NULL DEFAULT '',
             created_at  TIMESTAMPTZ NOT NULL
         )
         """
@@ -128,10 +153,10 @@ async def record_usage_event(event: UsageEvent) -> None:
                  tool_calls, tool_names, billable_tool_calls, billable_tool_names,
                  failed_tool_calls, failed_tool_names,
                  duration_ms, cost_usdc, platform_fee_usdc,
-                 settlement_tx, settlement_status, provider, model, created_at)
+                 settlement_tx, settlement_status, provider, model, source, runner_version, created_at)
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
             )
             """,
             event.id,
@@ -156,10 +181,104 @@ async def record_usage_event(event: UsageEvent) -> None:
             event.settlement_status,
             event.provider,
             event.model,
+            event.source,
+            event.runner_version,
             event.created_at,
         )
     except Exception:
         logger.exception("Failed to record usage event run_id=%s", event.run_id)
+
+
+async def record_telemetry_run_started(
+    run_id: str,
+    org_id: str,
+    source: TelemetryRunSource,
+) -> None:
+    """Persist a best-effort, immutable denominator for telemetry coverage."""
+    if _pool is None:
+        return
+    try:
+        await _pool.execute(
+            """
+            INSERT INTO telemetry_run_starts (run_id, org_id, source, started_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (run_id) DO NOTHING
+            """,
+            run_id,
+            org_id,
+            source,
+        )
+    except Exception:
+        logger.warning("Telemetry run-start recording unavailable")
+
+
+async def get_telemetry_completeness(days: int = 7) -> list[TelemetryCompletenessBySource]:
+    """Return source-split post-run telemetry coverage over recent starts."""
+    if not 1 <= days <= 90:
+        raise ValueError("days must be between 1 and 90")
+
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        WITH recent_runs AS (
+            SELECT run_id, source
+            FROM telemetry_run_starts
+            WHERE started_at >= NOW() - ($1 * INTERVAL '1 day')
+        ),
+        usage_records AS (
+            SELECT DISTINCT ON (u.run_id) u.run_id, u.tool_calls
+            FROM usage_events u
+            JOIN recent_runs r ON r.run_id = u.run_id
+            ORDER BY u.run_id, u.created_at DESC
+        ),
+        tool_event_counts AS (
+            SELECT e.run_id, COUNT(*) AS tool_event_count
+            FROM tool_call_events e
+            JOIN recent_runs r ON r.run_id = e.run_id
+            GROUP BY e.run_id
+        ),
+        decision_records AS (
+            SELECT d.run_id, d.outcome_source
+            FROM run_decisions d
+            JOIN recent_runs r ON r.run_id = d.run_id
+        )
+        SELECT
+            r.source,
+            COUNT(*) AS total_runs,
+            COUNT(u.run_id) AS usage_event_runs,
+            COUNT(*) FILTER (WHERE COALESCE(u.tool_calls, 0) > 0) AS tool_eligible_runs,
+            COUNT(*) FILTER (
+                WHERE COALESCE(u.tool_calls, 0) > 0
+                  AND COALESCE(t.tool_event_count, 0) >= u.tool_calls
+            ) AS tool_event_runs,
+            COUNT(d.run_id) AS decision_runs,
+            COUNT(*) FILTER (WHERE d.outcome_source <> '') AS outcome_label_runs
+        FROM recent_runs r
+        LEFT JOIN usage_records u ON u.run_id = r.run_id
+        LEFT JOIN tool_event_counts t ON t.run_id = r.run_id
+        LEFT JOIN decision_records d ON d.run_id = r.run_id
+        GROUP BY r.source
+        ORDER BY r.source
+        """,
+        days,
+    )
+
+    result: list[TelemetryCompletenessBySource] = []
+    for row in rows:
+        total_runs = int(row["total_runs"])
+        tool_eligible_runs = int(row["tool_eligible_runs"])
+        result.append(
+            TelemetryCompletenessBySource(
+                source=row["source"],
+                total_runs=total_runs,
+                usage_event_coverage=round(int(row["usage_event_runs"]) / total_runs, 4),
+                tool_eligible_runs=tool_eligible_runs,
+                tool_event_coverage=(round(int(row["tool_event_runs"]) / tool_eligible_runs, 4) if tool_eligible_runs else None),
+                decision_coverage=round(int(row["decision_runs"]) / total_runs, 4),
+                outcome_label_coverage=round(int(row["outcome_label_runs"]) / total_runs, 4),
+            )
+        )
+    return result
 
 
 async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict]) -> None:
@@ -180,8 +299,9 @@ async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict])
         await pool.executemany(
             """
             INSERT INTO tool_call_events
-                (id, run_id, org_id, tool_name, success, error_class, elapsed_ms, billable, args_hash, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (id, run_id, org_id, tool_name, success, error_class, elapsed_ms, billable, args_hash,
+                 schema_version, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             """,
             [
                 (
@@ -194,6 +314,7 @@ async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict])
                     int(entry.get("elapsed_ms", 0)),
                     bool(entry.get("billable", True)),
                     str(entry.get("args_hash", "")),
+                    TOOL_CALL_EVENT_SCHEMA_VERSION,
                     now,
                 )
                 for entry in entries

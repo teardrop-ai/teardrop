@@ -86,7 +86,7 @@ async def _noop_dispatch_settlement(*_args, **kwargs):
         yield None
 
 
-def _patch_success_path(monkeypatch, test_settings, *, billing_enabled: bool = True) -> None:
+def _patch_success_path(monkeypatch, test_settings, *, billing_enabled: bool = True) -> AsyncMock:
     test_settings.billing_enabled = billing_enabled
     test_settings.rate_limit_requests_per_minute = 1_000
     test_settings.rate_limit_agent_rpm = 1_000
@@ -99,9 +99,11 @@ def _patch_success_path(monkeypatch, test_settings, *, billing_enabled: bool = T
         AsyncMock(return_value=(_snapshot(), {"tokens_in": 12, "tokens_out": 8, "tool_calls": 0, "tool_names": []})),
     )
     monkeypatch.setattr("teardrop.agent_runtime.calculate_run_cost", AsyncMock(return_value=12_345))
-    monkeypatch.setattr("teardrop.agent_runtime.record_usage_event", AsyncMock(return_value=None))
+    usage_event_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.agent_runtime.record_usage_event", usage_event_mock)
     monkeypatch.setattr("teardrop.agent_runtime.dispatch_settlement", _noop_dispatch_settlement)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", AsyncMock(return_value=None))
+    return usage_event_mock
 
 
 def test_a2a_bazaar_extension_uses_self_contained_body_schema():
@@ -258,7 +260,7 @@ async def test_message_send_authenticated_invalid_json_returns_422(auth_header, 
 
 @pytest.mark.anyio
 async def test_message_send_anonymous_x402_success_returns_task(anon_client, test_settings, monkeypatch):
-    _patch_success_path(monkeypatch, test_settings)
+    usage_event_mock = _patch_success_path(monkeypatch, test_settings)
     audit_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
     monkeypatch.setattr(
@@ -288,6 +290,7 @@ async def test_message_send_anonymous_x402_success_returns_task(anon_client, tes
     assert audit_kwargs["task_state"] == "completed"
     assert audit_kwargs["billing_method"] == "x402"
     assert audit_kwargs["caller_address"] == "0xabc"
+    assert usage_event_mock.await_args.args[0].source == "a2a"
 
 
 @pytest.mark.anyio

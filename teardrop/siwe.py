@@ -108,7 +108,7 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
                 role="user",
             )
         else:
-            org = await create_org(org_name)
+            org = await create_org(org_name, acquisition_source="siwe")
             user = await create_user(
                 email=f"{address.lower()}@wallet",
                 secret=secrets.token_urlsafe(32),

@@ -4017,6 +4017,12 @@
       },
       "RegisterRequest": {
         "properties": {
+          "acquisition_source": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Acquisition Source",
+            "type": "string"
+          },
           "captcha_token": {
             "anyOf": [
               {
@@ -4721,6 +4727,82 @@
           "exhausted"
         ],
         "title": "SweepStatusResponse",
+        "type": "object"
+      },
+      "TelemetryCompletenessBySource": {
+        "properties": {
+          "decision_coverage": {
+            "default": 0.0,
+            "title": "Decision Coverage",
+            "type": "number"
+          },
+          "outcome_label_coverage": {
+            "default": 0.0,
+            "title": "Outcome Label Coverage",
+            "type": "number"
+          },
+          "source": {
+            "enum": [
+              "api",
+              "schedule",
+              "trigger",
+              "a2a"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "tool_eligible_runs": {
+            "default": 0,
+            "title": "Tool Eligible Runs",
+            "type": "integer"
+          },
+          "tool_event_coverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Event Coverage"
+          },
+          "total_runs": {
+            "default": 0,
+            "title": "Total Runs",
+            "type": "integer"
+          },
+          "usage_event_coverage": {
+            "default": 0.0,
+            "title": "Usage Event Coverage",
+            "type": "number"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "TelemetryCompletenessBySource",
+        "type": "object"
+      },
+      "TelemetryCompletenessResponse": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/TelemetryCompletenessBySource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days",
+          "sources"
+        ],
+        "title": "TelemetryCompletenessResponse",
         "type": "object"
       },
       "TestMcpToolRequest": {
@@ -5913,7 +5995,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7423,6 +7505,58 @@
         "tags": [
           "Admin",
           "Admin / Billing"
+        ]
+      }
+    },
+    "/admin/telemetry/completeness": {
+      "get": {
+        "description": "Return post-run telemetry coverage by execution source (admin only).",
+        "operationId": "admin_telemetry_completeness_admin_telemetry_completeness_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetryCompletenessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Telemetry Completeness",
+        "tags": [
+          "Admin",
+          "Admin / Usage"
         ]
       }
     },

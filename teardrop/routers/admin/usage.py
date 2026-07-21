@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
 from teardrop.dependencies import require_admin
-from teardrop.usage import UsageSummary, get_usage_by_org, get_usage_by_user
+from teardrop.usage import (
+    TelemetryCompletenessResponse,
+    UsageSummary,
+    get_telemetry_completeness,
+    get_usage_by_org,
+    get_usage_by_user,
+)
 
 router = APIRouter()
 
@@ -47,3 +53,20 @@ async def admin_usage_org(
     end_dt = datetime.fromisoformat(end) if end else None
     summary = await get_usage_by_org(org_id, start_dt, end_dt)
     return JSONResponse(content=summary.model_dump())
+
+
+@router.get(
+    "/admin/telemetry/completeness",
+    tags=["Admin", "Admin / Usage"],
+    response_model=TelemetryCompletenessResponse,
+)
+async def admin_telemetry_completeness(
+    _admin: dict = Depends(require_admin),
+    days: int = Query(default=7, ge=1, le=90),
+) -> JSONResponse:
+    """Return post-run telemetry coverage by execution source (admin only)."""
+    report = TelemetryCompletenessResponse(
+        window_days=days,
+        sources=await get_telemetry_completeness(days),
+    )
+    return JSONResponse(content=report.model_dump())

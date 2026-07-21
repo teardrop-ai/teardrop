@@ -83,3 +83,21 @@ python -m migrations.runner
 | `064_scheduled_runs.sql` | Schedules and execution logs for recurring prompt runs (`scheduled_runs` & `scheduled_run_results`) |
 | `065_event_triggers.sql` | Event-triggered reactive prompt runs via webhook dispatches (adds `trigger_token` & `secret_hash`) |
 | `066_tool_call_events.sql` | Telemetry event logs (`tool_call_events`) for ML parameters and reputation tracking/user ratings (`run_feedback`) |
+| `067_run_decisions.sql` | Per-run decision ledger with task, tool, and outcome labels for routing telemetry |
+| `068_org_tool_exclusions.sql` | Persisted org-scoped tool exclusions |
+| `069_onboarding_credit_grants.sql` | Idempotent verified-email onboarding-credit grants and retry outbox |
+| `070_a2a_delegation_task_type.sql` | Bounded task type on immutable A2A delegation audit events |
+| `071_mcp_client_schema_hash.sql` | External MCP inventory hash tracking for schema-drift detection |
+| `072_reserve_platform_org_slug.sql` | Reserves the `platform` organization slug for built-in marketplace tools |
+| `073_data_foundations.sql` | Run-source attribution, versioned ML telemetry, first-touch acquisition attribution, and retention support for disposable operational records |
+| `074_usage_events_runner_version.sql` | Deployment version provenance for canonical agent-run records |
+| `075_marketplace_reputation_v2.sql` | Recency-aware marketplace reputation diagnostics |
+| `076_telemetry_run_starts.sql` | Source-split run-start denominator for telemetry completeness reporting |
+| `077_telemetry_run_starts_retention.sql` | Ordered index for bounded telemetry run-start retention |
+*** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
+-- Migration 077: retention index for telemetry completeness denominators
+-- telemetry_run_starts is non-financial and retained only for the configured
+-- completeness-reporting window. This index supports ordered, batched cleanup.
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_run_starts_started_at
+	ON telemetry_run_starts (started_at);

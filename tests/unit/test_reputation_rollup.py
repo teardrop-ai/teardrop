@@ -36,6 +36,10 @@ class TestReputationRollupOnce:
                 "total_latency_ms": 500,
                 "success_rate": 0.8,
                 "popularity_norm": 1.0,
+                "sample_size": 12.5,
+                "confidence": 0.714,
+                "freshness": 1.0,
+                "task_success": '{"data_retrieval": {"success_rate": 0.8, "sample_size": 12.5}}',
             },
             {
                 "qualified_tool_name": "acme/weather",
@@ -44,6 +48,10 @@ class TestReputationRollupOnce:
                 "total_latency_ms": 120,
                 "success_rate": 1.0,
                 "popularity_norm": 0.1,
+                "sample_size": 1.0,
+                "confidence": 0.167,
+                "freshness": 0.5,
+                "task_success": "{}",
             },
         ]
         mock_pool = MagicMock()
@@ -64,6 +72,9 @@ class TestReputationRollupOnce:
         assert 2 in first_call_args
         assert 500 in first_call_args
         assert round(0.6 * 0.8 + 0.4 * 1.0, 6) in first_call_args
+        assert 12.5 in first_call_args
+        assert 0.714 in first_call_args
+        assert '{"data_retrieval": {"success_rate": 0.8, "sample_size": 12.5}}' in first_call_args
 
     @pytest.mark.anyio
     async def test_never_writes_total_calls_column(self, monkeypatch):
@@ -77,6 +88,10 @@ class TestReputationRollupOnce:
                 "total_latency_ms": 10,
                 "success_rate": 1.0,
                 "popularity_norm": 1.0,
+                "sample_size": 1.0,
+                "confidence": 0.167,
+                "freshness": 1.0,
+                "task_success": "{}",
             }
         ]
         mock_pool = MagicMock()
@@ -106,3 +121,7 @@ class TestReputationRollupOnce:
         assert "o.slug <> 'platform'" in sql_text
         assert "e.org_id IS DISTINCT FROM c.author_org_id" in sql_text
         assert "marketplace_tool_call_stats s" not in sql_text
+        assert "JOIN run_decisions d ON d.run_id = e.run_id AND d.org_id = e.org_id" in sql_text
+        assert "ELSE 'other'" in sql_text
+        assert "'data_retrieval'" in sql_text
+        assert "EXP(" in sql_text

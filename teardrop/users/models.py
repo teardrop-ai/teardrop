@@ -13,6 +13,7 @@ class Org(BaseModel):
     id: str
     name: str
     slug: str = ""
+    acquisition_source: str = ""
     created_at: datetime
 
 

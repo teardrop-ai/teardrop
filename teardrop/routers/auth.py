@@ -263,12 +263,14 @@ async def siwe_nonce(request: Request) -> JSONResponse:
 # Compiled once at import time. Intentionally permissive — catches obvious non-emails
 # without rejecting valid edge cases. Full RFC 5322 validation is handled by the mail server.
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+_ACQUISITION_SOURCE_RE = re.compile(r"^[a-z0-9_-]{0,64}$")
 
 
 class RegisterRequest(BaseModel):
     org_name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     password: str = Field(..., min_length=8, max_length=128)
+    acquisition_source: str = Field(default="", max_length=64)
     captcha_token: str | None = Field(default=None, max_length=4096)
 
     @field_validator("email")
@@ -285,6 +287,14 @@ class RegisterRequest(BaseModel):
         if not re.search(r"\d", v):
             raise ValueError("Password must contain at least one digit")
         return v
+
+    @field_validator("acquisition_source")
+    @classmethod
+    def validate_acquisition_source(cls, v: str) -> str:
+        normalized = v.strip().lower()
+        if not _ACQUISITION_SOURCE_RE.fullmatch(normalized):
+            raise ValueError("acquisition_source must use lowercase letters, digits, underscores, or hyphens")
+        return normalized
 
 
 @router.post("/register", tags=["Auth"], status_code=status.HTTP_201_CREATED, response_model=TokenResponse)
@@ -320,6 +330,7 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
             org_name=body.org_name,
             email=body.email,
             secret=body.password,
+            acquisition_source=body.acquisition_source,
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(

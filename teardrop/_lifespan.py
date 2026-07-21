@@ -26,6 +26,7 @@ from teardrop._background_tasks import (
     _prewarm_cache_prefixes,
     _refresh_token_cleanup_loop,
     _reputation_rollup_loop,
+    _retention_sweep_loop,
     _run_periodic,
     _settlement_retry_loop,
     _x402_nonce_cleanup_loop,
@@ -36,6 +37,7 @@ from teardrop.cache import close_redis, init_redis
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
+from teardrop.retention import close_retention_db, init_retention_db
 from teardrop.tool_exclusions import close_tool_exclusions_db, init_tool_exclusions_db
 from teardrop.usage import close_usage_db, init_usage_db
 from teardrop.users import close_user_db, init_user_db
@@ -84,6 +86,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await get_graph()
         await init_user_db(pool)
         await init_usage_db(pool)
+        await init_retention_db(pool)
         await init_wallets_db(pool)
         await init_billing(pool)
         await init_org_tools_db(pool)
@@ -116,6 +119,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_marketplace_sweep_loop()))
         if settings.reputation_rollup_enabled:
             bg_tasks.append(asyncio.create_task(_reputation_rollup_loop()))
+        if settings.retention_sweep_enabled:
+            bg_tasks.append(asyncio.create_task(_retention_sweep_loop()))
         if settings.scheduled_runs_enabled:
             bg_tasks.append(
                 asyncio.create_task(
@@ -146,6 +151,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await close_llm_config_db()
         await close_marketplace_db()
         await close_scheduling_db()
+        await close_retention_db()
         await close_tool_exclusions_db()
         await close_memory_db()
         await close_mcp_client_db()

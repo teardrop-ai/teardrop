@@ -53,10 +53,11 @@ class TestCreateOrg:
 
         pool = _pool()
         with patch.object(users_module.base, "_pool", pool):
-            org = await create_org("ACME")
+            org = await create_org("ACME", acquisition_source="founder_email")
         assert isinstance(org, Org)
         assert org.name == "ACME"
         assert org.slug == "acme"
+        assert org.acquisition_source == "founder_email"
         pool.execute.assert_called_once()
         assert "slug" in pool.execute.call_args.args[0]
 
@@ -199,7 +200,12 @@ class TestGetOrgById:
     async def test_returns_org_when_found(self):
         from teardrop.users import get_org_by_id
 
-        row = {"id": "org-1", "name": "ACME", "created_at": datetime.now(timezone.utc)}
+        row = {
+            "id": "org-1",
+            "name": "ACME",
+            "acquisition_source": "founder_email",
+            "created_at": datetime.now(timezone.utc),
+        }
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
         with patch.object(users_module.base, "_pool", pool):
@@ -207,6 +213,7 @@ class TestGetOrgById:
         assert org is not None
         assert org.id == "org-1"
         assert org.name == "ACME"
+        assert org.acquisition_source == "founder_email"
 
     async def test_returns_none_when_not_found(self):
         from teardrop.users import get_org_by_id
@@ -226,13 +233,19 @@ class TestGetOrgByName:
     async def test_returns_org_when_found(self):
         from teardrop.users import get_org_by_name
 
-        row = {"id": "org-2", "name": "Globex", "created_at": datetime.now(timezone.utc)}
+        row = {
+            "id": "org-2",
+            "name": "Globex",
+            "acquisition_source": "directory_listing",
+            "created_at": datetime.now(timezone.utc),
+        }
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=row)
         with patch.object(users_module.base, "_pool", pool):
             org = await get_org_by_name("Globex")
         assert org is not None
         assert org.name == "Globex"
+        assert org.acquisition_source == "directory_listing"
 
     async def test_returns_none_when_not_found(self):
         from teardrop.users import get_org_by_name
@@ -384,8 +397,14 @@ class TestRegisterOrgAndUser:
 
         pool, conn = _make_transactional_pool()
         with patch.object(users_module.base, "_pool", pool):
-            org, user = await register_org_and_user("MyOrg", "user@test.com", "pass123")
+            org, user = await register_org_and_user(
+                "MyOrg",
+                "user@test.com",
+                "pass123",
+                acquisition_source="founder_email",
+            )
         assert org.name == "MyOrg"
+        assert org.acquisition_source == "founder_email"
         assert user.email == "user@test.com"
         assert user.is_verified is False
         assert conn.execute.call_count == 2  # INSERT orgs + INSERT users

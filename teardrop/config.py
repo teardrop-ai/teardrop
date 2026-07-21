@@ -218,6 +218,41 @@ class Settings(BaseSettings):
             "character budget, indicating potential memory pressure."
         ),
     )
+    retention_sweep_enabled: bool = Field(
+        default=True,
+        description="Enable periodic cleanup of disposable operational data.",
+    )
+    retention_sweep_interval_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="Interval in seconds between disposable-data retention sweeps.",
+    )
+    retention_sweep_batch_size: int = Field(
+        default=500,
+        ge=1,
+        le=5000,
+        description="Maximum rows or checkpoint threads deleted per retention-sweep batch.",
+    )
+    checkpoint_ttl_days: int = Field(
+        default=45,
+        ge=0,
+        description="Days an inactive LangGraph thread is retained; 0 disables checkpoint cleanup.",
+    )
+    scheduled_run_results_ttl_days: int = Field(
+        default=30,
+        ge=0,
+        description="Days scheduled and triggered run output records are retained; 0 keeps them indefinitely.",
+    )
+    org_tool_execution_events_ttl_days: int = Field(
+        default=90,
+        ge=0,
+        description="Days executed and failed org-tool events are retained; 0 keeps them indefinitely.",
+    )
+    telemetry_run_starts_ttl_days: int = Field(
+        default=120,
+        ge=0,
+        description="Days telemetry run-start denominators are retained; 0 keeps them indefinitely.",
+    )
     agent_ui_generator_provider: str = Field(
         default="google",
         description="Provider for UI generation turns when no org-level BYOK config is set.",

@@ -358,3 +358,110 @@ class TestPromotionalCreditExclusions:
         assert "acme/weather" not in excluded
         assert result.marketplace_stats_billable is True
         earnings_mock.assert_awaited_once()
+
+    async def test_run_agent_once_records_shared_post_run_telemetry(self, test_settings):
+        """Schedules, triggers, and A2A runs use the common runtime path."""
+        from teardrop import agent_runtime
+
+        graph_mock = MagicMock()
+        graph_mock.ainvoke = AsyncMock(return_value={"messages": [], "task_status": "completed"})
+        state_values = {"messages": ["final response"], "slots": {"quotes": {"ETH": "safe"}}}
+        usage_data = {
+            "tool_calls": 1,
+            "tool_names": ["platform/weather"],
+            "_tool_call_log": [{"tool_name": "platform/weather", "args_hash": "safe-hash"}],
+        }
+        ctx = _RunContext(
+            graph=graph_mock,
+            org_lc_tools=[],
+            org_tools_by_name={},
+            mp_by_name={},
+            recalled=[],
+            llm_config=None,
+            org_name="test-org",
+            credit_balance_usdc=None,
+        )
+        telemetry_mock = MagicMock()
+
+        with (
+            patch.object(agent_runtime, "get_settings", return_value=test_settings),
+            patch.object(agent_runtime, "_prepare_run_context", AsyncMock(return_value=ctx)),
+            patch.object(
+                agent_runtime,
+                "fetch_usage_snapshot",
+                AsyncMock(return_value=(MagicMock(values=state_values), usage_data)),
+            ),
+            patch.object(agent_runtime, "calculate_run_cost", AsyncMock(return_value=0)),
+            patch.object(agent_runtime, "record_usage_event", AsyncMock()),
+            patch.object(agent_runtime, "record_post_run_telemetry", telemetry_mock),
+        ):
+            await run_agent_once(
+                org_id="org-1",
+                user_id="user-1",
+                usage_user_id="user-1",
+                usage_org_id="org-1",
+                user_message="hello",
+                run_id="run-1",
+                thread_id="schedule-1",
+                billing=BillingResult(verified=False),
+                is_byok=False,
+                org_llm_cfg=None,
+                platform_fee=0,
+                timeout_seconds=30,
+                source="schedule",
+            )
+
+        telemetry_mock.assert_called_once_with(
+            run_id="run-1",
+            org_id="org-1",
+            user_id="user-1",
+            usage_data=usage_data,
+            state_values=state_values,
+            settings=test_settings,
+            outcome=1,
+            outcome_source="auto",
+        )
+
+    async def test_failure_usage_records_automated_failure_telemetry(self, test_settings):
+        """Timeouts and executor failures contribute weak failure labels."""
+        from teardrop import agent_runtime
+
+        state_values = {"messages": ["partial response"]}
+        usage_data = {"tool_calls": 1, "_tool_call_log": [{"tool_name": "platform/weather"}]}
+        telemetry_mock = MagicMock()
+
+        with (
+            patch.object(
+                agent_runtime,
+                "fetch_usage_snapshot",
+                AsyncMock(return_value=(MagicMock(values=state_values), usage_data)),
+            ),
+            patch.object(agent_runtime, "record_usage_event", AsyncMock()),
+            patch.object(agent_runtime, "record_post_run_telemetry", telemetry_mock),
+        ):
+            await agent_runtime.record_failure_usage_event(
+                graph=MagicMock(),
+                config={},
+                run_id="run-1",
+                thread_id="thread-1",
+                org_id="org-1",
+                user_id="user-1",
+                usage_user_id="user-1",
+                usage_org_id="usage-org-1",
+                duration_ms=10,
+                llm_config=None,
+                platform_fee=0,
+                runtime_settings=test_settings,
+                source="a2a",
+            )
+
+        telemetry_mock.assert_called_once_with(
+            run_id="run-1",
+            org_id="org-1",
+            user_id="user-1",
+            usage_data=usage_data,
+            state_values=state_values,
+            settings=test_settings,
+            outcome=-1,
+            outcome_source="auto",
+        )

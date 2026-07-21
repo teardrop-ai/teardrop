@@ -11,7 +11,7 @@ from teardrop.users.base import _generate_org_slug, _get_pool, _hash_secret
 from teardrop.users.models import Org, User
 
 
-async def create_org(name: str) -> Org:
+async def create_org(name: str, acquisition_source: str = "") -> Org:
     """Create a new organisation."""
     pool = _get_pool()
     slug = _generate_org_slug(name)
@@ -19,13 +19,15 @@ async def create_org(name: str) -> Org:
         id=str(uuid.uuid4()),
         name=name,
         slug=slug,
+        acquisition_source=acquisition_source,
         created_at=datetime.now(timezone.utc),
     )
     await pool.execute(
-        "INSERT INTO orgs (id, name, slug, created_at) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO orgs (id, name, slug, acquisition_source, created_at) VALUES ($1, $2, $3, $4, $5)",
         org.id,
         org.name,
         org.slug,
+        org.acquisition_source,
         org.created_at,
     )
     return org
@@ -106,7 +108,7 @@ async def get_org_by_id(org_id: str) -> Org | None:
     """Look up an organisation by its ID. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at FROM orgs WHERE id = $1",
+        "SELECT id, name, acquisition_source, created_at FROM orgs WHERE id = $1",
         org_id,
     )
     if row is None:
@@ -114,6 +116,7 @@ async def get_org_by_id(org_id: str) -> Org | None:
     return Org(
         id=row["id"],
         name=row["name"],
+        acquisition_source=row["acquisition_source"],
         created_at=row["created_at"],
     )
 
@@ -122,7 +125,7 @@ async def get_org_by_name(name: str) -> Org | None:
     """Look up an organisation by name. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT id, name, created_at FROM orgs WHERE name = $1",
+        "SELECT id, name, acquisition_source, created_at FROM orgs WHERE name = $1",
         name,
     )
     if row is None:
@@ -130,6 +133,7 @@ async def get_org_by_name(name: str) -> Org | None:
     return Org(
         id=row["id"],
         name=row["name"],
+        acquisition_source=row["acquisition_source"],
         created_at=row["created_at"],
     )
 
@@ -161,6 +165,7 @@ async def register_org_and_user(
     org_name: str,
     email: str,
     secret: str,
+    acquisition_source: str = "",
 ) -> tuple[Org, User]:
     """Transactionally create an org + an unverified user for self-serve registration.
 
@@ -175,10 +180,11 @@ async def register_org_and_user(
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "INSERT INTO orgs (id, name, slug, created_at) VALUES ($1, $2, $3, $4)",
+                "INSERT INTO orgs (id, name, slug, acquisition_source, created_at) VALUES ($1, $2, $3, $4, $5)",
                 org_id,
                 org_name,
                 slug,
+                acquisition_source,
                 now,
             )
             await conn.execute(
@@ -196,7 +202,7 @@ async def register_org_and_user(
                 False,
                 now,
             )
-    org = Org(id=org_id, name=org_name, slug=slug, created_at=now)
+    org = Org(id=org_id, name=org_name, slug=slug, acquisition_source=acquisition_source, created_at=now)
     user = User(
         id=user_id,
         email=email,

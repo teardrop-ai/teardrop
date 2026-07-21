@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from teardrop.usage import UsageSummary
+from teardrop.usage import TelemetryCompletenessBySource, UsageSummary
 
 _SUMMARY = UsageSummary(
     total_runs=5,
@@ -61,6 +61,44 @@ async def test_admin_usage_org(admin_api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_admin_usage_org_requires_admin(api_client):
     resp = await api_client.get("/admin/usage/org/some-org-id")
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_telemetry_completeness(admin_api_client, monkeypatch):
+    source = TelemetryCompletenessBySource(
+        source="trigger",
+        total_runs=4,
+        usage_event_coverage=1.0,
+        tool_eligible_runs=2,
+        tool_event_coverage=1.0,
+        decision_coverage=0.75,
+        outcome_label_coverage=0.5,
+    )
+    monkeypatch.setattr("teardrop.routers.admin.usage.get_telemetry_completeness", AsyncMock(return_value=[source]))
+
+    resp = await admin_api_client.get("/admin/telemetry/completeness", params={"days": 14})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "window_days": 14,
+        "sources": [
+            {
+                "source": "trigger",
+                "total_runs": 4,
+                "usage_event_coverage": 1.0,
+                "tool_eligible_runs": 2,
+                "tool_event_coverage": 1.0,
+                "decision_coverage": 0.75,
+                "outcome_label_coverage": 0.5,
+            }
+        ],
+    }
+
+
+@pytest.mark.anyio
+async def test_admin_telemetry_completeness_requires_admin(api_client):
+    resp = await api_client.get("/admin/telemetry/completeness")
     assert resp.status_code == 403
 
 

@@ -557,6 +557,7 @@ async def message_send(request: Request) -> JSONResponse:
         org_llm_cfg=org_llm_cfg,
         platform_fee=platform_fee,
         timeout_seconds=float(settings.a2a_inbound_timeout_seconds),
+        source="a2a",
         metadata={
             **body.metadata,
             "a2a_context_id": body.context_id,

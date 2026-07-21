@@ -82,6 +82,13 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `MCP_BILLING_ENABLED` | `true` to enable credit billing for MCP tool calls |
 | `MCP_X402_ENABLED` | `true` to accept x402 payments on the MCP gateway |
 | `MEMORY_ENABLED` | Enable persistent agent memory (default: `true`). Auto-disabled if `OPENAI_API_KEY` is unset. |
+| `RETENTION_SWEEP_ENABLED` | Enable periodic deletion of disposable operational data (default: `true`) |
+| `RETENTION_SWEEP_INTERVAL_SECONDS` | Retention worker cadence in seconds (default: `3600`) |
+| `RETENTION_SWEEP_BATCH_SIZE` | Maximum rows or checkpoint threads deleted per batch (default: `500`, maximum: `5000`) |
+| `CHECKPOINT_TTL_DAYS` | Retain inactive LangGraph threads for this many days (default: `45`; `0` disables checkpoint cleanup) |
+| `SCHEDULED_RUN_RESULTS_TTL_DAYS` | Retain scheduled/event output records for this many days (default: `30`; `0` keeps them indefinitely) |
+| `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
+| `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
 | `SENTRY_DSN` | Sentry error tracking DSN (optional; leave empty to disable) |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token validity window in days (default: `30`) |
 | `RATE_LIMIT_AUTH_RPM` | Per-IP rate limit for `/token` and `/auth/siwe/nonce` (default: `20`) |

@@ -12,6 +12,16 @@ You can pass a suite name under evals/tasks (for example smoke, defi, wallet, re
 
 For rubric-based tasks, set `ANTHROPIC_API_KEY` so `scorer: "llm_judge"` can call the shared Anthropic client dependency already used by the agent stack.
 
+## Production Candidate Review
+
+Export an organization-scoped, metadata-only review queue from human-positive production outcomes:
+
+```powershell
+python -m evals.cli promote --org-id <org-id> --pg-dsn <postgres-dsn> --output .\eval-review-queue.json
+```
+
+The queue is not a runnable eval suite. It intentionally excludes prompts, model output, reasoning, slot data, identities, and tool arguments; a reviewer must author any resulting task manually.
+
 ## Policy Gates
 
 Use a policy file to fail a run on pass-rate, cost, latency, or regression violations.

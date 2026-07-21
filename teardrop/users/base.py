@@ -51,9 +51,10 @@ async def init_user_db(pool: asyncpg.Pool) -> None:
     await pool.execute(
         """
         CREATE TABLE IF NOT EXISTS orgs (
-            id         TEXT PRIMARY KEY,
-            name       TEXT NOT NULL UNIQUE,
-            created_at TIMESTAMPTZ NOT NULL
+            id                 TEXT PRIMARY KEY,
+            name               TEXT NOT NULL UNIQUE,
+            acquisition_source TEXT NOT NULL DEFAULT '',
+            created_at         TIMESTAMPTZ NOT NULL
         )
         """
     )

@@ -97,6 +97,26 @@ def test_agent_max_tool_iterations_env_override(monkeypatch):
     assert s.agent_max_tool_iterations == 5
 
 
+def test_retention_defaults_and_bounds():
+    settings = Settings()
+    assert settings.retention_sweep_enabled is True
+    assert settings.retention_sweep_interval_seconds == 3600
+    assert settings.retention_sweep_batch_size == 500
+    assert settings.checkpoint_ttl_days == 45
+    assert settings.scheduled_run_results_ttl_days == 30
+    assert settings.org_tool_execution_events_ttl_days == 90
+    assert settings.telemetry_run_starts_ttl_days == 120
+
+    with pytest.raises(ValueError):
+        Settings(retention_sweep_interval_seconds=0)
+    with pytest.raises(ValueError):
+        Settings(retention_sweep_batch_size=5001)
+    with pytest.raises(ValueError):
+        Settings(checkpoint_ttl_days=-1)
+    with pytest.raises(ValueError):
+        Settings(telemetry_run_starts_ttl_days=-1)
+
+
 def test_agent_tool_max_calls_per_run_default():
     s = Settings()
     assert s.agent_tool_max_calls_per_run == {"get_yield_rates": 1, "resolve_ens": 1, "get_protocol_tvl": 3}

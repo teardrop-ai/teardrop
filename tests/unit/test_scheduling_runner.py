@@ -76,21 +76,19 @@ async def test_execute_scheduled_run_blocks_ssrf_callback_without_failing_run(mo
         "scheduling.runner.verify_credit",
         AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
     )
-    monkeypatch.setattr(
-        "scheduling.runner.run_agent_once",
-        AsyncMock(
-            return_value=AgentRunOnceResult(
-                task_state="completed",
-                response_state="completed",
-                output_text="done",
-                duration_ms=25,
-                usage_event=SimpleNamespace(cost_usdc=123),
-                usage_data={},
-                llm_config=None,
-                marketplace_stats_billable=False,
-            )
-        ),
+    run_once = AsyncMock(
+        return_value=AgentRunOnceResult(
+            task_state="completed",
+            response_state="completed",
+            output_text="done",
+            duration_ms=25,
+            usage_event=SimpleNamespace(cost_usdc=123),
+            usage_data={},
+            llm_config=None,
+            marketplace_stats_billable=False,
+        )
     )
+    monkeypatch.setattr("scheduling.runner.run_agent_once", run_once)
     monkeypatch.setattr("scheduling.runner.record_scheduled_run_result", AsyncMock(return_value=_stored_result()))
     monkeypatch.setattr("scheduling.runner.mark_scheduled_run_succeeded", AsyncMock(return_value=None))
     monkeypatch.setattr("scheduling.runner.async_validate_url", AsyncMock(return_value="Blocked IP address"))
@@ -103,6 +101,7 @@ async def test_execute_scheduled_run_blocks_ssrf_callback_without_failing_run(mo
 
     assert result.status == "completed"
     httpx_client.assert_not_called()
+    assert run_once.await_args.kwargs["source"] == "schedule"
 
 
 @pytest.mark.anyio
@@ -181,4 +180,5 @@ async def test_execute_event_run_uses_caller_run_id_and_records(monkeypatch, tes
     assert run_once.await_args.kwargs["run_id"] == "evt-run-1"
     assert run_once.await_args.kwargs["user_message"] == "rendered prompt"
     assert run_once.await_args.kwargs["user_role"] == "event"
+    assert run_once.await_args.kwargs["source"] == "trigger"
     assert record_mock.await_args.kwargs["run_id"] == "evt-run-1"

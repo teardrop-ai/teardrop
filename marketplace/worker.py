@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -16,6 +17,12 @@ from marketplace.withdrawals import process_withdrawal
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+_REPUTATION_RECENCY_HALF_LIFE_DAYS = 14.0
+_REPUTATION_FRESHNESS_HALF_LIFE_DAYS = 30.0
+_REPUTATION_PRIOR_SUCCESSES = 4.0
+_REPUTATION_PRIOR_SAMPLE_SIZE = 5.0
+_REPUTATION_FRESHNESS_FLOOR = 0.75
 
 
 def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:
@@ -188,11 +195,10 @@ async def reputation_rollup_once() -> int:
     """Recompute tool-quality aggregates and reputation scores for the catalog.
 
     Reads the full ``tool_call_events`` ledger and *overwrites* (never
-    increments) ``total_failures``, ``total_latency_ms``, and
-    ``reputation_score`` on ``marketplace_tool_call_stats`` — this makes the
-    rollup idempotent and safe to re-run over the same data. Calls made by a
-    community tool's author are excluded to prevent self-traffic from
-    inflating its reputation. ``total_calls`` is owned exclusively by
+    increments) its derived metrics on ``marketplace_tool_call_stats`` — this
+    makes the rollup idempotent and safe to re-run over the same data. Calls
+    made by a community tool's author are excluded to prevent self-traffic
+    from inflating its reputation. ``total_calls`` is owned exclusively by
     ``record_marketplace_tool_call`` and is never touched here.
 
     Events are joined to active marketplace listings before aggregation. This
@@ -200,11 +206,11 @@ async def reputation_rollup_once() -> int:
     prevents internal or unpublished tools from gaining public aggregates.
     Bare (unqualified) names are normalized to platform names for the join.
 
-    v1 scoring: ``reputation_score = 0.6 * success_rate + 0.4 * popularity_norm``
-    where ``popularity_norm`` is log-scaled call volume relative to the
-    busiest tool. Recency weighting and an incremental watermark (to avoid
-    full-table aggregation) are left as future work — call volume is low
-    enough at this stage that a full scan is cheap.
+    v2 uses a 14-day exponential decay for quality and sample size, a
+    Beta(4, 1) prior to prevent sparse data from appearing certain, and a
+    30-day freshness factor with a 0.75 floor. Task-class success is stored
+    internally per tool for later context-aware routing; it is not exposed in
+    the public catalog because task labels are derived telemetry.
 
     Returns the number of tools upserted.
     """
@@ -235,57 +241,148 @@ async def reputation_rollup_once() -> int:
                     AS qualified_tool_name,
                 org_id,
                 success,
-                elapsed_ms
+                elapsed_ms,
+                run_id,
+                created_at
             FROM tool_call_events
         ),
-        agg AS (
+        eligible_events AS (
             SELECT
                 c.qualified_tool_name,
                 c.tool_type,
-                COUNT(*) FILTER (WHERE success) AS successes,
-                COUNT(*) FILTER (WHERE NOT success) AS failures,
-                COALESCE(SUM(elapsed_ms), 0)::BIGINT AS total_latency_ms
+                c.author_org_id,
+                e.org_id,
+                e.run_id,
+                e.success,
+                e.elapsed_ms,
+                e.created_at,
+                EXP(
+                    -LN(2.0) * GREATEST(
+                        0.0,
+                        EXTRACT(EPOCH FROM (NOW() - e.created_at)) / 86400.0
+                    ) / $1
+                ) AS recency_weight
             FROM normalized_events e
             JOIN catalog_tools c USING (qualified_tool_name)
             WHERE c.author_org_id IS NULL OR e.org_id IS DISTINCT FROM c.author_org_id
-            GROUP BY 1, 2
         ),
-        scored AS (
+        agg AS (
             SELECT
                 qualified_tool_name,
                 tool_type,
-                failures,
-                total_latency_ms,
-                CASE WHEN (successes + failures) = 0 THEN 1.0
-                     ELSE successes::NUMERIC / (successes + failures) END AS success_rate,
-                LN(1 + successes + failures) AS log_volume
-            FROM agg
+                COUNT(*) FILTER (WHERE success) AS successes,
+                COUNT(*) FILTER (WHERE NOT success) AS failures,
+                COALESCE(SUM(elapsed_ms), 0)::BIGINT AS total_latency_ms,
+                COALESCE(SUM(recency_weight) FILTER (WHERE success), 0.0) AS weighted_successes,
+                COALESCE(SUM(recency_weight), 0.0) AS weighted_sample_size,
+                MAX(created_at) AS last_event_at
+            FROM eligible_events
+            GROUP BY 1, 2
+        ),
+        task_agg AS (
+            SELECT
+                e.qualified_tool_name,
+                CASE
+                    WHEN d.task_class IN (
+                        'general', 'research', 'analysis', 'data_retrieval', 'coding', 'transaction', 'automation'
+                    ) THEN d.task_class
+                    WHEN d.task_class IN ('risk', 'liquidation_risk') THEN 'analysis'
+                    WHEN d.task_class IN (
+                        'portfolio_lookup', 'balance_lookup', 'price_lookup', 'defi_positions', 'lending_rates',
+                        'yield_comparison', 'protocol_tvl', 'marketplace_discovery', 'weather'
+                    ) THEN 'data_retrieval'
+                    ELSE 'other'
+                END AS task_class,
+                COALESCE(SUM(e.recency_weight) FILTER (WHERE e.success), 0.0) AS weighted_successes,
+                COALESCE(SUM(e.recency_weight), 0.0) AS weighted_sample_size
+            FROM eligible_events e
+            JOIN run_decisions d ON d.run_id = e.run_id AND d.org_id = e.org_id
+            WHERE d.task_class <> ''
+            GROUP BY 1, 2
+        ),
+        task_scores AS (
+            SELECT
+                qualified_tool_name,
+                jsonb_object_agg(
+                    task_class,
+                    jsonb_build_object(
+                        'success_rate', ROUND(
+                            ((weighted_successes + $2) / (weighted_sample_size + $3))::NUMERIC,
+                            6
+                        ),
+                        'sample_size', ROUND(weighted_sample_size::NUMERIC, 6)
+                    )
+                )::TEXT AS task_success
+            FROM task_agg
+            GROUP BY 1
+        ),
+        scored AS (
+            SELECT
+                a.qualified_tool_name,
+                a.tool_type,
+                a.failures,
+                a.total_latency_ms,
+                a.weighted_sample_size AS sample_size,
+                a.weighted_sample_size / (a.weighted_sample_size + $3) AS confidence,
+                EXP(
+                    -LN(2.0) * GREATEST(
+                        0.0,
+                        EXTRACT(EPOCH FROM (NOW() - a.last_event_at)) / 86400.0
+                    ) / $4
+                ) AS freshness,
+                (a.weighted_successes + $2) / (a.weighted_sample_size + $3) AS success_rate,
+                LN(1 + a.weighted_sample_size) AS log_volume,
+                COALESCE(t.task_success, '{}') AS task_success
+            FROM agg a
+            LEFT JOIN task_scores t USING (qualified_tool_name)
         )
         SELECT
             qualified_tool_name,
             tool_type,
             failures,
             total_latency_ms,
+            sample_size,
+            confidence,
+            freshness,
             success_rate,
+            task_success,
             CASE WHEN MAX(log_volume) OVER () = 0 THEN 0
                  ELSE log_volume / MAX(log_volume) OVER () END AS popularity_norm
         FROM scored
-        """
+        """,
+        _REPUTATION_RECENCY_HALF_LIFE_DAYS,
+        _REPUTATION_PRIOR_SUCCESSES,
+        _REPUTATION_PRIOR_SAMPLE_SIZE,
+        _REPUTATION_FRESHNESS_HALF_LIFE_DAYS,
     )
 
     for row in rows:
         success_rate = float(row["success_rate"])
         popularity_norm = float(row["popularity_norm"])
-        reputation_score = round(0.6 * success_rate + 0.4 * popularity_norm, 6)
+        freshness = float(row["freshness"])
+        reputation_score = round(
+            (0.6 * success_rate + 0.4 * popularity_norm)
+            * (_REPUTATION_FRESHNESS_FLOOR + (1 - _REPUTATION_FRESHNESS_FLOOR) * freshness),
+            6,
+        )
+        task_success = row["task_success"]
+        if not isinstance(task_success, str):
+            task_success = json.dumps(task_success)
         await pool.execute(
             """
             INSERT INTO marketplace_tool_call_stats
-                (qualified_tool_name, tool_type, total_failures, total_latency_ms, reputation_score, updated_at)
-            VALUES ($1, $2, $3, $4, $5, NOW())
+                (qualified_tool_name, tool_type, total_failures, total_latency_ms, reputation_score,
+                 reputation_sample_size, reputation_confidence, reputation_freshness, reputation_task_success,
+                 updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
             ON CONFLICT (qualified_tool_name) DO UPDATE
                 SET total_failures = EXCLUDED.total_failures,
                     total_latency_ms = EXCLUDED.total_latency_ms,
                     reputation_score = EXCLUDED.reputation_score,
+                    reputation_sample_size = EXCLUDED.reputation_sample_size,
+                    reputation_confidence = EXCLUDED.reputation_confidence,
+                    reputation_freshness = EXCLUDED.reputation_freshness,
+                    reputation_task_success = EXCLUDED.reputation_task_success,
                     updated_at = EXCLUDED.updated_at
             """,
             row["qualified_tool_name"],
@@ -293,6 +390,10 @@ async def reputation_rollup_once() -> int:
             int(row["failures"]),
             int(row["total_latency_ms"]),
             reputation_score,
+            float(row["sample_size"]),
+            float(row["confidence"]),
+            freshness,
+            task_success,
         )
 
     return len(rows)

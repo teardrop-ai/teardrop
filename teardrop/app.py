@@ -47,6 +47,7 @@ from teardrop._background_tasks import (  # noqa: E402,F401  re-exported for com
     _memory_cleanup_loop,
     _prewarm_cache_prefixes,
     _refresh_token_cleanup_loop,
+    _retention_sweep_loop,
     _run_periodic,
     _settlement_retry_loop,
     _x402_nonce_cleanup_loop,

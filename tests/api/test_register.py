@@ -166,8 +166,9 @@ async def test_register_email_normalized_to_lowercase(anon_client, monkeypatch):
     org, user = _mock_org(), _mock_user()
     captured: dict = {}
 
-    async def fake_register(org_name: str, email: str, secret: str):
+    async def fake_register(org_name: str, email: str, secret: str, acquisition_source: str = ""):
         captured["email"] = email
+        captured["acquisition_source"] = acquisition_source
         return org, user
 
     monkeypatch.setattr("teardrop.routers.auth.register_org_and_user", fake_register)
@@ -177,11 +178,32 @@ async def test_register_email_normalized_to_lowercase(anon_client, monkeypatch):
 
     resp = await anon_client.post(
         "/register",
-        json={"org_name": "Alice Inc", "email": "ALICE@EXAMPLE.COM", "password": "strongpass1"},
+        json={
+            "org_name": "Alice Inc",
+            "email": "ALICE@EXAMPLE.COM",
+            "password": "strongpass1",
+            "acquisition_source": " Founders_Email ",
+        },
     )
 
     assert resp.status_code == 201
     assert captured["email"] == "alice@example.com"
+    assert captured["acquisition_source"] == "founders_email"
+
+
+@pytest.mark.anyio
+async def test_register_rejects_invalid_acquisition_source(anon_client):
+    resp = await anon_client.post(
+        "/register",
+        json={
+            "org_name": "Org",
+            "email": "alice@example.com",
+            "password": "strongpass1",
+            "acquisition_source": "founders.email",
+        },
+    )
+
+    assert resp.status_code == 422
 
 
 @pytest.mark.anyio

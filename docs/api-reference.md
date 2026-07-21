@@ -49,7 +49,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. All
 | `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE); returns `access_token` + `refresh_token` |
 | `GET` | `/auth/me` | Bearer | Return the authenticated user's identity |
 | `GET` | `/auth/siwe/nonce` | — | Generate single-use SIWE nonce |
-| `POST` | `/register` | — | Self-serve org + user registration (optional invite-only + CAPTCHA gates) |
+| `POST` | `/register` | — | Self-serve org + user registration (optional normalized `acquisition_source`, invite-only + CAPTCHA gates) |
 | `GET` | `/auth/verify-email` | — | Consume one-time email verification token |
 | `POST` | `/auth/resend-verification` | Bearer | Re-send verification email |
 | `POST` | `/auth/refresh` | — | Exchange refresh token for new access + rotated refresh token |

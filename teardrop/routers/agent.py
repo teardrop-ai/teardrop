@@ -51,6 +51,7 @@ from teardrop.agent_post_run import (
     calculate_run_cost,
     dispatch_settlement,
     fetch_usage_snapshot,
+    record_post_run_telemetry,
 )
 from teardrop.agent_runtime import (
     _prepare_run_context,
@@ -73,10 +74,11 @@ from teardrop.agent_telemetry import _log_agent_memory
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.llm_config import get_org_llm_config_cached
-from teardrop.memory import backfill_decision_outcome, extract_and_store_memories, list_run_decisions
+from teardrop.memory import backfill_decision_outcome, list_run_decisions
 from teardrop.rate_limit import _enforce_rate_limit
+from teardrop.retention import touch_checkpoint_thread
 from teardrop.tool_exclusions import add_org_tool_exclusion, list_org_tool_exclusions, remove_org_tool_exclusion
-from teardrop.usage import UsageEvent, record_tool_call_events, record_usage_event
+from teardrop.usage import UsageEvent, record_telemetry_run_started, record_usage_event
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -141,6 +143,7 @@ async def agent_run(
     async def _stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
+        await record_telemetry_run_started(run_id, org_id, "api")
         _log_agent_memory("stream_start", run_id=run_id)
 
         # ── Pre-graph init: gather all independent calls concurrently ─────
@@ -211,6 +214,7 @@ async def agent_run(
                 "_org_tools_by_name": org_tools_by_name,
             }
         }
+        await touch_checkpoint_thread(scoped_thread_id)
 
         # Drive the LangGraph event-dispatch loop. The generator yields the
         # per-token / per-tool / per-surface SSE frames and signals early
@@ -229,6 +233,23 @@ async def agent_run(
         ):
             yield _sse
         if _loop_result.get("terminated"):
+            if _loop_result.get("termination_reason") == "failed":
+                state_snapshot, usage_data = await fetch_usage_snapshot(
+                    graph=graph,
+                    config=config,
+                    run_id=run_id,
+                    settings=settings,
+                )
+                record_post_run_telemetry(
+                    run_id=run_id,
+                    org_id=org_id,
+                    user_id=user_id,
+                    usage_data=usage_data,
+                    state_values=(state_snapshot.values or {}) if state_snapshot is not None else None,
+                    settings=mem_settings,
+                    outcome=-1,
+                    outcome_source="auto",
+                )
             return
 
         # ── Usage accounting (log-only, never blocks) ─────────────────────
@@ -280,39 +301,24 @@ async def agent_run(
             platform_fee_usdc=platform_fee,
             provider=llm_config["provider"] if llm_config else settings.agent_provider,
             model=llm_config["model"] if llm_config else settings.agent_model,
+            source="api",
         )
         await record_usage_event(usage_event)
 
-        # ── Per-tool-call telemetry (ML/reputation foundation, non-financial) ──
-        # Recorded unconditionally (not gated on settlement) so failures are
-        # captured too — this is telemetry, not a billing ledger.
-        if settings.tool_call_event_logging_enabled:
-            tool_call_log = usage_data.get("_tool_call_log", [])
-            if isinstance(tool_call_log, list) and tool_call_log:
-                asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log))
-
-        # ── Extract and store memories (fire-and-forget) ─────────────────
-        if mem_settings.memory_enabled and state_snapshot is not None:
-            try:
-                state_values = state_snapshot.values or {}
-                state_msgs = (state_values.get("messages", []))[-10:]
-                if state_msgs:
-                    billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
-                    if not isinstance(billable_tool_names, list):
-                        billable_tool_names = []
-                    run_slots = state_values.get("slots", {})
-                    asyncio.create_task(
-                        extract_and_store_memories(
-                            org_id,
-                            user_id,
-                            state_msgs,
-                            run_id,
-                            tool_names_used=[str(name) for name in billable_tool_names],
-                            slots=run_slots if isinstance(run_slots, dict) else {},
-                        )
-                    )
-            except Exception:
-                logger.debug("Memory extraction kickoff failed", exc_info=True)
+        # ── ML telemetry (non-financial, fire-and-forget) ────────────────
+        state_values = (state_snapshot.values or {}) if state_snapshot is not None else None
+        task_status = state_values.get("task_status", "") if state_values else ""
+        task_status = getattr(task_status, "value", None) or str(task_status)
+        record_post_run_telemetry(
+            run_id=run_id,
+            org_id=org_id,
+            user_id=user_id,
+            usage_data=usage_data,
+            state_values=state_values,
+            settings=mem_settings,
+            outcome=-1 if task_status.strip().lower().endswith("failed") else 1,
+            outcome_source="auto",
+        )
 
         # ── Settlement / credit debit (after usage recorded) ─────────────
         delegation_spend = usage_data.get("delegation_spend_usdc", 0)

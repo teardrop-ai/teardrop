@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import teardrop.usage as usage_module
+from teardrop._meta import APP_VERSION
 from teardrop.usage import UsageEvent, UsageSummary
 
 # ─── Pool mock helper ─────────────────────────────────────────────────────────
@@ -46,6 +47,13 @@ class TestRecordUsageEvent:
         call_args = pool.execute.call_args.args
         assert "run-1" in call_args
         assert 100 in call_args
+        assert call_args[-3] == "api"
+        assert call_args[-2] == APP_VERSION
+
+    def test_defaults_runner_version_to_application_version(self):
+        event = UsageEvent(user_id="user-1", org_id="org-1", thread_id="thread-1", run_id="run-1")
+
+        assert event.runner_version == APP_VERSION
 
     async def test_db_error_is_swallowed(self):
         from teardrop.usage import record_usage_event
@@ -56,6 +64,65 @@ class TestRecordUsageEvent:
         with patch.object(usage_module, "_pool", pool):
             # Must not raise
             await record_usage_event(event)
+
+
+@pytest.mark.anyio
+class TestTelemetryRunStart:
+    async def test_inserts_once_with_source(self):
+        from teardrop.usage import record_telemetry_run_started
+
+        pool = _pool()
+        with patch.object(usage_module, "_pool", pool):
+            await record_telemetry_run_started("run-1", "org-1", "trigger")
+
+        sql, run_id, org_id, source = pool.execute.await_args.args
+        assert "telemetry_run_starts" in sql
+        assert "ON CONFLICT (run_id) DO NOTHING" in sql
+        assert (run_id, org_id, source) == ("run-1", "org-1", "trigger")
+
+    async def test_is_noop_before_database_initialization(self):
+        from teardrop.usage import record_telemetry_run_started
+
+        with patch.object(usage_module, "_pool", None):
+            await record_telemetry_run_started("run-1", "org-1", "api")
+
+
+@pytest.mark.anyio
+class TestTelemetryCompleteness:
+    async def test_returns_source_split_coverage(self):
+        from teardrop.usage import get_telemetry_completeness
+
+        pool = _pool()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "source": "api",
+                    "total_runs": 10,
+                    "usage_event_runs": 8,
+                    "tool_eligible_runs": 4,
+                    "tool_event_runs": 3,
+                    "decision_runs": 6,
+                    "outcome_label_runs": 5,
+                }
+            ]
+        )
+
+        with patch.object(usage_module, "_pool", pool):
+            result = await get_telemetry_completeness(7)
+
+        assert result[0].source == "api"
+        assert result[0].usage_event_coverage == 0.8
+        assert result[0].tool_eligible_runs == 4
+        assert result[0].tool_event_coverage == 0.75
+        assert result[0].decision_coverage == 0.6
+        assert result[0].outcome_label_coverage == 0.5
+        assert "telemetry_run_starts" in pool.fetch.await_args.args[0]
+
+    async def test_rejects_unbounded_window(self):
+        from teardrop.usage import get_telemetry_completeness
+
+        with pytest.raises(ValueError, match="days must be between 1 and 90"):
+            await get_telemetry_completeness(0)
 
 
 # ─── record_tool_call_events ──────────────────────────────────────────────────
@@ -98,6 +165,7 @@ class TestRecordToolCallEvents:
         assert rows[0][3] == "get_datetime"  # tool_name
         assert rows[1][4] is False  # success
         assert rows[1][5] == "timeout"  # error_class
+        assert rows[0][-2] == usage_module.TOOL_CALL_EVENT_SCHEMA_VERSION
 
     async def test_empty_entries_is_noop(self):
         from teardrop.usage import record_tool_call_events

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -70,6 +71,7 @@ async def _run_and_record(
     run_id: str,
     thread_id: str,
     user_role: str,
+    source: Literal["schedule", "trigger"],
     metadata: dict[str, object],
 ) -> ScheduledRunResult:
     """Shared execution core for both scheduled and event-triggered runs.
@@ -114,6 +116,7 @@ async def _run_and_record(
         org_llm_cfg=org_llm_cfg,
         platform_fee=platform_fee,
         timeout_seconds=float(settings.scheduled_runs_execution_timeout_seconds),
+        source=source,
         metadata=metadata,
         user_role=user_role,
         emit_ui=False,
@@ -161,6 +164,7 @@ async def execute_scheduled_run(schedule: ScheduledRun) -> ScheduledRunResult:
         run_id=run_id,
         thread_id=f"scheduled:{schedule.id}:{run_id}",
         user_role="scheduled",
+        source="schedule",
         metadata={"scheduled_run_id": schedule.id, "scheduled_run_name": schedule.name},
     )
 
@@ -174,5 +178,6 @@ async def execute_event_run(schedule: ScheduledRun, *, prompt: str, run_id: str)
         run_id=run_id,
         thread_id=f"event:{schedule.id}:{run_id}",
         user_role="event",
+        source="trigger",
         metadata={"event_trigger_id": schedule.id, "event_trigger_name": schedule.name},
     )

@@ -31,8 +31,54 @@ from billing import (
 )
 from teardrop.agent_stream import _EV_BILLING_SETTLEMENT, _sse_event
 from teardrop.agent_telemetry import _log_agent_memory
+from teardrop.memory import extract_and_store_memories
+from teardrop.usage import record_tool_call_events
 
 logger = logging.getLogger(__name__)
+
+
+def record_post_run_telemetry(
+    *,
+    run_id: str,
+    org_id: str,
+    user_id: str,
+    usage_data: dict[str, Any],
+    state_values: dict[str, Any] | None,
+    settings: Any,
+    outcome: int = 0,
+    outcome_source: str = "",
+) -> None:
+    """Schedule best-effort ML telemetry without delaying a completed run."""
+    if settings.tool_call_event_logging_enabled:
+        tool_call_log = usage_data.get("_tool_call_log", [])
+        if isinstance(tool_call_log, list) and tool_call_log:
+            asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log))
+
+    if not settings.memory_enabled or not state_values:
+        return
+
+    try:
+        state_messages = state_values.get("messages", [])[-10:]
+        if not state_messages:
+            return
+        billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+        if not isinstance(billable_tool_names, list):
+            billable_tool_names = []
+        run_slots = state_values.get("slots", {})
+        asyncio.create_task(
+            extract_and_store_memories(
+                org_id,
+                user_id,
+                state_messages,
+                run_id,
+                tool_names_used=[str(name) for name in billable_tool_names],
+                slots=run_slots if isinstance(run_slots, dict) else {},
+                outcome=outcome,
+                outcome_source=outcome_source,
+            )
+        )
+    except Exception:
+        logger.debug("Post-run memory telemetry kickoff failed", exc_info=True)
 
 
 async def fetch_usage_snapshot(

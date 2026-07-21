@@ -28,8 +28,15 @@ def _pool():
 
 class TestSanitizeSlotsSnapshot:
     def test_drops_non_allowlisted_keys(self):
-        result = memory_module._sanitize_slots_snapshot({"balances": {"ETH": 1}, "raw_args": {"wallet": "0xabc"}})
-        assert result == {"balances": {"ETH": 1}}
+        result = memory_module._sanitize_slots_snapshot({"prices": {"ETH": 1}, "raw_args": {"wallet": "0xabc"}})
+        assert result == {"prices": {"ETH": 1}}
+
+    def test_drops_wallet_keyed_balance_slots(self):
+        result = memory_module._sanitize_slots_snapshot(
+            {"balances": {"1:0x1234567890123456789012345678901234567890": {"ETH": {"token_address": "0xabcdef"}}}}
+        )
+
+        assert result == {}
 
     def test_returns_empty_for_non_dict(self):
         assert memory_module._sanitize_slots_snapshot(None) == {}
@@ -103,7 +110,7 @@ class TestStoreRunDecision:
                 run_id="run-1",
                 decision={"action": "flag_risk", "reasoning": "low HF", "task_class": "risk", "confidence": 0.8},
                 tool_names=["get_liquidation_risk"],
-                slots={"risk": {"tier": "high"}, "raw_args": {"wallet": "0xabc"}},
+                slots={"prices": {"ETH": 1}, "raw_args": {"wallet": "0xabc"}},
             )
 
         assert stored is True
@@ -112,7 +119,7 @@ class TestStoreRunDecision:
         # so positional param N is at args[N] (1-indexed against $N placeholders).
         call_args = pool.fetchrow.call_args.args
         assert '"raw_args"' not in call_args[9]
-        assert '"risk"' in call_args[9]
+        assert '"prices"' in call_args[9]
 
     async def test_returns_false_on_duplicate(self, test_settings):
         pool = _pool()
@@ -127,6 +134,26 @@ class TestStoreRunDecision:
             )
 
         assert stored is False
+
+    async def test_stores_automated_outcome(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value={"id": "d-1"})
+
+        with patch.object(memory_module, "_pool", pool):
+            stored = await memory_module.store_run_decision(
+                org_id="org-1",
+                user_id="user-1",
+                run_id="run-1",
+                decision={"action": "a", "reasoning": "r"},
+                outcome=-1,
+                outcome_source="auto",
+            )
+
+        assert stored is True
+        call_args = pool.fetchrow.call_args.args
+        assert "outcome_at" in call_args[0]
+        assert call_args[11] == -1
+        assert call_args[12] == "auto"
 
     async def test_never_raises(self, test_settings):
         pool = _pool()
@@ -200,6 +227,17 @@ class TestBackfillDecisionOutcome:
             updated = await memory_module.backfill_decision_outcome("run-1", "org-1", 1)
 
         assert updated is True
+        query = pool.execute.await_args.args[0]
+        assert "outcome_source IN ('', 'auto')" in query
+
+    async def test_rejects_non_human_source(self, test_settings):
+        pool = _pool()
+
+        with patch.object(memory_module, "_pool", pool):
+            updated = await memory_module.backfill_decision_outcome("run-1", "org-1", 1, source="auto")
+
+        assert updated is False
+        pool.execute.assert_not_awaited()
 
     async def test_returns_false_when_no_matching_row(self, test_settings):
         pool = _pool()

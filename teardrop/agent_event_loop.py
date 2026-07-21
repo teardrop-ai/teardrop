@@ -8,8 +8,8 @@ the per-token / per-tool / per-surface SSE frames (RUN_STARTED, USAGE_SUMMARY,
 BILLING_SETTLEMENT, RUN_FINISHED and DONE remain the caller's responsibility).
 
 The generator mutates the supplied ``result`` dict to set ``result["terminated"]``
-to ``True`` when it short-circuits on cancellation or an unhandled exception, so
-the caller can skip post-run usage accounting exactly as before.
+and a reason when it short-circuits on cancellation or an unhandled exception,
+so callers can preserve accounting behavior while classifying outcomes safely.
 """
 
 from __future__ import annotations
@@ -63,10 +63,11 @@ async def stream_graph_events(
 
     On normal completion ``result["terminated"]`` stays ``False``. On
     cancellation or an unhandled exception the matching error frame is yielded,
-    ``result["terminated"]`` is set ``True`` and the generator returns so the
-    caller can skip usage accounting.
+    ``result["terminated"]`` and ``result["termination_reason"]`` are set,
+    and the generator returns so the caller can skip usage accounting.
     """
     result["terminated"] = False
+    result["termination_reason"] = ""
 
     # Streaming a2ui-block scrubber for planner text tokens. ui_generator
     # also calls an LLM (raw JSON output); we additionally guard by
@@ -324,6 +325,7 @@ async def stream_graph_events(
         logger.info("agent_run cancelled run_id=%s", run_id)
         yield _sse_event(_EV_ERROR, {"run_id": run_id, "error": "Request cancelled."})
         result["terminated"] = True
+        result["termination_reason"] = "cancelled"
         return
 
     except Exception as exc:
@@ -349,4 +351,5 @@ async def stream_graph_events(
             {"run_id": run_id, "error": error_msg},
         )
         result["terminated"] = True
+        result["termination_reason"] = "failed"
         return

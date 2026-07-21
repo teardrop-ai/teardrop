@@ -68,12 +68,13 @@ _STATELESS_TOOLS: frozenset[str] = frozenset(
 )
 _WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 
-# Decision-graph slot snapshot: only these top-level slot keys are persisted
-# with a run_decisions row (see agent/slots.py writers). This prevents raw
-# tool-call arguments (wallet addresses, API keys) from ever being stored —
-# slots already summarize tool outputs into safe, structured facts.
-_SLOTS_SNAPSHOT_ALLOWLIST: frozenset[str] = frozenset({"balances", "risk", "quotes", "positions", "yields", "tvl"})
+# Decision-graph slot snapshot: only non-identifying market and protocol
+# summaries are persisted. Wallet-keyed balances and positions remain in the
+# checkpoint state and are never copied into long-lived run telemetry.
+_SLOTS_SNAPSHOT_ALLOWLIST: frozenset[str] = frozenset({"prices", "rates", "tvl"})
 _SLOTS_SNAPSHOT_MAX_BYTES = 8192
+RUN_DECISION_SCHEMA_VERSION = 1
+TASK_CLASS_TAXONOMY_VERSION = 1
 
 
 async def init_memory_db(pool: asyncpg.Pool) -> None:
@@ -440,6 +441,8 @@ async def store_run_decision(
     decision: dict[str, Any],
     tool_names: list[str] | None = None,
     slots: dict[str, Any] | None = None,
+    outcome: int = 0,
+    outcome_source: str = "",
 ) -> bool:
     """Persist one decision-graph record for a run. Returns False on failure or duplicate.
 
@@ -452,12 +455,20 @@ async def store_run_decision(
         pool = _get_pool()
         snapshot = _sanitize_slots_snapshot(slots)
         confidence = decision.get("confidence")
+        if outcome not in (-1, 0, 1):
+            outcome = 0
+        if outcome == 0:
+            outcome_source = ""
+        elif outcome_source not in {"auto", "explicit", "feedback"}:
+            outcome_source = ""
         result = await pool.fetchrow(
             """
             INSERT INTO run_decisions
                 (id, run_id, org_id, user_id, task_class, action, reasoning,
-                 confidence, slots_snapshot, tool_names, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+                  confidence, slots_snapshot, tool_names, outcome, outcome_source, outcome_at,
+                  schema_version, taxonomy_version, created_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12,
+                      CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $13, $14, $15)
             ON CONFLICT (run_id) DO NOTHING
             RETURNING id
             """,
@@ -471,6 +482,10 @@ async def store_run_decision(
             float(confidence) if isinstance(confidence, (int, float)) else None,
             json.dumps(snapshot),
             list(tool_names or []),
+            outcome,
+            outcome_source,
+            RUN_DECISION_SCHEMA_VERSION,
+            TASK_CLASS_TAXONOMY_VERSION,
             datetime.now(timezone.utc),
         )
         return result is not None
@@ -521,17 +536,20 @@ async def list_run_decisions(
 async def backfill_decision_outcome(run_id: str, org_id: str, rating: int, source: str = "feedback") -> bool:
     """Attach a ground-truth outcome label (-1/0/1) to an existing decision record.
 
-    Org-scoped to prevent cross-org writes. Only sets the outcome once
-    (``WHERE outcome = 0``) so the first label wins and a decision cannot be
-    silently relabeled. Never raises.
+    Org-scoped to prevent cross-org writes. Human-originated sources replace an
+    unlabeled or automated result, but never replace another human label.
+    Never raises.
     """
+    if rating not in (-1, 0, 1) or source not in {"explicit", "feedback"}:
+        return False
     try:
         pool = _get_pool()
         result = await pool.execute(
             """
             UPDATE run_decisions
             SET outcome = $3, outcome_source = $4, outcome_at = NOW()
-            WHERE run_id = $1 AND org_id = $2 AND outcome = 0
+            WHERE run_id = $1 AND org_id = $2
+              AND outcome_source IN ('', 'auto')
             """,
             run_id,
             org_id,
@@ -647,6 +665,8 @@ async def extract_and_store_memories(
     run_id: str,
     tool_names_used: list[str] | None = None,
     slots: dict[str, Any] | None = None,
+    outcome: int = 0,
+    outcome_source: str = "",
 ) -> int:
     """Extract facts and a decision summary from a conversation; store both.
 
@@ -675,6 +695,8 @@ async def extract_and_store_memories(
                 decision=decision,
                 tool_names=tool_names_used,
                 slots=slots,
+                outcome=outcome,
+                outcome_source=outcome_source,
             )
 
         return stored

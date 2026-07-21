@@ -16,6 +16,7 @@ from marketplace import reputation_rollup_once
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import cleanup_expired_memories
+from teardrop.retention import retention_sweep_once
 from teardrop.users import cleanup_expired_refresh_tokens
 
 settings = get_settings()
@@ -113,6 +114,20 @@ async def _reputation_rollup_iter() -> None:
         logger.info("Reputation rollup: upserted %d tool aggregates", upserted)
 
 
+async def _retention_sweep_iter() -> None:
+    result = await retention_sweep_once()
+    if result.total_deleted:
+        logger.info(
+            "Retention sweep: checkpoint_threads=%d scheduled_run_results=%d "
+            "org_tool_execution_events=%d telemetry_run_starts=%d expired_siwe_login_sessions=%d",
+            result.checkpoint_threads,
+            result.scheduled_run_results,
+            result.org_tool_execution_events,
+            result.telemetry_run_starts,
+            result.expired_siwe_login_sessions,
+        )
+
+
 async def _settlement_retry_loop() -> None:
     """Periodically retry failed settlements (runs as background task)."""
     await _run_periodic(
@@ -170,6 +185,16 @@ async def _reputation_rollup_loop() -> None:
         _reputation_rollup_iter,
         settings.reputation_rollup_interval_seconds,
         monitor_slug="reputation-rollup",
+    )
+
+
+async def _retention_sweep_loop() -> None:
+    """Periodically remove disposable operational data (runs as a background task)."""
+    await _run_periodic(
+        "Retention sweep",
+        _retention_sweep_iter,
+        settings.retention_sweep_interval_seconds,
+        monitor_slug="retention-sweep",
     )
 
 

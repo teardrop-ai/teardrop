@@ -25,6 +25,22 @@ When `AGENT_COMPILER_MODE_ENABLED=true` is set, planner turns may emit an option
 
 Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-backed LangGraph checkpointer).
 
+### Retention And Data Tiers
+
+Each graph invocation records its thread in `checkpoint_thread_activity` before writing checkpoints. The periodic retention worker locks inactive thread rows before deleting their checkpoints, blobs, and writes, so a newly resumed thread cannot lose fresh state during a sweep.
+
+| Records | Retention policy |
+|---------|------------------|
+| LangGraph checkpoint state | Configurable inactive-thread TTL; 45 days by default |
+| `scheduled_run_results` | Disposable output cache; 30 days by default |
+| `org_tool_events` with `executed` or `failed` event types | Disposable execution telemetry; 90 days by default |
+| `telemetry_run_starts` | Run-source completeness denominator; 120 days by default |
+| Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |
+| `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events` | Immutable financial or audit records; never swept |
+| `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; never swept |
+
+Retention sweeps are batched, parameterized, and log counts only. Setting a configurable TTL to `0` disables that table's cleanup.
+
 ---
 
 ## Streaming & Server-Sent Events (`teardrop/routers/agent.py`)

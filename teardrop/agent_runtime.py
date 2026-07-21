@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -46,13 +46,14 @@ from marketplace import get_marketplace_tool_by_name, record_marketplace_tool_us
 from mcp_client import build_mcp_langchain_tools
 from org_tools import build_org_langchain_tools
 from teardrop.agent_event_loop import _coerce_stream_text
-from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot
+from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot, record_post_run_telemetry
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import recall_memories
 from teardrop.public_url import public_base_url
+from teardrop.retention import touch_checkpoint_thread
 from teardrop.tool_exclusions import list_org_tool_exclusions
-from teardrop.usage import UsageEvent, record_usage_event
+from teardrop.usage import UsageEvent, record_telemetry_run_started, record_usage_event
 from teardrop.users import get_org_by_id
 
 logger = logging.getLogger(__name__)
@@ -167,14 +168,17 @@ async def record_failure_usage_event(
     config: dict[str, Any],
     run_id: str,
     thread_id: str,
+    org_id: str,
+    user_id: str,
     usage_user_id: str,
     usage_org_id: str,
     duration_ms: int,
     llm_config: dict[str, Any] | None,
     platform_fee: int,
     runtime_settings: Settings,
+    source: Literal["api", "schedule", "trigger", "a2a"],
 ) -> UsageEvent:
-    _, usage_data = await fetch_usage_snapshot(
+    state_snapshot, usage_data = await fetch_usage_snapshot(
         graph=graph,
         config=config,
         run_id=run_id,
@@ -200,8 +204,19 @@ async def record_failure_usage_event(
         platform_fee_usdc=0 if platform_fee > 0 else 0,
         provider=llm_config["provider"] if llm_config else runtime_settings.agent_provider,
         model=llm_config["model"] if llm_config else runtime_settings.agent_model,
+        source=source,
     )
     await record_usage_event(usage_event)
+    record_post_run_telemetry(
+        run_id=run_id,
+        org_id=org_id,
+        user_id=user_id,
+        usage_data=usage_data,
+        state_values=_snapshot_values(state_snapshot),
+        settings=runtime_settings,
+        outcome=-1,
+        outcome_source="auto",
+    )
     return usage_event
 
 
@@ -219,6 +234,7 @@ async def run_agent_once(
     org_llm_cfg: Any,
     platform_fee: int,
     timeout_seconds: float,
+    source: Literal["api", "schedule", "trigger", "a2a"] = "api",
     metadata: dict[str, Any] | None = None,
     excluded_tool_names: list[str] | None = None,
     user_role: str = "user",
@@ -228,6 +244,7 @@ async def run_agent_once(
 ) -> AgentRunOnceResult:
     runtime_settings = get_settings()
     start_time = time.monotonic()
+    await record_telemetry_run_started(run_id, org_id, source)
     ctx = await _prepare_run_context(
         org_id=org_id,
         user_message=user_message,
@@ -267,6 +284,7 @@ async def run_agent_once(
             "_org_tools_by_name": ctx.org_tools_by_name,
         }
     }
+    await touch_checkpoint_thread(thread_id)
 
     invoke_result: Any = None
     try:
@@ -281,12 +299,15 @@ async def run_agent_once(
             config=config,
             run_id=run_id,
             thread_id=thread_id,
+            org_id=org_id,
+            user_id=user_id,
             usage_user_id=usage_user_id,
             usage_org_id=usage_org_id,
             duration_ms=duration_ms,
             llm_config=ctx.llm_config,
             platform_fee=platform_fee,
             runtime_settings=runtime_settings,
+            source=source,
         )
         return AgentRunOnceResult(
             task_state="timeout",
@@ -306,12 +327,15 @@ async def run_agent_once(
             config=config,
             run_id=run_id,
             thread_id=thread_id,
+            org_id=org_id,
+            user_id=user_id,
             usage_user_id=usage_user_id,
             usage_org_id=usage_org_id,
             duration_ms=duration_ms,
             llm_config=ctx.llm_config,
             platform_fee=platform_fee,
             runtime_settings=runtime_settings,
+            source=source,
         )
         return AgentRunOnceResult(
             task_state="failed",
@@ -365,8 +389,19 @@ async def run_agent_once(
         platform_fee_usdc=platform_fee,
         provider=ctx.llm_config["provider"] if ctx.llm_config else runtime_settings.agent_provider,
         model=ctx.llm_config["model"] if ctx.llm_config else runtime_settings.agent_model,
+        source=source,
     )
     await record_usage_event(usage_event)
+    record_post_run_telemetry(
+        run_id=run_id,
+        org_id=org_id,
+        user_id=user_id,
+        usage_data=usage_data,
+        state_values=values,
+        settings=runtime_settings,
+        outcome=-1 if task_state == "failed" else 1,
+        outcome_source="auto",
+    )
 
     settlement_result: dict[str, Any] = {}
     delegation_spend = usage_data.get("delegation_spend_usdc", 0)
