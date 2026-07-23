@@ -216,6 +216,13 @@ async def agent_run(
         }
         await touch_checkpoint_thread(scoped_thread_id)
 
+        # ── Implicit correction detection (fire-and-forget) ──────────────
+        # Check if this run is a correction of the immediately prior turn
+        # on the same thread. Runs concurrently with the graph loop.
+        from teardrop.memory import detect_implicit_correction  # noqa: PLC0415
+
+        asyncio.create_task(detect_implicit_correction(org_id, scoped_thread_id, body.message))
+
         # Drive the LangGraph event-dispatch loop. The generator yields the
         # per-token / per-tool / per-surface SSE frames and signals early
         # termination (cancellation or unhandled error) via the result dict so
@@ -249,6 +256,8 @@ async def agent_run(
                     settings=mem_settings,
                     outcome=-1,
                     outcome_source="auto",
+                    thread_id=scoped_thread_id,
+                    user_message=body.message,
                 )
             return
 
@@ -318,6 +327,8 @@ async def agent_run(
             settings=mem_settings,
             outcome=-1 if task_status.strip().lower().endswith("failed") else 1,
             outcome_source="auto",
+            thread_id=scoped_thread_id,
+            user_message=body.message,
         )
 
         # ── Settlement / credit debit (after usage recorded) ─────────────

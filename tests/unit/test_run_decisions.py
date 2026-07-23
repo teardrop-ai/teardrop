@@ -256,3 +256,162 @@ class TestBackfillDecisionOutcome:
             updated = await memory_module.backfill_decision_outcome("run-1", "org-1", 1)
 
         assert updated is False
+
+    async def test_accepts_implicit_correction_source(self, test_settings):
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="UPDATE 1")
+
+        with patch.object(memory_module, "_pool", pool):
+            updated = await memory_module.backfill_decision_outcome("run-1", "org-1", -1, source="implicit_correction")
+
+        assert updated is True
+
+    async def test_rejects_unknown_source(self, test_settings):
+        pool = _pool()
+
+        with patch.object(memory_module, "_pool", pool):
+            updated = await memory_module.backfill_decision_outcome("run-1", "org-1", -1, source="garbage")
+
+        assert updated is False
+        pool.execute.assert_not_awaited()
+
+
+# ─── _char_overlap_ratio ─────────────────────────────────────────────────────
+
+
+class TestCharOverlapRatio:
+    def test_identical_strings(self):
+        assert memory_module._char_overlap_ratio("hello", "hello") == 1.0
+
+    def test_empty_current(self):
+        assert memory_module._char_overlap_ratio("", "anything") == 0.0
+
+    def test_no_overlap(self):
+        ratio = memory_module._char_overlap_ratio("abc", "xyz")
+        assert ratio == 0.0
+
+    def test_partial_overlap(self):
+        # current="abcd" -> chars a,b,c present in prior="abcz" -> 3/4 = 0.75
+        ratio = memory_module._char_overlap_ratio("abcd", "abcz")
+        assert ratio == 0.75
+
+    def test_eighty_percent_threshold_trigger(self):
+        prior = "what is the price of Ethereum"
+        current = "what is the current price of Ethereum"
+        ratio = memory_module._char_overlap_ratio(current[:200].lower(), prior[:200].lower())
+        assert ratio >= memory_module._IMPLICIT_CORRECTION_OVERLAP_THRESHOLD
+
+
+# ─── detect_implicit_correction ──────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+class TestDetectImplicitCorrection:
+    async def test_downgrades_prior_run_with_high_overlap(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "run_id": "prior-run",
+                "user_message": "what is the price of Ethereum",
+                "outcome_source": "auto",
+            }
+        )
+        pool.execute = AsyncMock(return_value="UPDATE 1")
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="what is the current price of Ethereum",
+            )
+
+        pool.execute.assert_awaited_once()
+        call_args = pool.execute.call_args.args
+        # backfill_decision_outcome(run_id, org_id, rating, source)
+        assert call_args[1] == "prior-run"
+        assert call_args[2] == "org-1"
+        assert call_args[3] == -1
+        assert call_args[4] == "implicit_correction"
+
+    async def test_noop_when_no_prior_run(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=None)
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="what is the price of ETH",
+            )
+
+        pool.execute.assert_not_awaited()
+
+    async def test_noop_when_low_overlap(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "run_id": "prior-run",
+                "user_message": "what is the price of Ethereum",
+                "outcome_source": "auto",
+            }
+        )
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="tell me about DeFi yield farming strategies",
+            )
+
+        pool.execute.assert_not_awaited()
+
+    async def test_noop_when_prior_explicitly_labeled(self, test_settings):
+        pool = _pool()
+        # outcome_source='explicit' means the SELECT won't find it
+        # (because the WHERE clause filters on IN ('', 'auto'))
+        pool.fetchrow = AsyncMock(return_value=None)
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="what is the price of Ethereum",
+            )
+
+        pool.execute.assert_not_awaited()
+
+    async def test_noop_when_empty_thread_id(self, test_settings):
+        pool = _pool()
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="",
+                current_message="what is the price of Ethereum",
+            )
+
+        pool.fetchrow.assert_not_awaited()
+
+    async def test_noop_when_empty_message(self, test_settings):
+        pool = _pool()
+
+        with patch.object(memory_module, "_pool", pool):
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="   ",
+            )
+
+        pool.fetchrow.assert_not_awaited()
+
+    async def test_never_raises(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(side_effect=Exception("db down"))
+
+        with patch.object(memory_module, "_pool", pool):
+            # Should not propagate
+            await memory_module.detect_implicit_correction(
+                org_id="org-1",
+                scoped_thread_id="user-1:thread-1",
+                current_message="what is the price of Ethereum",
+            )

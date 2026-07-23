@@ -216,6 +216,7 @@ async def record_failure_usage_event(
         settings=runtime_settings,
         outcome=-1,
         outcome_source="auto",
+        thread_id=thread_id,
     )
     return usage_event
 
@@ -401,6 +402,8 @@ async def run_agent_once(
         settings=runtime_settings,
         outcome=-1 if task_state == "failed" else 1,
         outcome_source="auto",
+        thread_id=thread_id,
+        user_message=user_message,
     )
 
     settlement_result: dict[str, Any] = {}

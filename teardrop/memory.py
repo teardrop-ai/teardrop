@@ -443,6 +443,8 @@ async def store_run_decision(
     slots: dict[str, Any] | None = None,
     outcome: int = 0,
     outcome_source: str = "",
+    thread_id: str = "",
+    user_message: str = "",
 ) -> bool:
     """Persist one decision-graph record for a run. Returns False on failure or duplicate.
 
@@ -459,16 +461,16 @@ async def store_run_decision(
             outcome = 0
         if outcome == 0:
             outcome_source = ""
-        elif outcome_source not in {"auto", "explicit", "feedback"}:
+        elif outcome_source not in {"auto", "explicit", "feedback", "implicit_correction"}:
             outcome_source = ""
         result = await pool.fetchrow(
             """
             INSERT INTO run_decisions
                 (id, run_id, org_id, user_id, task_class, action, reasoning,
                   confidence, slots_snapshot, tool_names, outcome, outcome_source, outcome_at,
-                  schema_version, taxonomy_version, created_at)
+                  schema_version, taxonomy_version, thread_id, user_message, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12,
-                      CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $13, $14, $15)
+                      CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $13, $14, $15, $16, $17)
             ON CONFLICT (run_id) DO NOTHING
             RETURNING id
             """,
@@ -486,6 +488,8 @@ async def store_run_decision(
             outcome_source,
             RUN_DECISION_SCHEMA_VERSION,
             TASK_CLASS_TAXONOMY_VERSION,
+            thread_id[:256],
+            user_message[:200],
             datetime.now(timezone.utc),
         )
         return result is not None
@@ -540,7 +544,7 @@ async def backfill_decision_outcome(run_id: str, org_id: str, rating: int, sourc
     unlabeled or automated result, but never replace another human label.
     Never raises.
     """
-    if rating not in (-1, 0, 1) or source not in {"explicit", "feedback"}:
+    if rating not in (-1, 0, 1) or source not in {"explicit", "feedback", "implicit_correction"}:
         return False
     try:
         pool = _get_pool()
@@ -560,6 +564,84 @@ async def backfill_decision_outcome(run_id: str, org_id: str, rating: int, sourc
     except Exception:
         logger.exception("Failed to backfill decision outcome for run_id=%s", run_id)
         return False
+
+
+# ─── Implicit correction detection ───────────────────────────────────────────
+
+
+_IMPLICIT_CORRECTION_WINDOW_SECONDS = 300
+_IMPLICIT_CORRECTION_OVERLAP_THRESHOLD = 0.8
+
+
+def _char_overlap_ratio(current: str, prior: str) -> float:
+    """Fraction of current chars present in prior (order-stable bag overlap).
+
+    Returns 0.0 for empty current strings. Used as a cheap proxy for query
+    similarity when text is too short for embedding-based approaches.
+    """
+    if not current:
+        return 0.0
+    prior_set = set(prior)
+    return sum(1 for ch in current if ch in prior_set) / len(current)
+
+
+async def detect_implicit_correction(
+    org_id: str,
+    scoped_thread_id: str,
+    current_message: str,
+    *,
+    window_seconds: int = _IMPLICIT_CORRECTION_WINDOW_SECONDS,
+    overlap_threshold: float = _IMPLICIT_CORRECTION_OVERLAP_THRESHOLD,
+) -> None:
+    """Downgrade the immediately prior run in the same thread to outcome=-1
+    when the current message appears to be a re-ask or correction.
+
+    Triggers only when:
+    * A prior run exists in the same thread within ``window_seconds``.
+    * Its ``outcome_source`` is ``'auto'`` or ``''`` (no human label).
+    * Its ``user_message[:200]`` overlaps ``current_message[:200]`` by at
+      least ``overlap_threshold`` (character-bag overlap).
+
+    Never overwrites explicit or feedback labels. Best-effort; never raises.
+    """
+    pool = _get_pool()
+    if pool is None or not scoped_thread_id:
+        return
+    current_clean = current_message.strip()[:200]
+    if not current_clean:
+        return
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT run_id, user_message, outcome_source
+            FROM run_decisions
+            WHERE org_id = $1
+              AND thread_id = $2
+              AND created_at > NOW() - make_interval(secs => $3)
+              AND outcome_source IN ('', 'auto')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            org_id,
+            scoped_thread_id,
+            window_seconds,
+        )
+        if not row:
+            return
+        prior_msg = str(row.get("user_message", ""))[:200]
+        if not prior_msg:
+            return
+        ratio = _char_overlap_ratio(current_clean, prior_msg)
+        if ratio < overlap_threshold:
+            return
+        await backfill_decision_outcome(
+            row["run_id"],
+            org_id,
+            -1,
+            "implicit_correction",
+        )
+    except Exception:
+        logger.debug("Implicit correction detection failed org_id=%s thread_id=%s", org_id, scoped_thread_id, exc_info=True)
 
 
 # ─── Fact extraction (LLM-based) ─────────────────────────────────────────────
@@ -667,6 +749,8 @@ async def extract_and_store_memories(
     slots: dict[str, Any] | None = None,
     outcome: int = 0,
     outcome_source: str = "",
+    thread_id: str = "",
+    user_message: str = "",
 ) -> int:
     """Extract facts and a decision summary from a conversation; store both.
 
@@ -697,6 +781,8 @@ async def extract_and_store_memories(
                 slots=slots,
                 outcome=outcome,
                 outcome_source=outcome_source,
+                thread_id=thread_id,
+                user_message=user_message,
             )
 
         return stored

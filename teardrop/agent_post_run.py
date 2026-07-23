@@ -47,6 +47,8 @@ def record_post_run_telemetry(
     settings: Any,
     outcome: int = 0,
     outcome_source: str = "",
+    thread_id: str = "",
+    user_message: str = "",
 ) -> None:
     """Schedule best-effort ML telemetry without delaying a completed run."""
     if settings.tool_call_event_logging_enabled:
@@ -75,6 +77,8 @@ def record_post_run_telemetry(
                 slots=run_slots if isinstance(run_slots, dict) else {},
                 outcome=outcome,
                 outcome_source=outcome_source,
+                thread_id=thread_id,
+                user_message=user_message,
             )
         )
     except Exception:
