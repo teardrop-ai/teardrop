@@ -53,6 +53,8 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
         slots={"quotes": {"ETH": "safe"}},
         outcome=1,
         outcome_source="auto",
+        thread_id="",
+        user_message="",
     )
 
 
