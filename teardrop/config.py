@@ -88,7 +88,7 @@ class Settings(BaseSettings):
         ),
     )
     agent_planner_provider: str = Field(
-        default="",
+        default="google",
         description=(
             "Optional override provider for initial planner turns "
             "(tool_iterations == 0). When unset, the primary agent_provider is used. "
@@ -97,7 +97,7 @@ class Settings(BaseSettings):
         ),
     )
     agent_planner_model: str = Field(
-        default="",
+        default="gemini-3.6-flash",
         description=(
             "Optional override model for initial planner turns. "
             "Only applied when agent_planner_provider is also set and the "
@@ -258,7 +258,7 @@ class Settings(BaseSettings):
         description="Provider for UI generation turns when no org-level BYOK config is set.",
     )
     agent_ui_generator_model: str = Field(
-        default="gemini-3-flash-preview",
+        default="gemini-3.6-flash",
         description="Model for UI generation turns when no org-level BYOK config is set.",
     )
 
@@ -680,10 +680,10 @@ class Settings(BaseSettings):
         default=[
             # Cost tier — DeepSeek V4 Flash via OpenRouter (US providers: NovitaAI primary, DeepInfra fallback).
             {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},
-            # Speed tier — Gemini 3 Flash (1M context, sub-400ms median).
-            {"provider": "google", "model": "gemini-3-flash-preview"},
-            # Quality tier — Claude Sonnet 4.6 (200k context, top-tier reasoning).
-            {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+            # Speed tier — Gemini 3.6 Flash (1M context, sub-300ms median).
+            {"provider": "google", "model": "gemini-3.6-flash"},
+            # Quality tier — Claude Sonnet 5 (1M context, top-tier reasoning).
+            {"provider": "anthropic", "model": "claude-sonnet-5"},
         ],
         description="Models available for smart routing (Teardrop holds shared keys)",
     )

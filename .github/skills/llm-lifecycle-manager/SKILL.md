@@ -58,4 +58,4 @@ When you execute this workflow, report:
 - The computed atomic USDC rates.
 - The generated migration filename.
 - Whether an old model was deprecated or fully replaced.
-- Any follow-up files that still need manual review, such as `teardrop/config.py` or SDK handoff docs.
+- Any follow-up files that still need manual review, such as `teardrop/config.py` or docs.

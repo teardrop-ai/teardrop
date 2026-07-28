@@ -395,7 +395,7 @@ When you set `routing_preference` to a value other than `"default"`, Teardrop wi
 | `default` | Use the provider/model you configured |
 | `cost` | Select the cheapest model (by tokens-in + tokens-out pricing) |
 | `speed` | Select the fastest model (by p95 latency from live benchmarks; falls back to official specs for new deployments) |
-| `quality` | Select the highest quality model (Claude Sonnet > Claude Haiku, etc.) |
+| `quality` | Select the highest quality model |
 
 **Note**: If you set BYOK (custom API key), routing is disabled — you always use your configured model.
 

@@ -16,7 +16,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `AGENT_SYNTHESIS_PROVIDER` | Optional provider override for post-tool synthesis turns (`tool_iterations >= 1`). When unset, uses `AGENT_PROVIDER`. |
 | `AGENT_SYNTHESIS_MODEL` | Optional model override for synthesis turns, paired with `AGENT_SYNTHESIS_PROVIDER`. |
 | `AGENT_UI_GENERATOR_PROVIDER` | Provider for UI generation turns (default: `google`). **Important**: requires `GOOGLE_API_KEY` even if main provider is OpenRouter. |
-| `AGENT_UI_GENERATOR_MODEL` | Model for UI generation turns (default: `gemini-3-flash-preview`). |
+| `AGENT_UI_GENERATOR_MODEL` | Model for UI generation turns (default: `gemini-3.6-flash`). |
 | `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
 | `AGENT_COMPILER_MODE_ENABLED` | Enables optional staged planner IR (`<plan>{...}</plan>`) execution. Default: `false` (safe rollout). |
 | `AGENT_CACHE_PREWARM_ENABLED` | Enables one-time startup prompt-cache prewarm for top active org/provider/model prefixes. Default: `true`. |

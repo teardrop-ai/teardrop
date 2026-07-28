@@ -298,25 +298,25 @@ class TestCooldowns:
 class TestSelectHighestQuality:
     def test_selects_tier_1(self):
         models = [
-            {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
-            {"provider": "anthropic", "model": "claude-sonnet-4-6"},  # tier 1
+            {"provider": "google", "model": "gemini-3.6-flash"},  # tier 2
+            {"provider": "anthropic", "model": "claude-sonnet-5"},  # tier 1
             {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},  # tier 2
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "claude-sonnet-4-6"
+        assert result["model"] == "claude-sonnet-5"
 
     def test_unknown_model_lowest_priority(self):
         models = [
-            {"provider": "google", "model": "gemini-3-flash-preview"},  # tier 2
+            {"provider": "google", "model": "gemini-3.6-flash"},  # tier 2
             {"provider": "custom", "model": "custom-model-v1"},  # tier 99
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "gemini-3-flash-preview"
+        assert result["model"] == "gemini-3.6-flash"
 
     def test_single_model(self):
-        models = [{"provider": "anthropic", "model": "claude-sonnet-4-6"}]
+        models = [{"provider": "anthropic", "model": "claude-sonnet-5"}]
         result = _select_highest_quality(models)
-        assert result["model"] == "claude-sonnet-4-6"
+        assert result["model"] == "claude-sonnet-5"
 
 
 # ─── Fastest routing ─────────────────────────────────────────────────────────
