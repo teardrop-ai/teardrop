@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 
@@ -44,6 +46,62 @@ async def test_agent_card_shape(api_client):
     assert body["endpoints"]["a2a_message"] == "/message:send"
     assert body["endpoints"]["mcp_tools"] == "/tools/mcp"
     assert body["capabilities"]["billing"]["pricing_endpoint"] == "/billing/pricing"
+
+
+@pytest.mark.anyio
+async def test_agent_card_includes_public_tool_reputation(api_client, monkeypatch):
+    snapshot = {
+        "generated_at": "2026-08-02T12:00:00+00:00",
+        "tools": {"platform/web_search": {"reputation_score": 0.93, "success_rate": 0.97}},
+    }
+    monkeypatch.setattr(
+        "teardrop.routers.system.get_public_reputation_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+
+    response = await api_client.get("/.well-known/agent-card.json")
+
+    web_search = next(tool for tool in response.json()["tools"] if tool["name"] == "web_search")
+    assert web_search["reputation"] == snapshot["tools"]["platform/web_search"]
+
+
+@pytest.mark.anyio
+async def test_public_reputation_metadata_and_cache(api_client, monkeypatch):
+    snapshot = {
+        "generated_at": "2026-08-02T12:00:00+00:00",
+        "tools": {
+            "acme/oracle": {
+                "reputation_score": 0.91,
+                "success_rate": 0.96,
+                "sample_size": 12.5,
+                "confidence": 0.71,
+                "freshness": 1.0,
+                "average_latency_ms": 85.0,
+            }
+        },
+    }
+    monkeypatch.setattr(
+        "teardrop.routers.system.get_public_reputation_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+
+    response = await api_client.get("/.well-known/reputation.json")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "1.0",
+        "generated_at": snapshot["generated_at"],
+        "methodology_url": "http://test/docs",
+        "tools": [{"qualified_tool_name": "acme/oracle", **snapshot["tools"]["acme/oracle"]}],
+    }
+    assert "unique_caller_count" not in response.json()["tools"][0]
+    assert response.headers["cache-control"] == "public, max-age=300"
+
+    cached_response = await api_client.get(
+        "/.well-known/reputation.json",
+        headers={"If-None-Match": response.headers["etag"]},
+    )
+    assert cached_response.status_code == 304
 
 
 @pytest.mark.anyio
@@ -276,6 +334,7 @@ async def test_root_llms_txt(api_client, test_settings):
     assert resp.headers["cache-control"] == "public, max-age=3600"
     assert "# Teardrop" in resp.text
     assert "http://test/.well-known/agent-card.json" in resp.text
+    assert "http://test/.well-known/reputation.json" in resp.text
     assert "http://test/marketplace/llms.txt" in resp.text
 
 

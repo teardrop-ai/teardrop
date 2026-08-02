@@ -94,6 +94,7 @@ python -m migrations.runner
 | `075_marketplace_reputation_v2.sql` | Recency-aware marketplace reputation diagnostics |
 | `076_telemetry_run_starts.sql` | Source-split run-start denominator for telemetry completeness reporting |
 | `077_telemetry_run_starts_retention.sql` | Ordered index for bounded telemetry run-start retention |
+| `081_reputation_public_metrics.sql` | Public success-rate, average-latency, and privacy-thresholded caller-count reputation metrics |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

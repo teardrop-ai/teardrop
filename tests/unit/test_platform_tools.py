@@ -44,6 +44,9 @@ class TestGetMarketplaceCatalogWithPlatformTools:
                 "tool_type": "platform",
                 "category": "search",
                 "total_calls": 9,
+                "reputation_score": 0.91,
+                "success_rate": 0.96,
+                "unique_caller_count": 7,
             },
             {
                 "tool_id": None,
@@ -81,6 +84,9 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert by_name["platform/http_fetch"].health_status == "healthy"
         assert by_name["platform/web_search"].cost_usdc == 10000
         assert by_name["platform/web_search"].tool_type == "platform"
+        assert by_name["platform/web_search"].reputation_score == 0.91
+        assert by_name["platform/web_search"].success_rate == 0.96
+        assert by_name["platform/web_search"].unique_caller_count == 7
 
     @pytest.mark.anyio
     async def test_platform_tools_merged_with_org_tools(self, monkeypatch):

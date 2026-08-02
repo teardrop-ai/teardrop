@@ -83,6 +83,8 @@ class MarketplaceTool(BaseModel):
     tool_type: Literal["platform", "community"] = "community"
     total_calls: int = 0
     reputation_score: float = 0.0
+    success_rate: float = 0.0
+    unique_caller_count: int | None = None
     health_status: MarketplaceHealthStatus = "healthy"
     is_healthy: bool = True
     category: MarketplaceCategory = ""

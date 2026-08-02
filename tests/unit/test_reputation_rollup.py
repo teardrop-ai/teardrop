@@ -33,7 +33,9 @@ class TestReputationRollupOnce:
                 "qualified_tool_name": "platform/get_datetime",
                 "tool_type": "platform",
                 "failures": 2,
+                "unique_caller_count": 7,
                 "total_latency_ms": 500,
+                "average_latency_ms": 50.0,
                 "success_rate": 0.8,
                 "popularity_norm": 1.0,
                 "sample_size": 12.5,
@@ -45,7 +47,9 @@ class TestReputationRollupOnce:
                 "qualified_tool_name": "acme/weather",
                 "tool_type": "community",
                 "failures": 0,
+                "unique_caller_count": 1,
                 "total_latency_ms": 120,
+                "average_latency_ms": 120.0,
                 "success_rate": 1.0,
                 "popularity_norm": 0.1,
                 "sample_size": 1.0,
@@ -74,6 +78,7 @@ class TestReputationRollupOnce:
         assert round(0.6 * 0.8 + 0.4 * 1.0, 6) in first_call_args
         assert 12.5 in first_call_args
         assert 0.714 in first_call_args
+        assert 7 in first_call_args
         assert '{"data_retrieval": {"success_rate": 0.8, "sample_size": 12.5}}' in first_call_args
 
     @pytest.mark.anyio
@@ -85,7 +90,9 @@ class TestReputationRollupOnce:
                 "qualified_tool_name": "platform/get_datetime",
                 "tool_type": "platform",
                 "failures": 0,
+                "unique_caller_count": 1,
                 "total_latency_ms": 10,
+                "average_latency_ms": 10.0,
                 "success_rate": 1.0,
                 "popularity_norm": 1.0,
                 "sample_size": 1.0,
@@ -120,6 +127,7 @@ class TestReputationRollupOnce:
         assert "JOIN catalog_tools c USING (qualified_tool_name)" in sql_text
         assert "o.slug <> 'platform'" in sql_text
         assert "e.org_id IS DISTINCT FROM c.author_org_id" in sql_text
+        assert "COUNT(DISTINCT org_id) FILTER (WHERE org_id <> '')" in sql_text
         assert "marketplace_tool_call_stats s" not in sql_text
         assert "JOIN run_decisions d ON d.run_id = e.run_id AND d.org_id = e.org_id" in sql_text
         assert "ELSE 'other'" in sql_text

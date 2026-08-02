@@ -129,6 +129,28 @@ def test_to_a2a_skills_shape():
     assert "description" in skill
     assert "tags" in skill
     assert "version" in skill
+    assert "reputation" not in skill
+
+
+def test_public_exports_include_reputation_when_supplied():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {"platform/test_tool": {"reputation_score": 0.9, "unique_caller_count": 5}}
+
+    skill = reg.to_a2a_skills(reputation)[0]
+    tool = reg.to_a2a_tool_list(reputation)[0]
+    mcp_tool = reg.to_mcp_server_card_tools(reputation)[0]
+
+    assert skill["reputation"] == reputation["platform/test_tool"]
+    assert tool["reputation"] == reputation["platform/test_tool"]
+    assert mcp_tool["reputation"] == reputation["platform/test_tool"]
+
+
+def test_public_exports_ignore_unknown_reputation():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+
+    assert "reputation" not in reg.to_a2a_skills({"platform/other": {"reputation_score": 1.0}})[0]
 
 
 def test_show_on_agent_card_defaults_true():

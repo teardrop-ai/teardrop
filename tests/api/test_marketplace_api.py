@@ -267,6 +267,9 @@ async def test_catalog_success(anon_client, monkeypatch):
         author_org_slug="acme",
         category="defi",
         total_calls=42,
+        reputation_score=0.91,
+        success_rate=0.96,
+        unique_caller_count=17,
     )
     monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog", AsyncMock(return_value=[tool]))
     monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
@@ -287,6 +290,9 @@ async def test_catalog_success(anon_client, monkeypatch):
     assert data["tools"][0]["tool_type"] == "community"
     assert data["tools"][0]["category"] == "defi"
     assert data["tools"][0]["total_calls"] == 42
+    assert data["tools"][0]["reputation_score"] == 0.91
+    assert data["tools"][0]["success_rate"] == 0.96
+    assert data["tools"][0]["unique_caller_count"] == 17
     assert data["tools"][0]["health_status"] == "healthy"
     assert data["tools"][0]["is_healthy"] is True
     assert resp.headers["cache-control"] == "public, max-age=60"

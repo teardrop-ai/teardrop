@@ -1,6 +1,6 @@
 # API Reference
 
-Teardrop issued RS256 JWTs are required for authorization on most endpoints. All endpoints (except `/health`, `/docs`, `/billing/pricing`, `/.well-known/agent-card.json`, and the public payment-gated `POST /message:send` A2A endpoint when `A2A_INBOUND_ENABLED=true`) require a `Bearer` token.
+Teardrop issued RS256 JWTs are required for authorization on most endpoints. Public discovery endpoints, `/health`, `/docs`, `/billing/pricing`, and the payment-gated `POST /message:send` A2A endpoint when `A2A_INBOUND_ENABLED=true` do not require a `Bearer` token.
 
 ---
 
@@ -19,6 +19,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. All
 | `POST` | `/agent/tool-exclusions` | Bearer | Persist a tool exclusion (merged with per-request `tool_policy.exclude_names` on every run) |
 | `DELETE` | `/agent/tool-exclusions/{tool_name}` | Bearer | Remove a persisted tool exclusion |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
+| `GET` | `/.well-known/reputation.json` | — | Aggregate quality metrics for active marketplace tools; caller counts are omitted below five distinct orgs |
 | `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators |
 | `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |
 | `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
@@ -97,7 +98,9 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. All
 | `GET` | `/marketplace/subscriptions` | Bearer | List active marketplace subscriptions |
 | `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unsubscribe from a marketplace tool |
 
-`GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, or `popularity`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls` is sourced from non-financial aggregate stats and is recorded only after successful paid tool calls, not from the immutable earnings ledger.
+`GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats. `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
+
+Reputation uses a 14-day recency decay, a Beta(4,1) prior, and a 30-day freshness adjustment. Therefore `success_rate` is a posterior quality estimate, not raw successes divided by calls. Author-org self-calls, inactive tools, unpublished tools, and internal tools are excluded.
 
 `POST /marketplace/author-config` accepts any valid `0x` + 40-hex Ethereum/Base address and stores the canonical EIP-55 checksummed form. `POST /marketplace/import/publish` may omit `input_schema` and `output_schema`; when omitted, Teardrop reuses the normalized or synthesized schemas from live MCP discovery.
 

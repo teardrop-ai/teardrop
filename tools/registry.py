@@ -168,7 +168,10 @@ class ToolRegistry:
 
     # ── Export: A2A ───────────────────────────────────────────────────────────
 
-    def to_a2a_skills(self) -> list[dict[str, Any]]:
+    def to_a2a_skills(
+        self,
+        reputation: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Generate the ``skills`` section for the A2A agent card.
 
         Only tools with ``show_on_agent_card=True`` are included — this is a
@@ -190,10 +193,16 @@ class ToolRegistry:
                 skill["deprecated"] = True
                 if tool.superseded_by:
                     skill["superseded_by"] = tool.superseded_by
+            metrics = (reputation or {}).get(f"platform/{tool.name}")
+            if metrics:
+                skill["reputation"] = dict(metrics)
             skills.append(skill)
         return skills
 
-    def to_a2a_tool_list(self) -> list[dict[str, Any]]:
+    def to_a2a_tool_list(
+        self,
+        reputation: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Generate a detailed ``tools`` section with JSON Schema for the A2A card.
 
         Only tools with ``show_on_agent_card=True`` are included (see
@@ -217,12 +226,18 @@ class ToolRegistry:
                     entry["output_schema"] = tool.output_schema.model_json_schema()
             if tool.deprecated:
                 entry["deprecated"] = True
+            metrics = (reputation or {}).get(f"platform/{tool.name}")
+            if metrics:
+                entry["reputation"] = dict(metrics)
             tools.append(entry)
         return tools
 
     # ── Export: MCP ───────────────────────────────────────────────────────────
 
-    def to_mcp_server_card_tools(self) -> list[dict[str, Any]]:
+    def to_mcp_server_card_tools(
+        self,
+        reputation: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Generate the tools array for the static .well-known/mcp/server-card.json."""
         tools: list[dict[str, Any]] = []
         for tool in self.list_latest():
@@ -239,6 +254,9 @@ class ToolRegistry:
                     entry["outputSchema"] = tool.output_schema
                 else:
                     entry["outputSchema"] = tool.output_schema.model_json_schema()
+            metrics = (reputation or {}).get(f"platform/{tool.name}")
+            if metrics:
+                entry["reputation"] = dict(metrics)
             tools.append(entry)
         return tools
 

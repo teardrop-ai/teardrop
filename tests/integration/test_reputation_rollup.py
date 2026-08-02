@@ -66,7 +66,8 @@ async def test_rollup_uses_canonical_owner_without_existing_stats_row(reputation
 
     row = await pool.fetchrow(
         """
-        SELECT total_failures, total_latency_ms, total_calls
+         SELECT total_failures, total_latency_ms, total_calls, success_rate,
+             average_latency_ms, unique_caller_count
         FROM marketplace_tool_call_stats
         WHERE qualified_tool_name = 'author/weather'
         """
@@ -75,6 +76,9 @@ async def test_rollup_uses_canonical_owner_without_existing_stats_row(reputation
     assert row["total_failures"] == 1
     assert row["total_latency_ms"] == 200
     assert row["total_calls"] == 0
+    assert float(row["success_rate"]) > 0
+    assert float(row["average_latency_ms"]) == 200
+    assert row["unique_caller_count"] == 1
     assert (
         await pool.fetchval("SELECT COUNT(*) FROM marketplace_tool_call_stats WHERE qualified_tool_name = 'platform/calculate'")
         == 0
@@ -128,8 +132,9 @@ async def test_rollup_persists_recency_confidence_freshness_and_task_success(rep
 
     rows = await pool.fetch(
         """
-        SELECT qualified_tool_name, reputation_score, reputation_sample_size,
-               reputation_confidence, reputation_freshness, reputation_task_success
+         SELECT qualified_tool_name, reputation_score, reputation_sample_size,
+             reputation_confidence, reputation_freshness, reputation_task_success,
+             success_rate, average_latency_ms, unique_caller_count
         FROM marketplace_tool_call_stats
         WHERE qualified_tool_name IN ('author/fresh_weather', 'author/stale_weather')
         """
@@ -142,6 +147,9 @@ async def test_rollup_persists_recency_confidence_freshness_and_task_success(rep
     assert fresh["reputation_confidence"] > stale["reputation_confidence"]
     assert fresh["reputation_freshness"] > stale["reputation_freshness"]
     assert fresh["reputation_score"] > stale["reputation_score"]
+    assert float(fresh["success_rate"]) > 0
+    assert float(fresh["average_latency_ms"]) == 100
+    assert fresh["unique_caller_count"] == 1
     task_success = fresh["reputation_task_success"]
     if isinstance(task_success, str):
         task_success = json.loads(task_success)

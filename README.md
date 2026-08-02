@@ -38,7 +38,8 @@ Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled:
 - Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
-- Public catalog responses include `category`, `total_calls`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
+- Public catalog responses include `category`, `total_calls`, `reputation_score`, `success_rate`, privacy-thresholded `unique_caller_count`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
+- Aggregate quality metrics for active tools are available at `GET /.well-known/reputation.json` and are embedded in public A2A/MCP platform-tool entries
 - Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages at `GET /marketplace/catalog/{org_slug}/{tool_name}`, author profiles at `GET /marketplace/authors/{org_slug}`, and LLM-friendly discovery at `GET /marketplace/llms.txt`
 - Marketplace authors can register external MCP servers and turn discovered tools into listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`; publish may omit `input_schema` and `output_schema` to reuse the server's normalized discovery result
 - Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`

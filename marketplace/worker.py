@@ -13,6 +13,7 @@ from typing import Any
 
 from marketplace.catalog import get_author_config
 from marketplace.context import _get_pool
+from marketplace.reputation import invalidate_public_reputation_cache
 from marketplace.withdrawals import process_withdrawal
 from teardrop.config import get_settings
 
@@ -272,7 +273,9 @@ async def reputation_rollup_once() -> int:
                 tool_type,
                 COUNT(*) FILTER (WHERE success) AS successes,
                 COUNT(*) FILTER (WHERE NOT success) AS failures,
+                COUNT(DISTINCT org_id) FILTER (WHERE org_id <> '') AS unique_caller_count,
                 COALESCE(SUM(elapsed_ms), 0)::BIGINT AS total_latency_ms,
+                COALESCE(AVG(elapsed_ms), 0)::NUMERIC AS average_latency_ms,
                 COALESCE(SUM(recency_weight) FILTER (WHERE success), 0.0) AS weighted_successes,
                 COALESCE(SUM(recency_weight), 0.0) AS weighted_sample_size,
                 MAX(created_at) AS last_event_at
@@ -321,7 +324,9 @@ async def reputation_rollup_once() -> int:
                 a.qualified_tool_name,
                 a.tool_type,
                 a.failures,
+                a.unique_caller_count,
                 a.total_latency_ms,
+                a.average_latency_ms,
                 a.weighted_sample_size AS sample_size,
                 a.weighted_sample_size / (a.weighted_sample_size + $3) AS confidence,
                 EXP(
@@ -340,7 +345,9 @@ async def reputation_rollup_once() -> int:
             qualified_tool_name,
             tool_type,
             failures,
+            unique_caller_count,
             total_latency_ms,
+            average_latency_ms,
             sample_size,
             confidence,
             freshness,
@@ -373,8 +380,8 @@ async def reputation_rollup_once() -> int:
             INSERT INTO marketplace_tool_call_stats
                 (qualified_tool_name, tool_type, total_failures, total_latency_ms, reputation_score,
                  reputation_sample_size, reputation_confidence, reputation_freshness, reputation_task_success,
-                 updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
+                  success_rate, average_latency_ms, unique_caller_count, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, NOW())
             ON CONFLICT (qualified_tool_name) DO UPDATE
                 SET total_failures = EXCLUDED.total_failures,
                     total_latency_ms = EXCLUDED.total_latency_ms,
@@ -383,6 +390,9 @@ async def reputation_rollup_once() -> int:
                     reputation_confidence = EXCLUDED.reputation_confidence,
                     reputation_freshness = EXCLUDED.reputation_freshness,
                     reputation_task_success = EXCLUDED.reputation_task_success,
+                    success_rate = EXCLUDED.success_rate,
+                    average_latency_ms = EXCLUDED.average_latency_ms,
+                    unique_caller_count = EXCLUDED.unique_caller_count,
                     updated_at = EXCLUDED.updated_at
             """,
             row["qualified_tool_name"],
@@ -394,8 +404,12 @@ async def reputation_rollup_once() -> int:
             float(row["confidence"]),
             freshness,
             task_success,
+            success_rate,
+            float(row["average_latency_ms"]),
+            int(row["unique_caller_count"]),
         )
 
+    await invalidate_public_reputation_cache()
     return len(rows)
 
 

@@ -12,8 +12,10 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel
 
 from billing import build_402_response_body
+from marketplace.reputation import get_public_reputation_snapshot
 from org_tools import list_marketplace_tools
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
@@ -25,6 +27,24 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+
+class PublicToolReputation(BaseModel):
+    qualified_tool_name: str
+    reputation_score: float
+    success_rate: float
+    sample_size: float
+    confidence: float
+    freshness: float
+    average_latency_ms: float
+    unique_caller_count: int | None = None
+
+
+class PublicReputationResponse(BaseModel):
+    schema_version: str
+    generated_at: str | None
+    methodology_url: str
+    tools: list[PublicToolReputation]
 
 
 def _public_base_url(request: Request, current_settings) -> str:
@@ -78,6 +98,7 @@ def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
         f"- [Agent Card]({base_url}/.well-known/agent-card.json): Public Teardrop agent discovery manifest.",
         f"- [Legacy Agent Card]({base_url}/.well-known/agent.json): Legacy alias for older crawlers.",
         f"- [MCP Server Card]({base_url}/.well-known/mcp/server-card.json): Public MCP tool catalogue.",
+        f"- [Tool Reputation]({base_url}/.well-known/reputation.json): Aggregate tool quality metrics.",
         f"- [Docs]({base_url}/docs): Interactive API documentation.",
         "",
         "## Pricing",
@@ -96,7 +117,10 @@ def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
     return "\n".join(lines)
 
 
-def _build_agent_card_content(request: Request) -> dict[str, Any]:
+def _build_agent_card_content(
+    request: Request,
+    reputation: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     card_settings = get_settings()
     base_url = _public_base_url(request, card_settings)
     security_requirements = [{"bearer_jwt": []}]
@@ -181,14 +205,14 @@ def _build_agent_card_content(request: Request) -> dict[str, Any]:
                 "name": "task_planning",
                 "description": "Break complex tasks into actionable steps.",
             },
-            *registry.to_a2a_skills(),
+            *registry.to_a2a_skills(reputation),
             {
                 "id": "a2ui_rendering",
                 "name": "a2ui_rendering",
                 "description": "Declarative UI component generation (table, form, text, button, etc.).",
             },
         ],
-        "tools": registry.to_a2a_tool_list(),
+        "tools": registry.to_a2a_tool_list(reputation),
         "authentication": {
             "required": True,
             "scheme": "bearer",
@@ -396,7 +420,28 @@ async def jwks() -> JSONResponse:
 @router.get("/.well-known/agent-card.json", tags=["A2A"])
 async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
-    return _json_discovery_response(request, _build_agent_card_content(request))
+    snapshot = await get_public_reputation_snapshot()
+    return _json_discovery_response(request, _build_agent_card_content(request, snapshot["tools"]))
+
+
+@router.get(
+    "/.well-known/reputation.json",
+    tags=["System"],
+    response_model=PublicReputationResponse,
+)
+async def public_reputation(request: Request) -> Response:
+    """Public aggregate quality metrics for active marketplace tools."""
+    snapshot = await get_public_reputation_snapshot()
+    base_url = _public_base_url(request, get_settings())
+    content = {
+        "schema_version": "1.0",
+        "generated_at": snapshot["generated_at"],
+        "methodology_url": f"{base_url}/docs",
+        "tools": [
+            {"qualified_tool_name": qualified_name, **metrics} for qualified_name, metrics in sorted(snapshot["tools"].items())
+        ],
+    }
+    return _json_discovery_response(request, content)
 
 
 @router.get("/.well-known/x402", tags=["System"])
@@ -417,7 +462,8 @@ async def x402_discovery_json(request: Request) -> Response:
 @router.get("/.well-known/agent.json", include_in_schema=False, tags=["A2A"])
 async def legacy_agent_card(request: Request) -> Response:
     """Legacy alias for older discovery clients that still probe agent.json."""
-    return _json_discovery_response(request, _build_agent_card_content(request))
+    snapshot = await get_public_reputation_snapshot()
+    return _json_discovery_response(request, _build_agent_card_content(request, snapshot["tools"]))
 
 
 @router.get("/.well-known/oauth-protected-resource", tags=["MCP"])
@@ -466,7 +512,8 @@ async def robots_txt(request: Request) -> Response:
 @router.get("/.well-known/mcp/server-card.json", tags=["MCP"])
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
-    tools = registry.to_mcp_server_card_tools()
+    snapshot = await get_public_reputation_snapshot()
+    tools = registry.to_mcp_server_card_tools(snapshot["tools"])
     description = _mcp_server_description()
 
     # Include published marketplace tools

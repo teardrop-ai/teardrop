@@ -171,7 +171,10 @@ async def get_marketplace_catalog(
                 'community' AS tool_type,
                 COALESCE(t.category, '') AS category,
                 COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
-                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score
+                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score,
+                COALESCE(s.success_rate, 0)::NUMERIC AS success_rate,
+                CASE WHEN s.unique_caller_count >= 5 THEN s.unique_caller_count END::BIGINT
+                    AS unique_caller_count
             FROM org_tools t
             JOIN orgs o ON o.id = t.org_id
             LEFT JOIN marketplace_tool_call_stats s ON s.qualified_tool_name = (o.slug || '/' || t.name)
@@ -212,7 +215,10 @@ async def get_marketplace_catalog(
                 'platform' AS tool_type,
                 COALESCE(p.category, '') AS category,
                 COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
-                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score
+                COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score,
+                COALESCE(s.success_rate, 0)::NUMERIC AS success_rate,
+                CASE WHEN s.unique_caller_count >= 5 THEN s.unique_caller_count END::BIGINT
+                    AS unique_caller_count
             FROM marketplace_platform_tools p
             LEFT JOIN marketplace_tool_call_stats s ON s.qualified_tool_name = ('{PLATFORM_SLUG}/' || p.tool_name)
             WHERE {where_sql}
@@ -276,6 +282,9 @@ async def get_marketplace_catalog(
         cost = tool_overrides.get(qualified, tool_overrides.get(name, base_price or default_tool_cost))
         total_calls = int(_row_get(row, "total_calls", 0) or 0)
         reputation_score = float(_row_get(row, "reputation_score", 0) or 0)
+        success_rate = float(_row_get(row, "success_rate", 0) or 0)
+        raw_unique_caller_count = _row_get(row, "unique_caller_count")
+        unique_caller_count = int(raw_unique_caller_count) if raw_unique_caller_count is not None else None
         health_status = await _tool_health_status(_row_get(row, "tool_id"), str(_row_get(row, "tool_type", "community")))
 
         sort_key: Any
@@ -303,6 +312,8 @@ async def get_marketplace_catalog(
                 tool_type=str(_row_get(row, "tool_type", "community")),
                 total_calls=total_calls,
                 reputation_score=reputation_score,
+                success_rate=success_rate,
+                unique_caller_count=unique_caller_count,
                 health_status=health_status,
                 is_healthy=health_status == "healthy",
                 category=str(_row_get(row, "category", "") or ""),

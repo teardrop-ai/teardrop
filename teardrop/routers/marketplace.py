@@ -825,6 +825,8 @@ class MarketplaceToolSummary(BaseModel):
     category: str
     total_calls: int
     reputation_score: float
+    success_rate: float
+    unique_caller_count: int | None = None
     health_status: str
     is_healthy: bool
     author: str = Field(..., description="Display name; kept for backward compatibility.")
@@ -841,7 +843,7 @@ class MarketplaceCatalogDetailResponse(BaseModel):
 
 
 def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
-    return {
+    result = {
         "name": tool.qualified_name,
         "qualified_name": tool.qualified_name,
         "tool_name": tool.name,
@@ -854,6 +856,7 @@ def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
         "category": tool.category,
         "total_calls": tool.total_calls,
         "reputation_score": tool.reputation_score,
+        "success_rate": tool.success_rate,
         "health_status": tool.health_status,
         "is_healthy": tool.is_healthy,
         # author_slug is the canonical filter key; author is kept for
@@ -861,6 +864,9 @@ def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
         "author": tool.author_org_name,
         "author_slug": tool.author_org_slug,
     }
+    if tool.unique_caller_count is not None:
+        result["unique_caller_count"] = tool.unique_caller_count
+    return result
 
 
 def _format_atomic_usdc(amount_usdc: int) -> str:

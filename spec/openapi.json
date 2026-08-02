@@ -3042,6 +3042,10 @@
             "title": "Short Description",
             "type": "string"
           },
+          "success_rate": {
+            "title": "Success Rate",
+            "type": "number"
+          },
           "tool_name": {
             "title": "Tool Name",
             "type": "string"
@@ -3053,6 +3057,17 @@
           "total_calls": {
             "title": "Total Calls",
             "type": "integer"
+          },
+          "unique_caller_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique Caller Count"
           }
         },
         "required": [
@@ -3068,6 +3083,7 @@
           "category",
           "total_calls",
           "reputation_score",
+          "success_rate",
           "health_status",
           "is_healthy",
           "author",
@@ -4000,6 +4016,98 @@
           "run_price_usdc"
         ],
         "title": "PricingRuleWithOverrides",
+        "type": "object"
+      },
+      "PublicReputationResponse": {
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "methodology_url": {
+            "title": "Methodology Url",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/PublicToolReputation"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generated_at",
+          "methodology_url",
+          "tools"
+        ],
+        "title": "PublicReputationResponse",
+        "type": "object"
+      },
+      "PublicToolReputation": {
+        "properties": {
+          "average_latency_ms": {
+            "title": "Average Latency Ms",
+            "type": "number"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "freshness": {
+            "title": "Freshness",
+            "type": "number"
+          },
+          "qualified_tool_name": {
+            "title": "Qualified Tool Name",
+            "type": "string"
+          },
+          "reputation_score": {
+            "title": "Reputation Score",
+            "type": "number"
+          },
+          "sample_size": {
+            "title": "Sample Size",
+            "type": "number"
+          },
+          "success_rate": {
+            "title": "Success Rate",
+            "type": "number"
+          },
+          "unique_caller_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique Caller Count"
+          }
+        },
+        "required": [
+          "qualified_tool_name",
+          "reputation_score",
+          "success_rate",
+          "sample_size",
+          "confidence",
+          "freshness",
+          "average_latency_ms"
+        ],
+        "title": "PublicToolReputation",
         "type": "object"
       },
       "RefreshRequest": {
@@ -6117,6 +6225,28 @@
         "summary": "Oauth Protected Resource Path",
         "tags": [
           "MCP"
+        ]
+      }
+    },
+    "/.well-known/reputation.json": {
+      "get": {
+        "description": "Public aggregate quality metrics for active marketplace tools.",
+        "operationId": "public_reputation__well_known_reputation_json_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicReputationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Public Reputation",
+        "tags": [
+          "System"
         ]
       }
     },
