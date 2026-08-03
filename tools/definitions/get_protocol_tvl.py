@@ -137,6 +137,12 @@ class GetProtocolTvlOutput(BaseModel):
     tvl_30d_change_pct: float | None
     chain_breakdown: list[ChainTvlEntry]
     historical_series: list[DailyTvlPoint] | None
+    current_fees_usd: float | None = None
+    fees_7d_change_pct: float | None = None
+    fees_30d_change_pct: float | None = None
+    current_revenue_usd: float | None = None
+    revenue_7d_change_pct: float | None = None
+    revenue_30d_change_pct: float | None = None
     note: str
     error: str | None = None
     error_type: str | None = None
@@ -274,6 +280,41 @@ def _extract_historical_series(detail: dict[str, Any], days: int) -> list[DailyT
         sorted_days = sorted_days[-_MAX_HISTORICAL_POINTS:]
 
     return [DailyTvlPoint(date=d, tvl_usd=v) for d, v in sorted_days]
+
+
+def _extract_fee_series(detail: dict[str, Any], days: int, field: str) -> list[tuple[str, float]]:
+    """Extract a daily series for a DeFiLlama economic field (``fees``/``revenue``).
+
+    The field is a list of ``{date: unix_timestamp, <field>: float}``. We
+    deduplicate to one-per-day (last entry wins), trim to the requested window,
+    and cap at _MAX_HISTORICAL_POINTS. Returns ``[(date, value), ...]`` sorted
+    ascending, or ``[]`` when the field is absent/empty.
+    """
+    raw: list[Any] = detail.get(field, [])
+    if not isinstance(raw, list):
+        return []
+
+    by_day: dict[str, float] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("date")
+        value = entry.get(field)
+        if ts is None or value is None:
+            continue
+        try:
+            day = datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+            by_day[day] = float(value)
+        except (ValueError, OSError, TypeError):
+            continue
+
+    sorted_days = sorted(by_day.items())
+    if days < 365:
+        cutoff_idx = max(0, len(sorted_days) - days)
+        sorted_days = sorted_days[cutoff_idx:]
+    if len(sorted_days) > _MAX_HISTORICAL_POINTS:
+        sorted_days = sorted_days[-_MAX_HISTORICAL_POINTS:]
+    return sorted_days
 
 
 def _compute_change_pct(series: list[Any], days_ago: int) -> float | None:
@@ -445,6 +486,14 @@ async def _get_protocol_tvl_single(
         tvl_7d = _compute_change_pct(sorted_full, 7)
         tvl_30d = _compute_change_pct(sorted_full, 30)
 
+        # Economic series (fees/revenue) — fail-open: None when absent.
+        fees_full = _extract_fee_series(detail, 365, "fees")
+        revenue_full = _extract_fee_series(detail, 365, "revenue")
+        fees_7d = _compute_change_pct(fees_full, 7)
+        fees_30d = _compute_change_pct(fees_full, 30)
+        revenue_7d = _compute_change_pct(revenue_full, 7)
+        revenue_30d = _compute_change_pct(revenue_full, 30)
+
         result = GetProtocolTvlOutput(
             protocol=slug,
             current_tvl_usd=current_tvl,
@@ -452,10 +501,17 @@ async def _get_protocol_tvl_single(
             tvl_30d_change_pct=tvl_30d,
             chain_breakdown=chain_breakdown,
             historical_series=historical_series,
+            current_fees_usd=fees_full[-1][1] if fees_full else None,
+            fees_7d_change_pct=fees_7d,
+            fees_30d_change_pct=fees_30d,
+            current_revenue_usd=revenue_full[-1][1] if revenue_full else None,
+            revenue_7d_change_pct=revenue_7d,
+            revenue_30d_change_pct=revenue_30d,
             note=(
                 "TVL sourced from DeFiLlama. "
                 f"Historical series covers up to {_MAX_HISTORICAL_POINTS} daily points. "
-                "Chain breakdown shows top chains by current TVL."
+                "Chain breakdown shows top chains by current TVL. "
+                "Fees/revenue are included when DeFiLlama reports them for the protocol."
             ),
         ).model_dump()
 
@@ -544,12 +600,14 @@ async def get_protocol_tvl(
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
         "Returns current TVL in USD, 7-day and 30-day percentage change, and a "
         "per-chain breakdown. Set include_historical=True to also retrieve a daily "
-        "TVL series for trend analysis. You can also batch multiple protocols via "
+        "TVL series for trend analysis. When DeFiLlama reports them, also returns "
+        "current fees and revenue in USD with 7-day and 30-day percentage change. "
+        "You can also batch multiple protocols via "
         "protocols=[...]. Supports 3,000+ protocols including Aave, "
         "Uniswap, Curve, Compound, Lido, MakerDAO, and more. "
         "Use the DeFiLlama slug format: 'aave-v3', 'uniswap-v3', 'curve-dex'. "

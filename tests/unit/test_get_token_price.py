@@ -156,6 +156,7 @@ class TestGetTokenPrice:
                     "usd_market_cap": 1_200_000_000_000,
                     "usd_24h_vol": 30_000_000_000,
                     "usd_24h_change": 2.5,
+                    "usd_fully_diluted_valuation": 1_300_000_000_000,
                 },
             }
         )
@@ -172,6 +173,7 @@ class TestGetTokenPrice:
         assert len(result["prices"]) == 1
         assert result["prices"][0]["price"] == 65000.0
         assert result["prices"][0]["symbol"] == "BTC"
+        assert result["prices"][0]["fully_diluted_valuation"] == 1_300_000_000_000
 
     async def test_api_failure_returns_none_prices(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})

@@ -176,6 +176,7 @@ class TokenPriceEntry(BaseModel):
     market_cap: float | None
     volume_24h: float | None
     change_24h_pct: float | None
+    fully_diluted_valuation: float | None = None
 
 
 class GetTokenPriceOutput(BaseModel):
@@ -192,6 +193,7 @@ async def _fetch_from_coingecko(ids: list[str], vs: str) -> dict[str, dict[str, 
         f"https://api.coingecko.com/api/v3/simple/price"
         f"?ids={','.join(ids)}&vs_currencies={vs}"
         f"&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true"
+        f"&include_fully_diluted_valuation=true"
     )
     headers: dict[str, str] = {}
     try:
@@ -257,6 +259,7 @@ async def get_token_price(tokens: list[str], vs_currency: str = "usd") -> dict[s
             "market_cap": cached.get(cg_id, {}).get(f"{vs}_market_cap"),
             "volume_24h": cached.get(cg_id, {}).get(f"{vs}_24h_vol"),
             "change_24h_pct": cached.get(cg_id, {}).get(f"{vs}_24h_change"),
+            "fully_diluted_valuation": cached.get(cg_id, {}).get(f"{vs}_fully_diluted_valuation"),
         }
         for original, cg_id in zip(tokens, ids)
     ]
@@ -268,9 +271,10 @@ async def get_token_price(tokens: list[str], vs_currency: str = "usd") -> dict[s
 
 TOOL = ToolDefinition(
     name="get_token_price",
-    version="1.0.0",
+    version="1.1.0",
     description=(
-        "Get current price, 24h change, market cap, and volume for one or more "
+        "Get current price, 24h change, market cap, fully-diluted valuation, and "
+        "volume for one or more "
         "crypto tokens. Accepts ticker symbols (BTC, ETH, LQTY), full token names "
         "(Bitcoin, Liquity, Chainlink), or CoinGecko IDs. Unknown symbols are "
         "resolved automatically against the full CoinGecko coin list. "

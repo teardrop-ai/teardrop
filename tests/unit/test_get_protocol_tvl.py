@@ -150,6 +150,64 @@ async def test_batch_continues_after_one_slug_exception(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_include_historical_extracts_fees_and_revenue(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    detail_payload = {
+        "tvl": [
+            {"date": 1700000000, "totalLiquidityUSD": 1000.0},
+            {"date": 1700086400, "totalLiquidityUSD": 1100.0},
+        ],
+        "fees": [
+            {"date": 1700000000, "fees": 100.0},
+            {"date": 1700086400, "fees": 150.0},
+        ],
+        "revenue": [
+            {"date": 1700000000, "revenue": 50.0},
+            {"date": 1700086400, "revenue": 75.0},
+        ],
+    }
+
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_detail",
+        AsyncMock(return_value=detail_payload),
+    )
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+
+    result = await get_protocol_tvl("liquity", include_historical=True, days=30)
+
+    assert result["current_fees_usd"] == pytest.approx(150.0)
+    assert result["fees_7d_change_pct"] == pytest.approx(50.0)
+    assert result["current_revenue_usd"] == pytest.approx(75.0)
+    assert result["revenue_7d_change_pct"] == pytest.approx(50.0)
+
+
+@pytest.mark.anyio
+async def test_include_historical_fees_fail_open_when_absent(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    detail_payload = {
+        "tvl": [
+            {"date": 1700000000, "totalLiquidityUSD": 1000.0},
+            {"date": 1700086400, "totalLiquidityUSD": 1100.0},
+        ],
+    }
+
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_detail",
+        AsyncMock(return_value=detail_payload),
+    )
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+
+    result = await get_protocol_tvl("railgun", include_historical=True, days=30)
+
+    assert result["current_fees_usd"] is None
+    assert result["fees_7d_change_pct"] is None
+    assert result["current_revenue_usd"] is None
+    assert result["revenue_30d_change_pct"] is None
+
+
+@pytest.mark.anyio
 async def test_batch_timeout_returns_partial_results(monkeypatch):
     monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
     monkeypatch.setattr("tools.definitions.get_protocol_tvl._BATCH_TIMEOUT_SECONDS", 0.03)
