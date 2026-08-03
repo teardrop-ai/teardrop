@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         default="openrouter",
         description="LLM provider: anthropic, openai, google, or openrouter",
     )
-    agent_model: str = "deepseek/deepseek-v4-flash"
+    agent_model: str = "deepseek/deepseek-v4-flash-0731"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
@@ -678,8 +678,8 @@ class Settings(BaseSettings):
     )
     default_model_pool: list[dict[str, str]] = Field(
         default=[
-            # Cost tier — DeepSeek V4 Flash via OpenRouter (US providers: NovitaAI primary, DeepInfra fallback).
-            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},
+            # Cost tier — DeepSeek V4 Flash 0731 via OpenRouter (US providers: NovitaAI primary, DeepInfra fallback).
+            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731"},
             # Speed tier — Gemini 3.6 Flash (1M context, sub-300ms median).
             {"provider": "google", "model": "gemini-3.6-flash"},
             # Quality tier — Claude Sonnet 5 (1M context, top-tier reasoning).

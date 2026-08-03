@@ -4,21 +4,23 @@
 
 Usage example:
     python scripts/scaffold_model_upgrade.py \
-        --provider google \
-        --model gemini-3.5-flash \
-        --display-name "Gemini 3.5 Flash" \
-        --model-id google-gemini-3-5-flash-v1 \
-        --provider-input-price-per-1m 0.30 \
-        --provider-output-price-per-1m 2.50 \
-        --replace-model gemini-3-flash-preview \
-        --default-latency-ms 320 \
+        --provider openrouter \
+        --model deepseek/deepseek-v4-flash-0731 \
+        --display-name "DeepSeek V4 Flash 0731" \
+        --model-id openrouter-deepseek-v4-flash-0731-v1 \
+        --replace-provider openrouter \
+        --replace-model deepseek/deepseek-v4-flash \
+        --replace-model-id openrouter-deepseek-v4-flash-v1 \
+        --update-config-role primary \
+        --default-latency-ms 900 \
         --quality-tier 2 \
-        --context-window 1000000 \
-        --knowledge-cutoff 2026-03 \
-        --training-cutoff-note "Training data through March 2026"
+        --context-window 1048576 \
+        --knowledge-cutoff Unknown \
+        --training-cutoff-note "Training cutoff date unknown"
 
 By default the script runs in dry-run mode and prints the generated migration SQL.
-Pass ``--write`` to create the migration file and patch benchmarks.py.
+Provider pricing is fetched from OpenRouter unless explicit override values are supplied.
+Pass ``--write`` to create the migration file, patch benchmarks.py, and optionally patch config.py.
 """
 
 from __future__ import annotations
@@ -199,7 +201,7 @@ def _render_catalogue_entry(
         f'        "provider": "{provider}",',
         f'        "model": "{model}",',
         f'        "display_name": "{display_name}",',
-        f'        "context_window": {context_window:,},'.replace(",", "_"),
+        f'        "context_window": {context_window:,}'.replace(",", "_") + ",",
         f'        "supports_tools": {str(supports_tools)},',
         f'        "supports_streaming": {str(supports_streaming)},',
         f'        "quality_tier": {quality_tier},',
@@ -277,11 +279,10 @@ def patch_config_py(content: str, role: str, provider: str, model: str) -> str:
 
     def replacer(var_name: str, new_val: str, text: str) -> str:
         # Match `var_name: str = "val"` or `var_name: str = Field(..., default="val"`
-        pattern = rf'({var_name}\s*:\s*str\s*=(?:[^=]*?\bdefault\s*=\s*)?)["\'][^"\']*["\']'
-        replaced = re.sub(pattern, rf'\g<1>"{new_val}"', text, count=1)
-        if replaced == text:
+        pattern = rf'({var_name}\s*:\s*str\s*=\s*(?:[^=]*?\bdefault\s*=\s*)?)["\'][^"\']*["\']'
+        if re.search(pattern, text) is None:
             raise ScaffoldError(f"Failed to patch {var_name} in teardrop/config.py")
-        return replaced
+        return re.sub(pattern, rf'\g<1>"{new_val}"', text, count=1)
 
     content = replacer(provider_var, provider, content)
     content = replacer(model_var, model, content)

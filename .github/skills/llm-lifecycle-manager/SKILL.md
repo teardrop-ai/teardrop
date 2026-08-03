@@ -34,6 +34,13 @@ You are the workflow specialist for Teardrop model lifecycle changes.
    - Run focused tests for the scaffold helper and benchmark catalogue.
    - Ensure the new generated migration file SQL is syntactically sound.
 
+## Friction-Proofing Notes
+- Same-provider replacements are valid: keep `--provider` set to the target provider even when it matches the retired model. The scaffold must treat an unchanged config value as a successful patch and support both `Field(default=...)` and plain string declarations.
+- Preserve existing `run_price_usdc` and `tool_call_cost_usdc` values when the request is only a model replacement; pass them explicitly rather than accepting helper defaults that could change unrelated billing.
+- OpenRouter may report `knowledge_cutoff: null`. Use `Unknown` and state that the cutoff is undisclosed instead of inventing a date.
+- The generated benchmark text must be syntax-checked after `--write`; numeric grouping must retain the trailing field delimiter (for example, `1_048_576,`).
+- After the scaffold, search production routing selectors such as `default_model_pool` and quality-tier maps for the retired slug; historical migrations, deprecated catalogue entries, and explicit legacy test fixtures may retain it.
+
 ## Recommended Command Template
 ```powershell
 python scripts/scaffold_model_upgrade.py \
@@ -44,7 +51,7 @@ python scripts/scaffold_model_upgrade.py \
   --default-latency-ms <ms> \
   --quality-tier <1-or-2> \
   --context-window <tokens> \
-  --knowledge-cutoff <YYYY-MM> \
+  --knowledge-cutoff <YYYY-MM|Unknown> \
   --training-cutoff-note "<provider wording>" \
   --replace-provider <old-provider> \
   --replace-model <old-model> \

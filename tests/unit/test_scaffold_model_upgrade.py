@@ -38,6 +38,20 @@ def test_patch_config_py():
     assert 'agent_model: str = "old"' in patched  # Untouched
 
 
+def test_patch_config_py_allows_unchanged_provider():
+    original = """
+    agent_provider: str = Field(
+        default="openrouter",
+    )
+    agent_model: str = "deepseek/deepseek-v4-flash"
+    """
+
+    patched = patch_config_py(original, "primary", "openrouter", "deepseek/deepseek-v4-flash-0731")
+
+    assert 'default="openrouter"' in patched
+    assert 'agent_model: str = "deepseek/deepseek-v4-flash-0731"' in patched
+
+
 def test_build_upgrade_plan_scaffolds_sql_and_catalogue(tmp_path):
     repo_root = tmp_path / "repo"
     migrations_dir = repo_root / "migrations" / "versions"
@@ -95,6 +109,8 @@ def test_build_upgrade_plan_scaffolds_sql_and_catalogue(tmp_path):
     assert "375, 3125" in plan.migration_sql
     assert '"google:gemini-3.5-flash"' in plan.benchmarks_content
     assert '"deprecated": True' in plan.benchmarks_content
+    assert '"context_window": 1_000_000,' in plan.benchmarks_content
+    compile(plan.benchmarks_content, "benchmarks.py", "exec")
 
 
 def test_build_upgrade_plan_rejects_duplicate_catalogue_entry(tmp_path):

@@ -127,6 +127,7 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 900,
         "knowledge_cutoff": "2026-01",
         "training_cutoff_note": "Training data through early 2026",
+        "deprecated": True,
     },
     "google:gemini-3-flash-preview": {
         "provider": "google",
@@ -177,6 +178,18 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 1500,
         "knowledge_cutoff": "2026-06",
         "training_cutoff_note": "Training data through June 2026",
+    },
+    "openrouter:deepseek/deepseek-v4-flash-0731": {
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v4-flash-0731",
+        "display_name": "DeepSeek V4 Flash 0731 (OpenRouter / US)",
+        "context_window": 1_048_576,
+        "supports_tools": True,
+        "supports_streaming": True,
+        "quality_tier": 2,
+        "default_latency_ms": 900,
+        "knowledge_cutoff": "Unknown",
+        "training_cutoff_note": "Training cutoff date unknown; official release July 31, 2026",
     },
 }
 
