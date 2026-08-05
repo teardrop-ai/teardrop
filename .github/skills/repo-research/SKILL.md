@@ -22,14 +22,18 @@ Run Teardrop's developer-only research pipeline from one focused question. This 
 
 ## 1. Normalize the request
 
-Require a non-empty, focused question. Preserve the user's wording, but narrow a broad request into one question before running it. Accept an explicit topic when supplied; otherwise infer exactly one:
+Require one non-empty, focused question of at most 800 characters and 100 words. Preserve the user's intent, but narrow a broad request into one question before running it. Put detailed paths, invariants, and test requirements in `--scope` and the topic contract, not in a checklist-heavy query. Split compound questions into separate runs. The CLI enforces these limits before source collection or any provider call. Accept an explicit topic when supplied; otherwise infer exactly one:
 
 - Billing, settlement, auth, SSRF, marketplace, MCP/A2A, or migration exploit analysis -> `security`
 - Product direction, capabilities, planned work, or dependencies -> `roadmap`
 - Incremental correctness, reliability, security, performance, developer experience, or product expansion grounded in existing code -> `improvements`
 - Comparisons with external products or open-source projects -> `competitive`
 
-Ask when the topic is ambiguous. Keep any requested `--scope`, `--report-source`, `--github-mcp`, timeout, or output options and use the same options for both dry-run and final run.
+Ask when the topic is ambiguous. Keep any requested `--scope`, `--require-path`, `--report-source`, `--github-mcp`, timeout, or output options and use the same options for both dry-run and final run.
+
+Use a shape like: `Does <path or symbol> preserve <invariant> under <condition>, and what one incremental change is justified?`
+
+For cross-file questions, use `--require-path` for the mutation owner, invalidation/helper owner, and focused test file or directory. This is an explicit evidence contract, not a heuristic; the pipeline fails before the provider if a required path is missing from the collected manifest.
 
 ## 2. Run zero-cost preflight
 
@@ -74,6 +78,8 @@ $query = "<focused question>"
    --dry-run
 ```
 
+Use `--json` with `--dry-run` when a wrapper or script needs to parse the manifest. The JSON includes `revision`, `evidence_dirty`, `source_manifest_sha256`, `source_file_count`, `source_files`, and `required_paths`.
+
 The dry-run must exit successfully. Inspect its structured lines and record:
 
 - `revision`, which must not be `unknown`;
@@ -84,6 +90,8 @@ The dry-run must exit successfully. Inspect its structured lines and record:
 - the listed repository-relative source paths.
 
 Do not run the provider if the dry-run fails, has no eligible local sources, has an unknown revision, or produces malformed evidence metadata. Treat a suspicious source path as a stop condition and investigate the collector rather than widening scopes silently.
+
+On Windows, prefer `--json` and keep diagnostic redirection outside the repository (for example, `$env:TEMP`) because the dirty-tree check includes untracked files created by shell redirection.
 
 ## 4. Resolve evidence state before spending tokens
 
@@ -128,5 +136,7 @@ For `improvements` reports, apply the `.github/skills/ruthless-critic-verifier/S
 - Missing credential: configure the provider in the user's environment or `.env`; report only the missing variable/category name, never its value.
 - Dirty evidence: commit and rerun, or obtain explicit approval for `--allow-dirty`.
 - Existing draft: ask whether to use an explicit `--force`; never overwrite by default.
+- Query rejected as too long: rewrite it as one question within 800 characters and 100 words; do not retry the same compound prompt.
+- Required evidence path rejected: add the owning mutation/helper/test path to `--scope`, or correct the path before any provider retry.
 - Stale archive: run `.venv\Scripts\python.exe -m scripts.research_run --check-stale` and review each reported mismatch.
 - Manual free check: run the complete intended command with `--dry-run`; this is the only verification path that must not contact an LLM.

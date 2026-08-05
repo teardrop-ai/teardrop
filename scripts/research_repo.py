@@ -36,7 +36,9 @@ MAX_FILE_BYTES = 160_000
 MAX_SOURCE_BYTES = 1_500_000
 DEFAULT_TIMEOUT_SECONDS = 1_800.0
 DEFAULT_MAX_SUBTOPICS = 5
-PROMPT_VERSION = 1
+MAX_QUERY_CHARS = 800
+MAX_QUERY_WORDS = 100
+PROMPT_VERSION = 2
 IGNORED_DIRECTORIES = {".git", ".venv", ".research-venv", "venv", "__pycache__", "node_modules", "dist", "build"}
 SENSITIVE_DIRECTORY_NAMES = {"keys", ".secrets"}
 SENSITIVE_FILE_NAMES = {".env", ".env.local", ".env.production", "private.pem", "secret.pem"}
@@ -172,6 +174,64 @@ def slugify(value: str, *, max_length: int = 80) -> str:
     """Return a stable, filesystem-safe slug for a report filename."""
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug[:max_length].rstrip("-") or "research"
+
+
+def normalize_query(value: str) -> str:
+    """Normalize and bound the single question sent to the research worker."""
+    query = " ".join(value.split())
+    if not query:
+        raise ValueError("--query must not be empty.")
+    if len(query) > MAX_QUERY_CHARS:
+        raise ValueError(f"--query must be one focused question of at most {MAX_QUERY_CHARS} characters.")
+    word_count = len(query.split())
+    if word_count > MAX_QUERY_WORDS:
+        raise ValueError(f"--query must be one focused question of at most {MAX_QUERY_WORDS} words.")
+    return query
+
+
+def normalize_required_paths(repo_root: Path, paths: Sequence[str]) -> tuple[str, ...]:
+    """Normalize required evidence paths and reject paths outside the repository."""
+    normalized: list[str] = []
+    for raw_path in paths:
+        path = _ensure_inside(repo_root / raw_path, repo_root)
+        if not path.exists():
+            raise ResearchToolError(f"Required evidence path does not exist: {raw_path}")
+        relative_path = path.relative_to(repo_root).as_posix().rstrip("/")
+        if relative_path not in normalized:
+            normalized.append(relative_path)
+    return tuple(normalized)
+
+
+def missing_required_paths(required_paths: Sequence[str], source_paths: Sequence[str]) -> list[str]:
+    """Return required paths that are not represented by collected sources."""
+    return [
+        required
+        for required in required_paths
+        if not any(path == required or path.startswith(f"{required}/") for path in source_paths)
+    ]
+
+
+def build_dry_run_payload(
+    *,
+    revision: str,
+    evidence_dirty: bool,
+    manifest_sha256: str | None,
+    redaction_count: int,
+    report_source: str,
+    source_paths: Sequence[str],
+    required_paths: Sequence[str],
+) -> dict[str, object]:
+    """Build stable machine-readable dry-run metadata."""
+    return {
+        "revision": revision,
+        "evidence_dirty": evidence_dirty,
+        "source_manifest_sha256": manifest_sha256,
+        "source_redaction_count": redaction_count,
+        "report_source": report_source,
+        "source_file_count": len(source_paths),
+        "source_files": list(source_paths),
+        "required_paths": list(required_paths),
+    }
 
 
 def git_revision(repo_root: Path) -> str:
@@ -382,11 +442,11 @@ def build_research_prompt(topic: str, query: str, revision: str, source_paths: S
         else "There is no local source manifest; rely on dated external sources and identify that limitation."
     )
     local_citation_contract = (
-        "Local citation contract: in the `## Sources` section, include at least one Markdown bullet "
-        "with an exact collected repository path in backticks, for example `- `README.md` - product "
-        "capability evidence`. Use the paths from the manifest headings, such as `README.md` or "
-        "`docs/architecture.md`; do not cite `repo-source.md` as a substitute. A high-level roadmap "
-        "analysis still requires at least one relevant local path."
+        "Local citation contract: the final `## Sources` section MUST contain at least one Markdown bullet "
+        "in this exact shape, using a path from the manifest: - `README.md` - product capability evidence. "
+        "Use manifest paths such as `README.md` or `docs/architecture.md`; do not cite `repo-source.md`, "
+        "which is only the transport file. A high-level roadmap analysis still requires at least one relevant "
+        "local path, and inline citations alone do not satisfy this contract."
         if source_paths
         else "No local citation contract applies because no repository source files were collected."
     )
@@ -574,6 +634,7 @@ def render_report(
     redaction_count: int,
     generated_at: datetime,
     source_paths: Sequence[str],
+    required_paths: Sequence[str] = (),
     report: str,
 ) -> str:
     """Add durable metadata and the draft-review boundary to a report."""
@@ -591,6 +652,7 @@ def render_report(
             f"source_redaction_count: {redaction_count}",
             f"report_source: {json.dumps(report_source)}",
             f"prompt_version: {PROMPT_VERSION}",
+            f"required_paths: {json.dumps(list(required_paths))}",
             f"query: {json.dumps(query)}",
             "---",
             "",
@@ -655,8 +717,17 @@ def find_stale_reports(research_root: Path, current_revision: str) -> list[tuple
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--topic", choices=sorted(TOPICS))
-    parser.add_argument("--query", help="The focused research question.")
+    parser.add_argument(
+        "--query",
+        help=f"One focused research question ({MAX_QUERY_CHARS} characters and {MAX_QUERY_WORDS} words maximum).",
+    )
     parser.add_argument("--scope", action="append", help="Repository-relative source scope; repeat for multiple paths.")
+    parser.add_argument(
+        "--require-path",
+        action="append",
+        default=[],
+        help="Require a repository file or directory to appear in collected evidence; repeat for dependencies.",
+    )
     parser.add_argument("--report-source", choices=("local", "web", "hybrid"), help="Override the topic default.")
     parser.add_argument("--github-mcp", action="store_true", help="Enable the GitHub MCP retriever; requires GITHUB_TOKEN.")
     parser.add_argument("--researcher-python", help="Path to the isolated GPT-Researcher Python interpreter.")
@@ -676,6 +747,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Collect and list local source files without calling GPT-Researcher.",
     )
+    parser.add_argument("--json", action="store_true", help="Emit structured JSON; only valid with --dry-run.")
     parser.add_argument(
         "--check-stale",
         action="store_true",
@@ -703,15 +775,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.topic or args.query is None:
         print("--topic and --query are required unless --check-stale is used.", file=sys.stderr)
         return 2
-    query = args.query.strip()
-    if not query:
-        print("--query must not be empty.", file=sys.stderr)
+    try:
+        query = normalize_query(args.query)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
     if args.timeout_seconds <= 0:
         print("--timeout-seconds must be greater than zero.", file=sys.stderr)
         return 2
     if not 1 <= args.max_subtopics <= 10:
         print("--max-subtopics must be between 1 and 10.", file=sys.stderr)
+        return 2
+    if args.json and not args.dry_run:
+        print("--json requires --dry-run.", file=sys.stderr)
         return 2
 
     config = TOPICS[args.topic]
@@ -722,6 +798,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Research failed: a Git commit is required for evidence provenance.", file=sys.stderr)
         return 1
     try:
+        required_paths = normalize_required_paths(REPO_ROOT, args.require_path)
+        if required_paths and report_source not in {"local", "hybrid"}:
+            raise ResearchToolError("--require-path requires local or hybrid report sources.")
         evidence_dirty = git_worktree_dirty(REPO_ROOT)
         collector = collect_source_documents if evidence_dirty else collect_revision_documents
         documents = (
@@ -750,7 +829,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_paths = [path for path, _ in documents]
     manifest_sha256 = source_manifest_sha256(documents, revision)
     redaction_count = source_redaction_count(documents)
+    missing_paths = missing_required_paths(required_paths, source_paths)
+    if missing_paths:
+        print(
+            "Research failed: required evidence paths were not collected: " + ", ".join(missing_paths),
+            file=sys.stderr,
+        )
+        return 2
     if args.dry_run:
+        if args.json:
+            print(
+                json.dumps(
+                    build_dry_run_payload(
+                        revision=revision,
+                        evidence_dirty=evidence_dirty,
+                        manifest_sha256=manifest_sha256,
+                        redaction_count=redaction_count,
+                        report_source=report_source,
+                        source_paths=source_paths,
+                        required_paths=required_paths,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
         print(f"revision: {revision}")
         print(f"evidence_dirty: {str(evidence_dirty).lower()}")
         print(f"source_manifest_sha256: {manifest_sha256 or 'none'}")
@@ -802,6 +905,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 redaction_count=redaction_count,
                 generated_at=datetime.now(timezone.utc),
                 source_paths=source_paths,
+                required_paths=required_paths,
                 report=report,
             ),
             encoding="utf-8",

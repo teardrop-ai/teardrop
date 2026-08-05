@@ -13,11 +13,15 @@ import pytest
 from scripts.research_repo import (
     TOPICS,
     ResearchToolError,
+    build_dry_run_payload,
     build_research_prompt,
     collect_revision_documents,
     collect_source_documents,
     conduct_research,
     find_stale_reports,
+    missing_required_paths,
+    normalize_query,
+    normalize_required_paths,
     render_report,
     render_source_manifest,
     slugify,
@@ -63,6 +67,50 @@ Production metric volume needs confirmation.
 def test_slugify_returns_stable_safe_filename_component() -> None:
     assert slugify("Billing / settlement: replay? bypass!") == "billing-settlement-replay-bypass"
     assert slugify("!!!") == "research"
+
+
+def test_normalize_query_collapses_whitespace_and_enforces_single_question_budget() -> None:
+    assert normalize_query("  Find   one improvement\n to pricing.  ") == "Find one improvement to pricing."
+
+    with pytest.raises(ValueError, match="800 characters"):
+        normalize_query("x" * 801)
+
+    with pytest.raises(ValueError, match="100 words"):
+        normalize_query(" ".join(["word"] * 101))
+
+
+def test_required_paths_cover_files_and_directories(tmp_path: Path) -> None:
+    (tmp_path / "org_tools").mkdir()
+    (tmp_path / "org_tools" / "crud.py").write_text("", encoding="utf-8")
+
+    assert normalize_required_paths(tmp_path, ["org_tools", "org_tools"]) == ("org_tools",)
+    assert missing_required_paths(("org_tools", "tests"), ["org_tools/crud.py"]) == ["tests"]
+
+    with pytest.raises(ResearchToolError, match="does not exist"):
+        normalize_required_paths(tmp_path, ["missing.py"])
+
+
+def test_build_dry_run_payload_is_machine_readable() -> None:
+    payload = build_dry_run_payload(
+        revision="abc123",
+        evidence_dirty=True,
+        manifest_sha256="hash",
+        redaction_count=1,
+        report_source="local",
+        source_paths=["billing/pricing.py"],
+        required_paths=["billing", "tests"],
+    )
+
+    assert payload == {
+        "revision": "abc123",
+        "evidence_dirty": True,
+        "source_manifest_sha256": "hash",
+        "source_redaction_count": 1,
+        "report_source": "local",
+        "source_file_count": 1,
+        "source_files": ["billing/pricing.py"],
+        "required_paths": ["billing", "tests"],
+    }
 
 
 def test_collect_source_documents_excludes_secrets_and_ignored_paths(tmp_path: Path) -> None:
@@ -155,8 +203,9 @@ def test_build_research_prompt_requires_exact_local_source_bullets() -> None:
     prompt = build_research_prompt("roadmap", "Analyze the product roadmap", "abc123", ["README.md"])
 
     assert "## Sources" in prompt
-    assert "exact collected repository path in backticks" in prompt
-    assert "do not cite `repo-source.md` as a substitute" in prompt
+    assert "MUST contain at least one Markdown bullet" in prompt
+    assert "- `README.md` - product capability evidence" in prompt
+    assert "do not cite `repo-source.md`" in prompt
 
 
 def test_build_research_prompt_uses_improvement_contract() -> None:
@@ -205,7 +254,8 @@ def test_render_report_marks_output_as_draft_and_redacts_assignments() -> None:
     assert 'source_manifest_sha256: "manifest-hash"' in report
     assert "source_redaction_count: 2" in report
     assert 'report_source: "local"' in report
-    assert "prompt_version: 1" in report
+    assert "prompt_version: 2" in report
+    assert "required_paths: []" in report
     assert "do-not-persist" not in report
     assert "<redacted>" in report
 
