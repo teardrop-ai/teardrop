@@ -336,6 +336,15 @@ def build_research_prompt(topic: str, query: str, revision: str, source_paths: S
         if source_paths
         else "There is no local source manifest; rely on dated external sources and identify that limitation."
     )
+    local_citation_contract = (
+        "Local citation contract: in the `## Sources` section, include at least one Markdown bullet "
+        "with an exact collected repository path in backticks, for example `- `README.md` - product "
+        "capability evidence`. Use the paths from the manifest headings, such as `README.md` or "
+        "`docs/architecture.md`; do not cite `repo-source.md` as a substitute. A high-level roadmap "
+        "analysis still requires at least one relevant local path."
+        if source_paths
+        else "No local citation contract applies because no repository source files were collected."
+    )
     return f"""You are researching Teardrop at commit {revision}.
 
 Research question:
@@ -346,6 +355,7 @@ Scope and focus:
 
 Evidence rules:
 - {local_context}
+- {local_citation_contract}
 - Treat live code and primary documentation as stronger evidence than repository notes or marketing claims.
 - Distinguish verified facts, likely risks, unresolved hypotheses, and recommendations.
 - Do not invent a vulnerability. A suspected gap must include the attack precondition, affected path,
@@ -417,7 +427,10 @@ def validate_research_report(report: str, source_paths: Sequence[str]) -> None:
     if source_paths and not any(
         re.search(rf"(?m)^[ \t]*-[ \t]+`{re.escape(path)}`(?:[ \t]|$)", sources) for path in source_paths
     ):
-        raise ResearchToolError("Research report does not cite any collected repository path.")
+        raise ResearchToolError(
+            "Research report does not cite any collected repository path in Sources; "
+            "expected a bullet such as '- `README.md` - evidence.'"
+        )
 
 
 def resolve_researcher_python(requested: str | None) -> Path:

@@ -131,7 +131,7 @@ async def run_request(request: dict[str, object], output_path: Path) -> None:
             max_subtopics=int(request["max_subtopics"]),
         )
         await researcher.conduct_research()
-        report = await researcher.write_report()
+        report = await researcher.write_report(custom_prompt=str(request["prompt"]))
 
     if not isinstance(report, str) or not report.strip():
         raise WorkerError("GPT-Researcher returned an empty report.")

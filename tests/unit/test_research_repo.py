@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.research_repo import (
     ResearchToolError,
+    build_research_prompt,
     collect_revision_documents,
     collect_source_documents,
     conduct_research,
@@ -20,7 +23,7 @@ from scripts.research_repo import (
     source_manifest_sha256,
     validate_research_report,
 )
-from scripts.research_repo_worker import WorkerError, load_request
+from scripts.research_repo_worker import WorkerError, load_request, run_request
 
 VALID_REPORT = """## Executive conclusion
 No issue reproduced.
@@ -128,6 +131,14 @@ def test_render_source_manifest_preserves_paths_and_neutralizes_code_fences() ->
     assert "value = '''" in manifest
 
 
+def test_build_research_prompt_requires_exact_local_source_bullets() -> None:
+    prompt = build_research_prompt("roadmap", "Analyze the product roadmap", "abc123", ["README.md"])
+
+    assert "## Sources" in prompt
+    assert "exact collected repository path in backticks" in prompt
+    assert "do not cite `repo-source.md` as a substitute" in prompt
+
+
 def test_source_manifest_hash_tracks_exact_sanitized_payload() -> None:
     documents = [("billing/credit.py", "value = 1\n")]
 
@@ -195,6 +206,35 @@ def test_conduct_research_passes_only_manifest_directory_to_worker(monkeypatch: 
     )
 
     assert report == VALID_REPORT.strip()
+
+
+def test_worker_passes_parent_prompt_as_custom_report_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeResearcher:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def conduct_research(self) -> None:
+            return None
+
+        async def write_report(self, **kwargs: object) -> str:
+            assert kwargs == {"custom_prompt": "Analyze the roadmap"}
+            return VALID_REPORT
+
+    monkeypatch.setitem(sys.modules, "gpt_researcher", SimpleNamespace(GPTResearcher=FakeResearcher))
+    document_directory = tmp_path / "documents"
+    document_directory.mkdir()
+    request = {
+        "prompt": "Analyze the roadmap",
+        "report_source": "local",
+        "doc_path": str(document_directory),
+        "github_mcp": False,
+        "max_subtopics": 3,
+    }
+
+    output_path = tmp_path / "report.md"
+    asyncio.run(run_request(request, output_path))
+
+    assert output_path.read_text(encoding="utf-8") == VALID_REPORT.strip() + "\n"
 
 
 def test_conduct_research_terminates_timed_out_worker(monkeypatch: pytest.MonkeyPatch) -> None:
