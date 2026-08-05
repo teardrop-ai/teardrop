@@ -1,0 +1,3 @@
+# Install this file only in .research-venv, never in Teardrop's shared .venv.
+# GPT-Researcher 0.15.1 is the last tested release for this integration.
+gpt-researcher==0.15.1
