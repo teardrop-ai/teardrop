@@ -62,6 +62,16 @@ REQUIRED_REPORT_HEADINGS = (
     "## Recommended follow-up tests or actions",
     "## Sources",
 )
+IMPROVEMENT_REPORT_HEADINGS = (
+    "## Executive conclusion",
+    "## Improvement candidates",
+    "## Current behavior and evidence",
+    "## Proposed incremental changes",
+    "## Dependencies and prioritization",
+    "## Verification and rollout plan",
+    "## Uncertainties and alternatives",
+    "## Sources",
+)
 
 
 @dataclass(frozen=True)
@@ -71,6 +81,8 @@ class TopicConfig:
     report_source: str
     default_scopes: tuple[str, ...]
     focus: str
+    required_headings: tuple[str, ...] = REQUIRED_REPORT_HEADINGS
+    report_guidance: str = ""
 
 
 TOPICS: dict[str, TopicConfig] = {
@@ -104,6 +116,39 @@ TOPICS: dict[str, TopicConfig] = {
         focus=(
             "Identify user problems, existing capabilities, explicit planned work, dependencies, "
             "and evidence for prioritization. Separate shipped behavior from proposals and stale notes."
+        ),
+    ),
+    "improvements": TopicConfig(
+        label="Product improvement research",
+        directory="improvements",
+        report_source="local",
+        default_scopes=(
+            "agent",
+            "billing",
+            "marketplace",
+            "mcp_client",
+            "org_tools",
+            "scheduling",
+            "teardrop",
+            "tools",
+            "tests",
+            "docs",
+            "README.md",
+            "spec",
+        ),
+        focus=(
+            "Identify concrete, incremental improvements to existing Teardrop products and workflows. "
+            "Prioritize correctness, reliability, security, performance, developer experience, user value, "
+            "and narrowly scoped product expansions. Ground every candidate in current code, tests, docs, "
+            "and downstream spec compatibility; separate shipped behavior from proposals and assumptions."
+        ),
+        required_headings=IMPROVEMENT_REPORT_HEADINGS,
+        report_guidance=(
+            "For each candidate include: priority, confidence, user or business value, current behavior, "
+            "exact repository paths and symbols, proposed incremental change, affected API/schema or SDK "
+            "surface, effort, risk, dependencies, security and OWASP considerations, financial or ledger "
+            "implications when applicable, focused tests, observability, rollout, and rollback. Do not propose "
+            "new dependencies unless the benefit and maintenance cost are justified."
         ),
     ),
     "competitive": TopicConfig(
@@ -345,6 +390,12 @@ def build_research_prompt(topic: str, query: str, revision: str, source_paths: S
         if source_paths
         else "No local citation contract applies because no repository source files were collected."
     )
+    report_guidance = config.report_guidance or (
+        "For each finding include: severity or priority, confidence (high/medium/low), claim, evidence "
+        "path/symbol or URL, impact, and why the evidence supports the claim. For security findings, "
+        "classify each as `verified`, `inconclusive`, or `not reproduced`."
+    )
+    required_headings = "\n".join(config.required_headings)
     return f"""You are researching Teardrop at commit {revision}.
 
 Research question:
@@ -363,16 +414,9 @@ Evidence rules:
 - Do not include secrets, credentials, private keys, or copied sensitive values in the report.
 
 Use exactly these sections:
-## Executive conclusion
-## Findings
-## Verified controls
-## Uncertainties and alternatives
-## Recommended follow-up tests or actions
-## Sources
+{required_headings}
 
-For each finding include: severity or priority, confidence (high/medium/low), claim, evidence path/symbol or URL,
-impact, and why the evidence supports the claim. For security findings, classify each as `verified`, `inconclusive`,
-or `not reproduced`."""
+{report_guidance}"""
 
 
 def _redact_sensitive_text(text: str) -> str:
@@ -410,10 +454,14 @@ def _redact_sensitive_text(text: str) -> str:
     return bearer_pattern.sub(r"\1<redacted>", redacted)
 
 
-def validate_research_report(report: str, source_paths: Sequence[str]) -> None:
+def validate_research_report(
+    report: str,
+    source_paths: Sequence[str],
+    required_headings: Sequence[str] = REQUIRED_REPORT_HEADINGS,
+) -> None:
     """Reject malformed output before it enters the durable research archive."""
-    heading_matches = [re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", report) for heading in REQUIRED_REPORT_HEADINGS]
-    missing = [heading for heading, match in zip(REQUIRED_REPORT_HEADINGS, heading_matches, strict=True) if match is None]
+    heading_matches = [re.search(rf"(?m)^{re.escape(heading)}[ \t]*$", report) for heading in required_headings]
+    missing = [heading for heading, match in zip(required_headings, heading_matches, strict=True) if match is None]
     if missing:
         raise ResearchToolError(f"Research report is missing required sections: {', '.join(missing)}")
     positions = [match.start() for match in heading_matches if match is not None]
@@ -459,6 +507,7 @@ async def conduct_research(
     github_mcp: bool,
     timeout_seconds: float,
     max_subtopics: int,
+    required_headings: Sequence[str] = REQUIRED_REPORT_HEADINGS,
 ) -> str:
     """Run the isolated worker with a temporary, sanitized source manifest."""
     with tempfile.TemporaryDirectory(prefix="teardrop-research-") as temporary_directory:
@@ -510,7 +559,7 @@ async def conduct_research(
     if not isinstance(report, str) or not report.strip():
         raise ResearchToolError("GPT-Researcher returned an empty report.")
     report = _redact_sensitive_text(report.strip())
-    validate_research_report(report, [path for path, _ in documents])
+    validate_research_report(report, [path for path, _ in documents], required_headings)
     return report
 
 
@@ -738,6 +787,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 github_mcp=args.github_mcp,
                 timeout_seconds=args.timeout_seconds,
                 max_subtopics=args.max_subtopics,
+                required_headings=config.required_headings,
             )
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)

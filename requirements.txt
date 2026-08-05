@@ -37,7 +37,11 @@ python-dotenv>=1.0.1
 # ─── Authentication ────────────────────────────────────────────────────────────
 # Upper bounds: auth-critical; pin major to avoid silent breaking-change upgrades.
 PyJWT>=2.13.0,<3.0.0
-cryptography>=46.0.7,<47.0.0
+# cryptography >=50.0.0 resolves GHSA-537c-gmf6-5ccf (OpenSSL in wheels, fixed 48.0.1),
+# GHSA-g6cj-pr64-35w5 (Bleichenbacher, fixed 50.0.0), GHSA-jwv3-5hgf-82ww and
+# GHSA-m2h6-j472-rp4c (both fixed 49.0.0). Teardrop uses only stable APIs (Fernet,
+# rsa.generate_private_key, serialization, load_pem_public_key) unaffected by these.
+cryptography>=50.0.0,<51.0.0
 
 # ─── Observability (Sentry) ────────────────────────────────────────────────────
 # Errors + cron monitoring. fastapi/asyncpg integrations auto-enabled.

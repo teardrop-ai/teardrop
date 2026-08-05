@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.research_repo import (
+    TOPICS,
     ResearchToolError,
     build_research_prompt,
     collect_revision_documents,
@@ -37,6 +38,25 @@ Runtime behavior was not exercised.
 Run focused billing tests.
 ## Sources
 - `billing/credit.py`
+"""
+VALID_IMPROVEMENT_REPORT = """## Executive conclusion
+One incremental improvement is supported by the current code.
+## Improvement candidates
+### Candidate 1: Improve billing retry observability
+- Priority: high
+- Confidence: medium
+## Current behavior and evidence
+The current behavior is documented in `billing/settlement.py`.
+## Proposed incremental changes
+Add structured retry outcome metrics without changing the billing contract.
+## Dependencies and prioritization
+No schema or SDK dependency.
+## Verification and rollout plan
+Add unit coverage and verify `ruff check`.
+## Uncertainties and alternatives
+Production metric volume needs confirmation.
+## Sources
+- `billing/settlement.py`
 """
 
 
@@ -139,6 +159,24 @@ def test_build_research_prompt_requires_exact_local_source_bullets() -> None:
     assert "do not cite `repo-source.md` as a substitute" in prompt
 
 
+def test_build_research_prompt_uses_improvement_contract() -> None:
+    prompt = build_research_prompt("improvements", "Find one billing improvement", "abc123", ["billing/settlement.py"])
+
+    assert "## Improvement candidates" in prompt
+    assert "## Proposed incremental changes" in prompt
+    assert "## Findings" not in prompt
+    assert "user or business value" in prompt
+    assert "downstream spec compatibility" in prompt
+
+
+def test_validate_research_report_accepts_improvement_contract() -> None:
+    validate_research_report(
+        VALID_IMPROVEMENT_REPORT,
+        ["billing/settlement.py"],
+        TOPICS["improvements"].required_headings,
+    )
+
+
 def test_source_manifest_hash_tracks_exact_sanitized_payload() -> None:
     documents = [("billing/credit.py", "value = 1\n")]
 
@@ -206,6 +244,36 @@ def test_conduct_research_passes_only_manifest_directory_to_worker(monkeypatch: 
     )
 
     assert report == VALID_REPORT.strip()
+
+
+def test_conduct_research_validates_topic_specific_headings(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*command: str, **_: object) -> FakeProcess:
+        output_path = Path(command[command.index("--output") + 1])
+        output_path.write_text(VALID_IMPROVEMENT_REPORT, encoding="utf-8")
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    report = asyncio.run(
+        conduct_research(
+            "Find one focused billing improvement",
+            report_source="local",
+            documents=[("billing/settlement.py", "value = 1")],
+            revision="abc123",
+            researcher_python=Path("research-python"),
+            github_mcp=False,
+            timeout_seconds=30,
+            max_subtopics=3,
+            required_headings=TOPICS["improvements"].required_headings,
+        )
+    )
+
+    assert report == VALID_IMPROVEMENT_REPORT.strip()
 
 
 def test_worker_passes_parent_prompt_as_custom_report_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ This directory is the Git-tracked, developer-only knowledge base for research th
 
 - `security/` — billing, settlement, auth, SSRF, marketplace, MCP/A2A, and migration exploit analysis.
 - `roadmap/` — evidence-backed product opportunities and dependencies.
+- `improvements/` — code-grounded incremental product improvements and narrowly scoped expansions for coding agents.
 - `competitive/` — dated comparisons with external products and open-source projects.
 - `knowledge-index.md` — entry point for coding agents; list only current, verified findings here.
 
@@ -24,6 +25,8 @@ This directory is the Git-tracked, developer-only knowledge base for research th
 5. Verify the report's `evidence_commit`, `source_manifest_sha256`, and cited live files or symbols. For security, reproduce the behavior or add a focused test where practical.
 6. Update the report status and `knowledge-index.md` only after human review. Mark outdated entries `superseded`; do not silently rewrite history.
 7. Ask coding agents to read the index and the relevant report before planning changes.
+
+For improvement research, the coding agent applies the ruthless-critic review contract to each candidate, verifies the cited live code, and adds or runs focused tests before a human promotes it. After implementation, commit the change and rerun the same or a new focused question against the new revision; this is the recursive roadmap loop.
 
 Example:
 
@@ -49,4 +52,4 @@ The default worker interpreter is `.research-venv\Scripts\python` on Windows and
 
 ## Evidence Contract
 
-Every report records its UTC generation time, evidence commit and dirty state, exact sanitized-manifest hash, redaction count, prompt version, query, source paths, status, confidence, uncertainty, and citations. Security findings must state whether they are `verified`, `inconclusive`, or `not reproduced`; a suspected gap must not be promoted as fact. Only clean-evidence reports may be promoted to the knowledge index.
+Every report records its UTC generation time, evidence commit and dirty state, exact sanitized-manifest hash, redaction count, prompt version, query, source paths, status, confidence, uncertainty, and citations. Security findings must state whether they are `verified`, `inconclusive`, or `not reproduced`; improvement candidates must state current behavior, proposed change, value, affected symbols, risk, dependencies, tests, rollout, and rollback. A suspected gap or unverified improvement must not be promoted as fact. Only clean-evidence reports may be promoted to the knowledge index.

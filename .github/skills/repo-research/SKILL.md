@@ -1,9 +1,9 @@
 ---
 name: repo-research
 argument-hint: "Provide one focused research question or prompt."
-description: "Use when the user wants query-driven, cited repository research for Teardrop security, roadmap, or competitive questions and a Git-tracked draft report."
+description: "Use when the user wants query-driven, cited repository research for Teardrop security, roadmap, improvements, or competitive questions and a Git-tracked draft report."
 disable-model-invocation: true
-metadata: research, pipeline, gpt-researcher, security, roadmap, competitive, evidence, draft-report
+metadata: research, pipeline, gpt-researcher, security, roadmap, improvements, competitive, evidence, draft-report
 user-invocable: true
 ---
 
@@ -26,6 +26,7 @@ Require a non-empty, focused question. Preserve the user's wording, but narrow a
 
 - Billing, settlement, auth, SSRF, marketplace, MCP/A2A, or migration exploit analysis -> `security`
 - Product direction, capabilities, planned work, or dependencies -> `roadmap`
+- Incremental correctness, reliability, security, performance, developer experience, or product expansion grounded in existing code -> `improvements`
 - Comparisons with external products or open-source projects -> `competitive`
 
 Ask when the topic is ambiguous. Keep any requested `--scope`, `--report-source`, `--github-mcp`, timeout, or output options and use the same options for both dry-run and final run.
@@ -118,6 +119,8 @@ After a successful command, verify that the reported output is under `docs/resea
 - the report has the required sections, a non-empty `Sources` section, and citations to collected repository paths for local or hybrid research.
 
 If any comparison fails, treat the run as unsuccessful and do not promote it. Otherwise report the draft path, topic, query, evidence commit, dirty state, manifest hash, redaction count if present, and that the findings remain unverified. Tell the user to inspect cited live files and symbols, reproduce security claims or add a focused test where practical, then update report status and `knowledge-index.md` only through human review.
+
+For `improvements` reports, apply the `.github/skills/ruthless-critic-verifier/SKILL.md` checklist before promotion. Verify current behavior against live code, distinguish facts from proposals, check user/business value and dependencies, preserve backward compatibility with `spec/`, require additive migrations for schema changes, and confirm no secrets in logs/errors, immutable financial ledgers, SSRF/auth/org isolation, OWASP controls, and focused tests. Do not mark a candidate verified solely because GPT-Researcher proposed it. After implementation, commit the change and rerun research against the new evidence revision.
 
 ## Recovery and manual checks
 
