@@ -2,7 +2,7 @@
 name: repo-research
 argument-hint: "Provide one focused research question or prompt."
 description: "Use when the user wants query-driven, cited repository research for Teardrop security, roadmap, improvements, or competitive questions and a Git-tracked draft report."
-disable-model-invocation: true
+disable-model-invocation: false
 metadata: research, pipeline, gpt-researcher, security, roadmap, improvements, competitive, evidence, draft-report
 user-invocable: true
 ---
@@ -19,6 +19,24 @@ Run Teardrop's developer-only research pipeline from one focused question. This 
 - A dry-run is mandatory before a provider call. It collects and reports the sanitized source manifest but does not call GPT-Researcher.
 - Do not add `--allow-dirty`, `--force`, `--github-mcp`, or a non-default source mode unless the user requested or approved that option.
 - Every output is a `draft`. Never promote it automatically or edit `docs/research/knowledge-index.md` as part of this skill.
+
+## Future-value gate
+
+Invoke this skill only when all conditions hold:
+
+1. `docs/research/knowledge-index.md` and any current verified report do not already answer the question.
+2. The question requires durable synthesis across multiple subsystems, revisions, or current external primary sources; targeted search, nearby tests, or one documentation lookup is insufficient.
+3. The coordinator can name a concrete future consumer and expected shelf life, such as an implementation cycle, security baseline, architecture decision, roadmap choice, provider/dependency choice, or repeated review.
+4. The report can change a future decision, implementation constraint, verification strategy, or risk posture.
+5. The expected reuse justifies provider cost and human review.
+
+Route narrow bug diagnosis, failing-test investigation, code explanation, and single-symbol verification through normal coding-agent search/read/test pathways. Record the future consumer, shelf life, and affected decision before starting a research run. A vague possibility of future usefulness is not sufficient.
+
+The gate and safety contract apply identically when this skill is invoked by a coordinator or by a human. A coordinator may delegate up to three independent qualifying questions to the coordinator-only `repo-researcher` agent. Each subagent owns its dry-run and returns a structured success, approval-needed, or failure result. Do not fan out dependent questions.
+
+## Consumption calibration
+
+A produced draft is a hypothesis plus a citation map, not a fact. Any agent that later reads a draft must verify each cited file/symbol against live code and check `evidence_commit`/staleness before relying on a claim. Drafts are excluded from evidence collection and are not trusted context; only `knowledge-index.md` and promoted reports are trusted without re-verification.
 
 ## 1. Normalize the request
 
@@ -87,6 +105,7 @@ The dry-run must exit successfully. Inspect its structured lines and record:
 - `report_source`;
 - `source_files`, which must be greater than zero for `local` or `hybrid` research;
 - `source_manifest_sha256`, which must be present for `local` or `hybrid` research;
+- `relevant_dirty_paths`, which must contain only selected, eligible evidence paths;
 - the listed repository-relative source paths.
 
 Do not run the provider if the dry-run fails, has no eligible local sources, has an unknown revision, or produces malformed evidence metadata. Treat a suspicious source path as a stop condition and investigate the collector rather than widening scopes silently.
@@ -102,7 +121,7 @@ If `evidence_dirty: true`, stop before the final command and present the user wi
 1. Commit the changes, rerun the dry-run, and produce a promotable clean-evidence draft.
 2. Explicitly approve an exploratory run with `--allow-dirty`; explain that the report will record `evidence_dirty: true` and is not eligible for promotion.
 
-Never choose the second option silently. If the user chooses it, add `--allow-dirty` to both the final command's intended arguments and the recorded run summary, after rerunning the dry-run against the same working tree.
+Never choose the second option silently. A coordinator-only subagent must return `needs_approval` rather than ask an unavailable user. If the user chooses it, add `--allow-dirty` to both the final command's intended arguments and the recorded run summary, after rerunning the dry-run against the same working tree.
 
 ## 5. Execute the final research run
 
@@ -111,7 +130,10 @@ For a clean tree, the user's original request to run this skill authorizes the f
 ```powershell
 & .venv\Scripts\python.exe -m scripts.research_run `
    --topic <topic> `
-   --query $query
+   --query $query `
+   --expect-revision <dry-run revision> `
+   --expect-manifest-sha256 <dry-run manifest hash> `
+   --expect-evidence-dirty <true-or-false>
 ```
 
 The command must fail closed on an existing output, missing credentials, a provider error, timeout, or invalid report. Report the error and the smallest recovery action; do not retry a paid run automatically.

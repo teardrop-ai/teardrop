@@ -17,6 +17,7 @@ SCOPE -> RESEARCH -> PLAN -> IMPLEMENT -> VERIFY
 
 Use existing repo skills instead of recreating them:
 - `deep-researcher` for targeted repo or docs research
+- coordinator-only `repo-researcher` for durable GPT-Researcher reports that pass the future-value gate
 - `speedy-coder` for implementation
 - `ruthless-critic-verifier` for strict review
 - `teardrop-domain-invariants` when billing, marketplace, MCP, A2A, Stripe, or SSRF paths are involved
@@ -85,6 +86,9 @@ Actions:
 - Prefer targeted reads over broad scans.
 - Cross-check any repo-memory claims against live code before citing them.
 - Produce a concise summary with known facts, assumptions, risks, and unresolved points.
+- Before invoking GPT-Researcher, require a named future consumer, expected shelf life, and affected future decision. Use ordinary search/read/test pathways when the question is narrow or the result has no durable reuse.
+- For multiple qualifying questions, normalize and deduplicate them, then delegate at most three independent questions to `repo-researcher` in parallel. Keep dependent questions sequential.
+- Each delegated question performs its own dry-run and passes the revision, manifest hash, and evidence-dirty state to the final run. Relevant dirty evidence requires explicit approval and produces an unpromotable draft.
 
 Hard limits:
 - no more than 2 research rounds
@@ -104,6 +108,7 @@ Actions:
 - Include the first focused validation step immediately after the first substantive edit.
 - Include invariant checks required by the touched domains.
 - If tool behavior, planner behavior, pricing, or cost accounting may change, add an eval-harness follow-up.
+- State whether the work is ordinary investigation or durable research, and name the future consumer when research is selected.
 
 Plan requirements:
 - concrete edit target

@@ -13,6 +13,7 @@ import pytest
 from scripts.research_repo import (
     TOPICS,
     ResearchToolError,
+    _write_report,
     build_dry_run_payload,
     build_research_prompt,
     collect_revision_documents,
@@ -22,6 +23,7 @@ from scripts.research_repo import (
     missing_required_paths,
     normalize_query,
     normalize_required_paths,
+    relevant_dirty_paths,
     render_report,
     render_source_manifest,
     slugify,
@@ -110,6 +112,7 @@ def test_build_dry_run_payload_is_machine_readable() -> None:
         "source_file_count": 1,
         "source_files": ["billing/pricing.py"],
         "required_paths": ["billing", "tests"],
+        "relevant_dirty_paths": [],
     }
 
 
@@ -167,6 +170,112 @@ def test_collect_source_documents_excludes_drafts_but_keeps_verified_index(tmp_p
 def test_collect_source_documents_rejects_scope_outside_repository(tmp_path: Path) -> None:
     with pytest.raises(ResearchToolError, match="inside the repository"):
         collect_source_documents(tmp_path, ["../outside"])
+
+
+def test_relevant_dirty_paths_ignores_generated_reports_and_secrets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "billing").mkdir()
+    (tmp_path / "docs").mkdir()
+
+    monkeypatch.setattr(
+        "scripts.research_repo.git_dirty_paths",
+        lambda _: [
+            "billing/credit.py",
+            "docs/research/security/draft.md",
+            "docs/research/knowledge-index.md",
+            "keys/private.pem",
+        ],
+    )
+
+    assert relevant_dirty_paths(tmp_path, ["billing", "docs"]) == [
+        "billing/credit.py",
+        "docs/research/knowledge-index.md",
+    ]
+
+
+def test_main_uses_head_evidence_when_selected_scope_has_no_relevant_dirty_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import scripts.research_repo as research_repo
+
+    monkeypatch.setattr(research_repo, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(research_repo, "git_revision", lambda _: "abc123")
+    monkeypatch.setattr(research_repo, "relevant_dirty_paths", lambda *_: [])
+    calls: list[str] = []
+
+    def collect_from_head(*_: object, **kwargs: object) -> list[tuple[str, str]]:
+        calls.append(str(kwargs["revision"]))
+        return [("billing/credit.py", "value = 1")]
+
+    monkeypatch.setattr(research_repo, "collect_revision_documents", collect_from_head)
+    monkeypatch.setattr(
+        research_repo,
+        "collect_source_documents",
+        lambda *_args, **_kwargs: pytest.fail("working-tree evidence should not be collected"),
+    )
+
+    result = research_repo.main(["--topic", "security", "--query", "Audit billing", "--dry-run", "--json"])
+
+    assert result == 0
+    assert calls == ["abc123"]
+    assert json.loads(capsys.readouterr().out)["evidence_dirty"] is False
+
+
+def test_main_rejects_evidence_drift_before_provider_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import scripts.research_repo as research_repo
+
+    monkeypatch.setattr(research_repo, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(research_repo, "git_revision", lambda _: "current")
+    monkeypatch.setattr(research_repo, "relevant_dirty_paths", lambda *_: [])
+    monkeypatch.setattr(
+        research_repo,
+        "collect_revision_documents",
+        lambda *_args, **_kwargs: [("billing/credit.py", "value = 1")],
+    )
+    monkeypatch.setattr(
+        research_repo,
+        "conduct_research",
+        lambda *_args, **_kwargs: pytest.fail("provider should not run after evidence drift"),
+    )
+
+    result = research_repo.main(["--topic", "security", "--query", "Audit billing", "--expect-revision", "old-revision"])
+
+    assert result == 1
+    assert "evidence revision changed" in capsys.readouterr().err
+
+
+def test_write_report_rejects_collision_without_replacing_existing_file(tmp_path: Path) -> None:
+    output_path = tmp_path / "report.md"
+    output_path.write_text("existing", encoding="utf-8")
+
+    with pytest.raises(ResearchToolError, match="Refusing to overwrite"):
+        _write_report(output_path, "replacement")
+
+    assert output_path.read_text(encoding="utf-8") == "existing"
+
+
+def test_write_report_force_overwrites_existing_file(tmp_path: Path) -> None:
+    output_path = tmp_path / "report.md"
+    output_path.write_text("existing", encoding="utf-8")
+
+    _write_report(output_path, "replacement", force=True)
+
+    assert output_path.read_text(encoding="utf-8") == "replacement"
+
+
+def test_write_report_removes_claimed_file_when_open_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    output_path = tmp_path / "report.md"
+
+    def fail_fdopen(*_: object, **__: object):
+        raise OSError("simulated write setup failure")
+
+    monkeypatch.setattr("scripts.research_repo.os.fdopen", fail_fdopen)
+
+    with pytest.raises(ResearchToolError, match="Could not write research report"):
+        _write_report(output_path, "partial")
+
+    assert not output_path.exists()
 
 
 def test_collect_revision_documents_ignores_later_worktree_changes(tmp_path: Path) -> None:

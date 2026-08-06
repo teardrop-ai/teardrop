@@ -26,6 +26,23 @@ This directory is the Git-tracked, developer-only knowledge base for research th
 6. Update the report status and `knowledge-index.md` only after human review. Mark outdated entries `superseded`; do not silently rewrite history.
 7. Ask coding agents to read the index and the relevant report before planning changes.
 
+## When Agents Create Reports
+
+Agents use ordinary repository search, focused reads, tests, and implementation work for narrow bug diagnosis,
+failing-test investigation, code explanations, and single-symbol verification. They invoke GPT-Researcher only
+when the question is unresolved in the verified index, needs durable synthesis across subsystems, revisions, or
+primary external sources, and has all of the following recorded before invocation:
+
+- a named future consumer;
+- an expected shelf life longer than the current task;
+- a future implementation, architecture, verification, roadmap, provider, or risk decision the report can affect;
+- expected reuse that justifies provider cost and human review.
+
+Broad or interesting questions without a concrete future consumer stay in the ordinary coding-agent workflow.
+Independent qualifying questions may be delegated to at most three coordinator-only research subagents. Dependent
+questions are run sequentially. A partial fan-out preserves successful drafts and reports failed questions without
+automatically retrying paid calls.
+
 For improvement research, the coding agent applies the ruthless-critic review contract to each candidate, verifies the cited live code, and adds or runs focused tests before a human promotes it. After implementation, commit the change and rerun the same or a new focused question against the new revision; this is the recursive roadmap loop.
 
 Example:
@@ -44,6 +61,13 @@ The default worker interpreter is `.research-venv\Scripts\python` on Windows and
 
 - Real runs require a clean Git working tree by default. `--allow-dirty` is available for exploratory drafts, records `evidence_dirty: true`, and makes the report ineligible for promotion until rerun cleanly.
 - Clean runs read source directly from the immutable Git commit rather than mutable working-tree files.
+- Cleanliness is evidence-scoped: unrelated worktree edits and generated `docs/research/<topic>/*.md` drafts do not
+  invalidate an otherwise clean selected scope. A modified selected source or `knowledge-index.md` is relevant dirty
+  evidence and blocks provider execution until explicitly approved with `--allow-dirty`.
+- Automatic runs bind the final provider call to the dry-run's revision, sanitized manifest hash, and evidence-dirty
+  state. If any changes, the provider is not called.
+- Non-force report creation uses exclusive file creation. A parallel collision fails closed and a failed write removes
+  its partial claimed file; `--force` remains an explicit overwrite option.
 - Local files are filtered and common credential assignments, private-key blocks, bearer credentials, and provider-token formats are redacted before upload. `source_redaction_count` records how many markers entered the manifest. This is defense in depth, not a substitute for repository secret scanning or reviewing provider retention terms.
 - Generated reports under `docs/research/` are excluded from later source collection; only `knowledge-index.md` can re-enter the roadmap corpus.
 - The worker defaults to a 30-minute timeout and five subtopics. Use `--timeout-seconds` and `--max-subtopics` to tighten runtime and cost exposure.

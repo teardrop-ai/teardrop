@@ -170,6 +170,10 @@ class ResearchToolError(RuntimeError):
     """Raised when source collection or the isolated research worker fails."""
 
 
+class ReportExistsError(ResearchToolError):
+    """Raised when a draft destination is already claimed."""
+
+
 def slugify(value: str, *, max_length: int = 80) -> str:
     """Return a stable, filesystem-safe slug for a report filename."""
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
@@ -220,6 +224,7 @@ def build_dry_run_payload(
     report_source: str,
     source_paths: Sequence[str],
     required_paths: Sequence[str],
+    relevant_dirty_paths: Sequence[str] = (),
 ) -> dict[str, object]:
     """Build stable machine-readable dry-run metadata."""
     return {
@@ -231,6 +236,7 @@ def build_dry_run_payload(
         "source_file_count": len(source_paths),
         "source_files": list(source_paths),
         "required_paths": list(required_paths),
+        "relevant_dirty_paths": list(relevant_dirty_paths),
     }
 
 
@@ -251,17 +257,47 @@ def git_revision(repo_root: Path) -> str:
 
 def git_worktree_dirty(repo_root: Path) -> bool:
     """Return whether tracked or untracked working-tree content differs from HEAD."""
+    return bool(git_dirty_paths(repo_root))
+
+
+def git_dirty_paths(repo_root: Path) -> list[str]:
+    """Return repository-relative paths changed from HEAD, without reading contents."""
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             cwd=repo_root,
             check=True,
             capture_output=True,
-            text=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise ResearchToolError("Could not determine repository working-tree state.") from exc
-    return bool(result.stdout.strip())
+    entries = result.stdout.decode("utf-8", errors="replace").split("\0")
+    paths: list[str] = []
+    for entry in entries:
+        if len(entry) < 4 or entry[2] != " ":
+            continue
+        path = entry[3:]
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _path_matches_scope(relative_path: str, scopes: Sequence[str]) -> bool:
+    return any(relative_path == scope or relative_path.startswith(f"{scope}/") for scope in scopes)
+
+
+def relevant_dirty_paths(repo_root: Path, scopes: Sequence[str]) -> list[str]:
+    """Return dirty paths that could change the selected local evidence."""
+    root = repo_root.resolve()
+    normalized_scopes = tuple(_ensure_inside(root / scope, root).relative_to(root).as_posix().rstrip("/") for scope in scopes)
+    relevant: list[str] = []
+    for raw_path in git_dirty_paths(root):
+        relative_path = Path(raw_path).as_posix().lstrip("./")
+        if not _path_matches_scope(relative_path, normalized_scopes):
+            continue
+        if _is_allowed_source(root / relative_path, Path(relative_path)):
+            relevant.append(relative_path)
+    return relevant
 
 
 def _ensure_inside(path: Path, root: Path) -> Path:
@@ -680,6 +716,42 @@ def _output_path(root: Path, topic: str, query: str, requested: str | None) -> P
     return RESEARCH_ROOT / TOPICS[topic].directory / f"{today}-{slugify(query)}.md"
 
 
+def _write_report(output_path: Path, content: str, *, force: bool = False) -> None:
+    """Write a durable report without allowing parallel non-force overwrites."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if force:
+        output_path.write_text(content, encoding="utf-8")
+        return
+
+    try:
+        file_descriptor = os.open(str(output_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise ReportExistsError(f"Refusing to overwrite existing report: {output_path}. Use --force.") from exc
+    except OSError as exc:
+        raise ResearchToolError(f"Could not create research report: {output_path}") from exc
+
+    descriptor_owned = True
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as report_file:
+            descriptor_owned = False
+            report_file.write(content)
+    except (OSError, UnicodeError) as exc:
+        if descriptor_owned:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+            descriptor_owned = False
+        try:
+            output_path.unlink()
+        except OSError:
+            pass
+        raise ResearchToolError(f"Could not write research report: {output_path}") from exc
+    finally:
+        if descriptor_owned:
+            os.close(file_descriptor)
+
+
 def find_stale_reports(research_root: Path, current_revision: str) -> list[tuple[Path, str]]:
     """Find durable reports whose evidence cannot represent the current clean commit."""
     stale: list[tuple[Path, str]] = []
@@ -748,6 +820,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Collect and list local source files without calling GPT-Researcher.",
     )
     parser.add_argument("--json", action="store_true", help="Emit structured JSON; only valid with --dry-run.")
+    parser.add_argument("--expect-revision", help="Fail if the evidence revision differs from a prior dry-run.")
+    parser.add_argument(
+        "--expect-manifest-sha256",
+        help="Fail if the sanitized evidence manifest differs from a prior dry-run.",
+    )
+    parser.add_argument(
+        "--expect-evidence-dirty",
+        choices=("true", "false"),
+        help="Fail if evidence dirtiness differs from a prior dry-run.",
+    )
     parser.add_argument(
         "--check-stale",
         action="store_true",
@@ -801,7 +883,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         required_paths = normalize_required_paths(REPO_ROOT, args.require_path)
         if required_paths and report_source not in {"local", "hybrid"}:
             raise ResearchToolError("--require-path requires local or hybrid report sources.")
-        evidence_dirty = git_worktree_dirty(REPO_ROOT)
+        dirty_paths = relevant_dirty_paths(REPO_ROOT, scopes) if report_source in {"local", "hybrid"} else []
+        evidence_dirty = bool(dirty_paths)
         collector = collect_source_documents if evidence_dirty else collect_revision_documents
         documents = (
             (
@@ -829,6 +912,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_paths = [path for path, _ in documents]
     manifest_sha256 = source_manifest_sha256(documents, revision)
     redaction_count = source_redaction_count(documents)
+    if args.expect_revision and args.expect_revision != revision:
+        print(
+            f"Research failed: evidence revision changed from {args.expect_revision} to {revision}.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.expect_manifest_sha256 and args.expect_manifest_sha256 != manifest_sha256:
+        print("Research failed: sanitized evidence manifest changed since the dry-run.", file=sys.stderr)
+        return 1
+    if args.expect_evidence_dirty is not None and (args.expect_evidence_dirty == "true") != evidence_dirty:
+        print("Research failed: evidence dirtiness changed since the dry-run.", file=sys.stderr)
+        return 1
     missing_paths = missing_required_paths(required_paths, source_paths)
     if missing_paths:
         print(
@@ -848,6 +943,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         report_source=report_source,
                         source_paths=source_paths,
                         required_paths=required_paths,
+                        relevant_dirty_paths=dirty_paths,
                     ),
                     indent=2,
                     sort_keys=True,
@@ -859,6 +955,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"source_manifest_sha256: {manifest_sha256 or 'none'}")
         print(f"source_redaction_count: {redaction_count}")
         print(f"report_source: {report_source}")
+        print(f"relevant_dirty_paths: {len(dirty_paths)}")
+        for path in dirty_paths:
+            print(f"- dirty: {path}")
         print(f"source_files: {len(source_paths)}")
         for path in source_paths:
             print(f"- {path}")
@@ -873,10 +972,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ResearchToolError as exc:
         print(f"Research failed: {exc}", file=sys.stderr)
         return 1
-    if output_path.exists() and not args.force:
-        print(f"Refusing to overwrite existing report: {output_path}. Use --force.", file=sys.stderr)
-        return 2
-
     try:
         researcher_python = resolve_researcher_python(args.researcher_python)
         prompt = build_research_prompt(args.topic, query, revision, source_paths)
@@ -893,8 +988,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 required_headings=config.required_headings,
             )
         )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
+        _write_report(
+            output_path,
             render_report(
                 topic=args.topic,
                 query=query,
@@ -908,8 +1003,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 required_paths=required_paths,
                 report=report,
             ),
-            encoding="utf-8",
+            force=args.force,
         )
+    except ReportExistsError as exc:
+        print(f"Research failed: {exc}", file=sys.stderr)
+        return 2
     except (ResearchToolError, OSError) as exc:
         print(f"Research failed: {exc}", file=sys.stderr)
         return 1
