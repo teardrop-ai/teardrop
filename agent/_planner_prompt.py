@@ -99,12 +99,14 @@ Tool use economy:
         TVL trends or chain breakdowns. Without include_historical, it returns
         only a current TVL scalar. For 2+ protocols, use protocols=[...] in a
         single batched call rather than separate per-protocol calls.
-    - Call get_yield_rates at most ONCE per user request. If you need alternate
-        sorting or filtering, perform that analysis in your own response instead of
-        re-calling the tool.
+    - Call get_yield_rates at most ONCE per user request. A second call is only
+        justified for a genuinely disjoint filter (e.g. a different chain or a
+        different stablecoin basket); otherwise perform alternate sorting/filtering
+        analysis in your own response instead of re-calling the tool.
     - For consistency-focused yield queries (e.g., "consistent", "stable", "no spikes",
         "exclude short-term rates"), call get_yield_rates with stable_only=true and
-        treat apy_mean_30d as the primary metric. If apy_reward is non-zero, label the
+        max_apy=30 to exclude leveraged/boosted pools, and treat apy_mean_30d as the
+        primary metric. If apy_reward is non-zero, label the
         pool as reward-dependent and avoid presenting spot APY as durable. Do not use
         7-day trailing rates as the headline consistency metric.
     - NEVER call resolve_ens if a 0x address is already present or previously

@@ -217,6 +217,7 @@ async def record_failure_usage_event(
         outcome=-1,
         outcome_source="auto",
         thread_id=thread_id,
+        source=source,
     )
     return usage_event
 
@@ -404,6 +405,7 @@ async def run_agent_once(
         outcome_source="auto",
         thread_id=thread_id,
         user_message=user_message,
+        source=source,
     )
 
     settlement_result: dict[str, Any] = {}

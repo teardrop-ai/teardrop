@@ -181,3 +181,131 @@ async def test_get_yield_rates_stable_only_sorts_by_30d_mean(monkeypatch):
     assert result["total_matching"] == 2
     assert result["pools"][0]["pool_id"] == "pool-spot-lower"
     assert result["filters_applied"]["stable_only"] is True
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_max_apy_filters_above_threshold(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+    monkeypatch.setattr(
+        "tools.definitions.get_yield_rates._fetch_pools",
+        AsyncMock(
+            return_value=[
+                {
+                    "pool": "pool-leveraged",
+                    "project": "curve",
+                    "symbol": "DAI",
+                    "chain": "Ethereum",
+                    "tvlUsd": 5_000_000,
+                    "apy": 110.0,
+                    "apyMean7d": 100.0,
+                    "apyMean30d": 90.0,
+                    "apyBase": 2.0,
+                    "apyReward": 108.0,
+                    "stablecoin": True,
+                    "ilRisk": "no",
+                },
+                {
+                    "pool": "pool-legit",
+                    "project": "aave-v3",
+                    "symbol": "USDC",
+                    "chain": "Ethereum",
+                    "tvlUsd": 6_000_000,
+                    "apy": 5.2,
+                    "apyMean7d": 5.0,
+                    "apyMean30d": 4.8,
+                    "apyBase": 4.5,
+                    "apyReward": 0.7,
+                    "stablecoin": True,
+                    "ilRisk": "no",
+                },
+            ]
+        ),
+    )
+
+    result = await get_yield_rates(min_tvl_usd=0, max_apy=30.0, limit=5)
+
+    assert result["total_matching"] == 1
+    assert len(result["pools"]) == 1
+    assert result["pools"][0]["pool_id"] == "pool-legit"
+    assert result["filters_applied"]["max_apy"] == 30.0
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_max_apy_none_includes_all(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+    monkeypatch.setattr(
+        "tools.definitions.get_yield_rates._fetch_pools",
+        AsyncMock(
+            return_value=[
+                {
+                    "pool": "pool-high",
+                    "project": "curve",
+                    "symbol": "DAI",
+                    "chain": "Ethereum",
+                    "tvlUsd": 5_000_000,
+                    "apy": 110.0,
+                    "apyMean7d": 100.0,
+                    "apyMean30d": 90.0,
+                    "apyBase": 2.0,
+                    "apyReward": 108.0,
+                    "stablecoin": True,
+                    "ilRisk": "no",
+                }
+            ]
+        ),
+    )
+
+    result = await get_yield_rates(min_tvl_usd=0, limit=5)
+
+    assert result["total_matching"] == 1
+    assert result["pools"][0]["pool_id"] == "pool-high"
+    assert result["filters_applied"]["max_apy"] is None
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_max_apy_includes_equal_boundary(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+    monkeypatch.setattr(
+        "tools.definitions.get_yield_rates._fetch_pools",
+        AsyncMock(
+            return_value=[
+                {
+                    "pool": "pool-boundary",
+                    "project": "aave-v3",
+                    "symbol": "USDC",
+                    "chain": "Ethereum",
+                    "tvlUsd": 5_000_000,
+                    "apy": 30.0,
+                    "apyMean7d": 29.0,
+                    "apyMean30d": 28.0,
+                    "apyBase": 28.0,
+                    "apyReward": 2.0,
+                    "stablecoin": True,
+                    "ilRisk": "no",
+                }
+            ]
+        ),
+    )
+
+    result = await get_yield_rates(min_tvl_usd=0, max_apy=30.0, limit=5)
+
+    assert result["total_matching"] == 1
+    assert result["pools"][0]["pool_id"] == "pool-boundary"
+
+
+def test_get_yield_rates_max_apy_negative_rejected():
+    from pydantic import ValidationError
+
+    from tools.definitions.get_yield_rates import GetYieldRatesInput
+
+    with pytest.raises(ValidationError):
+        GetYieldRatesInput(max_apy=-1.0)
+
+
+def test_get_yield_rates_inverted_apy_bounds_rejected():
+    from pydantic import ValidationError
+
+    from tools.definitions.get_yield_rates import GetYieldRatesInput
+
+    with pytest.raises(ValidationError):
+        GetYieldRatesInput(min_apy=40.0, max_apy=30.0)

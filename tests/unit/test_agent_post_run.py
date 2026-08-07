@@ -39,6 +39,7 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
             settings=SimpleNamespace(tool_call_event_logging_enabled=True, memory_enabled=True),
             outcome=1,
             outcome_source="auto",
+            source="schedule",
         )
         await scheduled[0]
         await scheduled[1]
@@ -55,6 +56,7 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
         outcome_source="auto",
         thread_id="",
         user_message="",
+        source="schedule",
     )
 
 

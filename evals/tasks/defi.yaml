@@ -49,6 +49,6 @@
     "max_duration_ms": 15000,
     "max_cost_usdc": 700000,
     "scorer": "llm_judge",
-    "rubric": "Recommends stablecoin yield based on 30-day or longer trailing return data. Avoids protocols or rates that are explicitly short-term, promotional, or spiky. The recommendation is actionable for a risk-averse user."
+    "rubric": "Recommends stablecoin yield based on 30-day or longer trailing return data. Avoids protocols or rates that are explicitly short-term, promotional, or spiky. The recommendation is actionable for a risk-averse user. The agent should call get_yield_rates with stable_only=true and max_apy=30 to exclude leveraged/boosted pools."
   }
 ]

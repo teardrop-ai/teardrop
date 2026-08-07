@@ -751,6 +751,7 @@ async def extract_and_store_memories(
     outcome_source: str = "",
     thread_id: str = "",
     user_message: str = "",
+    source: str = "",
 ) -> int:
     """Extract facts and a decision summary from a conversation; store both.
 
@@ -759,17 +760,27 @@ async def extract_and_store_memories(
     is additionally stored once as a ``run_decisions`` row when present — the
     foundation for outcome-linked tool reputation. Both writes are
     independently best-effort. Fire-and-forget safe — never raises.
+
+    ``source`` distinguishes run origins. Scheduled background analyses
+    (``source="schedule"``) are intentional ML-label candidates: for stateless
+    runs we still extract and store a decision summary but suppress fact
+    storage, so recurring market scans produce labels without polluting
+    ``org_memories``. All other stateless lookups remain fully suppressed.
     """
     try:
-        if tool_names_used and _is_stateless_lookup_run(messages, tool_names_used):
+        is_stateless = bool(tool_names_used) and _is_stateless_lookup_run(messages, tool_names_used)
+        capture_decision = source == "schedule"
+        if is_stateless and not capture_decision:
             logger.debug("Skipping memory extraction for stateless lookup run org_id=%s run_id=%s", org_id, run_id)
             return 0
 
         facts, decision = await _extract_facts_and_decision(messages)
-        entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
-        stored = sum(1 for entry in entries if entry is not None)
-        if stored > 0:
-            logger.info("Stored %d memories for org_id=%s run_id=%s", stored, org_id, run_id)
+        stored = 0
+        if not is_stateless:
+            entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
+            stored = sum(1 for entry in entries if entry is not None)
+            if stored > 0:
+                logger.info("Stored %d memories for org_id=%s run_id=%s", stored, org_id, run_id)
 
         if decision is not None:
             await store_run_decision(

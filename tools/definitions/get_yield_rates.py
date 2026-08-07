@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 import aiohttp
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from teardrop.cache import get_redis
 from tools._internals._http_session import get_defillama_session
@@ -84,6 +84,15 @@ class GetYieldRatesInput(BaseModel):
         ge=0.0,
         description="Exclude pools with APY below this value (%). Default 0 includes all.",
     )
+    max_apy: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "Exclude pools with APY above this value (%). Default None = no upper bound. "
+            "Use to filter out leveraged/boosted pools (e.g. max_apy=30) so genuine "
+            "stablecoin yields surface."
+        ),
+    )
     limit: int = Field(
         default=20,
         ge=1,
@@ -105,6 +114,12 @@ class GetYieldRatesInput(BaseModel):
             "to emphasize consistency over short-term spikes."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_apy_bounds(self) -> "GetYieldRatesInput":
+        if self.max_apy is not None and self.min_apy > self.max_apy:
+            raise ValueError("min_apy must be <= max_apy when max_apy is set.")
+        return self
 
     @field_validator("protocols")
     @classmethod
@@ -273,6 +288,7 @@ async def get_yield_rates(
     limit: int = 20,
     symbols_any: list[str] | None = None,
     stable_only: bool = False,
+    max_apy: float | None = None,
 ) -> dict[str, Any]:
     """Get DeFi yield pool rates filtered and sorted by APY."""
     now = time.monotonic()
@@ -332,6 +348,8 @@ async def get_yield_rates(
             continue
         if _resolve_apy(pool) < min_apy:
             continue
+        if max_apy is not None and _resolve_apy(pool) > max_apy:
+            continue
         filtered.append(pool)
 
     if symbols_any:
@@ -355,6 +373,7 @@ async def get_yield_rates(
         "chain": chain,
         "min_tvl_usd": min_tvl_usd,
         "min_apy": min_apy,
+        "max_apy": max_apy,
         "limit": limit,
         "symbols_any": symbols_any,
         "stable_only": stable_only,
@@ -378,7 +397,7 @@ async def get_yield_rates(
 
 TOOL = ToolDefinition(
     name="get_yield_rates",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "
         "all chains. Returns pools sorted by APY with TVL, base rate, reward APY, "
@@ -387,10 +406,11 @@ TOOL = ToolDefinition(
         "'Base'), minimum TVL, and minimum APY. Use this to answer questions like "
         "'Where can I get the best USDC yield?', 'What is Aave's current APY on Ethereum?', "
         "or 'Compare Aave vs Compound yields'. Returns up to 50 pools. "
-        "IMPORTANT: Call ONCE per query. The returned `symbol` field contains the "
+        "Call once per query unless a genuinely disjoint filter is required. The returned `symbol` field contains the "
         "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
         "by inspecting `symbol` rather than re-calling with different arguments. "
-        "Use `min_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call. "
+        "Use `min_apy`, `max_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call. "
+        "Set `max_apy` (e.g. 30) to exclude leveraged/boosted pools so genuine yields surface. "
         "Set stable_only=true when you need consistent stablecoin yield screening; this "
         "ranks by 30d mean APY first and still returns spot/base/reward components."
     ),

@@ -423,6 +423,65 @@ class TestExtractAndStoreMemories:
         assert count == 0
         extract_mock.assert_not_called()
 
+    async def test_scheduled_stateless_run_stores_decision_but_no_facts(self, test_settings):
+        """Scheduled background analyses capture a decision label without facts."""
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=(0,))
+        decision = {
+            "action": "compare_yields",
+            "reasoning": "stablecoin screening",
+            "task_class": "yield_compare",
+            "confidence": 0.8,
+        }
+
+        with (
+            patch.object(memory_module, "_is_stateless_lookup_run", return_value=True),
+            patch.object(memory_module, "_pool", pool),
+            patch.object(
+                memory_module,
+                "_extract_facts_and_decision",
+                AsyncMock(return_value=(["fact one"], decision)),
+            ) as extract_mock,
+            patch.object(memory_module, "store_memory", AsyncMock(return_value=MagicMock())) as store_mock,
+            patch.object(memory_module, "store_run_decision", AsyncMock(return_value=True)) as decision_mock,
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1",
+                "user-1",
+                [MagicMock(type="human", content="compare stablecoin yields")],
+                "run-1",
+                tool_names_used=["get_yield_rates"],
+                source="schedule",
+            )
+
+        assert count == 0
+        extract_mock.assert_awaited_once()
+        store_mock.assert_not_awaited()
+        decision_mock.assert_awaited_once()
+        assert decision_mock.await_args.kwargs["decision"] == decision
+
+    async def test_non_scheduled_stateless_run_still_suppressed(self, test_settings):
+        """API/event stateless lookups remain fully suppressed even with a decision present."""
+        with (
+            patch.object(memory_module, "_is_stateless_lookup_run", return_value=True),
+            patch.object(
+                memory_module,
+                "_extract_facts_and_decision",
+                AsyncMock(return_value=(["fact one"], {"action": "x", "reasoning": "y", "task_class": "z"})),
+            ) as extract_mock,
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1",
+                "user-1",
+                [MagicMock(type="human", content="show me btc performance")],
+                "run-1",
+                tool_names_used=["get_token_price_historical"],
+                source="api",
+            )
+
+        assert count == 0
+        extract_mock.assert_not_called()
+
 
 # ─── _is_stateless_lookup_run ───────────────────────────────────────────────
 

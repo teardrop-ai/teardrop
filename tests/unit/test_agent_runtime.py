@@ -422,6 +422,7 @@ class TestPromotionalCreditExclusions:
             outcome_source="auto",
             thread_id="schedule-1",
             user_message="hello",
+            source="schedule",
         )
 
     async def test_failure_usage_records_automated_failure_telemetry(self, test_settings):
@@ -467,4 +468,5 @@ class TestPromotionalCreditExclusions:
             outcome=-1,
             outcome_source="auto",
             thread_id="thread-1",
+            source="a2a",
         )
