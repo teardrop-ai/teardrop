@@ -13,6 +13,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_token_price` | $0.002 (2,000 atomic) |
 | `get_token_price_historical` | $0.004 (4,000 atomic) |
 | `get_protocol_tvl` | $0.003 (3,000 atomic) |
+| `get_chain_metrics` | $0.003 (3,000 atomic) |
+| `get_dex_volume` | $0.003 (3,000 atomic) |
 | `get_yield_rates` | $0.004 (4,000 atomic) |
 | `get_lending_rates` | $0.003 (3,000 atomic) |
 | `http_fetch` | $0.002 (2,000 atomic) |
@@ -36,7 +38,7 @@ In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` hav
 
 ## Tool Definitions
 
-All system tool implementations are under [tools/definitions/](tools/definitions/). The following 25 tools are currently registered:
+All system tool implementations are under [tools/definitions/](tools/definitions/). The following 27 tools are currently registered:
 
 | Tool | Description |
 |------|-------------|
@@ -45,6 +47,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `decode_transaction` | Decodes transaction calldata into human-readable form using the supplied ABI or 4byte.directory. |
 | `delegate_to_agent` | Delegate a task to a remote A2A-compliant agent. Discovers capabilities, sends a message, handles optional x402 payment, debits org credits, and records audit events. |
 | `get_block` | Block metadata (timestamp, gas, miner, tx count) by number or `"latest"`. |
+| `get_chain_metrics` | Blockchain ecosystem health via DeFiLlama: current TVL, 7d/30d TVL change, and aggregate chain fees. |
 | `get_datetime` | Returns current UTC date/time. Accepts an optional `strftime` format string. |
 | `get_erc20_balance` | ERC-20 token balance for an address. |
 | `get_eth_balance` | ETH balance for an Ethereum address (mainnet or Base). Requires `ETHEREUM_RPC_URL` or `BASE_RPC_URL`. |
@@ -59,6 +62,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `web_search` | Web search via Tavily. Set `TAVILY_API_KEY` to activate. |
 | `get_defi_positions` | Aggregate DeFi positions (Aave v3, Compound v3, Uniswap v3 LP) for a wallet on Ethereum or Base. |
 | `get_dex_quote` | Best Uniswap v3 swap quote across all fee tiers on Ethereum or Base via on-chain QuoterV2. |
+| `get_dex_volume` | DEX landscape activity via DeFiLlama: 24h/7d/30d volume, period changes, and reported global 24h volume share. |
 | `get_liquidation_risk` | Assess DeFi liquidation risk for up to 50 wallets across Aave v3 and Compound v3. |
 | `get_token_approvals` | Audit ERC-20 token allowances and flag risky unlimited approvals across major DeFi spenders. Returns an `error` field when the full RPC approval batch fails so consumers can treat results as incomplete instead of "clean". |
 | `get_lending_rates` | Current on-chain lending supply/borrow rates for Aave v3 and Compound v3 on Ethereum or Base. Returns per-asset APY snapshots and Compound utilization for stablecoin yield comparisons. |

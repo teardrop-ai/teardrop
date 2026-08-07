@@ -200,32 +200,6 @@ def _max_iterations_reached(state: AgentState) -> bool:
     return iterations >= max(0, get_settings().agent_max_tool_iterations - 1)
 
 
-def _all_tool_calls_resolved(state: AgentState) -> bool:
-    """True when all tool calls from the latest AI message have ToolMessage results."""
-    latest_ai = _latest_ai_message(state)
-    if latest_ai is None:
-        return False
-
-    tool_calls = getattr(latest_ai, "tool_calls", None) or []
-    if not tool_calls:
-        return False
-
-    pending_ids = {str(call_id) for call in tool_calls if isinstance(call, dict) and (call_id := call.get("id"))}
-    if not pending_ids:
-        return False
-
-    resolved_ids: set[str] = set()
-    for msg in reversed(state.messages):
-        if msg is latest_ai:
-            break
-        if isinstance(msg, ToolMessage):
-            tool_call_id = getattr(msg, "tool_call_id", None)
-            if tool_call_id:
-                resolved_ids.add(str(tool_call_id))
-
-    return pending_ids.issubset(resolved_ids)
-
-
 def _synthesis_fast_path_reason(state: AgentState) -> str | None:
     s = get_settings()
     if not s.agent_synthesis_fast_path_enabled:
@@ -234,8 +208,6 @@ def _synthesis_fast_path_reason(state: AgentState) -> str | None:
         return "forced"
     if _planner_signaled_done(state):
         return "signaled_done"
-    if _all_tool_calls_resolved(state):
-        return "all_resolved"
     if _max_iterations_reached(state):
         return "max_iter"
     return None
@@ -304,7 +276,6 @@ def _resolve_planner_llm(
         get_fallback_llm=_get_fallback_llm,
         bind_tools_for_provider=_bind_tools_for_provider,
         get_llm_for_request=get_llm_for_request,
-        create_llm_from_config=create_llm_from_config,
         provider_api_key=_provider_api_key,
         logger_=logger,
     )
@@ -506,6 +477,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
     usage_already_recorded = False
     response_provider = _provider
     response_model = _model
+    active_llm = llm
 
     if isinstance(result, dict) and result.get("error_type") == "rate_limit" and not llm_config:
         # Record usage for the failed turn BEFORE retrying, so we don't lose the tokens
@@ -543,6 +515,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             usage_already_recorded = False
             response_provider = fallback_provider
             response_model = fallback_model
+            active_llm = fallback_bound
     if isinstance(result, dict):
         return result
     response: AIMessage = result
@@ -558,7 +531,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
     # model re-issues tool calls on a synthesis turn, retry ONCE with an explicit
     # no-tools instruction so the final report is emitted instead of being dropped
     # by the router (EXECUTING status discards buffered planner text → empty run).
-    if tool_iterations > 0 and not llm_config and getattr(response, "tool_calls", None):
+    if tool_iterations > 0 and getattr(response, "tool_calls", None):
         logger.warning(
             "planner_node: synthesis turn produced tool_calls %s; retrying with no-tools instruction (provider=%s, model=%s)",
             [str(call.get("name", "")) for call in response.tool_calls if isinstance(call, dict)],
@@ -576,7 +549,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             ),
         ]
         retry_response = await _invoke_planner_llm(
-            llm,
+            active_llm,
             retry_messages,
             _timeout,
             provider=response_provider,
@@ -593,7 +566,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
                 model=response_model,
             )
             response = retry_response
-            if getattr(response, "tool_calls", None):
+            if getattr(response, "tool_calls", None) and _ai_content_to_text(response.content).strip():
                 # Still requesting tools after the no-tools instruction: strip the
                 # advisory calls and force completion so any text is emitted.
                 logger.warning(

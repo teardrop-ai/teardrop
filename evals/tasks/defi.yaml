@@ -37,6 +37,49 @@
     "rubric": "Calls get_protocol_tvl and cites the current TVL figure."
   },
   {
+    "id": "defi.chain_health_landscape.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare Ethereum, Arbitrum, Base, Solana, and Avalanche by current TVL, 7-day and 30-day TVL change, and recent aggregate fees. Return compact JSON with task_class chain_health_landscape, one row per chain, explicit missing-data fields, and a short conclusion about ecosystem momentum."
+      }
+    ],
+    "expected_tool_calls": ["get_chain_metrics"],
+    "expected_tool_args": {
+      "get_chain_metrics": {
+        "chains": ["Ethereum", "Arbitrum", "Base", "Solana", "Avalanche"],
+        "days": 30
+      }
+    },
+    "expected_text_contains": ["chain_health_landscape", "TVL", "fees"],
+    "max_duration_ms": 45000,
+    "max_cost_usdc": 700000,
+    "scorer": "llm_judge",
+    "rubric": "Calls get_chain_metrics for the requested ecosystems, reports current TVL plus 7-day and 30-day changes and aggregate fees when available, labels missing upstream fields instead of fabricating them, and gives a concise comparison."
+  },
+  {
+    "id": "defi.dex_volume_landscape.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare Uniswap V3, Curve DEX, and PancakeSwap by 24-hour, 7-day, and 30-day volume, period-over-period changes, and share of reported DEX volume. Return compact JSON with task_class dex_volume_landscape, one row per protocol, and a brief conclusion."
+      }
+    ],
+    "expected_tool_calls": ["get_dex_volume"],
+    "expected_tool_args": {
+      "get_dex_volume": {
+        "protocols": ["uniswap-v3", "curve-dex", "pancakeswap"],
+        "lookback_days": 30,
+        "limit": 10
+      }
+    },
+    "expected_text_contains": ["dex_volume_landscape", "24", "volume", "share"],
+    "max_duration_ms": 30000,
+    "max_cost_usdc": 600000,
+    "scorer": "llm_judge",
+    "rubric": "Calls get_dex_volume with the requested protocols, reports all three volume windows and changes, explains that shares use the unfiltered reported DEX denominator, and labels protocols with unavailable data."
+  },
+  {
     "id": "defi.consistent_yield.001",
     "messages": [
       {
@@ -71,6 +114,7 @@
       }
     },
     "expected_text_contains": ["stablecoin_yield_compare_test", "basket", "spread"],
+    "expected_text_not_contains": ["truncated", "retrieve the full pool list"],
     "expected_json_shape": {
       "task_class": null,
       "stables": null,

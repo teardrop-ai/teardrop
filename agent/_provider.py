@@ -235,7 +235,6 @@ def _resolve_planner_llm(
     get_fallback_llm: Callable[..., tuple[Any, str, str] | None],
     bind_tools_for_provider: Callable[[Any, list[Any], str], Any],
     get_llm_for_request: Callable[[dict | None], Any],
-    create_llm_from_config: Callable[[dict[str, Any]], Any],
     provider_api_key: Callable[[Any, str], str] = _provider_api_key,
     logger_: logging.Logger = logger,
 ) -> tuple[Any, str, str, int, float, str | None]:
@@ -269,7 +268,7 @@ def _resolve_planner_llm(
         # Synthesis needs its token budget reserved for visible output: on reasoning
         # models max_tokens is shared with hidden reasoning tokens, so an unbounded
         # effort can consume the entire budget and truncate the response mid-stream.
-        llm_unbound = create_llm_from_config(
+        llm_unbound = get_llm_for_request(
             {
                 "provider": _provider,
                 "model": _model,
@@ -292,12 +291,13 @@ def _resolve_planner_llm(
             _planner_key = provider_api_key(settings, _planner_provider)
             if _planner_key and not is_provider_cooled_down(_planner_provider, _planner_model):
                 _provider, _model = _planner_provider, _planner_model
-                llm = create_llm_from_config(
+                llm = get_llm_for_request(
                     {
                         "provider": _provider,
                         "model": _model,
                         "api_key": _planner_key,
                         "max_tokens": _max_tokens,
+                        "reasoning_effort": "low",
                         "temperature": settings.agent_temperature,
                         "timeout_seconds": _timeout,
                     }

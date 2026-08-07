@@ -11,6 +11,7 @@ Provides:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 from collections import OrderedDict
@@ -129,9 +130,30 @@ _llm_cache: OrderedDict[str, BaseChatModel] = OrderedDict()
 _llm_cache_lock = threading.Lock()
 
 
-def _cache_key(provider: str, model: str, api_key: str) -> str:
+def _cache_key(
+    provider: str,
+    model: str,
+    api_key: str,
+    *,
+    api_base: str | None = None,
+    max_tokens: int = 4096,
+    temperature: float = 0.0,
+    reasoning_effort: str | None = None,
+) -> str:
     """Build a cache key from provider+model+key hash.  Never stores raw keys."""
-    raw = f"{provider}:{model}:{api_key}"
+    raw = json.dumps(
+        {
+            "provider": provider.lower(),
+            "model": model,
+            "api_key": api_key,
+            "api_base": api_base,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning_effort": reasoning_effort,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -234,6 +256,10 @@ def get_llm_for_request(llm_config: dict[str, Any] | None = None) -> BaseChatMod
         llm_config["provider"],
         llm_config["model"],
         llm_config.get("api_key", ""),
+        api_base=llm_config.get("api_base"),
+        max_tokens=llm_config.get("max_tokens", 4096),
+        temperature=llm_config.get("temperature", 0.0),
+        reasoning_effort=llm_config.get("reasoning_effort"),
     )
 
     with _llm_cache_lock:

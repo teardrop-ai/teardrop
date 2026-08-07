@@ -679,6 +679,35 @@ class TestGetYieldRates:
         assert result["total_matching"] == 3
         assert all("usdc" in p["symbol"].lower() for p in result["pools"])
 
+    async def test_symbols_any_matches_whole_tokens_only(self, test_settings, monkeypatch):
+        """Substring matches (e.g. TULIPAUSDC for USDC) are false positives and must not match."""
+        pools = [
+            {**_SAMPLE_POOLS[0], "pool": "vault-token", "symbol": "TULIPAUSDC"},
+            {**_SAMPLE_POOLS[0], "pool": "real-usdc", "symbol": "USDC"},
+            {**_SAMPLE_POOLS[0], "pool": "pair-usdc", "symbol": "EURC-USDC"},
+            {**_SAMPLE_POOLS[0], "pool": "susdai", "symbol": "SUSDAI"},
+        ]
+        result = await self._call_with_pools(monkeypatch, pools, symbols_any=["USDC", "DAI"])
+        returned = {p["pool_id"] for p in result["pools"]}
+        assert returned == {"real-usdc", "pair-usdc"}
+
+    async def test_symbols_any_returns_best_pool_per_symbol(self, test_settings, monkeypatch):
+        """A low-yield symbol must still be represented rather than crowded out by a
+        high-yield symbol's pools when the limit is tight."""
+        pools = [
+            {**_SAMPLE_POOLS[0], "pool": "usdc-hi", "symbol": "USDC", "apy": 20.0},
+            {**_SAMPLE_POOLS[0], "pool": "usdc-mid", "symbol": "USDC", "apy": 15.0},
+            {**_SAMPLE_POOLS[0], "pool": "gho-low", "symbol": "GHO", "apy": 1.0},
+        ]
+        result = await self._call_with_pools(monkeypatch, pools, symbols_any=["USDC", "GHO"], limit=2)
+        returned = {p["pool_id"] for p in result["pools"]}
+        assert returned == {"usdc-hi", "gho-low"}
+
+    async def test_symbols_any_names_symbols_without_pools(self, test_settings, monkeypatch):
+        result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=["USDC", "RLUSD"])
+        assert "RLUSD" in result["note"]
+        assert "complete per-symbol view" in result["note"]
+
     async def test_symbols_any_case_insensitive(self, test_settings, monkeypatch):
         result = await self._call_with_pools(monkeypatch, _SAMPLE_POOLS, symbols_any=["eth"])
         assert result["total_matching"] == 0

@@ -12,7 +12,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import agent.nodes as nodes_module
 from agent.nodes import (
-    _all_tool_calls_resolved,
     _contains_structured_data,
     _extract_a2ui_from_text,
     _max_iterations_reached,
@@ -172,12 +171,11 @@ class TestSynthesisFastPathPredicates:
         state = _make_state(metadata={"_usage": {"tool_iterations": test_settings.agent_max_tool_iterations - 1}})
         assert _max_iterations_reached(state) is True
 
-    def test_all_tool_calls_resolved_true(self):
+    def test_completed_tool_batch_does_not_force_synthesis(self, test_settings):
         ai = _make_ai_message(
             content="Calling tools",
             tool_calls=[
                 {"id": "call-1", "name": "get_a", "args": {}},
-                {"id": "call-2", "name": "get_b", "args": {}},
             ],
         )
         state = _make_state(
@@ -185,38 +183,10 @@ class TestSynthesisFastPathPredicates:
                 HumanMessage(content="hi"),
                 ai,
                 ToolMessage(content="{}", tool_call_id="call-1"),
-                ToolMessage(content="{}", tool_call_id="call-2"),
-            ]
-        )
-        assert _all_tool_calls_resolved(state) is True
-
-    def test_all_tool_calls_resolved_false_when_missing_tool_result(self):
-        ai = _make_ai_message(
-            content="Calling tools",
-            tool_calls=[
-                {"id": "call-1", "name": "get_a", "args": {}},
-                {"id": "call-2", "name": "get_b", "args": {}},
             ],
-        )
-        state = _make_state(
-            messages=[
-                HumanMessage(content="hi"),
-                ai,
-                ToolMessage(content="{}", tool_call_id="call-1"),
-            ]
-        )
-        assert _all_tool_calls_resolved(state) is False
-
-    def test_synthesis_fast_path_reason_all_resolved(self, test_settings):
-        ai = _make_ai_message(
-            content="Gathering",
-            tool_calls=[{"id": "call-1", "name": "get_a", "args": {}}],
-        )
-        state = _make_state(
-            messages=[HumanMessage(content="hi"), ai, ToolMessage(content="{}", tool_call_id="call-1")],
             metadata={"_usage": {"tool_iterations": 1}},
         )
-        assert _synthesis_fast_path_reason(state) == "all_resolved"
+        assert _synthesis_fast_path_reason(state) is None
 
 
 class TestToolShortlistHook:
@@ -242,6 +212,51 @@ class TestToolShortlistHook:
 
 
 class TestPlannerNode:
+    async def test_post_tool_planner_can_execute_second_tool_round(self, test_settings):
+        prior_ai = _make_ai_message(
+            "Gathering data",
+            tool_calls=[{"id": "call-1", "name": "get_a", "args": {}}],
+        )
+        state = _make_state(
+            messages=[
+                HumanMessage(content="Compare the results"),
+                prior_ai,
+                ToolMessage(content="{}", tool_call_id="call-1"),
+            ],
+            metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_a"]}},
+        )
+        second_call = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-2", "name": "get_b", "args": {}}],
+        )
+        base_llm = MagicMock()
+        base_llm.bind_tools.return_value = base_llm
+        synthesis_llm = MagicMock()
+        synthesis_llm.bind_tools.return_value = synthesis_llm
+        synthesis_llm.ainvoke = AsyncMock(return_value=second_call)
+        tool = MagicMock()
+        tool.ainvoke = AsyncMock(return_value={"value": 2})
+
+        with (
+            patch("agent.nodes.get_llm_for_request", side_effect=[base_llm, synthesis_llm]),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch.object(nodes_module, "_cached_tools", [tool]),
+        ):
+            planner_result = await planner_node(state)
+
+        assert planner_result["task_status"] == TaskStatus.EXECUTING
+        synthesis_llm.bind_tools.assert_called_once()
+
+        executor_state = _make_state(
+            messages=[*state.messages, *planner_result["messages"]],
+            metadata=planner_result["metadata"],
+        )
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_b": tool}):
+            executor_result = await tool_executor_node(executor_state, config={"configurable": {}})
+
+        assert executor_result["task_status"] == TaskStatus.PLANNING
+        assert executor_result["metadata"]["_usage"]["tool_iterations"] == 2
+
     async def test_excluded_tools_not_bound_to_llm(self, test_settings):
         class _Tool:
             def __init__(self, name: str) -> None:
@@ -474,6 +489,36 @@ class TestPlannerNode:
         )
         fallback_llm.ainvoke.assert_awaited_once()
 
+    async def test_synthesis_retry_uses_rate_limit_fallback_llm(self, test_settings):
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=Exception("429 rate limit"))
+
+        tool_call_response = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-2", "name": "get_yield_rates", "args": {}}],
+        )
+        final_response = _make_ai_message("Recovered synthesis.", tool_calls=[])
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=(fallback_llm, "google", "gemini-3.6-flash")),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content == "Recovered synthesis."
+        primary_llm.ainvoke.assert_awaited_once()
+        assert fallback_llm.ainvoke.await_count == 2
+
     async def test_preemptive_cooldown_uses_fallback_without_lc_kwargs(self, test_settings):
         """Regression: planner_node must not access lc_kwargs on the fallback LLM.
 
@@ -539,17 +584,16 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_wallet_portfolio"]}})
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=normal_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[normal_llm, synthesis_llm]) as mock_get_llm,
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
-            patch("agent.nodes.create_llm_from_config", return_value=synthesis_llm) as mock_create_from_config,
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
 
         assert result["task_status"] == TaskStatus.GENERATING_UI
-        assert mock_create_from_config.call_count == 1
-        cfg = mock_create_from_config.call_args.args[0]
+        assert mock_get_llm.call_count == 2
+        cfg = mock_get_llm.call_args.args[0]
         assert cfg["max_tokens"] == test_settings.agent_synthesis_max_tokens
         # Reasoning is bounded so hidden reasoning tokens cannot consume the
         # shared output budget and truncate the visible synthesis (root cause of
@@ -577,8 +621,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
-            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[MagicMock(), primary_llm]),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None) as mock_get_fallback,
             patch.object(nodes_module, "_cached_tools", []),
@@ -611,8 +654,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
-            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[MagicMock(), primary_llm]),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None),
             patch.object(nodes_module, "_cached_tools", []),
@@ -650,8 +692,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
-            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[MagicMock(), primary_llm]),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None),
             patch.object(nodes_module, "_cached_tools", []),
@@ -663,6 +704,62 @@ class TestPlannerNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         assert result["messages"][0].tool_calls == []
         assert result["messages"][0].content == '{"task_class": "stablecoin_yield_compare_test"}'
+
+    async def test_empty_synthesis_retry_keeps_tool_calls_for_executor(self, test_settings):
+        tool_call_response = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-2", "name": "get_yield_rates", "args": {}}],
+        )
+        empty_retry = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-3", "name": "get_token_price", "args": {}}],
+        )
+        synthesis_llm = MagicMock()
+        synthesis_llm.bind_tools.return_value = synthesis_llm
+        synthesis_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, empty_retry])
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", side_effect=[MagicMock(), synthesis_llm]),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.EXECUTING
+        assert result["messages"][0].tool_calls == empty_retry.tool_calls
+
+    async def test_byok_synthesis_tool_calls_are_retried(self, test_settings):
+        tool_call_response = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-2", "name": "get_yield_rates", "args": {}}],
+        )
+        final_response = _make_ai_message("BYOK synthesis.", tool_calls=[])
+        byok_llm = MagicMock()
+        byok_llm.bind_tools.return_value = byok_llm
+        byok_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+        state = _make_state(
+            metadata={
+                "_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]},
+                "_llm_config": {
+                    "provider": "openrouter",
+                    "model": "deepseek/deepseek-v4-flash",
+                    "api_key": "test-key",
+                    "is_byok": True,
+                },
+            }
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=byok_llm),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content == "BYOK synthesis."
+        assert byok_llm.ainvoke.await_count == 2
 
     async def test_initial_turn_uses_planner_override_model(self, test_settings):
         mock_response = _make_ai_message("Planner response", tool_calls=[])
@@ -678,20 +775,20 @@ class TestPlannerNode:
         with (
             patch.object(test_settings, "agent_planner_provider", "google"),
             patch.object(test_settings, "agent_planner_model", "gemini-3-flash-preview"),
-            patch("agent.nodes.get_llm_for_request", return_value=normal_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[normal_llm, planner_llm]) as mock_get_llm,
             patch("agent.nodes._provider_api_key", return_value="test-key"),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
-            patch("agent.nodes.create_llm_from_config", return_value=planner_llm) as mock_create_from_config,
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
 
         assert result["task_status"] == TaskStatus.GENERATING_UI
-        assert mock_create_from_config.call_count == 1
-        cfg = mock_create_from_config.call_args.args[0]
+        assert mock_get_llm.call_count == 2
+        cfg = mock_get_llm.call_args.args[0]
         assert cfg["provider"] == "google"
         assert cfg["model"] == "gemini-3-flash-preview"
+        assert cfg["reasoning_effort"] == "low"
 
     async def test_initial_turn_does_not_use_planner_override_with_org_llm_config(self, test_settings):
         mock_response = _make_ai_message("Planner response", tool_calls=[])
@@ -751,8 +848,7 @@ class TestPlannerNode:
 
         state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_synthesis_forced": True})
         with (
-            patch("agent.nodes.get_llm_for_request", return_value=base_llm),
-            patch("agent.nodes.create_llm_from_config", return_value=unbound_llm),
+            patch("agent.nodes.get_llm_for_request", side_effect=[base_llm, unbound_llm]),
             patch("agent.nodes._bind_tools_for_provider") as bind_mock,
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch.object(nodes_module, "_cached_tools", []),
@@ -1085,10 +1181,9 @@ class TestResolvePlannerLlm:
             patch.object(test_settings, "agent_synthesis_provider", "openai"),
             patch.object(test_settings, "agent_synthesis_model", "gpt-4o-mini"),
             patch("agent.nodes._synthesis_fast_path_reason", return_value="forced"),
-            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.get_llm_for_request", side_effect=[MagicMock(), synthesis_llm]),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._provider_api_key", return_value="test-key"),
-            patch("agent.nodes.create_llm_from_config", return_value=synthesis_llm),
             patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
         ):
             llm, provider, model, max_tokens, _timeout, fast_reason = _resolve_planner_llm(

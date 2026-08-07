@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -236,6 +237,47 @@ def _sort_key_stable(pool: dict[str, Any]) -> float:
     return _resolve_apy(pool)
 
 
+_SYMBOL_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _symbol_tokens(symbol: str) -> set[str]:
+    """Split a DeFiLlama symbol into its component token names."""
+    return {token for token in _SYMBOL_SPLIT_RE.split(symbol.lower()) if token}
+
+
+def _select_per_symbol(
+    pools: list[dict[str, Any]],
+    symbol_terms: list[str],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Round-robin each symbol's best pools so every requested symbol is represented."""
+    term_set = set(symbol_terms)
+    by_symbol: dict[str, list[dict[str, Any]]] = {term: [] for term in symbol_terms}
+    for pool in pools:
+        for term in _symbol_tokens(str(pool.get("symbol", ""))) & term_set:
+            by_symbol[term].append(pool)
+
+    selected: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for rank in range(limit):
+        progressed = False
+        for term in symbol_terms:
+            bucket = by_symbol[term]
+            if rank >= len(bucket):
+                continue
+            progressed = True
+            pool = bucket[rank]
+            if id(pool) in seen:
+                continue
+            seen.add(id(pool))
+            selected.append(pool)
+            if len(selected) >= limit:
+                return selected
+        if not progressed:
+            break
+    return selected
+
+
 def _pool_to_entry(pool: dict[str, Any]) -> YieldPoolEntry:
     """Map a raw DeFiLlama pool dict to a YieldPoolEntry."""
     apy_base_raw = pool.get("apyBase")
@@ -352,19 +394,37 @@ async def get_yield_rates(
             continue
         filtered.append(pool)
 
+    symbol_terms: list[str] = []
     if symbols_any:
         symbol_terms = [s.strip().lower() for s in symbols_any if isinstance(s, str) and s.strip()]
-        if symbol_terms:
-            filtered = [pool for pool in filtered if any(term in str(pool.get("symbol", "")).lower() for term in symbol_terms)]
+    if symbol_terms:
+        term_set = set(symbol_terms)
+        filtered = [pool for pool in filtered if _symbol_tokens(str(pool.get("symbol", ""))) & term_set]
 
     if stable_only:
         filtered = [pool for pool in filtered if bool(pool.get("stablecoin", False))]
 
     total_matching = len(filtered)
 
-    # Sort by APY descending, then slice.
-    filtered.sort(key=_sort_key_stable if stable_only else _resolve_apy, reverse=True)
-    filtered = filtered[:limit]
+    sort_key = _sort_key_stable if stable_only else _resolve_apy
+    filtered.sort(key=sort_key, reverse=True)
+
+    coverage_note = ""
+    if symbol_terms:
+        matched_terms: set[str] = set()
+        for pool in filtered:
+            matched_terms |= _symbol_tokens(str(pool.get("symbol", ""))) & set(symbol_terms)
+        filtered = _select_per_symbol(filtered, symbol_terms, limit)
+        filtered.sort(key=sort_key, reverse=True)
+        missing = [term.upper() for term in symbol_terms if term not in matched_terms]
+        coverage_note = (
+            " Results include the highest-ranked pools for each requested symbol, so this is a complete "
+            "per-symbol view rather than a truncated list."
+        )
+        if missing:
+            coverage_note += f" No pools matched these symbols under the current filters: {', '.join(missing)}."
+    else:
+        filtered = filtered[:limit]
 
     pools = [_pool_to_entry(p) for p in filtered]
 
@@ -388,7 +448,7 @@ async def get_yield_rates(
             "apyMean30d used as fallback when spot is unavailable. "
             "For consistency-focused analysis, compare apy_mean_30d and apy_reward "
             "instead of relying on short windows alone. "
-            "TVL and APY can change rapidly — verify before transacting."
+            "TVL and APY can change rapidly — verify before transacting." + coverage_note
         ),
     ).model_dump()
 
@@ -397,7 +457,7 @@ async def get_yield_rates(
 
 TOOL = ToolDefinition(
     name="get_yield_rates",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "
         "all chains. Returns pools sorted by APY with TVL, base rate, reward APY, "
@@ -410,6 +470,9 @@ TOOL = ToolDefinition(
         "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
         "by inspecting `symbol` rather than re-calling with different arguments. "
         "Use `min_apy`, `max_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call. "
+        "`symbols_any` matches whole symbol tokens (e.g. 'USDC' matches 'USDC' and 'ETH-USDC' but not "
+        "'TULIPAUSDC') and returns the highest-ranked pools for EACH requested symbol, so one call gives "
+        "a complete per-symbol comparison; symbols with no matching pool are named in `note`. "
         "Set `max_apy` (e.g. 30) to exclude leveraged/boosted pools so genuine yields surface. "
         "Set stable_only=true when you need consistent stablecoin yield screening; this "
         "ranks by 30d mean APY first and still returns spot/base/reward components."

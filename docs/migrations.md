@@ -95,6 +95,8 @@ python -m migrations.runner
 | `076_telemetry_run_starts.sql` | Source-split run-start denominator for telemetry completeness reporting |
 | `077_telemetry_run_starts_retention.sql` | Ordered index for bounded telemetry run-start retention |
 | `081_reputation_public_metrics.sql` | Public success-rate, average-latency, and privacy-thresholded caller-count reputation metrics |
+| `082_deepseek_v4_flash_0731_openrouter_us_pricing.sql` | Seeds DeepSeek V4 Flash 0731 OpenRouter pricing |
+| `083_defi_landscape_tools.sql` | Adds `get_chain_metrics` and `get_dex_volume` to the marketplace platform catalog at $0.003 each |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

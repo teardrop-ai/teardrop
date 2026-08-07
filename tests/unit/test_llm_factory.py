@@ -474,6 +474,12 @@ class TestCacheKey:
         key = _cache_key("a", "b", "c")
         assert len(key) == 16
 
+    def test_client_configuration_changes_key(self):
+        base = _cache_key("openrouter", "model", "key", max_tokens=4096, reasoning_effort="low")
+        larger = _cache_key("openrouter", "model", "key", max_tokens=8192, reasoning_effort="low")
+        unbounded = _cache_key("openrouter", "model", "key", max_tokens=4096)
+        assert len({base, larger, unbounded}) == 3
+
 
 class TestGetLlmForRequest:
     def setup_method(self):
@@ -518,3 +524,15 @@ class TestGetLlmForRequest:
 
         assert r1 is not r2
         assert mock_create.call_count == 2
+
+    @patch("agent.llm.create_llm_from_config")
+    def test_different_token_or_reasoning_config_not_cached(self, mock_create):
+        mock_create.side_effect = [MagicMock(), MagicMock(), MagicMock()]
+        base = _make_config(max_tokens=4096, reasoning_effort="low")
+        larger = _make_config(max_tokens=8192, reasoning_effort="low")
+        unbounded = _make_config(max_tokens=4096, reasoning_effort=None)
+
+        results = [get_llm_for_request(config) for config in (base, larger, unbounded)]
+
+        assert len({id(result) for result in results}) == 3
+        assert mock_create.call_count == 3

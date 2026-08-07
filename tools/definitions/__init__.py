@@ -9,9 +9,11 @@ from tools.definitions.convert_currency import TOOL as convert_currency_tool
 from tools.definitions.decode_transaction import TOOL as decode_transaction_tool
 from tools.definitions.delegate_to_agent import TOOL as delegate_to_agent_tool
 from tools.definitions.get_block import TOOL as get_block_tool
+from tools.definitions.get_chain_metrics import TOOL as get_chain_metrics_tool
 from tools.definitions.get_datetime import TOOL as get_datetime_tool
 from tools.definitions.get_defi_positions import TOOL as get_defi_positions_tool
 from tools.definitions.get_dex_quote import TOOL as get_dex_quote_tool
+from tools.definitions.get_dex_volume import TOOL as get_dex_volume_tool
 from tools.definitions.get_erc20_balance import TOOL as get_erc20_balance_tool
 from tools.definitions.get_eth_balance import TOOL as get_eth_balance_tool
 from tools.definitions.get_gas_price import TOOL as get_gas_price_tool
@@ -38,7 +40,9 @@ _ALL_TOOLS = [
     delegate_to_agent_tool,
     get_datetime_tool,
     get_block_tool,
+    get_chain_metrics_tool,
     get_dex_quote_tool,
+    get_dex_volume_tool,
     get_defi_positions_tool,
     get_gas_price_tool,
     get_lending_rates_tool,
