@@ -133,6 +133,7 @@ def _get_fallback_llm(
     is_provider_cooled_down: Callable[[str, str], bool],
     provider_api_key: Callable[[Any, str], str] = _provider_api_key,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[Any, str, str] | None:
     """Return ``(llm, provider, model)`` for the first usable fallback in the pool, or ``None``."""
     for entry in settings.default_model_pool:
@@ -155,6 +156,7 @@ def _get_fallback_llm(
                 "model": model,
                 "api_key": api_key,
                 "max_tokens": max_tokens if max_tokens is not None else settings.agent_max_tokens,
+                "reasoning_effort": reasoning_effort,
                 "temperature": settings.agent_temperature,
                 "timeout_seconds": settings.agent_llm_timeout_seconds,
             }
@@ -264,12 +266,16 @@ def _resolve_planner_llm(
             _override_key = provider_api_key(settings, _synth_provider)
             if _override_key and not is_provider_cooled_down(_synth_provider, _synth_model):
                 _provider, _model = _synth_provider, _synth_model
+        # Synthesis needs its token budget reserved for visible output: on reasoning
+        # models max_tokens is shared with hidden reasoning tokens, so an unbounded
+        # effort can consume the entire budget and truncate the response mid-stream.
         llm_unbound = create_llm_from_config(
             {
                 "provider": _provider,
                 "model": _model,
                 "api_key": provider_api_key(settings, _provider),
                 "max_tokens": _max_tokens,
+                "reasoning_effort": "low",
                 "temperature": settings.agent_temperature,
                 "timeout_seconds": _timeout,
             }

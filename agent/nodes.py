@@ -176,22 +176,6 @@ def _ai_content_to_text(content: Any) -> str:
 _TRUNCATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 
 
-def _synthesis_invalid_reason(response: AIMessage, max_tokens: int, *, synthesis_turn: bool) -> str | None:
-    if getattr(response, "tool_calls", None):
-        return None
-
-    extracted = extract_usage(response)
-    finish_reason = str(extracted.get("finish_reason", "stop")).strip().lower()
-    if synthesis_turn and (
-        finish_reason in _TRUNCATION_FINISH_REASONS or (max_tokens > 0 and int(extracted.get("tokens_out", 0) or 0) >= max_tokens)
-    ):
-        return "truncated"
-
-    if not _ai_content_to_text(getattr(response, "content", "")).strip():
-        return "empty"
-    return None
-
-
 def _latest_ai_message(state: AgentState) -> AIMessage | None:
     for msg in reversed(state.messages):
         if isinstance(msg, AIMessage):
@@ -266,6 +250,7 @@ def _get_fallback_llm(
     failed_provider: str,
     failed_model: str,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> "tuple[Any, str, str] | None":
     return _get_fallback_llm_impl(
         failed_provider=failed_provider,
@@ -275,6 +260,7 @@ def _get_fallback_llm(
         is_provider_cooled_down=is_provider_cooled_down,
         provider_api_key=_provider_api_key,
         max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -518,7 +504,6 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
 
     # Track if we already recorded usage for 'result' to avoid double-counting if we retry
     usage_already_recorded = False
-    fallback_attempted = False
     response_provider = _provider
     response_model = _model
 
@@ -538,9 +523,11 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             failed_provider=_provider,
             failed_model=_model,
             max_tokens=_max_tokens,
+            # Synthesis turns (tool_iterations > 0) bound reasoning effort so the
+            # fallback cannot burn the shared output budget on hidden reasoning.
+            reasoning_effort="low" if tool_iterations > 0 else None,
         )
         if fallback_result is not None:
-            fallback_attempted = True
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
@@ -560,64 +547,6 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         return result
     response: AIMessage = result
 
-    synthesis_invalid_reason = _synthesis_invalid_reason(
-        response,
-        _max_tokens,
-        synthesis_turn=tool_iterations > 0,
-    )
-    if synthesis_invalid_reason is not None and not llm_config and not fallback_attempted:
-        state.metadata["_usage"] = _accumulate_usage(
-            state,
-            response,
-            provider=response_provider,
-            model=response_model,
-        )
-        usage_already_recorded = True
-        fallback_result = _get_fallback_llm(
-            failed_provider=response_provider,
-            failed_model=response_model,
-            max_tokens=_max_tokens,
-        )
-        if fallback_result is not None:
-            fallback_attempted = True
-            fallback_llm, fallback_provider, fallback_model = fallback_result
-            logger.warning(
-                "planner_node: retrying %s response with fallback LLM (provider=%s, model=%s)",
-                synthesis_invalid_reason,
-                response_provider,
-                response_model,
-            )
-            retry_messages = [
-                *messages,
-                SystemMessage(
-                    content=(
-                        "The previous final response was incomplete. Produce a strictly shorter final response now. "
-                        "Do not call tools. Preserve the requested output format and ensure it is complete."
-                    )
-                ),
-            ]
-            fallback_bound = (
-                fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
-            )
-            fallback_response = await _invoke_planner_llm(
-                fallback_bound,
-                retry_messages,
-                _timeout,
-                provider=fallback_provider,
-                model=fallback_model,
-            )
-            if isinstance(fallback_response, dict):
-                return fallback_response
-            response = fallback_response
-            usage_already_recorded = False
-            response_provider = fallback_provider
-            response_model = fallback_model
-            synthesis_invalid_reason = _synthesis_invalid_reason(
-                response,
-                _max_tokens,
-                synthesis_turn=tool_iterations > 0,
-            )
-
     if _synthesis_forced and getattr(response, "tool_calls", None):
         logger.warning(
             "planner_node: forced synthesis produced tool_calls (provider=%s, model=%s); ignoring advisory output",
@@ -631,7 +560,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         usage = state.metadata.get("_usage", {})
 
     finish_reason = str(extract_usage(response).get("finish_reason", "stop")).strip().lower()
-    if finish_reason in {"length", "max_tokens", "max_output_tokens"}:
+    if finish_reason in _TRUNCATION_FINISH_REASONS:
         logger.warning(
             "planner_node: synthesis turn hit max_tokens limit (provider=%s, model=%s, max_tokens=%s)",
             response_provider,
@@ -669,11 +598,6 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
     return {
         "messages": [response],
         "task_status": next_status,
-        "metadata": {
-            **{key: value for key, value in state.metadata.items() if key != "_synthesis_invalid"},
-            "_usage": usage,
-            "_synthesis_forced": False,
-            **({"_synthesis_invalid": synthesis_invalid_reason} if synthesis_invalid_reason else {}),
-        },
+        "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
         "plan": next_plan,
     }

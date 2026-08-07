@@ -70,12 +70,16 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
                 else:
                     ui_provider = settings.agent_ui_generator_provider
                     ui_model = settings.agent_ui_generator_model
+                    # Bound reasoning effort: the default UI model is a reasoning
+                    # model whose max_tokens budget is shared with hidden reasoning
+                    # tokens; unbounded reasoning can truncate the a2ui JSON output.
                     ui_llm = create_llm_from_config(
                         {
                             "provider": ui_provider,
                             "model": ui_model,
                             "api_key": _provider_api_key(settings, ui_provider),
                             "max_tokens": settings.agent_synthesis_max_tokens,
+                            "reasoning_effort": "low",
                             "temperature": settings.agent_temperature,
                             "timeout_seconds": settings.agent_ui_generator_timeout_seconds,
                         }

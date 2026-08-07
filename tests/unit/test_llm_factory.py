@@ -409,6 +409,51 @@ class TestCreateLlmFromConfig:
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["base_url"] == "https://custom.proxy.example.com/v1"
 
+    @patch("agent.llm.ChatGoogleGenerativeAI")
+    def test_google_reasoning_effort_sets_thinking_level(self, mock_cls):
+        """Reasoning effort maps to Gemini thinking_level so hidden reasoning
+        tokens cannot consume the visible-output budget (truncation fix)."""
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="google", model="gemini-3.6-flash", reasoning_effort="low")
+        create_llm_from_config(config)
+        assert mock_cls.call_args[1]["thinking_level"] == "low"
+
+    @patch("agent.llm.ChatGoogleGenerativeAI")
+    def test_google_without_reasoning_effort_omits_thinking_level(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="google", model="gemini-3.6-flash")
+        create_llm_from_config(config)
+        assert "thinking_level" not in mock_cls.call_args[1]
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openrouter_reasoning_effort_merges_with_deepseek_provider_pin(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openrouter",
+            model="deepseek/deepseek-v4-flash-0731",
+            api_key="sk-or-test",
+            api_base=None,
+            reasoning_effort="low",
+        )
+        create_llm_from_config(config)
+        assert mock_cls.call_args[1]["extra_body"] == {
+            "provider": {"only": ["NovitaAI", "DeepInfra"]},
+            "reasoning": {"effort": "low"},
+        }
+
+    @patch("agent.llm.ChatOpenAI")
+    def test_openrouter_reasoning_effort_without_deepseek_pin(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(
+            provider="openrouter",
+            model="mistralai/mistral-7b-instruct",
+            api_key="sk-or-test",
+            api_base=None,
+            reasoning_effort="low",
+        )
+        create_llm_from_config(config)
+        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "low"}}
+
 
 class TestCacheKey:
     def test_deterministic(self):

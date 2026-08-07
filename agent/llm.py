@@ -146,6 +146,12 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         max_tokens      — int (default 4096)
         temperature     — float (default 0.0)
         timeout_seconds — int (default 120)
+        reasoning_effort — optional effort hint (e.g. "low") for reasoning models.
+            On reasoning models the ``max_tokens`` budget is shared between hidden
+            reasoning tokens and visible output, so an unbounded reasoning effort can
+            starve or truncate the visible response. Applied as ``thinking_level``
+            (google) or ``reasoning.effort`` (openrouter). Ignored for
+            anthropic/openai, where reasoning is opt-in.
     """
     provider = config["provider"].lower()
     if provider not in ALLOWED_PROVIDERS:
@@ -154,6 +160,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     api_key = config.get("api_key") or ""
     model = config["model"]
     api_base = config.get("api_base")
+    reasoning_effort = str(config.get("reasoning_effort") or "").strip().lower()
 
     common: dict[str, Any] = {
         "model": model,
@@ -181,6 +188,8 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         if ChatGoogleGenerativeAI is None:
             raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         kwargs = {**common, "google_api_key": api_key or None}
+        if reasoning_effort:
+            kwargs["thinking_level"] = reasoning_effort
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
 
     if provider == "openrouter":
@@ -196,8 +205,13 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             "api_key": api_key or None,
             "base_url": api_base or "https://openrouter.ai/api/v1",
         }
+        extra_body: dict[str, Any] = {}
         if model.startswith("deepseek/"):
-            kwargs["extra_body"] = {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
+            extra_body["provider"] = {"only": ["NovitaAI", "DeepInfra"]}
+        if reasoning_effort:
+            extra_body["reasoning"] = {"effort": reasoning_effort}
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
     # Should be unreachable due to ALLOWED_PROVIDERS check above.

@@ -236,20 +236,6 @@ async def stream_graph_events(
                     _planner_token_buffer.clear()
                     _text_filter.flush()
 
-                if (output.get("metadata") or {}).get("_synthesis_invalid") == "truncated":
-                    yield _sse_event(
-                        _EV_CUSTOM,
-                        {
-                            "name": "AGENT_WARNING",
-                            "value": {
-                                "type": "truncated_response",
-                                "message": (
-                                    "The response was truncated before completion. Please retry or request a more compact result."
-                                ),
-                            },
-                        },
-                    )
-
                 # P1: Explicitly signal timeouts or rate-limits to the client.
                 # This prevents the client from assuming the run finished normally
                 # when the LLM timed out or failed.
