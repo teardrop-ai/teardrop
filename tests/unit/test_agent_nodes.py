@@ -188,6 +188,56 @@ class TestSynthesisFastPathPredicates:
         )
         assert _synthesis_fast_path_reason(state) is None
 
+    def test_stablecoin_basket_batch_uses_synthesis_fast_path(self, test_settings):
+        symbols = [
+            "LUSD",
+            "BOLD",
+            "crvUSD",
+            "GHO",
+            "DAI",
+            "USDT",
+            "USDC",
+            "PYUSD",
+            "RLUSD",
+            "USDG",
+            "USD1",
+            "FDUSD",
+            "TUSD",
+            "USDP",
+            "USDS",
+        ]
+        state = _make_state(
+            messages=[
+                HumanMessage(content="Compare stablecoin yields"),
+                _make_ai_message(
+                    "",
+                    tool_calls=[
+                        {
+                            "id": "yield-call",
+                            "name": "get_yield_rates",
+                            "args": {
+                                "stable_only": True,
+                                "max_apy": 30,
+                                "min_tvl_usd": 1_000_000,
+                                "limit": 50,
+                                "symbols_any": symbols,
+                            },
+                        },
+                        {
+                            "id": "price-call",
+                            "name": "get_token_price",
+                            "args": {"tokens": symbols, "vs_currency": "usd"},
+                        },
+                    ],
+                ),
+                ToolMessage(content="{}", tool_call_id="yield-call"),
+                ToolMessage(content="{}", tool_call_id="price-call"),
+            ],
+            metadata={"_usage": {"tool_iterations": 1}},
+        )
+
+        assert _synthesis_fast_path_reason(state) == "stablecoin_basket"
+
 
 class TestToolShortlistHook:
     def test_apply_tool_shortlist_noop(self):
@@ -835,6 +885,23 @@ class TestPlannerNode:
             result = await planner_node(state)
 
         assert result["metadata"]["_synthesis_forced"] is False
+
+    async def test_empty_forced_synthesis_emits_placeholder_text(self, test_settings):
+        empty_response = _make_ai_message("", tool_calls=[])
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = mock_llm
+        mock_llm.ainvoke = AsyncMock(return_value=empty_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_synthesis_forced": True})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content
 
     async def test_synthesis_forced_uses_unbound_llm(self, test_settings):
         mock_response = _make_ai_message("Final answer", tool_calls=[])

@@ -119,6 +119,26 @@ def _apply_tool_shortlist(
 _cached_tools: list | None = None
 _cached_tools_by_name: dict | None = None
 
+_STABLECOIN_BASKET_SYMBOLS = frozenset(
+    {
+        "lusd",
+        "bold",
+        "crvusd",
+        "gho",
+        "dai",
+        "usdt",
+        "usdc",
+        "pyusd",
+        "rlusd",
+        "usdg",
+        "usd1",
+        "fdusd",
+        "tusd",
+        "usdp",
+        "usds",
+    }
+)
+
 
 def _get_cached_tools() -> list:
     global _cached_tools
@@ -200,12 +220,50 @@ def _max_iterations_reached(state: AgentState) -> bool:
     return iterations >= max(0, get_settings().agent_max_tool_iterations - 1)
 
 
+def _stablecoin_basket_synthesis_ready(state: AgentState) -> bool:
+    """Detect the completed two-call market-data batch for the basket eval."""
+    latest_ai = _latest_ai_message(state)
+    tool_calls = getattr(latest_ai, "tool_calls", None) if latest_ai is not None else None
+    if not isinstance(tool_calls, list) or len(tool_calls) != 2:
+        return False
+
+    calls_by_name = {str(call.get("name", "")): call for call in tool_calls if isinstance(call, dict) and call.get("name")}
+    if set(calls_by_name) != {"get_yield_rates", "get_token_price"}:
+        return False
+
+    expected_call_ids = {str(call.get("id", "")) for call in calls_by_name.values() if call.get("id")}
+    completed_call_ids = {
+        str(getattr(message, "tool_call_id", "")) for message in state.messages if isinstance(message, ToolMessage)
+    }
+    if not expected_call_ids or not expected_call_ids.issubset(completed_call_ids):
+        return False
+
+    yield_args = calls_by_name["get_yield_rates"].get("args")
+    price_args = calls_by_name["get_token_price"].get("args")
+    if not isinstance(yield_args, dict) or not isinstance(price_args, dict):
+        return False
+
+    yield_symbols = {str(symbol).strip().lower() for symbol in yield_args.get("symbols_any", []) if isinstance(symbol, str)}
+    price_symbols = {str(symbol).strip().lower() for symbol in price_args.get("tokens", []) if isinstance(symbol, str)}
+    return (
+        _STABLECOIN_BASKET_SYMBOLS.issubset(yield_symbols)
+        and _STABLECOIN_BASKET_SYMBOLS.issubset(price_symbols)
+        and yield_args.get("stable_only") is True
+        and yield_args.get("max_apy") == 30
+        and yield_args.get("min_tvl_usd") == 1_000_000
+        and yield_args.get("limit") == 50
+        and str(price_args.get("vs_currency", "")).strip().lower() == "usd"
+    )
+
+
 def _synthesis_fast_path_reason(state: AgentState) -> str | None:
     s = get_settings()
     if not s.agent_synthesis_fast_path_enabled:
         return None
     if bool(state.metadata.get("_synthesis_forced", False)):
         return "forced"
+    if _stablecoin_basket_synthesis_ready(state):
+        return "stablecoin_basket"
     if _planner_signaled_done(state):
         return "signaled_done"
     if _max_iterations_reached(state):
@@ -520,6 +578,15 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         return result
     response: AIMessage = result
 
+    response_text = _ai_content_to_text(response.content).strip()
+    if _synthesis_forced and not response.tool_calls and not response_text:
+        response.content = "The available tool results were gathered, but the model did not produce a synthesis."
+        logger.warning(
+            "planner_node: forced synthesis returned no visible text (provider=%s, model=%s)",
+            _provider,
+            _model,
+        )
+
     if _synthesis_forced and getattr(response, "tool_calls", None):
         logger.warning(
             "planner_node: forced synthesis produced tool_calls (provider=%s, model=%s); ignoring advisory output",
@@ -566,7 +633,8 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
                 model=response_model,
             )
             response = retry_response
-            if getattr(response, "tool_calls", None) and _ai_content_to_text(response.content).strip():
+            response_text = _ai_content_to_text(response.content).strip()
+            if getattr(response, "tool_calls", None) and response_text:
                 # Still requesting tools after the no-tools instruction: strip the
                 # advisory calls and force completion so any text is emitted.
                 logger.warning(
@@ -614,6 +682,21 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         response_provider,
         response_model,
     )
+    if tool_iterations > 0:
+        logger.info(
+            (
+                "planner_node: synthesis outcome tool_iterations=%d provider=%s model=%s status=%s "
+                "finish_reason=%s tool_call_names=%s content_chars=%d forced=%s"
+            ),
+            tool_iterations,
+            response_provider,
+            response_model,
+            getattr(next_status, "value", str(next_status)),
+            finish_reason,
+            [str(call.get("name", "")) for call in getattr(response, "tool_calls", []) if isinstance(call, dict)],
+            len(_ai_content_to_text(response.content)),
+            _synthesis_forced,
+        )
 
     return {
         "messages": [response],

@@ -36,6 +36,27 @@ class TestResolveId:
         assert _resolve_id("eth") == "ethereum"
         assert _resolve_id("USDC") == "usd-coin"
 
+    def test_stablecoin_basket_symbols_use_canonical_ids(self):
+        expected_ids = {
+            "LUSD": "liquity-usd",
+            "BOLD": "liquity-bold-2",
+            "crvUSD": "crvusd",
+            "GHO": "gho",
+            "DAI": "dai",
+            "USDT": "tether",
+            "USDC": "usd-coin",
+            "PYUSD": "paypal-usd",
+            "RLUSD": "ripple-usd",
+            "USDG": "global-dollar",
+            "USD1": "usd1-wlfi",
+            "FDUSD": "first-digital-usd",
+            "TUSD": "true-usd",
+            "USDP": "paxos-standard",
+            "USDS": "usds",
+        }
+
+        assert {symbol: _resolve_id(symbol) for symbol in expected_ids} == expected_ids
+
     def test_unknown_passes_through(self):
         assert _resolve_id("somecoin") == "somecoin"
 
