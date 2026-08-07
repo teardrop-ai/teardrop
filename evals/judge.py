@@ -39,6 +39,7 @@ def _fallback_score(
     *,
     expected_text_contains: list[str],
     expected_text_not_contains: list[str] | None,
+    expected_json_shape: dict[str, object] | None,
     actual_text: str,
 ) -> float:
     if not expected_text_contains and not (expected_text_not_contains or []):
@@ -47,6 +48,7 @@ def _fallback_score(
         scorer="contains",
         expected_text_contains=expected_text_contains,
         expected_text_not_contains=expected_text_not_contains,
+        expected_json_shape=expected_json_shape,
         actual_text=actual_text,
     )
 
@@ -128,6 +130,7 @@ async def score_task_async(
     expected_text_contains: list[str],
     actual_text: str,
     expected_text_not_contains: list[str] | None = None,
+    expected_json_shape: dict[str, object] | None = None,
     api_key: str = "",
     judge_model: str = _DEFAULT_JUDGE_MODEL,
 ) -> float:
@@ -136,6 +139,7 @@ async def score_task_async(
             scorer=scorer,
             expected_text_contains=expected_text_contains,
             expected_text_not_contains=expected_text_not_contains,
+            expected_json_shape=expected_json_shape,
             actual_text=actual_text,
         )
 
@@ -144,6 +148,7 @@ async def score_task_async(
         return _fallback_score(
             expected_text_contains=expected_text_contains,
             expected_text_not_contains=expected_text_not_contains,
+            expected_json_shape=expected_json_shape,
             actual_text=actual_text,
         )
 
@@ -152,6 +157,7 @@ async def score_task_async(
         return _fallback_score(
             expected_text_contains=expected_text_contains,
             expected_text_not_contains=expected_text_not_contains,
+            expected_json_shape=expected_json_shape,
             actual_text=actual_text,
         )
 
@@ -163,5 +169,6 @@ async def score_task_async(
         return _fallback_score(
             expected_text_contains=expected_text_contains,
             expected_text_not_contains=expected_text_not_contains,
+            expected_json_shape=expected_json_shape,
             actual_text=actual_text,
         )

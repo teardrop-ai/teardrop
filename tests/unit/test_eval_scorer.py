@@ -51,3 +51,43 @@ def test_score_task_not_contains_mode():
         actual_text=text,
     )
     assert score == 1.0
+
+
+def test_score_task_json_shape_rejects_truncated_json():
+    score = score_task(
+        scorer="json_shape",
+        expected_text_contains=[],
+        expected_json_shape={"task_class": None, "stables": None, "spread": None, "winner": None},
+        actual_text='{"task_class":"stablecoin_yield_compare_test","stables": [',
+    )
+    assert score == 0.0
+
+
+def test_score_task_json_shape_accepts_required_top_level_keys():
+    score = score_task(
+        scorer="json_shape",
+        expected_text_contains=[],
+        expected_json_shape={"task_class": None, "stables": None, "spread": None, "winner": None},
+        actual_text=('{"task_class":"stablecoin_yield_compare_test","stables":[],"spread":0,"winner":"tie"}'),
+    )
+    assert score == 1.0
+
+
+def test_score_task_json_shape_rejects_missing_required_key():
+    score = score_task(
+        scorer="json_shape",
+        expected_text_contains=[],
+        expected_json_shape={"task_class": None, "stables": None, "spread": None, "winner": None},
+        actual_text='{"task_class":"stablecoin_yield_compare_test","stables":[],"spread":0}',
+    )
+    assert score == 0.0
+
+
+def test_score_task_json_shape_preserves_text_expectations():
+    score = score_task(
+        scorer="json_shape",
+        expected_text_contains=["stablecoin_yield_compare_test", "basket"],
+        expected_json_shape={"task_class": None},
+        actual_text='{"task_class":"stablecoin_yield_compare_test"}',
+    )
+    assert score == 0.5

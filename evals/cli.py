@@ -227,6 +227,7 @@ async def _run_task_http(task: EvalTask, *, base_url: str, token: str | None) ->
 
     text_parts: list[str] = []
     tool_names: list[str] = []
+    tool_call_args: dict[str, list[dict[str, Any]]] = {}
     usage: dict[str, Any] = {}
 
     async with httpx.AsyncClient(timeout=120) as client:
@@ -255,12 +256,16 @@ async def _run_task_http(task: EvalTask, *, base_url: str, token: str | None) ->
                     name = str(data.get("tool_name", ""))
                     if name:
                         tool_names.append(name)
+                        args = data.get("args")
+                        if isinstance(args, dict):
+                            tool_call_args.setdefault(name, []).append(args)
                 elif current_event == "USAGE_SUMMARY":
                     usage = data
 
     return RunArtifact(
         text="".join(text_parts),
         tool_names_used=tool_names,
+        tool_call_args=tool_call_args,
         tokens_in=int(usage.get("tokens_in", 0)),
         tokens_out=int(usage.get("tokens_out", 0)),
         cache_read_input_tokens=int(usage.get("cache_read_tokens", 0)),

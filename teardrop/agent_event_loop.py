@@ -74,6 +74,7 @@ async def stream_graph_events(
     # langgraph_node so its tokens never reach TEXT_MESSAGE_CONTENT.
     _text_filter = _A2UIStreamFilter()
     _last_msg_id: str = run_id
+    _planner_attempt_id: str | None = None
     _planner_token_buffer: list[tuple[str, str]] = []
     _text_emitted = False
 
@@ -112,6 +113,11 @@ async def stream_graph_events(
                     else:
                         delta = raw_content
                     if delta:
+                        if _planner_attempt_id != msg_id:
+                            if _planner_attempt_id is not None:
+                                _planner_token_buffer.clear()
+                                _text_filter = _A2UIStreamFilter()
+                            _planner_attempt_id = msg_id
                         _last_msg_id = msg_id
                         clean = _text_filter.feed(delta)
                         if clean:
@@ -229,6 +235,20 @@ async def stream_graph_events(
                     # Intermediate/planner-failed turns are not user-facing.
                     _planner_token_buffer.clear()
                     _text_filter.flush()
+
+                if (output.get("metadata") or {}).get("_synthesis_invalid") == "truncated":
+                    yield _sse_event(
+                        _EV_CUSTOM,
+                        {
+                            "name": "AGENT_WARNING",
+                            "value": {
+                                "type": "truncated_response",
+                                "message": (
+                                    "The response was truncated before completion. Please retry or request a more compact result."
+                                ),
+                            },
+                        },
+                    )
 
                 # P1: Explicitly signal timeouts or rate-limits to the client.
                 # This prevents the client from assuming the run finished normally

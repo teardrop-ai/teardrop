@@ -51,8 +51,10 @@ Each task supports:
 - id
 - messages
 - expected_tool_calls
+- expected_tool_args (tool name to required argument subset)
 - expected_text_contains
 - expected_text_not_contains
+- expected_json_shape (required top-level keys for `scorer: "json_shape"`)
 - max_duration_ms
 - max_cost_usdc
 - scorer
@@ -66,6 +68,7 @@ Example:
     "id": "defi.balance_check.001",
     "messages": [{"role": "user", "content": "What is the USDC balance of vitalik.eth on Base?"}],
     "expected_tool_calls": ["resolve_ens", "get_erc20_balance"],
+    "expected_tool_args": {"get_erc20_balance": {"chain_id": 8453}},
     "expected_text_contains": ["USDC", "vitalik"],
     "max_duration_ms": 8000,
     "max_cost_usdc": 500000,
@@ -102,6 +105,8 @@ Set `scorer` to `llm_judge` when substring matching is too weak and the task has
 ```
 
 If the Anthropic API key is missing or a test key is used, the harness falls back to deterministic contains-based scoring. For safety, tasks with no deterministic fallback expectations score `0.0` in that mode instead of silently passing.
+
+`scorer: "json_shape"` parses the complete response as a JSON object and requires every key in `expected_json_shape`. `expected_tool_args` requires at least one invocation of each named tool to contain the listed argument/value pairs; omitted or mismatched filters fail the task.
 
 ### When to Use Each Scorer
 

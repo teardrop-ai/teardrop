@@ -60,10 +60,26 @@
       }
     ],
     "expected_tool_calls": ["get_yield_rates", "get_token_price"],
+    "expected_tool_args": {
+      "get_yield_rates": {
+        "stable_only": true,
+        "max_apy": 30,
+        "min_tvl_usd": 1000000
+      },
+      "get_token_price": {
+        "vs_currency": "usd"
+      }
+    },
     "expected_text_contains": ["stablecoin_yield_compare_test", "basket", "spread"],
+    "expected_json_shape": {
+      "task_class": null,
+      "stables": null,
+      "spread": null,
+      "winner": null
+    },
     "max_duration_ms": 120000,
     "max_cost_usdc": 100000,
-    "scorer": "contains",
+    "scorer": "json_shape",
     "rubric": "Calls both market-data tools and emits a visible, compact stablecoin basket comparison rather than completing with empty text. Live values may vary; missing source data must be labeled rather than fabricated."
   }
 ]

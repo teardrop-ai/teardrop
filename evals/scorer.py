@@ -40,8 +40,7 @@ def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
     keys = list(expected_shape.keys())
     if not keys:
         return 1.0
-    hits = sum(1 for key in keys if key in payload)
-    return hits / len(keys)
+    return 1.0 if all(key in payload for key in keys) else 0.0
 
 
 def score_contains_pattern(expected_patterns: list[str], actual: str) -> float:
@@ -57,9 +56,16 @@ def score_task(
     expected_text_contains: list[str],
     actual_text: str,
     expected_text_not_contains: list[str] | None = None,
+    expected_json_shape: dict[str, Any] | None = None,
 ) -> float:
     negative_score = score_not_contains(expected_text_not_contains or [], actual_text)
 
+    if scorer == "json_shape":
+        return (
+            score_json_shape(expected_json_shape or {}, actual_text)
+            * score_contains(expected_text_contains, actual_text)
+            * negative_score
+        )
     if scorer == "contains":
         return score_contains(expected_text_contains, actual_text) * negative_score
     if scorer == "contains_pattern":

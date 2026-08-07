@@ -23,8 +23,10 @@ class EvalTask(BaseModel):
     id: str
     messages: list[EvalMessage]
     expected_tool_calls: list[str] = Field(default_factory=list)
+    expected_tool_args: dict[str, dict[str, Any]] = Field(default_factory=dict)
     expected_text_contains: list[str] = Field(default_factory=list)
     expected_text_not_contains: list[str] = Field(default_factory=list)
+    expected_json_shape: dict[str, Any] = Field(default_factory=dict)
     max_duration_ms: int = 0
     max_cost_usdc: int = 0
     scorer: str = "contains"
@@ -34,6 +36,7 @@ class EvalTask(BaseModel):
 class RunArtifact(BaseModel):
     text: str = ""
     tool_names_used: list[str] = Field(default_factory=list)
+    tool_call_args: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     tokens_in: int = 0
     tokens_out: int = 0
     cache_read_input_tokens: int = 0
@@ -80,6 +83,14 @@ def _pct_delta(old: float, new: float) -> float:
     if old == 0:
         return 0.0
     return ((new - old) / old) * 100.0
+
+
+def _tool_args_match(expected: dict[str, dict[str, Any]], actual: dict[str, list[dict[str, Any]]]) -> bool:
+    for tool_name, expected_args in expected.items():
+        calls = actual.get(tool_name, [])
+        if not any(all(call.get(key) == value for key, value in expected_args.items()) for call in calls):
+            return False
+    return True
 
 
 def diff_reports(baseline: EvalReport, candidate: EvalReport) -> EvalDiff:
@@ -135,6 +146,7 @@ async def run_suite(
             rubric=task.rubric,
             expected_text_contains=task.expected_text_contains,
             expected_text_not_contains=task.expected_text_not_contains,
+            expected_json_shape=task.expected_json_shape,
             actual_text=artifact.text,
             api_key=judge_api_key,
             judge_model=judge_model,
@@ -143,10 +155,11 @@ async def run_suite(
         if task.expected_tool_calls:
             used = set(artifact.tool_names_used)
             tool_call_ok = all(name in used for name in task.expected_tool_calls)
+        tool_args_ok = _tool_args_match(task.expected_tool_args, artifact.tool_call_args)
 
         duration_ok = task.max_duration_ms <= 0 or artifact.duration_ms <= task.max_duration_ms
         cost_ok = task.max_cost_usdc <= 0 or artifact.cost_usdc <= task.max_cost_usdc
-        passed = score >= 0.8 and tool_call_ok and duration_ok and cost_ok
+        passed = score >= 0.8 and tool_call_ok and tool_args_ok and duration_ok and cost_ok
 
         results.append(
             EvalTaskResult(

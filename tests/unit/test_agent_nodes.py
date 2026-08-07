@@ -19,6 +19,7 @@ from agent.nodes import (
     _parse_a2ui_json,
     _planner_signaled_done,
     _synthesis_fast_path_reason,
+    _synthesis_invalid_reason,
     planner_node,
     tool_executor_node,
     ui_generator_node,
@@ -441,6 +442,39 @@ class TestPlannerNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         assert fallback_llm.ainvoke.call_count == 1
 
+    async def test_rate_limit_fallback_is_not_retried_when_response_is_invalid(self, test_settings):
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=Exception("429 rate limit"))
+
+        fallback_response = _make_ai_message("")
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch(
+                "agent.nodes._get_fallback_llm",
+                return_value=(fallback_llm, "google", "gemini-3.6-flash"),
+            ) as mock_get_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["metadata"]["_synthesis_invalid"] == "empty"
+        mock_get_fallback.assert_called_once_with(
+            failed_provider="openrouter",
+            failed_model=test_settings.agent_model,
+            max_tokens=test_settings.agent_synthesis_max_tokens,
+        )
+        fallback_llm.ainvoke.assert_awaited_once()
+
     async def test_preemptive_cooldown_uses_fallback_without_lc_kwargs(self, test_settings):
         """Regression: planner_node must not access lc_kwargs on the fallback LLM.
 
@@ -558,6 +592,146 @@ class TestPlannerNode:
             max_tokens=test_settings.agent_synthesis_max_tokens,
         )
         fallback_llm.ainvoke.assert_awaited_once()
+
+    async def test_truncated_synthesis_retries_when_output_reaches_cap(self, test_settings):
+        truncated_response = _make_ai_message('{"task_class":"stablecoin_yield_compare_test","stables":[')
+        truncated_response.usage_metadata = {
+            "input_tokens": 9000,
+            "output_tokens": test_settings.agent_synthesis_max_tokens,
+        }
+        truncated_response.response_metadata = {"finish_reason": "stop"}
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(return_value=truncated_response)
+
+        fallback_response = _make_ai_message('{"task_class":"stablecoin_yield_compare_test","stables":[]}')
+        fallback_response.usage_metadata = {"input_tokens": 9000, "output_tokens": 100}
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch(
+                "agent.nodes._get_fallback_llm",
+                return_value=(fallback_llm, "google", "gemini-3.6-flash"),
+            ) as mock_get_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content == fallback_response.content
+        assert "_synthesis_invalid" not in result["metadata"]
+        assert mock_get_fallback.call_args.kwargs == {
+            "failed_provider": "openrouter",
+            "failed_model": test_settings.agent_model,
+            "max_tokens": test_settings.agent_synthesis_max_tokens,
+        }
+        retry_messages = fallback_llm.ainvoke.call_args.args[0]
+        assert retry_messages[-1].content.startswith("The previous final response was incomplete.")
+
+    def test_truncated_synthesis_detects_length_finish_reason(self):
+        response = _make_ai_message("partial JSON")
+        response.usage_metadata = {"input_tokens": 10, "output_tokens": 100}
+        response.response_metadata = {"finish_reason": "length"}
+
+        assert _synthesis_invalid_reason(response, 8192, synthesis_turn=True) == "truncated"
+
+    async def test_truncated_tool_response_is_not_retried(self, test_settings):
+        response = _make_ai_message(
+            "partial tool call",
+            tool_calls=[{"id": "call-1", "name": "get_yield_rates", "args": {}}],
+        )
+        response.usage_metadata = {"input_tokens": 10, "output_tokens": test_settings.agent_synthesis_max_tokens}
+        response.response_metadata = {"finish_reason": "length"}
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(return_value=response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None) as mock_get_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.EXECUTING
+        mock_get_fallback.assert_not_called()
+
+    async def test_truncated_byok_synthesis_is_not_rerouted(self, test_settings):
+        response = _make_ai_message("partial JSON")
+        response.usage_metadata = {"input_tokens": 10, "output_tokens": 4096}
+        response.response_metadata = {"finish_reason": "length"}
+
+        byok_llm = MagicMock()
+        byok_llm.bind_tools.return_value = byok_llm
+        byok_llm.ainvoke = AsyncMock(return_value=response)
+        byok_config = {
+            "provider": "openrouter",
+            "model": "deepseek/deepseek-v4-flash",
+            "is_byok": True,
+        }
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}, "_llm_config": byok_config})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=byok_llm),
+            patch("agent.nodes._get_fallback_llm", return_value=None) as mock_get_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["messages"][0].content == "partial JSON"
+        assert result["metadata"]["_synthesis_invalid"] == "truncated"
+        mock_get_fallback.assert_not_called()
+
+    async def test_truncated_fallback_is_reported_and_accounted(self, test_settings):
+        primary_response = _make_ai_message("primary partial")
+        primary_response.usage_metadata = {
+            "input_tokens": 10,
+            "output_tokens": test_settings.agent_synthesis_max_tokens,
+        }
+        fallback_response = _make_ai_message("fallback partial")
+        fallback_response.usage_metadata = {
+            "input_tokens": 20,
+            "output_tokens": test_settings.agent_synthesis_max_tokens,
+        }
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(return_value=primary_response)
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch(
+                "agent.nodes._get_fallback_llm",
+                return_value=(fallback_llm, "google", "gemini-3.6-flash"),
+            ),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["metadata"]["_synthesis_invalid"] == "truncated"
+        assert result["metadata"]["_usage"]["tokens_out"] == test_settings.agent_synthesis_max_tokens * 2
+        assert len(result["metadata"]["_usage"]["turns"]) == 2
 
     async def test_initial_turn_uses_planner_override_model(self, test_settings):
         mock_response = _make_ai_message("Planner response", tool_calls=[])

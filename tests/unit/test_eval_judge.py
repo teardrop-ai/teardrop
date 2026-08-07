@@ -121,8 +121,30 @@ async def test_run_suite_passes_judge_config(monkeypatch):
             "rubric": "Mention hello",
             "expected_text_contains": [],
             "expected_text_not_contains": [],
+            "expected_json_shape": {},
             "actual_text": "hello",
             "api_key": "real-key",
             "judge_model": "judge-model",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_suite_rejects_mismatched_expected_tool_args():
+    task = EvalTask(
+        id="defi.args.001",
+        messages=[{"role": "user", "content": "Compare yields"}],
+        expected_tool_args={"get_yield_rates": {"stable_only": True, "max_apy": 30}},
+    )
+
+    async def fake_runner(_task):
+        return RunArtifact(
+            text="done",
+            tool_call_args={"get_yield_rates": [{"stable_only": True, "max_apy": 55}]},
+            duration_ms=10,
+        )
+
+    report = await run_suite(suite_name="defi", tasks=[task], run_task=fake_runner)
+
+    assert report.passed_tasks == 0
+    assert report.tasks[0].passed is False

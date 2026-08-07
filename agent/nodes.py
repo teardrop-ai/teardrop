@@ -173,6 +173,25 @@ def _ai_content_to_text(content: Any) -> str:
     return str(content or "")
 
 
+_TRUNCATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _synthesis_invalid_reason(response: AIMessage, max_tokens: int, *, synthesis_turn: bool) -> str | None:
+    if getattr(response, "tool_calls", None):
+        return None
+
+    extracted = extract_usage(response)
+    finish_reason = str(extracted.get("finish_reason", "stop")).strip().lower()
+    if synthesis_turn and (
+        finish_reason in _TRUNCATION_FINISH_REASONS or (max_tokens > 0 and int(extracted.get("tokens_out", 0) or 0) >= max_tokens)
+    ):
+        return "truncated"
+
+    if not _ai_content_to_text(getattr(response, "content", "")).strip():
+        return "empty"
+    return None
+
+
 def _latest_ai_message(state: AgentState) -> AIMessage | None:
     for msg in reversed(state.messages):
         if isinstance(msg, AIMessage):
@@ -499,6 +518,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
 
     # Track if we already recorded usage for 'result' to avoid double-counting if we retry
     usage_already_recorded = False
+    fallback_attempted = False
     response_provider = _provider
     response_model = _model
 
@@ -520,6 +540,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             max_tokens=_max_tokens,
         )
         if fallback_result is not None:
+            fallback_attempted = True
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
@@ -539,7 +560,12 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         return result
     response: AIMessage = result
 
-    if not _ai_content_to_text(response.content).strip() and not getattr(response, "tool_calls", None) and not llm_config:
+    synthesis_invalid_reason = _synthesis_invalid_reason(
+        response,
+        _max_tokens,
+        synthesis_turn=tool_iterations > 0,
+    )
+    if synthesis_invalid_reason is not None and not llm_config and not fallback_attempted:
         state.metadata["_usage"] = _accumulate_usage(
             state,
             response,
@@ -553,18 +579,29 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             max_tokens=_max_tokens,
         )
         if fallback_result is not None:
+            fallback_attempted = True
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning(
-                "planner_node: retrying empty response with fallback LLM (provider=%s, model=%s)",
+                "planner_node: retrying %s response with fallback LLM (provider=%s, model=%s)",
+                synthesis_invalid_reason,
                 response_provider,
                 response_model,
             )
+            retry_messages = [
+                *messages,
+                SystemMessage(
+                    content=(
+                        "The previous final response was incomplete. Produce a strictly shorter final response now. "
+                        "Do not call tools. Preserve the requested output format and ensure it is complete."
+                    )
+                ),
+            ]
             fallback_bound = (
                 fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
             )
             fallback_response = await _invoke_planner_llm(
                 fallback_bound,
-                messages,
+                retry_messages,
                 _timeout,
                 provider=fallback_provider,
                 model=fallback_model,
@@ -575,6 +612,11 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             usage_already_recorded = False
             response_provider = fallback_provider
             response_model = fallback_model
+            synthesis_invalid_reason = _synthesis_invalid_reason(
+                response,
+                _max_tokens,
+                synthesis_turn=tool_iterations > 0,
+            )
 
     if _synthesis_forced and getattr(response, "tool_calls", None):
         logger.warning(
@@ -627,6 +669,11 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
     return {
         "messages": [response],
         "task_status": next_status,
-        "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
+        "metadata": {
+            **{key: value for key, value in state.metadata.items() if key != "_synthesis_invalid"},
+            "_usage": usage,
+            "_synthesis_forced": False,
+            **({"_synthesis_invalid": synthesis_invalid_reason} if synthesis_invalid_reason else {}),
+        },
         "plan": next_plan,
     }
