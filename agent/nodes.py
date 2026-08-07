@@ -242,7 +242,12 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return _is_rate_limit_error_impl(exc)
 
 
-def _get_fallback_llm(*, failed_provider: str, failed_model: str) -> "tuple[Any, str, str] | None":
+def _get_fallback_llm(
+    *,
+    failed_provider: str,
+    failed_model: str,
+    max_tokens: int | None = None,
+) -> "tuple[Any, str, str] | None":
     return _get_fallback_llm_impl(
         failed_provider=failed_provider,
         failed_model=failed_model,
@@ -250,6 +255,7 @@ def _get_fallback_llm(*, failed_provider: str, failed_model: str) -> "tuple[Any,
         create_llm_from_config=create_llm_from_config,
         is_provider_cooled_down=is_provider_cooled_down,
         provider_api_key=_provider_api_key,
+        max_tokens=max_tokens,
     )
 
 
@@ -493,6 +499,8 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
 
     # Track if we already recorded usage for 'result' to avoid double-counting if we retry
     usage_already_recorded = False
+    response_provider = _provider
+    response_model = _model
 
     if isinstance(result, dict) and result.get("error_type") == "rate_limit" and not llm_config:
         # Record usage for the failed turn BEFORE retrying, so we don't lose the tokens
@@ -506,7 +514,11 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             )
             usage_already_recorded = True
 
-        fallback_result = _get_fallback_llm(failed_provider=_provider, failed_model=_model)
+        fallback_result = _get_fallback_llm(
+            failed_provider=_provider,
+            failed_model=_model,
+            max_tokens=_max_tokens,
+        )
         if fallback_result is not None:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
@@ -520,9 +532,49 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
                 provider=fallback_provider,
                 model=fallback_model,
             )
+            usage_already_recorded = False
+            response_provider = fallback_provider
+            response_model = fallback_model
     if isinstance(result, dict):
         return result
     response: AIMessage = result
+
+    if not _ai_content_to_text(response.content).strip() and not getattr(response, "tool_calls", None) and not llm_config:
+        state.metadata["_usage"] = _accumulate_usage(
+            state,
+            response,
+            provider=response_provider,
+            model=response_model,
+        )
+        usage_already_recorded = True
+        fallback_result = _get_fallback_llm(
+            failed_provider=response_provider,
+            failed_model=response_model,
+            max_tokens=_max_tokens,
+        )
+        if fallback_result is not None:
+            fallback_llm, fallback_provider, fallback_model = fallback_result
+            logger.warning(
+                "planner_node: retrying empty response with fallback LLM (provider=%s, model=%s)",
+                response_provider,
+                response_model,
+            )
+            fallback_bound = (
+                fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+            )
+            fallback_response = await _invoke_planner_llm(
+                fallback_bound,
+                messages,
+                _timeout,
+                provider=fallback_provider,
+                model=fallback_model,
+            )
+            if isinstance(fallback_response, dict):
+                return fallback_response
+            response = fallback_response
+            usage_already_recorded = False
+            response_provider = fallback_provider
+            response_model = fallback_model
 
     if _synthesis_forced and getattr(response, "tool_calls", None):
         logger.warning(
@@ -532,16 +584,16 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         )
 
     if not usage_already_recorded:
-        usage = _accumulate_usage(state, response, provider=_provider, model=_model)
+        usage = _accumulate_usage(state, response, provider=response_provider, model=response_model)
     else:
         usage = state.metadata.get("_usage", {})
 
     finish_reason = str(extract_usage(response).get("finish_reason", "stop")).strip().lower()
-    if finish_reason == "length":
+    if finish_reason in {"length", "max_tokens", "max_output_tokens"}:
         logger.warning(
             "planner_node: synthesis turn hit max_tokens limit (provider=%s, model=%s, max_tokens=%s)",
-            _provider,
-            _model,
+            response_provider,
+            response_model,
             _max_tokens,
         )
 
@@ -568,8 +620,8 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
         [str(call.get("name", "")) for call in getattr(response, "tool_calls", []) if isinstance(call, dict)],
         getattr(next_status, "value", str(next_status)),
         finish_reason,
-        _provider,
-        _model,
+        response_provider,
+        response_model,
     )
 
     return {

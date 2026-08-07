@@ -130,7 +130,7 @@ def test_agent_tool_max_calls_per_run_env_override(monkeypatch):
 
 def test_agent_synthesis_max_tokens_default():
     s = Settings()
-    assert s.agent_synthesis_max_tokens == 4096
+    assert s.agent_synthesis_max_tokens == 8192
 
 
 def test_agent_planner_overrides_default_empty():

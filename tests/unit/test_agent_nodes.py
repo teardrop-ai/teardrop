@@ -519,6 +519,46 @@ class TestPlannerNode:
         cfg = mock_create_from_config.call_args.args[0]
         assert cfg["max_tokens"] == test_settings.agent_synthesis_max_tokens
 
+    async def test_empty_synthesis_retries_with_fallback(self, test_settings):
+        empty_response = _make_ai_message("", tool_calls=[])
+        empty_response.usage_metadata = {"input_tokens": 9000, "output_tokens": 4096}
+        empty_response.response_metadata = {"finish_reason": "max_tokens"}
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(return_value=empty_response)
+
+        fallback_response = _make_ai_message("Recovered synthesis", tool_calls=[])
+        fallback_response.usage_metadata = {"input_tokens": 9000, "output_tokens": 100}
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=fallback_response)
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch(
+                "agent.nodes._get_fallback_llm",
+                return_value=(fallback_llm, "google", "gemini-3.6-flash"),
+            ) as mock_get_fallback,
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content == "Recovered synthesis"
+        assert result["metadata"]["_usage"]["tokens_out"] == 4196
+        assert result["metadata"]["_usage"]["turns"][-1]["provider"] == "google"
+        mock_get_fallback.assert_called_once_with(
+            failed_provider="openrouter",
+            failed_model=test_settings.agent_model,
+            max_tokens=test_settings.agent_synthesis_max_tokens,
+        )
+        fallback_llm.ainvoke.assert_awaited_once()
+
     async def test_initial_turn_uses_planner_override_model(self, test_settings):
         mock_response = _make_ai_message("Planner response", tool_calls=[])
 
@@ -960,6 +1000,25 @@ class TestResolvePlannerLlm:
         # Synthesis fast path returns the unbound LLM so tool schemas aren't sent.
         assert llm is synthesis_llm
         assert fast_reason == "forced"
+
+    def test_fallback_model_uses_active_turn_token_budget(self, test_settings):
+        from agent._provider import _get_fallback_llm
+
+        fallback_llm = MagicMock()
+        create_llm = MagicMock(return_value=fallback_llm)
+
+        result = _get_fallback_llm(
+            failed_provider="unavailable",
+            failed_model="unavailable",
+            settings=test_settings,
+            create_llm_from_config=create_llm,
+            is_provider_cooled_down=lambda _provider, _model: False,
+            provider_api_key=lambda _settings, _provider: "test-key",
+            max_tokens=8192,
+        )
+
+        assert result is not None
+        assert create_llm.call_args.args[0]["max_tokens"] == 8192
 
 
 # ─── tool_executor_node ───────────────────────────────────────────────────────

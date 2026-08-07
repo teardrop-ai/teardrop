@@ -50,5 +50,20 @@
     "max_cost_usdc": 700000,
     "scorer": "llm_judge",
     "rubric": "Recommends stablecoin yield based on 30-day or longer trailing return data. Avoids protocols or rates that are explicitly short-term, promotional, or spiky. The recommendation is actionable for a risk-averse user. The agent should call get_yield_rates with stable_only=true and max_apy=30 to exclude leveraged/boosted pools."
+  },
+  {
+    "id": "defi.stablecoin_basket_compare.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare current stablecoin yields and peg health for decentralized LUSD, BOLD, crvUSD, GHO, DAI versus centralized USDT, USDC, PYUSD, RLUSD, USDG, USD1, FDUSD, TUSD, USDP, USDS. Call get_yield_rates once with stable_only=true, max_apy=30, min_tvl_usd=1000000 and all symbols, and call get_token_price once for all symbols in USD. Return compact JSON with task_class stablecoin_yield_compare_test, per-token data gaps, basket average APYs, spread, peg-health counts, and a discrete decentralized/centralized/tie winner."
+      }
+    ],
+    "expected_tool_calls": ["get_yield_rates", "get_token_price"],
+    "expected_text_contains": ["stablecoin_yield_compare_test", "basket", "spread"],
+    "max_duration_ms": 120000,
+    "max_cost_usdc": 100000,
+    "scorer": "contains",
+    "rubric": "Calls both market-data tools and emits a visible, compact stablecoin basket comparison rather than completing with empty text. Live values may vary; missing source data must be labeled rather than fabricated."
   }
 ]

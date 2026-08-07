@@ -132,6 +132,7 @@ def _get_fallback_llm(
     create_llm_from_config: Callable[[dict[str, Any]], Any],
     is_provider_cooled_down: Callable[[str, str], bool],
     provider_api_key: Callable[[Any, str], str] = _provider_api_key,
+    max_tokens: int | None = None,
 ) -> tuple[Any, str, str] | None:
     """Return ``(llm, provider, model)`` for the first usable fallback in the pool, or ``None``."""
     for entry in settings.default_model_pool:
@@ -153,7 +154,7 @@ def _get_fallback_llm(
                 "provider": provider,
                 "model": model,
                 "api_key": api_key,
-                "max_tokens": settings.agent_max_tokens,
+                "max_tokens": max_tokens if max_tokens is not None else settings.agent_max_tokens,
                 "temperature": settings.agent_temperature,
                 "timeout_seconds": settings.agent_llm_timeout_seconds,
             }

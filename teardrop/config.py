@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
     agent_synthesis_max_tokens: int = Field(
-        default=4096,
+        default=8192,
         description=(
             "Maximum output tokens for planner synthesis turns after at least one "
             "tool iteration. Keeps final synthesis concise and reduces timeout risk."
