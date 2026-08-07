@@ -554,6 +554,53 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             _model,
         )
 
+    # Post-tool synthesis must produce a text answer, not more tool calls. If the
+    # model re-issues tool calls on a synthesis turn, retry ONCE with an explicit
+    # no-tools instruction so the final report is emitted instead of being dropped
+    # by the router (EXECUTING status discards buffered planner text → empty run).
+    if tool_iterations > 0 and not llm_config and getattr(response, "tool_calls", None):
+        logger.warning(
+            "planner_node: synthesis turn produced tool_calls %s; retrying with no-tools instruction (provider=%s, model=%s)",
+            [str(call.get("name", "")) for call in response.tool_calls if isinstance(call, dict)],
+            response_provider,
+            response_model,
+        )
+        retry_messages = [
+            *messages,
+            response,
+            SystemMessage(
+                content=(
+                    "You have already gathered all required tool outputs. Do NOT request any further tool calls. "
+                    "Write the final synthesis using the existing conversation context now."
+                )
+            ),
+        ]
+        retry_response = await _invoke_planner_llm(
+            llm,
+            retry_messages,
+            _timeout,
+            provider=response_provider,
+            model=response_model,
+        )
+        if not isinstance(retry_response, dict):
+            # The final accounting block below accumulates whichever response is
+            # current; to bill BOTH attempts, first fold the original attempt into
+            # _usage, then swap in the retry so it is accumulated once.
+            state.metadata["_usage"] = _accumulate_usage(
+                state,
+                response,
+                provider=response_provider,
+                model=response_model,
+            )
+            response = retry_response
+            if getattr(response, "tool_calls", None):
+                # Still requesting tools after the no-tools instruction: strip the
+                # advisory calls and force completion so any text is emitted.
+                logger.warning(
+                    "planner_node: synthesis turn still produced tool_calls after retry; stripping them to emit text",
+                )
+                response.tool_calls = []
+
     if not usage_already_recorded:
         usage = _accumulate_usage(state, response, provider=response_provider, model=response_model)
     else:

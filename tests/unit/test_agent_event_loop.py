@@ -126,3 +126,61 @@ async def test_stream_replaces_buffered_primary_text_on_planner_retry():
 
     text = "".join(json.loads(event["data"])["delta"] for event in events if event["event"] == "TEXT_MESSAGE_CONTENT")
     assert text == "RECOVERED"
+
+
+@pytest.mark.anyio
+async def test_planner_text_is_dropped_when_turn_requests_tool_calls():
+    """Planner prose streamed on a turn that ends EXECUTING (tool_calls present)
+    is never flushed — the client sees empty_response even though tokens_out > 0.
+
+    This is the empty-response mechanism observed when the synthesis model
+    re-issues a tool call instead of synthesizing: the text deltas buffer, then
+    the buffer is discarded because EXECUTING is not a flushable status.
+    """
+    graph = _EventGraph(
+        [
+            {
+                "event": "on_chat_model_stream",
+                "run_id": "synthesis-attempt",
+                "metadata": {"langgraph_node": "planner"},
+                "data": {"chunk": SimpleNamespace(content="Here is the comparison")},
+            },
+            {
+                "event": "on_chain_end",
+                "name": "planner",
+                "data": {
+                    "output": {
+                        "task_status": "executing",
+                        "messages": [SimpleNamespace(content="Here is the comparison")],
+                        "metadata": {},
+                    }
+                },
+            },
+            {"event": "on_chain_end", "name": "ui_generator", "data": {"output": {}}},
+        ]
+    )
+
+    events = [
+        event
+        async for event in stream_graph_events(
+            graph=graph,
+            initial_state=_InitialState(),
+            config={},
+            run_id="run-1",
+            settings=SimpleNamespace(app_env="production"),
+            org_id="org-1",
+            payload={},
+            result={},
+        )
+    ]
+
+    text = "".join(json.loads(event["data"])["delta"] for event in events if event["event"] == "TEXT_MESSAGE_CONTENT")
+    warnings = [
+        json.loads(event["data"])["value"]
+        for event in events
+        if event["event"] == "Custom" and json.loads(event["data"]).get("name") == "AGENT_WARNING"
+    ]
+    # The buffered text was dropped (EXECUTING is not flushable) and the client
+    # only sees the empty_response warning — no visible output despite tokens_out>0.
+    assert text == ""
+    assert any(w["type"] == "empty_response" for w in warnings)

@@ -591,6 +591,79 @@ class TestPlannerNode:
         assert "_synthesis_invalid" not in result["metadata"]
         mock_get_fallback.assert_not_called()
 
+    async def test_synthesis_tool_calls_retry_emits_final_text(self, test_settings):
+        """A post-tool synthesis turn that re-issues tool_calls is retried once with
+        a no-tools instruction so the report text is emitted (GENERATING_UI) instead
+        of being dropped by the router (EXECUTING discards buffered planner text)."""
+        tool_call_response = _make_ai_message(
+            "",
+            tool_calls=[{"id": "call-2", "name": "get_yield_rates", "args": {}}],
+        )
+        tool_call_response.usage_metadata = {"input_tokens": 9000, "output_tokens": 50}
+
+        final_response = _make_ai_message('{"task_class": "stablecoin_yield_compare_test", "stables": []}', tool_calls=[])
+        final_response.usage_metadata = {"input_tokens": 9100, "output_tokens": 120}
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        # First synthesis call returns tool_calls; retry returns final text.
+        primary_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].content == final_response.content
+        assert primary_llm.ainvoke.await_count == 2
+        # The retry appended the assistant tool_call message + no-tools system message.
+        retry_messages = primary_llm.ainvoke.call_args.args[0]
+        assert retry_messages[-1].content.startswith("You have already gathered all required tool outputs")
+        # Both attempts are billed.
+        assert result["metadata"]["_usage"]["tokens_out"] == 50 + 120
+
+    async def test_synthesis_tool_calls_persisting_are_stripped_to_emit_text(self, test_settings):
+        """If the no-tools retry STILL returns tool_calls, strip them and emit text
+        (GENERATING_UI) rather than dropping the run."""
+        tool_call_response = _make_ai_message(
+            "partial",
+            tool_calls=[{"id": "call-2", "name": "get_yield_rates", "args": {}}],
+        )
+        tool_call_response.usage_metadata = {"input_tokens": 9000, "output_tokens": 50}
+
+        still_tool_calls = _make_ai_message(
+            '{"task_class": "stablecoin_yield_compare_test"}',
+            tool_calls=[{"id": "call-3", "name": "get_token_price", "args": {}}],
+        )
+        still_tool_calls.usage_metadata = {"input_tokens": 9100, "output_tokens": 80}
+
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, still_tool_calls])
+
+        state = _make_state(metadata={"_usage": {"tool_iterations": 1, "tool_names": ["get_yield_rates"]}})
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=MagicMock()),
+            patch("agent.nodes.create_llm_from_config", return_value=primary_llm),
+            patch("agent.nodes.is_provider_cooled_down", return_value=False),
+            patch("agent.nodes._get_fallback_llm", return_value=None),
+            patch.object(nodes_module, "_cached_tools", []),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        # tool_calls stripped → GENERATING_UI so the text is emitted.
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert result["messages"][0].tool_calls == []
+        assert result["messages"][0].content == '{"task_class": "stablecoin_yield_compare_test"}'
+
     async def test_initial_turn_uses_planner_override_model(self, test_settings):
         mock_response = _make_ai_message("Planner response", tool_calls=[])
 
