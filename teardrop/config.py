@@ -64,10 +64,10 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
     agent_synthesis_max_tokens: int = Field(
-        default=8192,
+        default=12288,
         description=(
             "Maximum output tokens for planner synthesis turns after at least one "
-            "tool iteration. Keeps final synthesis concise and reduces timeout risk."
+            "tool iteration. The budget is shared by hidden reasoning and visible output."
         ),
     )
     agent_synthesis_provider: str = Field(
@@ -678,7 +678,7 @@ class Settings(BaseSettings):
     )
     default_model_pool: list[dict[str, str]] = Field(
         default=[
-            # Cost tier — DeepSeek V4 Flash 0731 via OpenRouter (US providers: NovitaAI primary, DeepInfra fallback).
+            # Cost tier — DeepSeek V4 Flash 0731 via OpenRouter; provider eligibility follows the API-key policy.
             {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731"},
             # Speed tier — Gemini 3.6 Flash (1M context, sub-300ms median).
             {"provider": "google", "model": "gemini-3.6-flash"},

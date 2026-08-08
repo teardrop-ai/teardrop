@@ -100,8 +100,6 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
             "api_key": settings.openrouter_api_key or None,
             "base_url": "https://openrouter.ai/api/v1",
         }
-        if settings.agent_model.startswith("deepseek/"):
-            kwargs["extra_body"] = {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
 
     raise ValueError(f"Unknown agent_provider '{provider}'. Supported: anthropic, openai, google, openrouter.")
@@ -216,10 +214,8 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
 
     if provider == "openrouter":
         # OpenRouter exposes an OpenAI-compatible API at a fixed base URL.
-        # DeepSeek models are pinned to US-hosted providers (NovitaAI primary, DeepInfra
-        # fallback) via OpenRouter's provider-routing preference to avoid Chinese-hosted
-        # inference. NovitaAI runs fp8 with a 393K output limit; DeepInfra runs fp4
-        # with a 16.4K output limit and is kept as a fallback only.
+        # Provider eligibility is delegated to OpenRouter so API-key data policies
+        # such as ZDR can determine the eligible inference pool.
         if ChatOpenAI is None:
             raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
         kwargs = {
@@ -228,8 +224,6 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             "base_url": api_base or "https://openrouter.ai/api/v1",
         }
         extra_body: dict[str, Any] = {}
-        if model.startswith("deepseek/"):
-            extra_body["provider"] = {"only": ["NovitaAI", "DeepInfra"]}
         if reasoning_effort:
             extra_body["reasoning"] = {"effort": reasoning_effort}
         if extra_body:

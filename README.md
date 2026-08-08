@@ -202,7 +202,7 @@ Minimum required contents:
 # Note: Each org can override via PUT /llm-config
 AGENT_PROVIDER=openrouter
 # Default model is deepseek/deepseek-v4-flash.
-# For OpenRouter DeepSeek models, Teardrop pins provider routing to NovitaAI/DeepInfra.
+# For OpenRouter DeepSeek models, Teardrop delegates provider eligibility to the API key's OpenRouter data policy.
 OPENROUTER_API_KEY=sk-or-...      # required if AGENT_PROVIDER=openrouter
 # ANTHROPIC_API_KEY=sk-ant-...     # required if AGENT_PROVIDER=anthropic
 # OPENAI_API_KEY=sk-...           # required if AGENT_PROVIDER=openai

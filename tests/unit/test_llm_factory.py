@@ -90,7 +90,7 @@ class TestCreateLlm:
             assert "model_kwargs" not in call_kwargs
             assert llm is MockCls.return_value
 
-    def test_openrouter_deepseek_model_gets_provider_routing(self):
+    def test_openrouter_deepseek_model_does_not_restrict_provider_routing(self):
         settings = _make_settings(
             agent_provider="openrouter",
             agent_model="deepseek/deepseek-v4-flash",
@@ -99,7 +99,7 @@ class TestCreateLlm:
         with patch("agent.llm.ChatOpenAI") as MockCls:
             create_llm(settings)
             call_kwargs = MockCls.call_args[1]
-            assert call_kwargs["extra_body"] == {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
+            assert "extra_body" not in call_kwargs
 
     def test_unknown_provider_raises_value_error(self):
         settings = _make_settings(agent_provider="cohere")
@@ -381,8 +381,8 @@ class TestCreateLlmFromConfig:
         assert "model_kwargs" not in call_kwargs
 
     @patch("agent.llm.ChatOpenAI")
-    def test_openrouter_deepseek_model_pins_to_us_providers(self, mock_cls):
-        """DeepSeek models must pin to US-hosted providers (NovitaAI primary, DeepInfra fallback)."""
+    def test_openrouter_deepseek_model_does_not_pin_providers(self, mock_cls):
+        """DeepSeek provider eligibility is delegated to OpenRouter's API-key policy."""
         mock_cls.return_value = MagicMock()
         config = _make_config(
             provider="openrouter",
@@ -393,7 +393,7 @@ class TestCreateLlmFromConfig:
         create_llm_from_config(config)
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
-        assert call_kwargs["extra_body"] == {"provider": {"only": ["NovitaAI", "DeepInfra"]}}
+        assert "extra_body" not in call_kwargs
 
     @patch("agent.llm.ChatOpenAI")
     def test_openrouter_custom_base_url(self, mock_cls):
@@ -426,7 +426,7 @@ class TestCreateLlmFromConfig:
         assert "thinking_level" not in mock_cls.call_args[1]
 
     @patch("agent.llm.ChatOpenAI")
-    def test_openrouter_reasoning_effort_merges_with_deepseek_provider_pin(self, mock_cls):
+    def test_openrouter_reasoning_effort_does_not_add_provider_pin(self, mock_cls):
         mock_cls.return_value = MagicMock()
         config = _make_config(
             provider="openrouter",
@@ -437,7 +437,6 @@ class TestCreateLlmFromConfig:
         )
         create_llm_from_config(config)
         assert mock_cls.call_args[1]["extra_body"] == {
-            "provider": {"only": ["NovitaAI", "DeepInfra"]},
             "reasoning": {"effort": "low"},
         }
 

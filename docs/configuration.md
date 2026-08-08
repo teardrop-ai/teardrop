@@ -9,7 +9,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | Variable | Description |
 |----------|-------------|
 | `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
-| `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). When using OpenRouter DeepSeek models, provider routing is pinned to `NovitaAI` and `DeepInfra`. |
+| `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). OpenRouter provider eligibility follows the API key's data policy, including ZDR. |
 | `AGENT_SYNTHESIS_MAX_TOKENS` | Max output tokens for post-tool synthesis turns (`tool_iterations >= 1`). Default: `4096`. |
 | `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
 | `AGENT_PLANNER_MODEL` | Optional model override paired with `AGENT_PLANNER_PROVIDER` for first-pass tool selection speed tuning. |
