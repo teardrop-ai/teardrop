@@ -125,7 +125,7 @@ If the Anthropic API key is missing or a test key is used, the harness falls bac
 
 ## CI
 
-The default CI test suite runs `pytest tests/unit/` and includes the eval harness unit tests (`test_eval_judge.py`, `test_eval_policy.py`, `test_eval_scorer.py`, `test_eval_harness_smoke.py`). These execute locally with a test API key, so all `llm_judge` tasks fall back to contains-based scoring. This is a documented tradeoff — CI gates catch structural failures (tool routing, keyword presence); semantic correctness gates are gated on real-key manual runs or staging deployments.
+The default CI test suite runs `pytest tests/unit/` and `pytest tests/api/` in parallel (`-n auto --dist load`) and includes the eval harness unit tests (`test_eval_judge.py`, `test_eval_policy.py`, `test_eval_scorer.py`, `test_eval_harness_smoke.py`). These execute locally with a test API key, so all `llm_judge` tasks fall back to contains-based scoring. This is a documented tradeoff — CI gates catch structural failures (tool routing, keyword presence); semantic correctness gates are gated on real-key manual runs or staging deployments.
 
 For staging evals with real credentials, run the CLI manually with a valid `ANTHROPIC_API_KEY` and an API token pointing to the staging backend.
 

@@ -388,6 +388,24 @@ class TestExtractFacts:
 
 @pytest.mark.anyio
 class TestExtractAndStoreMemories:
+    async def test_store_run_decision_persists_source(self, test_settings):
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value={"id": "decision-1"})
+
+        with patch.object(memory_module, "_pool", pool):
+            stored = await memory_module.store_run_decision(
+                org_id="org-1",
+                user_id="user-1",
+                run_id="run-1",
+                decision={"action": "quote", "reasoning": "use source", "task_class": "market"},
+                source="trigger",
+            )
+
+        assert stored is True
+        call_args = pool.fetchrow.call_args.args
+        assert "source" in call_args[0]
+        assert "trigger" in call_args
+
     async def test_extracts_and_stores(self, test_settings):
         pool = _pool()
         pool.fetchrow = AsyncMock(return_value=(0,))
@@ -459,6 +477,7 @@ class TestExtractAndStoreMemories:
         store_mock.assert_not_awaited()
         decision_mock.assert_awaited_once()
         assert decision_mock.await_args.kwargs["decision"] == decision
+        assert decision_mock.await_args.kwargs["source"] == "schedule"
 
     async def test_non_scheduled_stateless_run_still_suppressed(self, test_settings):
         """API/event stateless lookups remain fully suppressed even with a decision present."""

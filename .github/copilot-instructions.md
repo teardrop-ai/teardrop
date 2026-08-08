@@ -22,3 +22,7 @@ Token-efficient workflow for coding agents on this repo. See [CONTRIBUTING.md](.
 ## Editing
 - Make multi-file changes incrementally per module; verify before moving to the next.
 - Only show changed lines in explanations, not unchanged boilerplate.
+
+## Testing
+- For broad validation of the mocked suites, prefer `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix) for faster feedback.
+- Do **not** use `-n auto` on `tests/integration` — its session-scoped Postgres container uses a fixed port and truncates shared tables. Run integration serially with `-n 0`.

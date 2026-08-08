@@ -33,6 +33,7 @@ import asyncpg
 from pydantic import BaseModel, Field
 
 from teardrop.config import get_settings
+from teardrop.usage import normalize_telemetry_source
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +446,7 @@ async def store_run_decision(
     outcome_source: str = "",
     thread_id: str = "",
     user_message: str = "",
+    source: str = "api",
 ) -> bool:
     """Persist one decision-graph record for a run. Returns False on failure or duplicate.
 
@@ -455,6 +457,7 @@ async def store_run_decision(
     """
     try:
         pool = _get_pool()
+        source = normalize_telemetry_source(source)
         snapshot = _sanitize_slots_snapshot(slots)
         confidence = decision.get("confidence")
         if outcome not in (-1, 0, 1):
@@ -468,9 +471,9 @@ async def store_run_decision(
             INSERT INTO run_decisions
                 (id, run_id, org_id, user_id, task_class, action, reasoning,
                   confidence, slots_snapshot, tool_names, outcome, outcome_source, outcome_at,
-                  schema_version, taxonomy_version, thread_id, user_message, created_at)
+                  source, schema_version, taxonomy_version, thread_id, user_message, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12,
-                      CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $13, $14, $15, $16, $17)
+                      $13, CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $14, $15, $16, $17, $18)
             ON CONFLICT (run_id) DO NOTHING
             RETURNING id
             """,
@@ -486,6 +489,7 @@ async def store_run_decision(
             list(tool_names or []),
             outcome,
             outcome_source,
+            source,
             RUN_DECISION_SCHEMA_VERSION,
             TASK_CLASS_TAXONOMY_VERSION,
             thread_id[:256],
@@ -751,7 +755,7 @@ async def extract_and_store_memories(
     outcome_source: str = "",
     thread_id: str = "",
     user_message: str = "",
-    source: str = "",
+    source: str = "api",
 ) -> int:
     """Extract facts and a decision summary from a conversation; store both.
 
@@ -768,6 +772,7 @@ async def extract_and_store_memories(
     ``org_memories``. All other stateless lookups remain fully suppressed.
     """
     try:
+        source = normalize_telemetry_source(source)
         is_stateless = bool(tool_names_used) and _is_stateless_lookup_run(messages, tool_names_used)
         capture_decision = source == "schedule"
         if is_stateless and not capture_decision:
@@ -794,6 +799,7 @@ async def extract_and_store_memories(
                 outcome_source=outcome_source,
                 thread_id=thread_id,
                 user_message=user_message,
+                source=source,
             )
 
         return stored

@@ -54,7 +54,7 @@ class ToolPolicy(BaseModel):
 
 
 class AgentRunRequest(BaseModel):
-    message: str = Field(..., description="User message to send to the agent", max_length=4096)
+    message: str = Field(..., description="User message to send to the agent", max_length=8000)
     thread_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
         description="Conversation thread ID for multi-turn sessions",

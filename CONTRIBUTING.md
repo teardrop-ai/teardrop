@@ -67,6 +67,9 @@ CI will reject PRs that fail `ruff check .`. Run it before pushing.
 # Run all tests
 pytest
 
+# Run unit + API suites in parallel across CPU cores (fast local feedback)
+pytest tests/unit/ tests/api/ -n auto --dist load -v
+
 # Run with coverage
 pytest tests/unit/ --cov=. --cov-fail-under=0 --cov-report=
 pytest tests/api/ --cov=. --cov-append --cov-report=term-missing
@@ -77,6 +80,12 @@ pytest tests/unit/test_auth.py -v
 
 Coverage must stay above 75% (`fail_under = 75` in `pyproject.toml`). CI
 appends coverage from the unit and API suites before enforcing the threshold.
+
+> **Note:** `pytest-xdist` (`-n auto`) is safe for the mocked `tests/unit` and
+> `tests/api` suites. Do **not** run `tests/integration` with `-n auto`: its
+> session-scoped fixture starts a Postgres container on a fixed port and
+> truncates shared tables, which conflicts across workers. Run integration
+> tests serially with `pytest tests/integration -n 0`.
 
 ---
 

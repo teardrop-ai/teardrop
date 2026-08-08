@@ -134,6 +134,7 @@ Actions:
 - Read only the files named in the plan unless validation disproves the hypothesis.
 - Make the smallest plausible edit first.
 - Always run validation using the project virtual environment commands: `.venv\Scripts\python -m pytest` (Windows) or `.venv/bin/python -m pytest` (Unix). Never use system, global, or conda-based python directly to avoid missing dependencies or LangGraph configuration issues.
+- For broad local validation of the mocked `tests/unit` and `tests/api` suites, prefer the parallel form `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix) for faster feedback. Do **not** use `-n auto` on `tests/integration` — its session-scoped Postgres container uses a fixed port and truncates shared tables, so run integration serially with `-n 0`.
 - After the first substantive edit, run the narrowest available validation before further patching.
 - Preserve Teardrop invariants and existing style.
 

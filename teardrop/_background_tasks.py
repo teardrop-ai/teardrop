@@ -116,16 +116,17 @@ async def _reputation_rollup_iter() -> None:
 
 async def _retention_sweep_iter() -> None:
     result = await retention_sweep_once()
-    if result.total_deleted:
-        logger.info(
-            "Retention sweep: checkpoint_threads=%d scheduled_run_results=%d "
-            "org_tool_execution_events=%d telemetry_run_starts=%d expired_siwe_login_sessions=%d",
-            result.checkpoint_threads,
-            result.scheduled_run_results,
-            result.org_tool_execution_events,
-            result.telemetry_run_starts,
-            result.expired_siwe_login_sessions,
-        )
+    logger.info(
+        "Retention sweep completed: total_deleted=%d checkpoint_threads=%d "
+        "scheduled_run_results=%d org_tool_execution_events=%d "
+        "telemetry_run_starts=%d expired_siwe_login_sessions=%d",
+        result.total_deleted,
+        result.checkpoint_threads,
+        result.scheduled_run_results,
+        result.org_tool_execution_events,
+        result.telemetry_run_starts,
+        result.expired_siwe_login_sessions,
+    )
 
 
 async def _settlement_retry_loop() -> None:

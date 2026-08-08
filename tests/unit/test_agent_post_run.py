@@ -44,7 +44,12 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
         await scheduled[0]
         await scheduled[1]
 
-    tool_events.assert_awaited_once_with("run-1", "org-1", [{"tool_name": "platform/weather", "args_hash": "safe-hash"}])
+    tool_events.assert_awaited_once_with(
+        "run-1",
+        "org-1",
+        [{"tool_name": "platform/weather", "args_hash": "safe-hash"}],
+        source="schedule",
+    )
     memory_extraction.assert_awaited_once_with(
         "org-1",
         "user-1",

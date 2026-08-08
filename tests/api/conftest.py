@@ -22,6 +22,27 @@ def anyio_backend():
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_app_state():
+    """Snapshot and restore the singleton FastAPI app's mutable state.
+
+    Tests assign ``app.state.pool`` and ``app.dependency_overrides`` directly
+    (e.g. tests/api/test_a2a_admin.py). Under pytest-xdist each worker is its
+    own process, but within a worker these mutations can leak across tests.
+    Restoring them per-test keeps parallel runs deterministic.
+    """
+    from teardrop.main import app
+
+    saved_pool = getattr(app.state, "pool", None)
+    saved_overrides = dict(app.dependency_overrides)
+
+    yield
+
+    app.state.pool = saved_pool
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(saved_overrides)
+
+
 @pytest.fixture
 async def api_client(test_settings):
     """AsyncClient for a regular (non-admin) authenticated user.

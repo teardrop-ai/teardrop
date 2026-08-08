@@ -16,7 +16,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 import asyncpg
 from pydantic import BaseModel, Field
@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 
 TOOL_CALL_EVENT_SCHEMA_VERSION = 1
 TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a"]
+_VALID_TELEMETRY_SOURCES = frozenset({"api", "schedule", "trigger", "a2a"})
+
+
+def normalize_telemetry_source(source: str | None) -> TelemetryRunSource:
+    """Return a database-safe run source, defaulting legacy callers to API."""
+    if source not in _VALID_TELEMETRY_SOURCES:
+        return "api"
+    return cast(TelemetryRunSource, source)
+
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -198,6 +207,7 @@ async def record_telemetry_run_started(
     if _pool is None:
         return
     try:
+        source = normalize_telemetry_source(source)
         await _pool.execute(
             """
             INSERT INTO telemetry_run_starts (run_id, org_id, source, started_at)
@@ -281,7 +291,12 @@ async def get_telemetry_completeness(days: int = 7) -> list[TelemetryCompletenes
     return result
 
 
-async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict]) -> None:
+async def record_tool_call_events(
+    run_id: str,
+    org_id: str,
+    entries: list[dict],
+    source: str = "api",
+) -> None:
     """Insert per-tool-call telemetry rows. Logs errors but never raises — this is
     best-effort ML/observability telemetry and must not block the SSE stream.
 
@@ -295,13 +310,14 @@ async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict])
         return
     try:
         pool = _get_pool()
+        source = normalize_telemetry_source(source)
         now = datetime.now(timezone.utc)
         await pool.executemany(
             """
             INSERT INTO tool_call_events
                 (id, run_id, org_id, tool_name, success, error_class, elapsed_ms, billable, args_hash,
-                 schema_version, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 source, schema_version, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             """,
             [
                 (
@@ -314,6 +330,7 @@ async def record_tool_call_events(run_id: str, org_id: str, entries: list[dict])
                     int(entry.get("elapsed_ms", 0)),
                     bool(entry.get("billable", True)),
                     str(entry.get("args_hash", "")),
+                    source,
                     TOOL_CALL_EVENT_SCHEMA_VERSION,
                     now,
                 )

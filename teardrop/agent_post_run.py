@@ -49,13 +49,13 @@ def record_post_run_telemetry(
     outcome_source: str = "",
     thread_id: str = "",
     user_message: str = "",
-    source: str = "",
+    source: str = "api",
 ) -> None:
     """Schedule best-effort ML telemetry without delaying a completed run."""
     if settings.tool_call_event_logging_enabled:
         tool_call_log = usage_data.get("_tool_call_log", [])
         if isinstance(tool_call_log, list) and tool_call_log:
-            asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log))
+            asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log, source=source))
 
     if not settings.memory_enabled or not state_values:
         return

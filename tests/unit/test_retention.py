@@ -127,6 +127,26 @@ class TestCheckpointActivity:
 
 @pytest.mark.anyio
 class TestRetentionWorker:
+    async def test_sweep_logs_zero_deletion_pass(self):
+        from teardrop import _background_tasks
+
+        result = SimpleNamespace(
+            total_deleted=0,
+            checkpoint_threads=0,
+            scheduled_run_results=0,
+            org_tool_execution_events=0,
+            telemetry_run_starts=0,
+            expired_siwe_login_sessions=0,
+        )
+        with (
+            patch.object(_background_tasks, "retention_sweep_once", AsyncMock(return_value=result)),
+            patch.object(_background_tasks.logger, "info") as info,
+        ):
+            await _background_tasks._retention_sweep_iter()
+
+        assert info.call_args.args[0].startswith("Retention sweep completed:")
+        assert info.call_args.args[1] == 0
+
     async def test_loop_uses_monitored_periodic_runner(self):
         from teardrop import _background_tasks
 

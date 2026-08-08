@@ -37,9 +37,9 @@ Each graph invocation records its thread in `checkpoint_thread_activity` before 
 | `telemetry_run_starts` | Run-source completeness denominator; 120 days by default |
 | Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |
 | `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events` | Immutable financial or audit records; never swept |
-| `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; never swept |
+| `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; each row carries `source` (`api`, `schedule`, `trigger`, or `a2a`); never swept |
 
-Retention sweeps are batched, parameterized, and log counts only. Setting a configurable TTL to `0` disables that table's cleanup.
+Retention sweeps are batched, parameterized, and log per-table counts on every pass. The Sentry cron monitor covers failed or stalled sweeps. Setting a configurable TTL to `0` disables that table's cleanup.
 
 ---
 

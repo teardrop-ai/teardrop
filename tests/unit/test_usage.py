@@ -154,7 +154,7 @@ class TestRecordToolCallEvents:
             },
         ]
         with patch.object(usage_module, "_pool", pool):
-            await record_tool_call_events("run-1", "org-1", entries)
+            await record_tool_call_events("run-1", "org-1", entries, source="schedule")
 
         pool.executemany.assert_called_once()
         sql, rows = pool.executemany.call_args.args
@@ -163,9 +163,21 @@ class TestRecordToolCallEvents:
         assert rows[0][1] == "run-1"  # run_id
         assert rows[0][2] == "org-1"  # org_id
         assert rows[0][3] == "get_datetime"  # tool_name
+        assert rows[0][9] == "schedule"  # source
         assert rows[1][4] is False  # success
         assert rows[1][5] == "timeout"  # error_class
         assert rows[0][-2] == usage_module.TOOL_CALL_EVENT_SCHEMA_VERSION
+
+    async def test_unknown_source_defaults_to_api(self):
+        from teardrop.usage import record_tool_call_events
+
+        pool = _pool()
+        pool.executemany = AsyncMock(return_value=None)
+        with patch.object(usage_module, "_pool", pool):
+            await record_tool_call_events("run-1", "org-1", [{"tool_name": "x"}], source="unknown")
+
+        rows = pool.executemany.call_args.args[1]
+        assert rows[0][9] == "api"
 
     async def test_empty_entries_is_noop(self):
         from teardrop.usage import record_tool_call_events
