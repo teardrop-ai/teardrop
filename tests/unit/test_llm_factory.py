@@ -425,6 +425,13 @@ class TestCreateLlmFromConfig:
         create_llm_from_config(config)
         assert "thinking_level" not in mock_cls.call_args[1]
 
+    @patch("agent.llm.ChatGoogleGenerativeAI")
+    def test_google_disabled_reasoning_uses_minimal_thinking_level(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        config = _make_config(provider="google", model="gemini-3.6-flash", reasoning_effort="none")
+        create_llm_from_config(config)
+        assert mock_cls.call_args[1]["thinking_level"] == "minimal"
+
     @patch("agent.llm.ChatOpenAI")
     def test_openrouter_reasoning_effort_does_not_add_provider_pin(self, mock_cls):
         mock_cls.return_value = MagicMock()

@@ -553,9 +553,9 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             failed_provider=_provider,
             failed_model=_model,
             max_tokens=_max_tokens,
-            # Synthesis turns (tool_iterations > 0) bound reasoning effort so the
-            # fallback cannot burn the shared output budget on hidden reasoning.
-            reasoning_effort="low" if tool_iterations > 0 else None,
+            # Synthesis turns assemble existing tool results; avoid spending the
+            # shared output budget on hidden reasoning during fallback.
+            reasoning_effort="none" if tool_iterations > 0 else None,
         )
         if fallback_result is not None:
             fallback_llm, fallback_provider, fallback_model = fallback_result

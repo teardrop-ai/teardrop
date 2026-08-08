@@ -535,7 +535,7 @@ class TestPlannerNode:
             failed_provider="openrouter",
             failed_model=test_settings.agent_model,
             max_tokens=test_settings.agent_synthesis_max_tokens,
-            reasoning_effort="low",
+            reasoning_effort="none",
         )
         fallback_llm.ainvoke.assert_awaited_once()
 
@@ -648,7 +648,7 @@ class TestPlannerNode:
         # Reasoning is bounded so hidden reasoning tokens cannot consume the
         # shared output budget and truncate the visible synthesis (root cause of
         # the mid-JSON truncation regression).
-        assert cfg["reasoning_effort"] == "low"
+        assert cfg["reasoning_effort"] == "none"
 
     async def test_truncated_synthesis_is_not_retried(self, test_settings):
         """A truncated synthesis response flows through untouched.

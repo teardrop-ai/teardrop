@@ -24,5 +24,5 @@ Token-efficient workflow for coding agents on this repo. See [CONTRIBUTING.md](.
 - Only show changed lines in explanations, not unchanged boilerplate.
 
 ## Testing
-- For broad validation of the mocked suites, prefer `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix) for faster feedback.
+- Use `-n auto --dist load` for **any** run of the mocked suites — `tests/unit/`, `tests/api/`, or both together. The parallelism comes from `-n auto` (one worker per core) and applies to each suite on its own, not only when they're combined. For broad validation, run both: `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix).
 - Do **not** use `-n auto` on `tests/integration` — its session-scoped Postgres container uses a fixed port and truncates shared tables. Run integration serially with `-n 0`.

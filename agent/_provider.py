@@ -274,7 +274,7 @@ def _resolve_planner_llm(
                 "model": _model,
                 "api_key": provider_api_key(settings, _provider),
                 "max_tokens": _max_tokens,
-                "reasoning_effort": "low",
+                "reasoning_effort": "none",
                 "temperature": settings.agent_temperature,
                 "timeout_seconds": _timeout,
             }

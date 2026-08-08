@@ -209,7 +209,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         kwargs = {**common, "google_api_key": api_key or None}
         if reasoning_effort:
-            kwargs["thinking_level"] = reasoning_effort
+            kwargs["thinking_level"] = "minimal" if reasoning_effort == "none" else reasoning_effort
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
 
     if provider == "openrouter":
