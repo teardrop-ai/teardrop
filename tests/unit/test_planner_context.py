@@ -460,6 +460,8 @@ async def test_prompt_includes_no_redundant_calculate_guidance():
 
     system_prompt = _captured_system_prompt(mock_llm.ainvoke)
     assert "get_token_price_historical already returns price_change_pct" in system_prompt
+    assert "high_30d, std_30d, and" in system_prompt
+    assert "dca_baseline_90d_partial" in system_prompt
     assert "Do not call calculate" in system_prompt
 
 

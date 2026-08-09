@@ -125,5 +125,27 @@
     "max_cost_usdc": 100000,
     "scorer": "json_shape",
     "rubric": "Calls both market-data tools and emits a visible, compact stablecoin basket comparison rather than completing with empty text. Live values may vary; missing source data must be labeled rather than fabricated."
+  },
+  {
+    "id": "defi.price_history_metrics.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Assess ETH's recent 30-day high and volatility, and compare its current price with the preceding 90-day weekly-buy baseline. Use the historical price tool's precomputed metrics and report any partial-history flag."
+      }
+    ],
+    "expected_tool_calls": ["get_token_price_historical"],
+    "expected_tool_args": {
+      "get_token_price_historical": {
+        "tokens": ["ETH"],
+        "days": 90,
+        "stats_only": true
+      }
+    },
+    "expected_text_contains": ["volatility", "90-day"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 700000,
+    "scorer": "llm_judge",
+    "rubric": "Calls get_token_price_historical with days=90 and stats_only=true, uses high_30d and std_30d directly, compares price_end with dca_baseline_90d, and explicitly reports dca_baseline_90d_partial or missing data without fabricating values."
   }
 ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+from statistics import pstdev
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -107,6 +109,61 @@ class TestSummarize:
         assert s["price_change_pct"] == pytest.approx(-10.0)
         assert s["price_high"] == 110.0
         assert s["price_low"] == 90.0
+
+    def test_computes_extended_metrics_from_daily_closes(self):
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        prices = [[int((start + timedelta(days=i)).timestamp() * 1000), 100.0 if i % 2 == 0 else 110.0] for i in range(100)]
+        summary = _summarize(prices)
+        expected_returns = [
+            current / previous - 1.0
+            for previous, current in zip(
+                [100.0 if i % 2 == 0 else 110.0 for i in range(70, 100)],
+                [100.0 if i % 2 == 0 else 110.0 for i in range(71, 100)],
+            )
+        ]
+
+        assert summary["high_30d"] == 110.0
+        assert summary["std_30d"] == pytest.approx(pstdev(expected_returns))
+        assert summary["dca_baseline_90d"] == 105.0
+        assert summary["dca_baseline_90d_partial"] is False
+
+    def test_high_30d_includes_intraday_observations(self):
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        prices = [[int((start + timedelta(days=i)).timestamp() * 1000), 100.0] for i in range(30)]
+        prices.insert(10, [int((start + timedelta(days=10, hours=12)).timestamp() * 1000), 250.0])
+
+        summary = _summarize(prices)
+
+        assert summary["high_30d"] == 250.0
+
+    def test_dca_excludes_latest_observation_and_flags_partial_history(self):
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        prices = [[int((start + timedelta(days=i)).timestamp() * 1000), 100.0] for i in range(30)]
+        prices[-1][1] = 10_000.0
+
+        summary = _summarize(prices)
+
+        assert summary["dca_baseline_90d"] == 100.0
+        assert summary["dca_baseline_90d_partial"] is True
+
+    def test_invalid_points_are_skipped_and_points_are_sorted(self):
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        prices = [
+            [int((start + timedelta(days=2)).timestamp() * 1000), 2.0],
+            [int(start.timestamp() * 1000), 1.0],
+            [int((start + timedelta(days=1)).timestamp() * 1000), float("nan")],
+            [int((start + timedelta(days=3)).timestamp() * 1000), float("inf")],
+            [int((start + timedelta(days=4)).timestamp() * 1000), -1.0],
+        ]
+
+        summary = _summarize(prices)
+
+        assert summary["price_start"] == 1.0
+        assert summary["price_end"] == 2.0
+        assert summary["daily_prices"] == [
+            {"date": "2024-01-01", "price": 1.0},
+            {"date": "2024-01-03", "price": 2.0},
+        ]
 
 
 class TestGetTokenPriceHistorical:
@@ -248,3 +305,24 @@ class TestGetTokenPriceHistorical:
         assert entry["price_start"] == 2000.0
         assert entry["price_end"] == 2200.0
         assert entry["price_change_pct"] == pytest.approx(10.0)
+        assert "high_30d" in entry
+        assert "std_30d" in entry
+        assert "dca_baseline_90d" in entry
+
+    async def test_stats_only_retains_extended_metrics(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_token_price_historical._historical_cache", {})
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        payload = {"prices": [[int((start + timedelta(days=i)).timestamp() * 1000), 100.0] for i in range(100)]}
+        session = _make_mock_session(200, payload)
+        with patch(
+            "tools.definitions.get_token_price_historical.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            result = await get_token_price_historical(tokens=["ETH"], days=90, stats_only=True)
+
+        entry = result["tokens"][0]
+        assert entry["daily_prices"] == []
+        assert entry["high_30d"] == 100.0
+        assert entry["std_30d"] == 0.0
+        assert entry["dca_baseline_90d"] == 100.0
+        assert entry["dca_baseline_90d_partial"] is False
