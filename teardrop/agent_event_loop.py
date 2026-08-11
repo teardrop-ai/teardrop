@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""LangGraph event-dispatch loop for the agent run endpoint.
+"""Runtime event-dispatch loop for the agent run endpoint.
 
 Extracted verbatim from ``teardrop.routers.agent``'s inner ``_stream``
-generator. ``stream_graph_events`` drives ``graph.astream_events`` and yields
+generator. ``stream_graph_events`` consumes normalized runtime events and yields
 the per-token / per-tool / per-surface SSE frames (RUN_STARTED, USAGE_SUMMARY,
 BILLING_SETTLEMENT, RUN_FINISHED and DONE remain the caller's responsibility).
 
@@ -19,6 +19,7 @@ import json
 import logging
 from typing import Any
 
+from agent.runtime_events import RuntimeEventKind, iter_runtime_events
 from teardrop.agent_stream import (
     _EV_CUSTOM,
     _EV_ERROR,
@@ -59,7 +60,7 @@ async def stream_graph_events(
     payload: dict[str, Any],
     result: dict[str, Any],
 ):
-    """Drive ``graph.astream_events`` and yield SSE frames.
+    """Consume normalized runtime events and yield SSE frames.
 
     On normal completion ``result["terminated"]`` stays ``False``. On
     cancellation or an unhandled exception the matching error frame is yielded,
@@ -71,7 +72,7 @@ async def stream_graph_events(
 
     # Streaming a2ui-block scrubber for planner text tokens. ui_generator
     # also calls an LLM (raw JSON output); we additionally guard by
-    # langgraph_node so its tokens never reach TEXT_MESSAGE_CONTENT.
+    # Runtime adapters suppress non-planner tokens before this boundary.
     _text_filter = _A2UIStreamFilter()
     _last_msg_id: str = run_id
     _planner_attempt_id: str | None = None
@@ -79,26 +80,12 @@ async def stream_graph_events(
     _text_emitted = False
 
     try:
-        async for event in graph.astream_events(
-            initial_state.model_dump(),
-            config=config,
-            version="v2",
-        ):
-            event_name: str = event.get("event", "")
-            event_data: dict[str, Any] = event.get("data", {})
-            node_name: str = event.get("name", "")
-
+        async for event in iter_runtime_events(graph, initial_state, config):
             # --- Text streaming from the planner (LLM tokens) ---
-            if event_name == "on_chat_model_stream":
-                # Only forward tokens originating from the planner node.
-                # The ui_generator node also invokes an LLM whose raw JSON
-                # output must not surface as TEXT_MESSAGE_CONTENT.
-                if event.get("metadata", {}).get("langgraph_node") != "planner":
-                    await asyncio.sleep(0)
-                    continue
-                chunk = event_data.get("chunk")
+            if event.kind == RuntimeEventKind.TOKEN:
+                chunk = event.value
                 if chunk and hasattr(chunk, "content") and chunk.content:
-                    msg_id = event.get("run_id", run_id)
+                    msg_id = event.run_id or run_id
                     # Anthropic returns chunk.content as a list of content
                     # blocks ([{"type": "text", "text": "...", "index": 0}]).
                     # Normalise to a plain string so the SDK delta contract
@@ -124,25 +111,25 @@ async def stream_graph_events(
                             _planner_token_buffer.append((msg_id, clean))
 
             # --- Tool call start ---
-            elif event_name == "on_tool_start":
+            elif event.kind == RuntimeEventKind.TOOL_START:
                 yield _sse_event(
                     _EV_TOOL_CALL_START,
                     {
-                        "tool_call_id": event.get("run_id", ""),
-                        "tool_name": node_name,
-                        "args": event_data.get("input", {}),
+                        "tool_call_id": event.run_id,
+                        "tool_name": event.node,
+                        "args": event.value,
                     },
                 )
 
             # --- Tool call end ---
-            elif event_name == "on_tool_end":
-                tool_call_id = event.get("run_id", "")
-                raw_output = event_data.get("output", "")
+            elif event.kind == RuntimeEventKind.TOOL_END:
+                tool_call_id = event.run_id
+                raw_output = event.value
                 yield _sse_event(
                     _EV_TOOL_CALL_END,
                     {
                         "tool_call_id": tool_call_id,
-                        "tool_name": node_name,
+                        "tool_name": event.node,
                         "output": str(raw_output),
                     },
                 )
@@ -164,15 +151,15 @@ async def stream_graph_events(
                         "name": "TOOL_OUTPUT",
                         "value": {
                             "tool_call_id": tool_call_id,
-                            "tool_name": node_name,
+                            "tool_name": event.node,
                             "data": structured,
                         },
                     },
                 )
 
             # --- Planner finished: conditionally flush buffered text ---
-            elif event_name == "on_chain_end" and node_name == "planner":
-                output = event_data.get("output", {})
+            elif event.kind == RuntimeEventKind.NODE_END and event.node == "planner":
+                output = event.value
                 # task_status may be a TaskStatus(str, Enum) instance.
                 # In Python 3.12, str(TaskStatus.GENERATING_UI) returns
                 # "TaskStatus.GENERATING_UI", not the value "generating_ui",
@@ -273,8 +260,8 @@ async def stream_graph_events(
                     )
 
             # --- Node outputs (state snapshots) ---
-            elif event_name == "on_chain_end" and node_name == "tool_executor":
-                output = event_data.get("output", {})
+            elif event.kind == RuntimeEventKind.NODE_END and event.node == "tool_executor":
+                output = event.value
                 # P1: Explicitly signal timeouts or rate-limits to the client.
                 # This prevents the client from assuming the run finished normally
                 # when the LLM timed out or failed.
@@ -299,8 +286,8 @@ async def stream_graph_events(
                     )
 
             # --- Node outputs (state snapshots) ---
-            elif event_name == "on_chain_end" and node_name == "ui_generator":
-                output = event_data.get("output", {})
+            elif event.kind == RuntimeEventKind.NODE_END and event.node == "ui_generator":
+                output = event.value
                 ui_components = output.get("ui_components", [])
                 if ui_components:
                     yield _sse_event(

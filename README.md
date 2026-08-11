@@ -638,7 +638,7 @@ python tools/mcp_server.py --transport=sse
 
 ## How It Works
 
-Teardrop utilizes a LangGraph state machine paired with a streaming Server-Sent Events (SSE) framework. 
+Teardrop uses portable agent nodes behind a LangGraph routing/checkpoint adapter and emits framework-neutral runtime events to its Server-Sent Events (SSE) layer.
 
 For the complete architectural design, execution flow state diagrams, SSE stream event descriptions, and structured A2UI component schemas, consult the [docs/architecture.md](docs/architecture.md) reference.
 
@@ -683,6 +683,8 @@ wallets.py          # User wallet management, SIWE nonce lifecycle
 agent_wallets.py    # CDP-backed agent wallet provisioning, balance queries, audit
 agent/
   graph.py          # LangGraph StateGraph definition and routing
+  runtime_context.py # Request-scoped, non-checkpointed tool dependencies
+  runtime_events.py # Framework-neutral event adapter
   llm.py            # Multi-provider LLM factory (Anthropic, OpenAI, Google, OpenRouter)
   nodes.py          # planner, tool_executor, ui_generator implementations
   state.py          # AgentState, A2UIComponent, TaskStatus schemas

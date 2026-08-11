@@ -78,7 +78,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `resolve_ens` | Resolves ENS name → address or address → ENS primary name. |
 | `count_text_stats` | Returns character, word, sentence, and paragraph counts for a given text. |
 | `web_search` | Web search via Tavily. Set `TAVILY_API_KEY` to activate. |
-| `get_defi_positions` | Aggregate DeFi positions (expanded Aave v3 reserves, Compound v3 markets, and Uniswap v3 LP) for a wallet on Ethereum or Base. |
+| `get_defi_positions` | Aggregate DeFi positions (expanded Aave v3 reserves, Compound v3 markets, Uniswap v3 LP, and canonical Ethereum Lido stETH/wstETH balances) for a wallet on Ethereum or Base. |
 | `get_dex_quote` | Best Uniswap v3 swap quote across all fee tiers on Ethereum or Base via on-chain QuoterV2. |
 | `get_dex_volume` | DEX landscape activity via DeFiLlama: 24h/7d/30d volume, period changes, and reported global 24h volume share. |
 | `get_liquidation_risk` | Assess DeFi liquidation risk for up to 50 wallets across expanded Aave v3 and Compound v3 coverage. |

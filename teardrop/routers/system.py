@@ -184,7 +184,7 @@ def _build_agent_card_content(
         "protocolVersion": "1.0",
         "name": "Teardrop",
         "description": (
-            "Intelligence beyond the browser. A task-manager agent with LangGraph, AG-UI streaming, and A2UI rendering."
+            "Intelligence beyond the browser. A task-manager agent with AG-UI streaming, MCP tool discovery, and A2UI rendering."
         ),
         "version": APP_VERSION,
         "url": base_url,

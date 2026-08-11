@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import agent.nodes as nodes_module
@@ -22,6 +23,7 @@ from agent.nodes import (
     tool_executor_node,
     ui_generator_node,
 )
+from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState, TaskStatus
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -46,6 +48,12 @@ def _make_ai_message(content: str = "Hello", tool_calls: list | None = None) -> 
     msg.additional_kwargs = {}
     msg.response_metadata = {}
     return msg
+
+
+@pytest.fixture(autouse=True)
+def _empty_agent_run_context():
+    with agent_run_context(AgentRunContext([], {})):
+        yield
 
 
 # ─── _extract_a2ui_from_text ──────────────────────────────────────────────────
@@ -302,7 +310,7 @@ class TestPlannerNode:
             metadata=planner_result["metadata"],
         )
         with patch.object(nodes_module, "_cached_tools_by_name", {"get_b": tool}):
-            executor_result = await tool_executor_node(executor_state, config={"configurable": {}})
+            executor_result = await tool_executor_node(executor_state)
 
         assert executor_result["task_status"] == TaskStatus.PLANNING
         assert executor_result["metadata"]["_usage"]["tool_iterations"] == 2
@@ -360,8 +368,10 @@ class TestPlannerNode:
             captured["org"] = [t.name for t in org_tools]
             return all_tools, platform_tools, org_tools
 
-        state = _make_state(metadata={"_usage": {}, "_org_tools": [_Tool("org_custom_tool")]})
+        org_tool = _Tool("org_custom_tool")
+        state = _make_state(metadata={"_usage": {}})
         with (
+            agent_run_context(AgentRunContext([org_tool], {})),
             patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
             patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
             patch("agent.nodes._apply_tool_shortlist", side_effect=_shortlist_spy) as shortlist_mock,
@@ -390,14 +400,15 @@ class TestPlannerNode:
             captured["messages"] = list(messages)
             return mock_response
 
+        org_tools = [_Tool("org_allowed"), _Tool("org_blocked")]
         state = _make_state(
             metadata={
                 "_usage": {},
-                "_org_tools": [_Tool("org_allowed"), _Tool("org_blocked")],
                 "_excluded_tool_names": ["web_search", "org_blocked"],
             }
         )
         with (
+            agent_run_context(AgentRunContext(org_tools, {})),
             patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
             patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
             patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
@@ -1030,14 +1041,11 @@ class TestPlannerNode:
         assert "calculate" in system_text
 
 
-# ─── P0: Config-based tool resolution ─────────────────────────────────────────
+# ─── Request-scoped tool resolution ───────────────────────────────────────────
 
 
-class TestPlannerNodeConfigTools:
-    """Verify planner_node reads _org_tools from config via config["configurable"]."""
-
-    async def test_planner_node_org_tools_from_config(self, test_settings):
-        """_org_tools from config are bound to the LLM."""
+class TestPlannerNodeRunContextTools:
+    async def test_planner_node_org_tools_from_run_context(self, test_settings):
 
         class _Tool:
             def __init__(self, name: str) -> None:
@@ -1054,8 +1062,9 @@ class TestPlannerNodeConfigTools:
             return llm
 
         state = _make_state(metadata={"_usage": {}})
-        cfg = {"configurable": {"_org_tools": [_Tool("org_custom_tool")]}}
+        context = AgentRunContext([_Tool("org_custom_tool")], {})
         with (
+            agent_run_context(context),
             patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
             patch("agent.nodes.create_llm_from_config", return_value=mock_llm),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
@@ -1063,15 +1072,14 @@ class TestPlannerNodeConfigTools:
             patch.object(nodes_module, "_cached_tools", [_Tool("calculate")]),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
-            result = await planner_node(state, config=cfg)
+            result = await planner_node(state)
 
         assert result["task_status"] == TaskStatus.GENERATING_UI
         bound_names = [t.name for t in captured["tools"]]
         assert "calculate" in bound_names
         assert "org_custom_tool" in bound_names
 
-    async def test_planner_node_org_tools_fallback_to_metadata(self, test_settings):
-        """Without config, falls back to state.metadata._org_tools (backward compat)."""
+    async def test_planner_node_ignores_tools_in_checkpoint_metadata(self, test_settings):
 
         class _Tool:
             def __init__(self, name: str) -> None:
@@ -1101,10 +1109,9 @@ class TestPlannerNodeConfigTools:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         bound_names = [t.name for t in captured["tools"]]
         assert "calculate" in bound_names
-        assert "meta_org_tool" in bound_names
+        assert "meta_org_tool" not in bound_names
 
-    async def test_planner_node_without_config_or_metadata(self, test_settings):
-        """Neither config nor metadata._org_tools — planner runs with platform tools only."""
+    async def test_planner_node_without_org_tools(self, test_settings):
         mock_response = _make_ai_message("OK.", tool_calls=[])
         mock_llm = MagicMock()
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
@@ -1118,16 +1125,13 @@ class TestPlannerNodeConfigTools:
             patch.object(nodes_module, "_cached_tools", []),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
-            result = await planner_node(state, config={"configurable": {}})
+            result = await planner_node(state)
 
         assert result["task_status"] == TaskStatus.GENERATING_UI
 
 
-class TestToolExecutorNodeConfigTools:
-    """Verify tool_executor_node reads _org_tools_by_name from config."""
-
-    async def test_tool_executor_org_tools_from_config(self, test_settings):
-        """_org_tools_by_name from config are used for tool dispatch."""
+class TestToolExecutorNodeRunContextTools:
+    async def test_tool_executor_org_tools_from_run_context(self, test_settings):
         call = {"id": "c1", "name": "org_custom_tool", "args": {"x": 1}}
         last_msg = _make_ai_message(tool_calls=[call])
 
@@ -1138,15 +1142,14 @@ class TestToolExecutorNodeConfigTools:
             messages=[last_msg],
             metadata={"_usage": {}},
         )
-        cfg = {"configurable": {"_org_tools_by_name": {"org_custom_tool": mock_tool}}}
-        with patch.object(nodes_module, "_cached_tools_by_name", {}):
-            result = await tool_executor_node(state, config=cfg)
+        context = AgentRunContext([], {"org_custom_tool": mock_tool})
+        with agent_run_context(context), patch.object(nodes_module, "_cached_tools_by_name", {}):
+            result = await tool_executor_node(state)
 
         mock_tool.ainvoke.assert_called_once()
         assert result["task_status"] == TaskStatus.PLANNING
 
-    async def test_tool_executor_org_tools_fallback_to_metadata(self, test_settings):
-        """Without config, falls back to state.metadata._org_tools_by_name."""
+    async def test_tool_executor_ignores_tools_in_checkpoint_metadata(self, test_settings):
         call = {"id": "c1", "name": "org_custom_tool", "args": {"x": 1}}
         last_msg = _make_ai_message(tool_calls=[call])
 
@@ -1160,11 +1163,11 @@ class TestToolExecutorNodeConfigTools:
         with patch.object(nodes_module, "_cached_tools_by_name", {}):
             result = await tool_executor_node(state)
 
-        mock_tool.ainvoke.assert_called_once()
-        assert result["task_status"] == TaskStatus.PLANNING
+        mock_tool.ainvoke.assert_not_called()
+        assert result["metadata"]["_synthesis_forced"] is True
+        assert "TOOL_UNAVAILABLE" in result["messages"][0].content
 
-    async def test_tool_executor_without_config_or_metadata(self, test_settings):
-        """Neither config nor metadata — platform tools only, no crash."""
+    async def test_tool_executor_without_org_tools(self, test_settings):
         call = {"id": "c1", "name": "calculate", "args": {"expression": "2+2"}}
         last_msg = _make_ai_message(tool_calls=[call])
 
@@ -1173,7 +1176,7 @@ class TestToolExecutorNodeConfigTools:
 
         state = _make_state(messages=[last_msg], metadata={"_usage": {}})
         with patch.object(nodes_module, "_cached_tools_by_name", {"calculate": mock_tool}):
-            result = await tool_executor_node(state, config={"configurable": {}})
+            result = await tool_executor_node(state)
 
         mock_tool.ainvoke.assert_called_once()
         assert result["task_status"] == TaskStatus.PLANNING
@@ -1473,9 +1476,10 @@ class TestToolExecutorNode:
 
         state = _make_state(
             messages=[last_msg],
-            metadata={"_usage": {}, "_org_tools_by_name": {"org__send_invoice": mock_tool}},
+            metadata={"_usage": {}},
         )
-        with patch.object(nodes_module, "_cached_tools_by_name", {}):
+        context = AgentRunContext([], {"org__send_invoice": mock_tool})
+        with agent_run_context(context), patch.object(nodes_module, "_cached_tools_by_name", {}):
             result = await tool_executor_node(state)
 
         usage = result["metadata"]["_usage"]
@@ -1970,16 +1974,11 @@ class TestToolExecutorDedup:
 
         state = _make_state(
             messages=[last_msg],
-            metadata={
-                "_usage": {"custom_tool_calls": 0},
-                "_org_tools_by_name": {
-                    "org__tool_a": mock_tool_a,
-                    "org__tool_b": mock_tool_b,
-                },
-            },
+            metadata={"_usage": {"custom_tool_calls": 0}},
         )
 
-        with patch.object(test_settings, "max_custom_tool_calls_per_run", 1):
+        context = AgentRunContext([], {"org__tool_a": mock_tool_a, "org__tool_b": mock_tool_b})
+        with agent_run_context(context), patch.object(test_settings, "max_custom_tool_calls_per_run", 1):
             result = await tool_executor_node(state)
 
         assert mock_tool_a.ainvoke.call_count + mock_tool_b.ainvoke.call_count == 1

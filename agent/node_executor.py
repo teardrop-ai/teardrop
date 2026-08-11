@@ -36,6 +36,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from agent.node_usage import _covered_defi_keys_from_result
 from agent.planner_ir import resolve_plan_references
+from agent.runtime_context import get_agent_run_context
 from agent.slots import summarize_into_slots
 from agent.state import AgentState, TaskStatus
 from teardrop.config import get_settings
@@ -215,13 +216,7 @@ async def _execute_single_tool_safe(
         }
 
 
-# NOTE: `config` is intentionally left UNANNOTATED. This module uses
-# `from __future__ import annotations` (PEP 563), which stringifies type hints.
-# LangGraph 1.x detects the config-injection parameter by inspecting the raw
-# annotation object; a stringified `RunnableConfig` hint is NOT recognized, so
-# the runtime config (e.g. `_org_tools_by_name`) would silently fail to inject
-# and `config` would stay `None`. Leaving it unannotated forces name-based injection.
-async def tool_executor_node(state: AgentState, config=None) -> dict[str, Any]:
+async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     """Execute all pending tool calls from the latest AIMessage in parallel.
 
     Resolves tool calls from the compiler plan (if active) or from
@@ -263,11 +258,10 @@ async def tool_executor_node(state: AgentState, config=None) -> dict[str, Any]:
         incoming_calls = list(last_msg.tool_calls)
         stage_call_ids = [str(c.get("id", "")) for c in incoming_calls if isinstance(c, dict)]
 
-    _configurable = (config or {}).get("configurable", {})
     platform_tools_by_name = _get_platform_tools_by_name()
     tools_by_name = {
         **platform_tools_by_name,
-        **(_configurable.get("_org_tools_by_name") or state.metadata.get("_org_tools_by_name", {})),
+        **get_agent_run_context().org_tools_by_name,
     }
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
     if excluded_tool_names:

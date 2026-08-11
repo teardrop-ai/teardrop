@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from langchain_core.messages import HumanMessage
 
 from agent.graph import get_graph
+from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState
 from billing import (
     BillingResult,
@@ -279,21 +280,16 @@ async def run_agent_once(
             "emit_ui": emit_ui,
         },
     )
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "_org_tools": ctx.org_lc_tools,
-            "_org_tools_by_name": ctx.org_tools_by_name,
-        }
-    }
+    config = {"configurable": {"thread_id": thread_id}}
     await touch_checkpoint_thread(thread_id)
 
     invoke_result: Any = None
     try:
-        invoke_result = await asyncio.wait_for(
-            ctx.graph.ainvoke(initial_state, config),
-            timeout=timeout_seconds,
-        )
+        with agent_run_context(AgentRunContext(ctx.org_lc_tools, ctx.org_tools_by_name)):
+            invoke_result = await asyncio.wait_for(
+                ctx.graph.ainvoke(initial_state, config),
+                timeout=timeout_seconds,
+            )
     except asyncio.TimeoutError:
         duration_ms = int((time.monotonic() - start_time) * 1000)
         usage_event = await record_failure_usage_event(

@@ -33,6 +33,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState
 from billing import (
     get_byok_platform_fee,
@@ -207,13 +208,7 @@ async def agent_run(
                 "emit_ui": body.emit_ui,
             },
         )
-        config = {
-            "configurable": {
-                "thread_id": scoped_thread_id,
-                "_org_tools": org_lc_tools,
-                "_org_tools_by_name": org_tools_by_name,
-            }
-        }
+        config = {"configurable": {"thread_id": scoped_thread_id}}
         await touch_checkpoint_thread(scoped_thread_id)
 
         # ── Implicit correction detection (fire-and-forget) ──────────────
@@ -228,17 +223,18 @@ async def agent_run(
         # termination (cancellation or unhandled error) via the result dict so
         # post-run usage accounting is skipped exactly as before.
         _loop_result: dict[str, Any] = {}
-        async for _sse in stream_graph_events(
-            graph=graph,
-            initial_state=initial_state,
-            config=config,
-            run_id=run_id,
-            settings=settings,
-            org_id=org_id,
-            payload=payload,
-            result=_loop_result,
-        ):
-            yield _sse
+        with agent_run_context(AgentRunContext(org_lc_tools, org_tools_by_name)):
+            async for _sse in stream_graph_events(
+                graph=graph,
+                initial_state=initial_state,
+                config=config,
+                run_id=run_id,
+                settings=settings,
+                org_id=org_id,
+                payload=payload,
+                result=_loop_result,
+            ):
+                yield _sse
         if _loop_result.get("terminated"):
             if _loop_result.get("termination_reason") == "failed":
                 state_snapshot, usage_data = await fetch_usage_snapshot(

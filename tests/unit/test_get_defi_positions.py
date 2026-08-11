@@ -77,13 +77,41 @@ def patch_multicall3(monkeypatch):
         "uniswap_token_ids": [],
         "uniswap_position_by_id": {},
         "uniswap_default_position": _DEFAULT_POSITION,
+        "lido_steth_balance": 0,
+        "lido_wsteth_balance": 0,
+        "lido_steth_per_wsteth": 10**18,
+        "lido_fail_calls": set(),
     }
 
     async def _stub(w3, calls, *, allow_failure=True, chain_id=None):
         out: list[tuple[bool, bytes]] = []
-        for _target, call_data in calls:
+        for target, call_data in calls:
             selector = call_data[:4]
             payload = call_data[4:]
+            target_cs = Web3.to_checksum_address(target)
+            if selector == gdp._BALANCE_OF_SELECTOR and target_cs in {
+                Web3.to_checksum_address(gdp._LIDO_TOKENS[1]["steth"]),
+                Web3.to_checksum_address(gdp._LIDO_TOKENS[1]["wsteth"]),
+            }:
+                if target_cs == Web3.to_checksum_address(gdp._LIDO_TOKENS[1]["steth"]):
+                    if "steth_balance" in _current["lido_fail_calls"]:
+                        out.append((False, b""))
+                    else:
+                        out.append((True, abi_encode(["uint256"], [_current["lido_steth_balance"]])))
+                elif target_cs == Web3.to_checksum_address(gdp._LIDO_TOKENS[1]["wsteth"]):
+                    if "wsteth_balance" in _current["lido_fail_calls"]:
+                        out.append((False, b""))
+                    else:
+                        out.append((True, abi_encode(["uint256"], [_current["lido_wsteth_balance"]])))
+                else:
+                    out.append((False, b""))
+                continue
+            if selector == gdp._GET_STETH_BY_WSTETH_SELECTOR:
+                if "wsteth_rate" in _current["lido_fail_calls"]:
+                    out.append((False, b""))
+                else:
+                    out.append((True, abi_encode(["uint256"], [_current["lido_steth_per_wsteth"]])))
+                continue
             if selector == gdp._GET_USER_RESERVE_DATA_SELECTOR:
                 out.append((True, _encode_reserve_data(_current["reserve_data"])))
                 continue
@@ -295,6 +323,103 @@ class TestChainValidation:
 
         with pytest.raises(ValueError, match="chain_id"):
             await get_defi_positions(wallet_address=_WALLET, chain_id=137)
+
+
+# ─── Lido staking ───────────────────────────────────────────────────────────
+
+
+class TestLidoStaking:
+    async def test_zero_balances_are_a_valid_snapshot(self, test_settings, monkeypatch):
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        assert result["lido_staking"] == {
+            "steth_balance": "0",
+            "wsteth_balance": "0",
+            "wsteth_steth_equivalent": "0",
+            "total_steth_equivalent": "0",
+        }
+
+    async def test_ethereum_balances_and_conversion_are_exact(self, test_settings, monkeypatch):
+        set_multicall_data(
+            monkeypatch,
+            lido_steth_balance=2 * 10**18,
+            lido_wsteth_balance=3 * 10**18,
+            lido_steth_per_wsteth=1_050_000_000_000_000_000,
+        )
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        assert result["lido_staking"] == {
+            "steth_balance": "2000000000000000000",
+            "wsteth_balance": "3000000000000000000",
+            "wsteth_steth_equivalent": "3150000000000000000",
+            "total_steth_equivalent": "5150000000000000000",
+        }
+        assert not any(error["protocol"] == "lido_staking" for error in result["errors"])
+
+    async def test_base_omits_canonical_lido_position(self, test_settings, monkeypatch):
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=8453: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=8453)
+
+        assert result["lido_staking"] is None
+        assert not any(error["protocol"] == "lido_staking" for error in result["errors"])
+
+    async def test_failed_required_call_is_not_reported_as_zero_balance(self, test_settings, monkeypatch):
+        set_multicall_data(monkeypatch, lido_fail_calls={"wsteth_rate"})
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        assert result["lido_staking"] is None
+        lido_error = next(error for error in result["errors"] if error["protocol"] == "lido_staking")
+        assert "wstETH rate call failed" in lido_error["error"]
+        assert result["aave_v3"] is not None
+
+    async def test_malformed_required_response_is_not_reported_as_zero_balance(self, test_settings, monkeypatch):
+        async def malformed_multicall(w3, calls, *, allow_failure=True, chain_id=None):
+            return [(True, b"\x00"), (True, abi_encode(["uint256"], [0])), (True, abi_encode(["uint256"], [10**18]))]
+
+        monkeypatch.setattr("tools.definitions.get_defi_positions.multicall3_batch", malformed_multicall)
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        assert result["lido_staking"] is None
+        lido_error = next(error for error in result["errors"] if error["protocol"] == "lido_staking")
+        assert "stETH balance call failed" in lido_error["error"]
+
+    async def test_timeout_isolated_from_existing_protocol_results(self, test_settings, monkeypatch):
+        mock_w3 = _build_mock_w3()
+        monkeypatch.setattr("tools.definitions.get_defi_positions.get_web3", lambda chain_id=1: mock_w3)
+        original_wait_for = asyncio.wait_for
+
+        async def wait_for_with_lido_timeout(fut, timeout):
+            coroutine = fut.get_coro() if hasattr(fut, "get_coro") else None
+            if timeout == 45 and getattr(coroutine, "__name__", "") == "_fetch_lido_staking":
+                fut.cancel()
+                try:
+                    await fut
+                except asyncio.CancelledError:
+                    pass
+                raise asyncio.TimeoutError()
+            return await original_wait_for(fut, timeout)
+
+        with patch("asyncio.wait_for", side_effect=wait_for_with_lido_timeout):
+            result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
+
+        assert result["lido_staking"] is None
+        lido_error = next(error for error in result["errors"] if error["protocol"] == "lido_staking")
+        assert lido_error["error"] == "Request timeout (45s)"
+        assert result["aave_v3"] is not None
 
 
 # ─── Aave v3 ─────────────────────────────────────────────────────────────────
@@ -766,10 +891,12 @@ class TestOutputSchema:
         from tools.definitions.get_defi_positions import TOOL
 
         assert TOOL.name == "get_defi_positions"
-        assert TOOL.version == "1.1.0"
+        assert TOOL.version == "1.2.0"
         assert "aave" in TOOL.tags
         assert "compound" in TOOL.tags
         assert "uniswap" in TOOL.tags
+        assert "lido" in TOOL.tags
+        assert "staking" in TOOL.tags
 
     def test_registry_includes_verified_expansions(self):
         import tools.definitions.get_defi_positions as gdp

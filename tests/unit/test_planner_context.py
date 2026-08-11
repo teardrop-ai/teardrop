@@ -21,6 +21,7 @@ import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.nodes import planner_node
+from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -42,6 +43,12 @@ def _make_state(**metadata_overrides) -> AgentState:
         messages=[HumanMessage(content="What is the current BTC price?")],
         metadata=metadata,
     )
+
+
+@pytest.fixture(autouse=True)
+def _empty_agent_run_context():
+    with agent_run_context(AgentRunContext([], {})):
+        yield
 
 
 def _make_ai_response(content: str = "The current BTC price is...") -> MagicMock:

@@ -90,6 +90,7 @@ from agent.node_usage import (
     _covered_defi_keys_from_result,  # noqa: F401  (re-exported for backward compatibility)
 )
 from agent.planner_ir import parse_plan_from_text
+from agent.runtime_context import get_agent_run_context
 from agent.state import AgentState, TaskStatus
 from teardrop.config import get_settings
 from teardrop.llm_config import is_provider_cooled_down, record_provider_failure
@@ -339,16 +340,10 @@ def _resolve_planner_llm(
     )
 
 
-# NOTE: `config` is intentionally left UNANNOTATED. This module uses
-# `from __future__ import annotations` (PEP 563), which stringifies type hints.
-# LangGraph 1.x detects the config-injection parameter by inspecting the raw
-# annotation object; a stringified `RunnableConfig` hint is NOT recognized, so
-# the runtime config (e.g. `_org_tools`) would silently fail to be injected and
-# `config` would stay `None`. Leaving it unannotated forces name-based injection.
-async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
+async def planner_node(state: AgentState) -> dict[str, Any]:
     """Run the LangGraph planner stage for one turn.
 
-    Reads ``config.configurable._org_tools`` (fallback ``state.metadata._org_tools``), ``_llm_config``, ``_usage``,
+    Reads request-scoped org tools plus ``_llm_config``, ``_usage``,
     ``_excluded_tool_names``, ``_synthesis_forced`` and ``state.plan`` (compiler mode).
     Resolves and invokes the LLM (with provider cooldown fallback if not BYOK).
     Binds all tools for non-synthesis turns; skips bind_tools on forced synthesis
@@ -380,8 +375,7 @@ async def planner_node(state: AgentState, config=None) -> dict[str, Any]:
             str(state.metadata.get("thread_id", "")),
         )
     tools = _get_cached_tools()
-    _configurable = (config or {}).get("configurable", {})
-    org_tools = _configurable.get("_org_tools") or state.metadata.get("_org_tools", [])
+    org_tools = list(get_agent_run_context().org_tools)
     all_tools = tools + org_tools
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
     server_excluded = frozenset()

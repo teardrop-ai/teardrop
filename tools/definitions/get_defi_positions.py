@@ -95,6 +95,9 @@ _USER_COLLATERAL_SELECTOR: bytes = bytes(Web3.keccak(text="userCollateral(addres
 _GET_ASSET_INFO_SELECTOR: bytes = bytes(Web3.keccak(text="getAssetInfo(uint8)"))[:4]
 _TOKEN_OF_OWNER_BY_INDEX_SELECTOR: bytes = bytes(Web3.keccak(text="tokenOfOwnerByIndex(address,uint256)"))[:4]
 _POSITIONS_SELECTOR: bytes = bytes(Web3.keccak(text="positions(uint256)"))[:4]
+_BALANCE_OF_SELECTOR: bytes = bytes(Web3.keccak(text="balanceOf(address)"))[:4]
+_GET_STETH_BY_WSTETH_SELECTOR: bytes = bytes(Web3.keccak(text="getStETHByWstETH(uint256)"))[:4]
+_WSTETH_SCALE = 10**18
 
 # Compound v3 (Comet) per-market metadata.
 # Last reviewed: May 2026.
@@ -206,6 +209,13 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
 _UNISWAP_V3_NFPM: dict[int, str] = {
     1: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
     8453: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+}
+
+_LIDO_TOKENS: dict[int, dict[str, str]] = {
+    1: {
+        "steth": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+        "wsteth": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+    },
 }
 
 # ─── Minimal view-only ABIs ──────────────────────────────────────────────────
@@ -418,6 +428,13 @@ class UniswapV3Position(BaseModel):
     status: str  # "active" | "closed"
 
 
+class LidoStakingPosition(BaseModel):
+    steth_balance: str
+    wsteth_balance: str
+    wsteth_steth_equivalent: str
+    total_steth_equivalent: str
+
+
 class ProtocolErrorInfo(BaseModel):
     protocol: str
     error: str
@@ -430,6 +447,7 @@ class GetDefiPositionsOutput(BaseModel):
     aave_v3: AavePosition | None = None
     compound_v3: list[CompoundMarketPosition] = Field(default_factory=list)
     uniswap_v3: list[UniswapV3Position] = Field(default_factory=list)
+    lido_staking: LidoStakingPosition | None = None
     errors: list[ProtocolErrorInfo] = Field(default_factory=list)
     note: str = (
         "On-chain position snapshot at data_block_number. "
@@ -441,9 +459,13 @@ class GetDefiPositionsOutput(BaseModel):
         "Report them as 'unrecognized token (0x…)' in the final answer and move on. "
         "Uniswap v3 liquidity is returned raw (no underlying token valuation in v1); "
         "tokensOwed0/1 are uncollected fees only. "
+        "Lido staking contains canonical Ethereum stETH/wstETH balances and a current wstETH-to-stETH "
+        "equivalent in raw integer units; it does not include APR, rewards accounting, validator positions, "
+        "or withdrawal queue status. "
+        "Lido staking is null on Base because its wstETH representation there is bridged. "
         "If a protocol is missing (e.g., aave_v3 is null) and appears in errors, "
         "its risk could not be verified from this snapshot and must not be treated as no debt. "
-        "Does not include staking rewards, COMP accruals, or unlisted protocols."
+        "Does not include COMP accruals or unlisted protocols."
     )
 
 
@@ -775,6 +797,45 @@ async def _fetch_uniswap_v3(w3: Any, wallet: str, chain_id: int) -> list[Uniswap
     return positions
 
 
+async def _fetch_lido_staking(w3: Any, wallet: str, chain_id: int) -> LidoStakingPosition | None:
+    """Fetch canonical Ethereum Lido token balances and their stETH equivalent."""
+    tokens = _LIDO_TOKENS.get(chain_id)
+    if tokens is None:
+        return None
+
+    steth_addr = Web3.to_checksum_address(tokens["steth"])
+    wsteth_addr = Web3.to_checksum_address(tokens["wsteth"])
+    calls: list[tuple[str, bytes]] = [
+        (steth_addr, _BALANCE_OF_SELECTOR + abi_encode(["address"], [wallet])),
+        (wsteth_addr, _BALANCE_OF_SELECTOR + abi_encode(["address"], [wallet])),
+        (wsteth_addr, _GET_STETH_BY_WSTETH_SELECTOR + abi_encode(["uint256"], [_WSTETH_SCALE])),
+    ]
+    results = await multicall3_batch(w3, calls, chain_id=chain_id)
+    if len(results) != len(calls):
+        raise RuntimeError("Lido snapshot returned incomplete multicall results")
+
+    decoded: list[int] = []
+    for label, (success, return_data) in zip(("stETH balance", "wstETH balance", "wstETH rate"), results):
+        if not success or len(return_data) != 32:
+            raise RuntimeError(f"Lido {label} call failed")
+        try:
+            decoded.append(int(abi_decode(["uint256"], return_data)[0]))
+        except Exception as exc:
+            raise RuntimeError(f"Lido {label} response decode failed") from exc
+
+    steth_balance, wsteth_balance, steth_per_wsteth = decoded
+    if steth_per_wsteth <= 0:
+        raise RuntimeError("Lido wstETH conversion rate is invalid")
+
+    wsteth_steth_equivalent = wsteth_balance * steth_per_wsteth // _WSTETH_SCALE
+    return LidoStakingPosition(
+        steth_balance=str(steth_balance),
+        wsteth_balance=str(wsteth_balance),
+        wsteth_steth_equivalent=str(wsteth_steth_equivalent),
+        total_steth_equivalent=str(steth_balance + wsteth_steth_equivalent),
+    )
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 
@@ -794,16 +855,18 @@ async def get_defi_positions(
     wallet = Web3.to_checksum_address(wallet_address)
     w3 = get_web3(chain_id)
 
-    # Launch all three protocol pipelines + block number in parallel
+    # Launch all protocol pipelines + block number in parallel
     aave_task = asyncio.create_task(_fetch_aave_v3(w3, wallet, chain_id))
     compound_task = asyncio.create_task(_fetch_compound_v3(w3, wallet, chain_id))
     uniswap_task = asyncio.create_task(_fetch_uniswap_v3(w3, wallet, chain_id))
+    lido_task = asyncio.create_task(_fetch_lido_staking(w3, wallet, chain_id))
     block_task = asyncio.create_task(rpc_call(lambda: w3.eth.block_number, chain_id=chain_id))
 
     errors: list[ProtocolErrorInfo] = []
     aave_result: AavePosition | None = None
     compound_result: list[CompoundMarketPosition] = []
     uniswap_result: list[UniswapV3Position] = []
+    lido_result: LidoStakingPosition | None = None
 
     try:
         aave_result = await asyncio.wait_for(aave_task, timeout=45)
@@ -833,6 +896,15 @@ async def get_defi_positions(
         errors.append(ProtocolErrorInfo(protocol="uniswap_v3", error=str(exc)[:200]))
 
     try:
+        lido_result = await asyncio.wait_for(lido_task, timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("Lido staking fetch timed out after 45s")
+        errors.append(ProtocolErrorInfo(protocol="lido_staking", error="Request timeout (45s)"))
+    except Exception as exc:
+        logger.warning("Lido staking fetch failed: %s", exc)
+        errors.append(ProtocolErrorInfo(protocol="lido_staking", error=str(exc)[:200]))
+
+    try:
         block_number = int(await block_task)
     except Exception as exc:
         logger.warning("block_number fetch failed: %s", exc)
@@ -845,6 +917,7 @@ async def get_defi_positions(
         aave_v3=aave_result,
         compound_v3=compound_result,
         uniswap_v3=uniswap_result,
+        lido_staking=lido_result,
         errors=errors,
     )
     return output.model_dump()
@@ -854,16 +927,17 @@ async def get_defi_positions(
 
 TOOL = ToolDefinition(
     name="get_defi_positions",
-    version="1.1.0",
+    version="1.2.0",
     description=(
-        "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP on "
+        "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, Uniswap v3 LP, and canonical "
         "Ethereum (chain_id=1) or Base (chain_id=8453). Returns Aave aggregate account health "
         "(collateral, debt, health factor, LTV) with per-reserve breakdown for major assets, "
         "Compound v3 Comet market positions (supply, borrow, per-asset collateral, liquidation flag), "
         "and Uniswap v3 LP positions by token ID (token pair, fee tier, tick range, liquidity, "
-        "uncollected fees). Per-protocol failures are isolated — other protocols still return."
+        "uncollected fees). On Ethereum, also returns canonical Lido stETH/wstETH balances and the current "
+        "wstETH-to-stETH equivalent. Per-protocol failures are isolated — other protocols still return."
     ),
-    tags=["web3", "defi", "aave", "compound", "uniswap", "portfolio"],
+    tags=["web3", "defi", "aave", "compound", "uniswap", "lido", "staking", "portfolio"],
     input_schema=GetDefiPositionsInput,
     output_schema=GetDefiPositionsOutput,
     implementation=get_defi_positions,

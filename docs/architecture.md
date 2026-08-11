@@ -1,12 +1,12 @@
 # Architecture Reference
 
-Details explaining Teardrop's internal agent runtime, LangGraph state machine flow, AG-UI SSE streaming layer, and UI component generation standard.
+Details explaining Teardrop's portable agent nodes, current LangGraph adapter, AG-UI SSE streaming layer, and UI component generation standard.
 
 ---
 
 ## Agent Graph (`agent/graph.py`)
 
-The agent runs as a LangGraph state machine with the following execution flow:
+The current runtime adapter uses LangGraph for routing and checkpointing with the following execution flow:
 
 ```mermaid
 graph TD
@@ -24,6 +24,8 @@ graph TD
 When `AGENT_COMPILER_MODE_ENABLED=true` is set, planner turns may emit an optional staged `<plan>{...}</plan>` block. The executor then processes staged calls with dependency-aware argument resolution while keeping the overall graph topology stable.
 
 Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-backed LangGraph checkpointer).
+
+Planner and executor nodes receive executable org, MCP, and marketplace tool wrappers through `agent/runtime_context.py`. This request-scoped context is isolated across concurrent tasks and is never serialized into checkpoints. `agent/runtime_events.py` translates LangGraph events into framework-neutral runtime events before the SSE layer consumes them; LangGraph-specific metadata does not cross that boundary.
 
 ### Retention And Data Tiers
 
