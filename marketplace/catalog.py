@@ -129,9 +129,12 @@ async def get_marketplace_catalog(
         return f"${len(params)}"
 
     search_ref: str | None = None
+    tag_search_ref: str | None = None
     if q is not None:
         escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         search_ref = _add_param(f"%{escaped_q}%")
+        tag_terms = [term.casefold() for term in q.split() if term][:20]
+        tag_search_ref = _add_param(tag_terms)
 
     include_community = org_slug != PLATFORM_SLUG
     include_platform = org_slug is None or org_slug == PLATFORM_SLUG
@@ -150,6 +153,7 @@ async def get_marketplace_catalog(
                 f"t.name ILIKE {search_ref} ESCAPE '\\' OR "
                 f"t.description ILIKE {search_ref} ESCAPE '\\' OR "
                 f"t.marketplace_description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"t.tags && {tag_search_ref}::TEXT[] OR "
                 f"o.name ILIKE {search_ref} ESCAPE '\\' OR "
                 f"o.slug ILIKE {search_ref} ESCAPE '\\'"
                 ")"
@@ -194,6 +198,8 @@ async def get_marketplace_catalog(
                 f"p.tool_name ILIKE {search_ref} ESCAPE '\\' OR "
                 f"p.display_name ILIKE {search_ref} ESCAPE '\\' OR "
                 f"p.description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"p.marketplace_description ILIKE {search_ref} ESCAPE '\\' OR "
+                f"p.tags && {tag_search_ref}::TEXT[] OR "
                 f"'Teardrop' ILIKE {search_ref} ESCAPE '\\' OR "
                 f"'{PLATFORM_SLUG}' ILIKE {search_ref} ESCAPE '\\'"
                 ")"
@@ -207,7 +213,7 @@ async def get_marketplace_catalog(
                 ('{PLATFORM_SLUG}/' || p.tool_name) AS qualified_name,
                 p.display_name AS display_name,
                 p.description AS description,
-                p.description AS marketplace_description,
+                COALESCE(NULLIF(p.marketplace_description, ''), p.description) AS marketplace_description,
                 '{{}}'::JSONB AS input_schema,
                 p.base_price_usdc AS base_price_usdc,
                 'Teardrop' AS author_org_name,

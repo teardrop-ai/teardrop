@@ -259,6 +259,15 @@ TOOL = ToolDefinition(
         "separately after this is redundant."
     ),
     tags=["web3", "ethereum", "portfolio", "balance", "defi"],
+    use_when=(
+        "Choose when you need a wallet's overall token exposure and USD value on Ethereum "
+        "or Base in one call. Call once per chain for a cross-chain comparison."
+    ),
+    limitations=(
+        "Tracks a fixed set of major assets per chain, not arbitrary tokens. Returns up to "
+        "20 holdings. Native ETH is included, so calling get_eth_balance separately is redundant."
+    ),
+    alternatives=["get_eth_balance", "get_token_price", "get_defi_positions"],
     input_schema=GetWalletPortfolioInput,
     output_schema=GetWalletPortfolioOutput,
     implementation=get_wallet_portfolio,

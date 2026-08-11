@@ -138,6 +138,15 @@ TOOL = ToolDefinition(
         "Set topic='news' for recent headlines or 'finance' for market information."
     ),
     tags=["search", "web", "realtime"],
+    use_when=(
+        "Choose when the task needs current, external, or factual information not available "
+        "from on-chain or local data — e.g. news, prices, documentation, or fact-checking."
+    ),
+    limitations=(
+        "Returns web snippets, not raw page bodies; results depend on Tavily coverage. "
+        "Advanced depth costs more. Not a substitute for on-chain tools like get_token_price."
+    ),
+    alternatives=["get_token_price", "http_fetch"],
     input_schema=WebSearchInput,
     output_schema=WebSearchOutput,
     implementation=web_search,

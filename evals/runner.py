@@ -23,6 +23,7 @@ class EvalTask(BaseModel):
     id: str
     messages: list[EvalMessage]
     expected_tool_calls: list[str] = Field(default_factory=list)
+    forbidden_tool_calls: list[str] = Field(default_factory=list)
     expected_tool_args: dict[str, dict[str, Any]] = Field(default_factory=dict)
     expected_text_contains: list[str] = Field(default_factory=list)
     expected_text_not_contains: list[str] = Field(default_factory=list)
@@ -155,11 +156,12 @@ async def run_suite(
         if task.expected_tool_calls:
             used = set(artifact.tool_names_used)
             tool_call_ok = all(name in used for name in task.expected_tool_calls)
+        forbidden_tool_ok = not any(name in artifact.tool_names_used for name in task.forbidden_tool_calls)
         tool_args_ok = _tool_args_match(task.expected_tool_args, artifact.tool_call_args)
 
         duration_ok = task.max_duration_ms <= 0 or artifact.duration_ms <= task.max_duration_ms
         cost_ok = task.max_cost_usdc <= 0 or artifact.cost_usdc <= task.max_cost_usdc
-        passed = score >= 0.8 and tool_call_ok and tool_args_ok and duration_ok and cost_ok
+        passed = score >= 0.8 and tool_call_ok and forbidden_tool_ok and tool_args_ok and duration_ok and cost_ok
 
         results.append(
             EvalTaskResult(

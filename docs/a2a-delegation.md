@@ -13,6 +13,8 @@ The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`
 
 The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
 
+Each `ToolDefinition` may also carry agent-commerce guidance fields — `use_when`, `limitations`, and `alternatives` — that are emitted on the A2A skills/tools sections and the MCP server card when present. These help external agents decide when to select a tool, what constraints apply, and which related tools to consider instead. They are additive and omitted when empty, so existing consumers see no change.
+
 Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`.
 
 ---

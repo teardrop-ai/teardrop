@@ -42,6 +42,18 @@ class ToolDefinition(BaseModel):
     version: str = Field(..., description="Semver string, e.g. '1.0.0'")
     description: str = Field(..., description="Human/agent-readable description")
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
+    use_when: str = Field(
+        default="",
+        description="Agent-commerce guidance: when an agent should choose this tool.",
+    )
+    limitations: str = Field(
+        default="",
+        description="Agent-commerce guidance: known constraints, exclusions, or caveats.",
+    )
+    alternatives: list[str] = Field(
+        default_factory=list,
+        description="Agent-commerce guidance: related tool names an agent may consider instead.",
+    )
     input_schema: Any = Field(..., description="Pydantic BaseModel class for input validation")
     output_schema: Any = Field(default=None, description="Optional Pydantic BaseModel class for output validation")
     annotations: dict[str, Any] | None = Field(default=None, description="Optional MCP tool annotations (readOnlyHint, etc.)")
@@ -189,6 +201,12 @@ class ToolRegistry:
                 "tags": tool.tags,
                 "version": tool.version,
             }
+            if tool.use_when:
+                skill["use_when"] = tool.use_when
+            if tool.limitations:
+                skill["limitations"] = tool.limitations
+            if tool.alternatives:
+                skill["alternatives"] = list(tool.alternatives)
             if tool.deprecated:
                 skill["deprecated"] = True
                 if tool.superseded_by:
@@ -219,6 +237,12 @@ class ToolRegistry:
                 "tags": tool.tags,
                 "input_schema": tool.input_schema.model_json_schema(),
             }
+            if tool.use_when:
+                entry["use_when"] = tool.use_when
+            if tool.limitations:
+                entry["limitations"] = tool.limitations
+            if tool.alternatives:
+                entry["alternatives"] = list(tool.alternatives)
             if tool.output_schema is not None:
                 if isinstance(tool.output_schema, dict):
                     entry["output_schema"] = tool.output_schema
@@ -249,6 +273,12 @@ class ToolRegistry:
                 "inputSchema": tool.input_schema.model_json_schema(),
                 "annotations": tool.annotations or {"readOnlyHint": True},
             }
+            if tool.use_when:
+                entry["use_when"] = tool.use_when
+            if tool.limitations:
+                entry["limitations"] = tool.limitations
+            if tool.alternatives:
+                entry["alternatives"] = list(tool.alternatives)
             if tool.output_schema is not None:
                 if isinstance(tool.output_schema, dict):
                     entry["outputSchema"] = tool.output_schema

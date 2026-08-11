@@ -406,6 +406,15 @@ TOOL = ToolDefinition(
         "block_number; do not cache."
     ),
     tags=["web3", "defi", "uniswap", "dex", "quote", "trading"],
+    use_when=(
+        "Choose when you need a best-execution Uniswap v3 swap quote on Ethereum or Base "
+        "before executing a trade — e.g. price impact, output amount, or route selection."
+    ),
+    limitations=(
+        "Quotes raw uint256 amounts with EIP-55 checksummed addresses only; native ETH is "
+        "not quoted directly (pass WETH). Point-in-time at the returned block_number — do not cache."
+    ),
+    alternatives=["get_token_price", "get_dex_volume"],
     input_schema=GetDexQuoteInput,
     output_schema=GetDexQuoteOutput,
     implementation=get_dex_quote,

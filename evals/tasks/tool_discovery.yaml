@@ -1,0 +1,38 @@
+[
+  {
+    "id": "tool_discovery.wallet_risk.001",
+    "messages": [{"role": "user", "content": "Assess liquidation risk for wallet 0x0000000000000000000000000000000000000000 on Base if ETH drops sharply. Use the most specific on-chain risk tool."}],
+    "expected_tool_calls": ["get_liquidation_risk"],
+    "forbidden_tool_calls": ["get_wallet_portfolio", "get_token_price"],
+    "expected_text_contains": ["liquidation", "risk"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_liquidation_risk (the intent-specific tool) rather than a generic balance or price tool. It should not call get_wallet_portfolio or get_token_price as a substitute for risk assessment."
+  },
+  {
+    "id": "tool_discovery.swap_quote.001",
+    "messages": [{"role": "user", "content": "I want to swap 1 ETH for USDC on Base. Use token_in 0x4200000000000000000000000000000000000006, token_out 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, and amount_in 1000000000000000000. Give me the best-execution quote before I trade."}],
+    "expected_tool_calls": ["get_dex_quote"],
+    "forbidden_tool_calls": ["get_token_price"],
+    "expected_text_contains": ["quote", "USDC", "output"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_dex_quote for a best-execution swap quote. It should not use get_token_price as a substitute for an executable quote."
+  },
+  {
+    "id": "tool_discovery.portfolio.001",
+    "messages": [{"role": "user", "content": "Show me the overall token exposure and USD value of wallet 0x0000000000000000000000000000000000000000 on Base in one call."}],
+    "expected_tool_calls": ["get_wallet_portfolio"],
+    "forbidden_tool_calls": ["get_eth_balance"],
+    "expected_text_contains": ["portfolio", "USD", "holdings"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_wallet_portfolio for aggregated exposure in one call, and should not redundantly call get_eth_balance afterward since native ETH is already included."
+  }
+]

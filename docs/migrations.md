@@ -98,6 +98,7 @@ python -m migrations.runner
 | `082_deepseek_v4_flash_0731_openrouter_us_pricing.sql` | Seeds DeepSeek V4 Flash 0731 OpenRouter pricing |
 | `083_defi_landscape_tools.sql` | Adds `get_chain_metrics` and `get_dex_volume` to the marketplace platform catalog at $0.003 each |
 | `084_telemetry_source_propagation.sql` | Propagates canonical run source into tool-call and decision ML telemetry; backfills matched legacy rows |
+| `085_agent_commerce_discoverability.sql` | Adds commerce-facing `marketplace_description` and search `tags` to platform tools, and `tags` to org tools; seeds flagship descriptions/tags |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

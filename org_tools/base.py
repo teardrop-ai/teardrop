@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 import asyncpg
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.audit import insert_event_row
 from shared.db_pool import bind_pool, require_pool, unbind_pool
@@ -31,12 +32,32 @@ logger = logging.getLogger(__name__)
 
 _MAX_RESPONSE_BYTES = 50 * 1024  # 50 KB webhook response cap
 _POOL_SCOPE = "org_tools"
+_MAX_MARKETPLACE_TAGS = 20
+_MARKETPLACE_TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9 _-]{0,49}$")
 _ORG_TOOL_EVENT_INSERT_SQL = (
     "INSERT INTO org_tool_events"
     " (id, org_id, tool_id, tool_name, event_type, actor_id, detail)"
     " VALUES ($1, $2, $3, $4, $5, $6, $7)"
 )
 _VALID_MARKETPLACE_CATEGORIES = {"", "defi", "search", "data", "communication", "utility"}
+
+
+def normalize_marketplace_tags(tags: list[str] | None) -> list[str]:
+    """Normalize bounded public search tags while preserving first-seen order."""
+    if tags is None:
+        return []
+    if len(tags) > _MAX_MARKETPLACE_TAGS:
+        raise ValueError(f"At most {_MAX_MARKETPLACE_TAGS} marketplace tags are allowed")
+
+    normalized: list[str] = []
+    for raw_tag in tags:
+        tag = raw_tag.strip().lower()
+        if not _MARKETPLACE_TAG_PATTERN.fullmatch(tag):
+            raise ValueError("Marketplace tags must use lowercase letters, digits, spaces, underscores, or hyphens")
+        if tag not in normalized:
+            normalized.append(tag)
+    return normalized
+
 
 # ─── Models ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +81,7 @@ class OrgTool(BaseModel):
     publish_as_mcp: bool = False
     marketplace_description: str = ""
     category: str = ""
+    tags: list[str] = Field(default_factory=list)
     base_price_usdc: int = 0
     schema_hash: str = ""
     last_schema_changed_at: datetime | None = None
@@ -167,6 +189,7 @@ def _row_to_org_tool(row: asyncpg.Record) -> OrgTool:
         publish_as_mcp=row.get("publish_as_mcp", False),
         marketplace_description=row.get("marketplace_description", ""),
         category=row.get("category", ""),
+        tags=row.get("tags", []) or [],
         base_price_usdc=row.get("base_price_usdc", 0),
         schema_hash=row.get("schema_hash") or "",
         last_schema_changed_at=row.get("last_schema_changed_at"),

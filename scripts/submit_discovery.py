@@ -124,6 +124,21 @@ async def _fetch_text(client: httpx.AsyncClient, url: str) -> str:
     return response.text
 
 
+def validate_reputation(reputation: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(reputation, dict):
+        return ["reputation.json must be a JSON object."]
+    for field_name in ("schema_version", "generated_at", "methodology_url", "tools"):
+        if field_name not in reputation:
+            errors.append(f"reputation.json missing required field: {field_name}")
+    tools = reputation.get("tools")
+    if tools is not None and not isinstance(tools, list):
+        errors.append("reputation.json tools must be a list.")
+    elif tools is not None and any(not isinstance(tool, dict) for tool in tools):
+        errors.append("reputation.json tools entries must be objects.")
+    return errors
+
+
 def build_submission_payload(
     *,
     base_url: str,
@@ -136,6 +151,7 @@ def build_submission_payload(
         "agent_card_url": f"{base_url}/.well-known/agent-card.json",
         "legacy_agent_card_url": f"{base_url}/.well-known/agent.json",
         "mcp_server_card_url": f"{base_url}/.well-known/mcp/server-card.json",
+        "reputation_url": f"{base_url}/.well-known/reputation.json",
         "llms_url": f"{base_url}/llms.txt",
         "agent_card": agent_card,
         "mcp_server_card": mcp_server_card,
@@ -170,6 +186,7 @@ async def run_validation(
     safe_registry_urls = await validate_registry_urls(registry_urls)
     agent_card_url = f"{base_url}/.well-known/agent-card.json"
     mcp_server_card_url = f"{base_url}/.well-known/mcp/server-card.json"
+    reputation_url = f"{base_url}/.well-known/reputation.json"
     llms_url = f"{base_url}/llms.txt"
 
     async with httpx.AsyncClient(
@@ -179,10 +196,12 @@ async def run_validation(
     ) as client:
         agent_card = await _fetch_json(client, agent_card_url)
         mcp_server_card = await _fetch_json(client, mcp_server_card_url)
+        reputation = await _fetch_json(client, reputation_url)
         llms_txt = await _fetch_text(client, llms_url)
 
         errors = [
             *validate_agent_card(agent_card),
+            *validate_reputation(reputation),
             *validate_llms_txt(llms_txt),
         ]
         if errors:

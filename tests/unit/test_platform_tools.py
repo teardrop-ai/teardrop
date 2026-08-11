@@ -199,8 +199,11 @@ class TestGetMarketplaceCatalogSearch:
         args = mock_pool.fetch.call_args.args[1:]
         assert "t.name ILIKE $1" in sql
         assert "t.marketplace_description ILIKE $1" in sql
+        assert "t.tags && $2::TEXT[]" in sql
         assert "o.slug ILIKE $1" in sql
         assert "p.display_name ILIKE $1" in sql
+        assert "p.marketplace_description ILIKE $1" in sql
+        assert "p.tags && $2::TEXT[]" in sql
         assert "'Teardrop' ILIKE $1" in sql
         assert args[0] == "%GPT%"
 
@@ -214,11 +217,11 @@ class TestGetMarketplaceCatalogSearch:
 
         sql = mock_pool.fetch.call_args.args[0]
         args = mock_pool.fetch.call_args.args[1:]
-        assert "o.slug = $2" in sql
+        assert "o.slug = $3" in sql
         assert "t.name ILIKE $1" in sql
         assert "FROM marketplace_platform_tools" not in sql
         assert args[0] == "%GPT%"
-        assert args[1] == "acme"
+        assert args[2] == "acme"
 
     @pytest.mark.anyio
     async def test_catalog_search_escapes_like_wildcards(self, monkeypatch):

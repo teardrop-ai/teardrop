@@ -5,6 +5,23 @@ from pathlib import Path
 from evals.runner import RunArtifact, load_tasks, run_suite
 
 
+async def test_forbidden_tool_calls_fail_task():
+    tasks = load_tasks(Path(__file__).resolve().parents[2] / "evals" / "tasks" / "tool_discovery.yaml")
+    task = next(task for task in tasks if task.id == "tool_discovery.portfolio.001")
+
+    async def _fake_runner(_task):
+        return RunArtifact(
+            text="Portfolio holdings and USD value are available.",
+            tool_names_used=["get_wallet_portfolio", "get_eth_balance"],
+            duration_ms=100,
+        )
+
+    report = await run_suite(suite_name="tool_discovery", tasks=[task], run_task=_fake_runner)
+
+    assert report.total_tasks == 1
+    assert report.passed_tasks == 0
+
+
 async def test_eval_harness_smoke_suite_runs():
     suite_path = Path(__file__).resolve().parents[2] / "evals" / "tasks" / "smoke.yaml"
     tasks = load_tasks(suite_path)

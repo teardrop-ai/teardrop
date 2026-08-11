@@ -499,6 +499,10 @@ async def test_marketplace_llms_txt(anon_client, monkeypatch):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
     assert "acme/my_tool" in resp.text
+    assert "marketplace desc" in resp.text
+    assert "Description:" in resp.text
+    assert "[Detail](http://test/marketplace/catalog/acme/my_tool)" in resp.text
+    assert "[Reputation](http://test/.well-known/reputation.json)" in resp.text
     assert "$1.234567" in resp.text
 
     config.get_settings.cache_clear()

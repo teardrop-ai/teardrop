@@ -12,7 +12,7 @@ from typing import Any, Literal
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from marketplace.models import MarketplaceCategory
 from org_tools import (
@@ -22,6 +22,7 @@ from org_tools import (
     get_org_tool,
     invalidate_org_tools_cache,
     list_org_tools,
+    normalize_marketplace_tags,
     normalize_webhook_response,
     update_org_tool,
     validate_safe_schema_subset,
@@ -74,7 +75,13 @@ class CreateOrgToolRequest(BaseModel):
     publish_as_mcp: bool = False
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory = ""
+    tags: list[str] = Field(default_factory=list, max_length=20)
     base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, value: list[str]) -> list[str]:
+        return normalize_marketplace_tags(value)
 
 
 class UpdateOrgToolRequest(BaseModel):
@@ -89,7 +96,13 @@ class UpdateOrgToolRequest(BaseModel):
     publish_as_mcp: bool | None = None
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
     base_price_usdc: int | None = Field(default=None, ge=0, le=100_000_000)
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, value: list[str] | None) -> list[str] | None:
+        return normalize_marketplace_tags(value) if value is not None else None
 
 
 class OrgToolResponse(BaseModel):
@@ -109,6 +122,7 @@ class OrgToolResponse(BaseModel):
     publish_as_mcp: bool
     marketplace_description: str
     category: str
+    tags: list[str]
     base_price_usdc: int
     created_at: str
     updated_at: str
@@ -165,6 +179,7 @@ def _org_tool_to_response(tool: OrgTool) -> dict[str, Any]:
         "publish_as_mcp": tool.publish_as_mcp,
         "marketplace_description": tool.marketplace_description,
         "category": tool.category,
+        "tags": tool.tags,
         "base_price_usdc": tool.base_price_usdc,
         "created_at": tool.created_at.isoformat(),
         "updated_at": tool.updated_at.isoformat(),
@@ -250,6 +265,7 @@ async def create_tool(
             publish_as_mcp=body.publish_as_mcp,
             marketplace_description=body.marketplace_description or "",
             category=body.category,
+            tags=body.tags,
             base_price_usdc=body.base_price_usdc,
         )
     except asyncpg.UniqueViolationError:
@@ -355,6 +371,7 @@ async def patch_tool(
         "publish_as_mcp",
         "marketplace_description",
         "category",
+        "tags",
         "base_price_usdc",
     )
     for field_name in _updatable:

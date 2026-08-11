@@ -84,7 +84,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/marketplace/catalog` | — | Public catalog with optional `org_slug`, `category`, `sort`, `limit`, and `cursor` query params |
 | `GET` | `/marketplace/catalog/{org_slug}/{tool_name}` | — | Public detail for one published catalog tool |
 | `GET` | `/marketplace/authors/{org_slug}` | — | Public author profile with aggregate calls and paginated tools |
-| `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and SEO surfaces |
+| `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and agent-discovery surfaces; per-tool entries include description, price, health, and reputation link |
 | `POST` | `/marketplace/author-config` | Bearer | Create or update author settlement wallet |
 | `GET` | `/marketplace/author-config` | Bearer | Get author settlement wallet config |
 | `POST` | `/marketplace/import/preview` | Bearer | Preview importable MCP tools, normalized schemas, and publish blockers |

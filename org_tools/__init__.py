@@ -49,6 +49,7 @@ from org_tools.base import (  # noqa: F401  (re-exported for backward compatibil
     _row_to_org_tool,
     close_org_tools_db,
     init_org_tools_db,
+    normalize_marketplace_tags,
 )
 from org_tools.cache import (  # noqa: F401  (re-exported for backward compatibility)
     _get_marketplace_lock,
@@ -82,6 +83,7 @@ from org_tools.runtime import (  # noqa: F401  (re-exported for backward compati
 # with `_`) remain importable by name for internal callers.
 __all__ = [
     "OrgTool",
+    "normalize_marketplace_tags",
     "init_org_tools_db",
     "close_org_tools_db",
     "create_org_tool",

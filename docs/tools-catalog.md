@@ -30,6 +30,20 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_gas_price` | $0.002 (2,000 atomic) |
 | `resolve_ens` | $0.003 (3,000 atomic) |
 
+## Agent Discovery
+
+Public A2A skills/tools and the MCP server card expose each built-in tool's
+description, tags, version, input schema, and output schema. Selected tools
+also publish `use_when`, `limitations`, and `alternatives` guidance to help
+agents choose the right capability and avoid redundant calls.
+
+Marketplace discovery adds a commerce-facing `marketplace_description`,
+intent tags, price, health, and aggregate reputation. Browse these through
+`GET /marketplace/catalog`, `GET /marketplace/llms.txt`, and
+`GET /.well-known/reputation.json`. Community publishers can manage intent
+tags through the authenticated org-tool API; tags are normalized and bounded
+before being included in catalog search.
+
 In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
 
 `get_yield_rates` supports an optional `stable_only` filter for consistency-focused stablecoin discovery and returns both `apy_mean_7d` and `apy_mean_30d` so clients can avoid short-window APY spikes. Use `max_apy` (e.g. `30`) to exclude leveraged/boosted pools so genuine stablecoin yields surface; combine with `stable_only=true` and rank by `apy_mean_30d` for durable, risk-averse screening.

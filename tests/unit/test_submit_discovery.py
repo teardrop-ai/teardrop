@@ -67,6 +67,40 @@ def test_validate_llms_txt_requires_title_and_links():
     assert any("markdown link" in error for error in errors)
 
 
+def test_validate_reputation_accepts_valid_snapshot():
+    errors = submit_discovery.validate_reputation(
+        {
+            "schema_version": 1,
+            "generated_at": "2026-08-10T00:00:00Z",
+            "methodology_url": "https://teardrop.ai/methodology",
+            "tools": [{"qualified_tool_name": "platform/web_search"}],
+        }
+    )
+
+    assert errors == []
+
+
+def test_validate_reputation_requires_fields_and_list_tools():
+    errors = submit_discovery.validate_reputation({"tools": "not-a-list"})
+
+    assert any("schema_version" in error for error in errors)
+    assert any("generated_at" in error for error in errors)
+    assert any("methodology_url" in error for error in errors)
+    assert any("tools must be a list" in error for error in errors)
+
+    assert submit_discovery.validate_reputation([]) == ["reputation.json must be a JSON object."]
+
+
+def test_build_submission_payload_includes_reputation_url():
+    payload = submit_discovery.build_submission_payload(
+        base_url="https://api.teardrop.dev",
+        agent_card={"name": "Teardrop"},
+        mcp_server_card={},
+    )
+
+    assert payload["reputation_url"] == "https://api.teardrop.dev/.well-known/reputation.json"
+
+
 def test_submit_discovery_help_works_from_outside_repo(tmp_path):
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "submit_discovery.py"
     env = os.environ.copy()

@@ -877,7 +877,20 @@ def _format_atomic_usdc(amount_usdc: int) -> str:
 def _escape_llms_text(value: Any) -> str:
     # ─── Public Catalog & Author Discovery (browse/search marketplace) ─────────
 
-    return str(value or "").replace("\r", " ").replace("\n", " ").replace("|", "-").strip()
+    return (
+        str(value or "")
+        .replace("\\", "\\\\")
+        .replace("`", "'")
+        .replace("[", "(")
+        .replace("]", ")")
+        .replace("<", "(")
+        .replace(">", ")")
+        .replace("#", "")
+        .replace("|", "-")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .strip()
+    )
 
 
 @router.get("/marketplace/catalog", tags=["Marketplace"], response_model=MarketplaceCatalogResponse)
@@ -1140,8 +1153,9 @@ async def marketplace_llms_txt(request: Request) -> Response:
         "",
         "Public MCP tools available through Teardrop.",
         "",
-        "| Tool | Author | Category | Health | Calls | Price | URL |",
-        "| --- | --- | --- | --- | ---: | ---: | --- |",
+        "Each tool lists its purpose, price, health, and a link to its detail page and",
+        "aggregate reputation. Agents should read the description before choosing a tool.",
+        "",
     ]
 
     cursor: str | None = None
@@ -1159,15 +1173,17 @@ async def marketplace_llms_txt(request: Request) -> Response:
         for tool in catalog:
             seen += 1
             detail_url = f"{base_url}/marketplace/catalog/{tool.author_org_slug}/{tool.name}"
+            description = tool.marketplace_description or tool.description
             lines.append(
-                "| "
-                f"{_escape_llms_text(tool.qualified_name)} | "
-                f"{_escape_llms_text(tool.author_org_name)} | "
-                f"{_escape_llms_text(tool.category or 'uncategorized')} | "
-                f"{_escape_llms_text(tool.health_status)} | "
-                f"{tool.total_calls} | "
-                f"{_format_atomic_usdc(tool.cost_usdc)} | "
-                f"{detail_url} |"
+                f"## {_escape_llms_text(tool.qualified_name)}\n"
+                f"- Description: {_escape_llms_text(description)}\n"
+                f"- Author: {_escape_llms_text(tool.author_org_name)}\n"
+                f"- Category: {_escape_llms_text(tool.category or 'uncategorized')}\n"
+                f"- Health: {_escape_llms_text(tool.health_status)}\n"
+                f"- Calls: {tool.total_calls}\n"
+                f"- Price: {_format_atomic_usdc(tool.cost_usdc)}\n"
+                f"- [Detail]({detail_url})\n"
+                f"- [Reputation]({base_url}/.well-known/reputation.json)\n"
             )
         if len(catalog) < 200 or seen >= 10_000:
             break

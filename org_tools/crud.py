@@ -25,6 +25,7 @@ from org_tools.base import (
     _get_pool,
     _record_event,
     _row_to_org_tool,
+    normalize_marketplace_tags,
 )
 from org_tools.cache import invalidate_marketplace_cache, invalidate_org_tools_cache
 from teardrop.config import get_settings
@@ -47,6 +48,7 @@ async def create_org_tool(
     publish_as_mcp: bool = False,
     marketplace_description: str = "",
     category: str = "",
+    tags: list[str] | None = None,
     base_price_usdc: int = 0,
     mcp_server_id: str | None = None,
     mcp_tool_name: str | None = None,
@@ -89,6 +91,7 @@ async def create_org_tool(
 
     if category not in _VALID_MARKETPLACE_CATEGORIES:
         raise ValueError("Invalid marketplace category")
+    normalized_tags = normalize_marketplace_tags(tags)
 
     try:
         await pool.execute(
@@ -98,8 +101,8 @@ async def create_org_tool(
             "  auth_header_name, auth_header_enc,"
             "  timeout_seconds, is_active,"
             "  publish_as_mcp, marketplace_description, category, base_price_usdc,"
-            "  created_at, updated_at, last_schema_changed_at)"
-            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14, $15, $16, $17, $18, $18, $18)",
+            "  created_at, updated_at, last_schema_changed_at, tags)"
+            " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14, $15, $16, $17, $18, $18, $18, $19)",
             tool_id,
             org_id,
             name,
@@ -118,6 +121,7 @@ async def create_org_tool(
             category,
             base_price_usdc,
             now,
+            normalized_tags,
         )
     except asyncpg.UniqueViolationError:
         raise ValueError(f"Tool '{name}' already exists for this organisation")
@@ -144,6 +148,7 @@ async def create_org_tool(
         publish_as_mcp=publish_as_mcp,
         marketplace_description=marketplace_description,
         category=category,
+        tags=normalized_tags,
         base_price_usdc=base_price_usdc,
         last_schema_changed_at=now,
         created_at=now,
@@ -191,6 +196,7 @@ async def update_org_tool(
     publish_as_mcp: bool | None = None,
     marketplace_description: str | None = None,
     category: str | None = None,
+    tags: list[str] | None = None,
     base_price_usdc: int | None = None,
 ) -> OrgTool | None:
     """Partial-update a tool.  Returns updated OrgTool or None if not found."""
@@ -243,6 +249,8 @@ async def update_org_tool(
         if category not in _VALID_MARKETPLACE_CATEGORIES:
             raise ValueError("Invalid marketplace category")
         _add("category", category)
+    if tags is not None:
+        _add("tags", normalize_marketplace_tags(tags))
     if base_price_usdc is not None:
         _add("base_price_usdc", base_price_usdc)
 
@@ -268,7 +276,14 @@ async def update_org_tool(
     await _record_event(org_id, tool_id, row["name"], "updated", actor_id)
     await invalidate_org_tools_cache(org_id)
     # Invalidate marketplace/pricing caches if publication, visibility, or price changed.
-    if publish_as_mcp is not None or is_active is not None or base_price_usdc is not None or category is not None:
+    if (
+        publish_as_mcp is not None
+        or is_active is not None
+        or base_price_usdc is not None
+        or category is not None
+        or marketplace_description is not None
+        or tags is not None
+    ):
         await invalidate_marketplace_cache()
 
     # Cascade: deactivate marketplace subscriptions when a published tool is
