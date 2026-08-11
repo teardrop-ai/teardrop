@@ -304,6 +304,28 @@ class TestGetTokenApprovals:
         used_targets = {call[0] for call in captured_calls}
         assert CUSTOM_TOKEN in used_targets
 
+    async def test_default_token_scan_includes_expanded_registry_asset(self, test_settings, monkeypatch):
+        from tools.definitions.get_token_approvals import get_token_approvals
+        from tools.definitions.get_wallet_portfolio import _TRACKED_TOKENS
+
+        captured_calls: list = []
+
+        async def _capture_batch(w3, calls, *, allow_failure=True, chain_id=None):
+            captured_calls.extend(calls)
+            return [(True, abi_encode(["uint256"], [0])) for _ in calls]
+
+        monkeypatch.setattr("tools.definitions.get_token_approvals.multicall3_batch", _capture_batch)
+        monkeypatch.setattr("tools.definitions.get_token_approvals.get_web3", MagicMock())
+
+        await get_token_approvals(
+            wallet_address=_WALLET,
+            chain_id=1,
+            spenders=[_SPENDER_UNISWAP],
+        )
+
+        wsteth_address = next(token["address"] for token in _TRACKED_TOKENS[1] if token["symbol"] == "wstETH")
+        assert wsteth_address in {call[0] for call in captured_calls}
+
     async def test_empty_result_for_unsupported_chain(self, test_settings, monkeypatch):
         from tools.definitions.get_token_approvals import get_token_approvals
 

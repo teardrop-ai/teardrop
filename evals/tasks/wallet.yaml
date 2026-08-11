@@ -1,12 +1,12 @@
 [
   {
     "id": "wallet.portfolio.001",
-    "messages": [{"role": "user", "content": "Summarize this wallet portfolio on Base: 0x0000000000000000000000000000000000000000"}],
+    "messages": [{"role": "user", "content": "Summarize this wallet portfolio on Base: 0x0000000000000000000000000000000000000000. Mention tracked liquid-staking or restaking assets when present and state that untracked assets are excluded."}],
     "expected_tool_calls": ["get_wallet_portfolio"],
     "expected_text_contains": ["portfolio", "Base"],
     "max_duration_ms": 10000,
     "max_cost_usdc": 500000,
     "scorer": "contains",
-    "rubric": "Uses wallet portfolio tool and summarizes holdings."
+    "rubric": "Uses the wallet portfolio tool, summarizes holdings, and accurately communicates the expanded tracked-asset boundary."
   }
 ]

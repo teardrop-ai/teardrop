@@ -6,6 +6,7 @@ Tests cover: get_eth_balance, get_erc20_balance, get_block, get_transaction, res
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -152,11 +153,22 @@ class TestGetTransaction:
             "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
             "value": 0,
             "gasPrice": 20_000_000_000,  # 20 gwei
+            "input": b"\xa9\x05\x9c\xbb",
             "blockNumber": 12345,
         }
         mock_receipt = {
             "gasUsed": 21_000,
             "status": 1,
+            "effectiveGasPrice": 10_000_000_000,
+            "transactionIndex": 7,
+            "logs": [
+                {
+                    "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "topics": [b"\x01" * 32],
+                    "data": b"\x12\x34",
+                    "logIndex": 2,
+                }
+            ],
         }
         mock_w3 = MagicMock()
         mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
@@ -171,6 +183,23 @@ class TestGetTransaction:
         assert result["gas_used"] == 21_000
         assert result["status"] == 1
         assert result["block_number"] == 12345
+        assert result["input_data"] == "0xa9059cbb"
+        assert result["input_data_truncated"] is False
+        assert result["transaction_index"] == 7
+        assert result["effective_gas_price_gwei"] == "10"
+        assert result["fee_wei"] == "210000000000000"
+        assert result["fee_eth"] == "0.00021"
+        assert result["logs"] == [
+            {
+                "address": mock_receipt["logs"][0]["address"],
+                "topics": ["0x" + "01" * 32],
+                "topics_truncated": False,
+                "data": "0x1234",
+                "data_truncated": False,
+                "log_index": 2,
+            }
+        ]
+        assert result["logs_truncated"] is False
 
     async def test_pending_tx_has_no_receipt(self, test_settings, monkeypatch):
         """Pending transactions have no receipt — status and gas_used should be None."""
@@ -193,6 +222,123 @@ class TestGetTransaction:
 
         assert result["gas_used"] is None
         assert result["status"] is None
+        assert result["input_data"] is None
+        assert result["transaction_index"] is None
+        assert result["effective_gas_price_gwei"] is None
+        assert result["fee_wei"] is None
+        assert result["logs"] == []
+
+    async def test_evidence_payloads_are_bounded(self, test_settings, monkeypatch):
+        from tools.definitions.get_transaction import (
+            _CALLDATA_MAX_CHARS,
+            _LOG_DATA_MAX_CHARS,
+            _MAX_LOGS,
+            get_transaction,
+        )
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "value": 0,
+            "gasPrice": None,
+            "input": b"\xab\xcd" * 9_000,
+            "blockNumber": 12345,
+        }
+        mock_receipt = {
+            "gasUsed": 21_000,
+            "status": 1,
+            "logs": [
+                {
+                    "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "topics": [b"\x00" * 32] * 6,
+                    "data": b"\x12" * 5_000,
+                    "logIndex": index,
+                }
+                for index in range(_MAX_LOGS + 1)
+            ],
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
+
+        monkeypatch.setattr("tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_transaction("0xbounded", chain_id=1)
+
+        assert len(result["input_data"]) <= _CALLDATA_MAX_CHARS
+        assert result["input_data_truncated"] is True
+        assert len(result["logs"]) == _MAX_LOGS
+        assert result["logs_truncated"] is True
+        assert len(result["logs"][0]["data"]) <= _LOG_DATA_MAX_CHARS
+        assert result["logs"][0]["data_truncated"] is True
+        assert len(result["logs"][0]["topics"]) == 4
+        assert result["logs"][0]["topics_truncated"] is True
+
+    async def test_normalizes_provider_values_and_preserves_exact_fee(self, test_settings, monkeypatch):
+        from tools.definitions.get_transaction import get_transaction
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            "value": "1000000000000000000",
+            "gasPrice": "0x4a817c800",
+            "input": b"\x01\x02",
+            "blockNumber": "0x3039",
+            "transactionIndex": "0x09",
+        }
+        mock_receipt = {
+            "gasUsed": "1000000",
+            "status": "0x1",
+            "effectiveGasPrice": "100000000000",
+            "logs": [],
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
+
+        monkeypatch.setattr("tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_transaction("0xnumeric", chain_id=1)
+
+        assert result["value_eth"] == "1"
+        assert result["gas_price_gwei"] == "20"
+        assert result["gas_used"] == 1_000_000
+        assert result["status"] == 1
+        assert result["block_number"] == 12_345
+        assert result["transaction_index"] == 9
+        assert result["fee_wei"] == "100000000000000000"
+        assert result["fee_eth"] == "0.1"
+        json.dumps(result)
+
+    async def test_malformed_hex_values_are_safe_empty_payloads(self, test_settings, monkeypatch):
+        from tools.definitions.get_transaction import get_transaction
+
+        mock_tx = {
+            "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+            "to": None,
+            "value": 0,
+            "gasPrice": None,
+            "input": object(),
+            "blockNumber": None,
+        }
+        mock_receipt = {
+            "gasUsed": None,
+            "status": 0,
+            "logs": [{"address": object(), "topics": [object()], "data": object()}],
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction = AsyncMock(return_value=mock_tx)
+        mock_w3.eth.get_transaction_receipt = AsyncMock(return_value=mock_receipt)
+
+        monkeypatch.setattr("tools.definitions.get_transaction.get_web3", lambda chain_id=1: mock_w3)
+
+        result = await get_transaction("0xmalformed", chain_id=1)
+
+        assert result["input_data"] == "0x"
+        assert result["logs"][0]["address"] == "0x"
+        assert result["logs"][0]["topics"] == ["0x"]
+        assert result["logs"][0]["data"] == "0x"
+        json.dumps(result)
 
 
 # ─── resolve_ens ─────────────────────────────────────────────────────────────

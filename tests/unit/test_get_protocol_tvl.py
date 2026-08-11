@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tools.definitions.get_protocol_tvl import get_protocol_tvl
+from tools.definitions.get_protocol_tvl import TOOL, get_protocol_tvl
 
 
 @pytest.mark.anyio
@@ -39,6 +39,13 @@ async def test_include_historical_prefers_detail_and_fetches_fallback_in_paralle
     assert result["current_tvl_usd"] == pytest.approx(1100.0)
     assert len(result["chain_breakdown"]) == 2
     assert result["historical_series"]
+    assert result["provenance"]["provider"] == "DeFiLlama"
+    assert result["provenance"]["cache_hit"] is False
+    assert result["provenance"]["source_fetched_at"] is not None
+    assert result["provenance"]["source_urls"] == [
+        "https://api.llama.fi/protocol/aave-v3",
+        "https://api.llama.fi/tvl/aave-v3",
+    ]
 
 
 @pytest.mark.anyio
@@ -54,6 +61,7 @@ async def test_include_historical_uses_current_tvl_fallback_when_detail_unavaila
     assert result["current_tvl_usd"] == pytest.approx(1234.56)
     assert result["historical_series"] is None
     assert "fallback" in result["note"].lower()
+    assert result["provenance"]["source_fetched_at"] is not None
 
 
 @pytest.mark.anyio
@@ -69,6 +77,7 @@ async def test_include_historical_returns_graceful_empty_result_when_all_sources
     assert result["historical_series"] is None
     assert result["chain_breakdown"] == []
     assert "unavailable" in result["note"].lower()
+    assert result["provenance"]["source_fetched_at"] is None
 
 
 @pytest.mark.anyio
@@ -118,6 +127,31 @@ async def test_result_includes_error_fields_on_not_found(monkeypatch):
     assert result["current_tvl_usd"] is None
     assert result["error_type"] == "not_found"
     assert "not found" in (result["error"] or "").lower()
+    assert result["provenance"]["source_fetched_at"] is None
+
+
+@pytest.mark.anyio
+async def test_protocol_tvl_result_cache_refreshes_retrieval_metadata(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+    current_mock = AsyncMock(return_value=(321.0, None, None))
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", current_mock)
+
+    first = await get_protocol_tvl(protocol="aave-v3")
+    second = await get_protocol_tvl(protocol="aave-v3")
+
+    assert second["current_tvl_usd"] == first["current_tvl_usd"]
+    assert second["provenance"]["cache_hit"] is True
+    assert second["provenance"]["source_fetched_at"] == first["provenance"]["source_fetched_at"]
+    assert first["provenance"]["cache_hit"] is False
+    assert second is not first
+    assert second["provenance"]["cache_age_seconds"] >= 0
+    assert second["provenance"]["cache_ttl_seconds"] == 300
+    current_mock.assert_awaited_once_with("aave-v3")
+
+
+def test_protocol_tvl_version_and_schema_include_provenance():
+    assert TOOL.version == "1.3.0"
+    assert "provenance" in TOOL.output_schema["anyOf"][0]["properties"]
 
 
 @pytest.mark.anyio

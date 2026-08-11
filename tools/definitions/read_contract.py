@@ -9,10 +9,10 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from web3 import Web3
 
-from tools._internals._web3_helpers import get_web3
+from tools._internals._web3_helpers import get_web3, rpc_call
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,16 @@ def _get_function_mutability(fn_abi: dict) -> str:
     return fn_abi.get("stateMutability", "nonpayable")
 
 
+def _normalize_caller_address(value: str | None) -> str | None:
+    """Normalize optional caller context for ``msg.sender``-aware views."""
+    if value is None:
+        return None
+    try:
+        return Web3.to_checksum_address(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("caller_address must be a valid EVM address") from exc
+
+
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 
@@ -102,6 +112,18 @@ class ReadContractInput(BaseModel):
         max_length=80,
     )
     chain_id: int = Field(default=1, description="Chain ID (1=Ethereum, 8453=Base)")
+    caller_address: str | None = Field(
+        default=None,
+        description=(
+            "Optional EVM address to supply as msg.sender for caller-dependent view functions. "
+            "This does not sign or submit a transaction."
+        ),
+    )
+
+    @field_validator("caller_address")
+    @classmethod
+    def _validate_caller_address(cls, value: str | None) -> str | None:
+        return _normalize_caller_address(value)
 
 
 class ReadContractOutput(BaseModel):
@@ -110,6 +132,7 @@ class ReadContractOutput(BaseModel):
     result: Any
     block_identifier: str
     chain_id: int
+    caller_address: str | None = None
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
@@ -123,8 +146,11 @@ async def read_contract(
     args: list[Any] | None = None,
     block_identifier: str = "latest",
     chain_id: int = 1,
+    caller_address: str | None = None,
 ) -> dict[str, Any]:
     """Call a view/pure function on any smart contract and return the result."""
+    normalized_caller = _normalize_caller_address(caller_address)
+
     # Resolve arguments: prefer args_json if provided.
     final_args: list[Any] = []
     if args_json:
@@ -178,7 +204,14 @@ async def read_contract(
             f"Function '{function_name}' not found in contract ABI — check that function_name matches the ABI exactly."
         )
 
-    raw = await fn(*final_args).call(block_identifier=block_id)
+    call_kwargs: dict[str, Any] = {"block_identifier": block_id}
+    if normalized_caller is not None:
+        call_kwargs["transaction"] = {"from": normalized_caller}
+
+    raw = await rpc_call(
+        lambda: fn(*final_args).call(**call_kwargs),
+        chain_id=chain_id,
+    )
 
     return {
         "contract_address": address,
@@ -186,6 +219,7 @@ async def read_contract(
         "result": _serialize_value(raw),
         "block_identifier": block_identifier,
         "chain_id": chain_id,
+        "caller_address": normalized_caller,
     }
 
 
@@ -193,12 +227,14 @@ async def read_contract(
 
 TOOL = ToolDefinition(
     name="read_contract",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Call any view/pure function on a smart contract and return the result. "
         "Provide the ABI fragment (JSON array) and function name. "
         "State-changing functions (payable/nonpayable) are rejected for safety. "
-        "Supports historical queries via block_identifier (block number or 'latest')."
+        "Supports historical queries via block_identifier (block number or 'latest') "
+        "and optional caller_address context for msg.sender-dependent views. "
+        "Calls use Teardrop's bounded RPC timeout and rate-limit retry policy."
     ),
     tags=["web3", "ethereum", "contract", "abi", "defi"],
     input_schema=ReadContractInput,

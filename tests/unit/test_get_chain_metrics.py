@@ -67,6 +67,14 @@ async def test_get_chain_metrics_extracts_tvl_changes_and_fees(monkeypatch):
     assert result["chains"][0]["tvl_usd"] == pytest.approx(2_000_000)
     assert result["chains"][0]["tvl_7d_change_pct"] == pytest.approx(20.0)
     assert result["chains"][0]["fees_30d_change_pct"] == pytest.approx(-4.0)
+    assert result["provenance"]["provider"] == "DeFiLlama"
+    assert result["provenance"]["cache_hit"] is False
+    assert result["provenance"]["source_fetched_at"] is not None
+    assert result["provenance"]["source_urls"] == [
+        "https://api.llama.fi/chains",
+        "https://api.llama.fi/v2/historicalChainTvl/Ethereum",
+        "https://api.llama.fi/overview/fees/Ethereum",
+    ]
 
 
 @pytest.mark.anyio
@@ -112,6 +120,7 @@ async def test_get_chain_metrics_fails_open_on_supplement_errors(monkeypatch):
     assert entry["tvl_7d_change_pct"] is None
     assert entry["error_type"] == "partial_data"
     assert "history timed out" in entry["error"]
+    assert result["provenance"]["source_fetched_at"] is not None
 
 
 @pytest.mark.anyio
@@ -131,10 +140,31 @@ async def test_get_chain_metrics_uses_result_cache(monkeypatch):
         AsyncMock(return_value=({}, None, None)),
     )
 
-    await get_chain_metrics(chains=["Ethereum"])
-    await get_chain_metrics(chains=["Ethereum"])
+    first = await get_chain_metrics(chains=["Ethereum"])
+    second = await get_chain_metrics(chains=["Ethereum"])
 
     fetch_chains.assert_awaited_once()
+    assert second["provenance"]["cache_hit"] is True
+    assert second["provenance"]["source_fetched_at"] == first["provenance"]["source_fetched_at"]
+    assert first["provenance"]["cache_hit"] is False
+    assert second is not first
+    assert second["provenance"]["cache_age_seconds"] >= 0
+    assert second["provenance"]["cache_ttl_seconds"] == 300
+
+
+@pytest.mark.anyio
+async def test_get_chain_metrics_source_failure_has_no_source_timestamp(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_chain_metrics._result_cache", {})
+    monkeypatch.setattr("tools.definitions.get_chain_metrics._chains_cache", None)
+    monkeypatch.setattr(
+        "tools.definitions.get_chain_metrics._fetch_chains",
+        AsyncMock(return_value=(None, "timeout", "timed out")),
+    )
+
+    result = await get_chain_metrics(chains=["Ethereum"])
+
+    assert result["error_type"] == "timeout"
+    assert result["provenance"]["source_fetched_at"] is None
 
 
 def test_chain_metrics_tool_is_registered():
@@ -142,3 +172,5 @@ def test_chain_metrics_tool_is_registered():
     from tools.definitions.get_chain_metrics import TOOL
 
     assert TOOL in _ALL_TOOLS
+    assert TOOL.version == "1.1.0"
+    assert "provenance" in TOOL.output_schema.model_json_schema()["properties"]

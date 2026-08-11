@@ -59,6 +59,7 @@ class TestReadContract:
 
         assert result["function_name"] == "totalSupply"
         assert result["result"] == 1_000_000_000
+        assert result["caller_address"] is None
 
     async def test_payable_function_rejected(self, test_settings, payable_abi):
         from tools.definitions.read_contract import read_contract
@@ -232,6 +233,38 @@ class TestReadContract:
 
         assert captured_kwargs.get("block_identifier") == 19_000_000
 
+    async def test_caller_address_passed_as_from_context(self, test_settings, monkeypatch, view_abi):
+        from tools.definitions.read_contract import read_contract
+
+        captured_kwargs: dict = {}
+
+        async def fake_call(**kwargs):
+            captured_kwargs.update(kwargs)
+            return 42
+
+        mock_fn = MagicMock()
+        mock_fn.return_value.call = fake_call
+
+        mock_contract = MagicMock()
+        mock_contract.functions.__getitem__ = MagicMock(return_value=mock_fn)
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_contract
+
+        monkeypatch.setattr("tools.definitions.read_contract.get_web3", lambda chain_id=1: mock_w3)
+
+        caller_address = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+        result = await read_contract(
+            contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+            abi_fragment=view_abi,
+            function_name="totalSupply",
+            caller_address=caller_address,
+        )
+
+        expected_caller = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+        assert captured_kwargs.get("transaction") == {"from": expected_caller}
+        assert result["caller_address"] == expected_caller
+
     def test_oversized_abi_raises_validation_error(self):
         from pydantic import ValidationError
 
@@ -243,6 +276,19 @@ class TestReadContract:
                 contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
                 abi_fragment=huge_abi,
                 function_name="totalSupply",
+            )
+
+    def test_invalid_caller_address_raises_validation_error(self):
+        from pydantic import ValidationError
+
+        from tools.definitions.read_contract import ReadContractInput
+
+        with pytest.raises(ValidationError, match="caller_address"):
+            ReadContractInput(
+                contract_address="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                abi_fragment="[]",
+                function_name="totalSupply",
+                caller_address="not-an-address",
             )
 
 

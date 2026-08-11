@@ -42,8 +42,8 @@ _AAVE_V3_POOL: dict[int, str] = {
 }
 
 _AAVE_V3_DATA_PROVIDER: dict[int, str] = {
-    1: "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3",
-    8453: "0xC4Fcf9893072d61Cc2899C0054877Cb752587981",
+    1: "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD",
+    8453: "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A",
 }
 
 # Curated shortlist of major Aave v3 reserves to fetch per-reserve breakdown for.
@@ -57,7 +57,12 @@ _AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
         {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
         {"symbol": "USDC", "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "decimals": "6"},
         {"symbol": "USDT", "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "decimals": "6"},
+        {"symbol": "USDS", "address": "0xdC035D45d973E3EC169d2276DDab16f1e407384F", "decimals": "18"},
         {"symbol": "DAI", "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "decimals": "18"},
+        {"symbol": "cbETH", "address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704", "decimals": "18"},
+        {"symbol": "rETH", "address": "0xae78736Cd615f374D3085123A210448E74Fc6393", "decimals": "18"},
+        {"symbol": "rsETH", "address": "0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7", "decimals": "18"},
+        {"symbol": "sUSDe", "address": "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", "decimals": "18"},
         {"symbol": "weETH", "address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee", "decimals": "18"},
     ],
     8453: [
@@ -67,6 +72,9 @@ _AAVE_V3_TRACKED_RESERVES: dict[int, list[dict[str, str]]] = {
         {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
         {"symbol": "USDC", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": "6"},
         {"symbol": "USDbC", "address": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA", "decimals": "6"},
+        {"symbol": "GHO", "address": "0x6Bb7a212910682DCFdbd5BCBb3e28FB4E8da10Ee", "decimals": "18"},
+        {"symbol": "AAVE", "address": "0x63706e401c06ac8513145b7687A14804d17f814b", "decimals": "18"},
+        {"symbol": "wrsETH", "address": "0xEDfa23602D0EC14714057867A78d01e94176BEA0", "decimals": "18"},
         {"symbol": "weETH", "address": "0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A", "decimals": "18"},
     ],
 }
@@ -96,6 +104,7 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cUSDCv3",
             "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
             "base_symbol": "USDC",
+            "base_asset_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
             "base_decimals": "6",
             "collateral_assets": [
                 {"symbol": "WBTC", "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "decimals": "8"},
@@ -109,6 +118,7 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cWETHv3",
             "address": "0xA17581A9E3356d9A858b789D68B4d866e593aE94",
             "base_symbol": "WETH",
+            "base_asset_address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
             "base_decimals": "18",
             "collateral_assets": [
                 {"symbol": "wstETH", "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "decimals": "18"},
@@ -120,10 +130,25 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cUSDTv3",
             "address": "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
             "base_symbol": "USDT",
+            "base_asset_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
             "base_decimals": "6",
             "collateral_assets": [
                 {"symbol": "WBTC", "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "decimals": "8"},
                 {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": "18"},
+            ],
+        },
+        {
+            "name": "cUSDSv3",
+            "address": "0x5D409e56D886231aDAf00c8775665AD0f9897b56",
+            "base_symbol": "USDS",
+            "base_asset_address": "0xdC035D45d973E3EC169d2276DDab16f1e407384F",
+            "base_decimals": "18",
+            "collateral_assets": [
+                {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": "18"},
+                {"symbol": "USDe", "address": "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3", "decimals": "18"},
+                {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
+                {"symbol": "tBTC", "address": "0x18084fbA666a33d37592fA2633fD49a74DD93a88", "decimals": "18"},
+                {"symbol": "wstETH", "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "decimals": "18"},
             ],
         },
     ],
@@ -132,6 +157,7 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cUSDCv3",
             "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
             "base_symbol": "USDC",
+            "base_asset_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
             "base_decimals": "6",
             "collateral_assets": [
                 {"symbol": "WETH", "address": "0x4200000000000000000000000000000000000006", "decimals": "18"},
@@ -145,6 +171,7 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cWETHv3",
             "address": "0x46e6b214b524310239732D51387075E0e70970bf",
             "base_symbol": "WETH",
+            "base_asset_address": "0x4200000000000000000000000000000000000006",
             "base_decimals": "18",
             "collateral_assets": [
                 {"symbol": "wstETH", "address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "decimals": "18"},
@@ -155,10 +182,22 @@ _COMPOUND_V3_MARKETS: dict[int, list[dict[str, Any]]] = {
             "name": "cUSDbCv3",
             "address": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf",
             "base_symbol": "USDbC",
+            "base_asset_address": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA",
             "base_decimals": "6",
             "collateral_assets": [
                 {"symbol": "WETH", "address": "0x4200000000000000000000000000000000000006", "decimals": "18"},
                 {"symbol": "cbETH", "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "decimals": "18"},
+            ],
+        },
+        {
+            "name": "cUSDSv3",
+            "address": "0x2c776041CCFe903071AF44aa147368a9c8EEA518",
+            "base_symbol": "USDS",
+            "base_asset_address": "0x820C137fa70C8691f0e44Dc420a5e53c168921Dc",
+            "base_decimals": "18",
+            "collateral_assets": [
+                {"symbol": "sUSDS", "address": "0x5875eEE11Cf8398102FdAd704C9E96607675467a", "decimals": "18"},
+                {"symbol": "cbBTC", "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "decimals": "8"},
             ],
         },
     ],
@@ -602,9 +641,7 @@ async def _fetch_compound_market(w3: Any, wallet: str, market: dict[str, Any], c
         market_name=market["name"],
         market_address=market_addr,
         base_asset_symbol=market["base_symbol"],
-        # Compound's baseToken is implicit in the market — we carry the symbol/decimals
-        # statically to avoid an extra RPC call. The market address is the Comet proxy.
-        base_asset_address=market_addr,  # Comet proxy; treat market_address as canonical
+        base_asset_address=Web3.to_checksum_address(market["base_asset_address"]),
         supplied_amount=f"{supplied / base_divisor:.6f}",
         borrowed_amount=f"{borrowed / base_divisor:.6f}",
         collateral=collateral,
@@ -817,7 +854,7 @@ async def get_defi_positions(
 
 TOOL = ToolDefinition(
     name="get_defi_positions",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, and Uniswap v3 LP on "
         "Ethereum (chain_id=1) or Base (chain_id=8453). Returns Aave aggregate account health "

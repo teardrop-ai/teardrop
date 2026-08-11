@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from teardrop.cache import get_redis
 from tools._internals._http_session import get_defillama_session
+from tools._internals.provenance import DataProvenance, attach_provenance, utc_now_iso
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ _POOLS_CACHE_KEY = "pools:all"
 _POOLS_REDIS_KEY = "tool:get_yield_rates:pools:all"
 _POOLS_CACHE_TTL = 300  # seconds
 _POOLS_CACHE_ERROR_TTL = 60  # seconds for transient fetch failures
+_pools_cache_source_fetched_at: dict[str, str | None] = {}
 _POOL_KEEP_FIELDS = frozenset(
     {
         "pool",
@@ -171,6 +173,10 @@ class GetYieldRatesOutput(BaseModel):
     total_matching: int
     filters_applied: dict[str, Any]
     note: str
+    provenance: DataProvenance | None = Field(
+        default=None,
+        description="Source and freshness metadata for the DeFiLlama response.",
+    )
 
 
 # ─── HTTP helper ──────────────────────────────────────────────────────────────
@@ -336,13 +342,23 @@ async def get_yield_rates(
     now = time.monotonic()
     redis = get_redis()
     raw_pools: list[dict[str, Any]] = []
+    cache_hit = False
+    source_fetched_at: str | None = None
+    cache_ttl_seconds = _POOLS_CACHE_TTL
 
     # Multi-container cache path: Redis-first.
     if redis is not None:
         try:
             cached = await redis.get(_POOLS_REDIS_KEY)
             if cached:
-                raw_pools = _normalize_cached_pools(json.loads(cached))
+                decoded = json.loads(cached)
+                if isinstance(decoded, dict) and "data" in decoded:
+                    raw_pools = _normalize_cached_pools(decoded.get("data"))
+                    source_fetched_at = decoded.get("source_fetched_at")
+                else:
+                    # Keep compatibility with pre-provenance Redis entries.
+                    raw_pools = _normalize_cached_pools(decoded)
+                cache_hit = bool(raw_pools)
         except Exception:
             logger.warning("Yield rates Redis cache read failed; refreshing source", exc_info=True)
 
@@ -351,6 +367,8 @@ async def get_yield_rates(
         cached = _pools_cache.get(_POOLS_CACHE_KEY)
         if cached and now < cached[0]:
             raw_pools = cached[1]
+            source_fetched_at = _pools_cache_source_fetched_at.get(_POOLS_CACHE_KEY)
+            cache_hit = bool(raw_pools)
 
     if not raw_pools:
         try:
@@ -360,21 +378,39 @@ async def get_yield_rates(
             raw_pools = []
 
         ttl = _POOLS_CACHE_TTL if raw_pools else _POOLS_CACHE_ERROR_TTL
+        source_fetched_at = utc_now_iso() if raw_pools else None
+        cache_ttl_seconds = ttl
         if redis is not None:
             try:
-                await redis.setex(_POOLS_REDIS_KEY, ttl, json.dumps(raw_pools, separators=(",", ":")))
+                await redis.setex(
+                    _POOLS_REDIS_KEY,
+                    ttl,
+                    json.dumps(
+                        {"data": raw_pools, "source_fetched_at": source_fetched_at},
+                        separators=(",", ":"),
+                    ),
+                )
             except Exception:
                 logger.warning("Yield rates Redis cache write failed", exc_info=True)
         else:
             _pools_cache[_POOLS_CACHE_KEY] = (now + ttl, raw_pools)
+            _pools_cache_source_fetched_at[_POOLS_CACHE_KEY] = source_fetched_at
 
     if not raw_pools:
-        return GetYieldRatesOutput(
+        result = GetYieldRatesOutput(
             pools=[],
             total_matching=0,
             filters_applied={},
             note="DeFiLlama yield data unavailable.",
         ).model_dump()
+        return attach_provenance(
+            result,
+            "DeFiLlama",
+            [_DEFILLAMA_POOLS_URL],
+            cache_hit=cache_hit,
+            source_fetched_at=source_fetched_at,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
 
     # Apply filters.
     protocol_set: set[str] | None = {p.lower() for p in protocols} if protocols else None
@@ -439,7 +475,7 @@ async def get_yield_rates(
         "stable_only": stable_only,
     }
 
-    return GetYieldRatesOutput(
+    result = GetYieldRatesOutput(
         pools=pools,
         total_matching=total_matching,
         filters_applied=filters_applied,
@@ -451,13 +487,21 @@ async def get_yield_rates(
             "TVL and APY can change rapidly — verify before transacting." + coverage_note
         ),
     ).model_dump()
+    return attach_provenance(
+        result,
+        "DeFiLlama",
+        [_DEFILLAMA_POOLS_URL],
+        cache_hit=cache_hit,
+        source_fetched_at=source_fetched_at,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
 
 
 # ─── Tool definition ──────────────────────────────────────────────────────────
 
 TOOL = ToolDefinition(
     name="get_yield_rates",
-    version="1.2.0",
+    version="1.3.0",
     description=(
         "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "
         "all chains. Returns pools sorted by APY with TVL, base rate, reward APY, "

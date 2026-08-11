@@ -25,12 +25,21 @@ logger = logging.getLogger(__name__)
 # ─── Well-known tokens per chain ──────────────────────────────────────────────
 
 _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
-    1: [  # Ethereum mainnet (15 major tokens covering 80% of typical DeFi wallets)
+    1: [  # Ethereum mainnet (19 major assets spanning spot, lending, and staking)
         {"address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
         {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "cg_id": "tether", "decimals": "6"},  # noqa: E501
         {"address": "0x6B175474E89094C44Da98b954EedeAC495271d0F", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
         {"address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
         {"address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "cg_id": "wrapped-bitcoin", "decimals": "8"},  # noqa: E501
+        {"address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "symbol": "wstETH", "cg_id": "wrapped-steth", "decimals": "18"},  # noqa: E501
+        {
+            "address": "0xBe9895146f7AF43049ca1c1AE358B0541Ea49704",
+            "symbol": "cbETH",
+            "cg_id": "coinbase-wrapped-staked-eth",
+            "decimals": "18",
+        },  # noqa: E501
+        {"address": "0xae78736Cd615f374D3085123A210448E74Fc6393", "symbol": "rETH", "cg_id": "rocket-pool-eth", "decimals": "18"},  # noqa: E501
+        {"address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee", "symbol": "weETH", "cg_id": "wrapped-eeth", "decimals": "18"},  # noqa: E501
         {"address": "0x514910771af9ca656af840dff83e8264ecf986ca", "symbol": "LINK", "cg_id": "chainlink", "decimals": "18"},  # noqa: E501
         {"address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", "symbol": "UNI", "cg_id": "uniswap", "decimals": "18"},  # noqa: E501
         {"address": "0x7fc66500c84a76ad7e9c93437e0273038f7e64ee", "symbol": "AAVE", "cg_id": "aave", "decimals": "18"},  # noqa: E501
@@ -42,16 +51,24 @@ _TRACKED_TOKENS: dict[int, list[dict[str, str]]] = {
         {"address": "0x6b3595068778dd592e39a122f4f5a5cf09c90fe2", "symbol": "SUSHI", "cg_id": "sushi", "decimals": "18"},  # noqa: E501
         {"address": "0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2", "symbol": "MKR", "cg_id": "maker", "decimals": "18"},  # noqa: E501
     ],
-    8453: [  # Base (9 major tokens)
+    8453: [  # Base (12 major assets spanning spot, lending, and staking)
         {"address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "cg_id": "usd-coin", "decimals": "6"},  # noqa: E501
         {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "cg_id": "weth", "decimals": "18"},  # noqa: E501
         {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "cg_id": "dai", "decimals": "18"},  # noqa: E501
         {
-            "address": "0xd4d42f0b6def4ce0383636d504adfc00e50ed41f",
+            "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22",
             "symbol": "cbETH",
             "cg_id": "coinbase-wrapped-staked-eth",
             "decimals": "18",
         },  # noqa: E501
+        {"address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "symbol": "wstETH", "cg_id": "wrapped-steth", "decimals": "18"},  # noqa: E501
+        {
+            "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+            "symbol": "cbBTC",
+            "cg_id": "coinbase-wrapped-btc",
+            "decimals": "8",
+        },  # noqa: E501
+        {"address": "0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A", "symbol": "weETH", "cg_id": "wrapped-eeth", "decimals": "18"},  # noqa: E501
         {
             "address": "0x940181a94a02757d5b3642341111d8f88a6d7efa",
             "symbol": "AERO",
@@ -233,12 +250,11 @@ async def get_wallet_portfolio(
 
 TOOL = ToolDefinition(
     name="get_wallet_portfolio",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Get aggregated token holdings with USD values for a wallet address. "
-        "Tracks 15+ major tokens on Ethereum "
-        "(USDC, USDT, DAI, WETH, WBTC, LINK, UNI, AAVE, ARB, OP, LDO, stETH, CRV, SUSHI, MKR) "
-        "and 9+ on Base. Sorted by USD value. Returns up to 20 holdings. "
+        "Tracks 19 major assets on Ethereum and 12 on Base, including spot, lending, liquid-staking, "
+        "restaking, and stablecoin assets. Sorted by USD value. Returns up to 20 holdings. "
         "Includes native ETH balance in the holdings list — calling get_eth_balance "
         "separately after this is redundant."
     ),

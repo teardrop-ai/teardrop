@@ -362,3 +362,8 @@ class TestRegistration:
 
         names = {t.name for t in _ALL_TOOLS}
         assert "get_lending_rates" in names
+
+    def test_tool_version_reflects_registry_expansion(self):
+        from tools.definitions.get_lending_rates import TOOL
+
+        assert TOOL.version == "1.1.0"

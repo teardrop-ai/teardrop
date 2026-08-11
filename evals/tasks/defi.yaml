@@ -147,5 +147,47 @@
     "max_cost_usdc": 700000,
     "scorer": "llm_judge",
     "rubric": "Calls get_token_price_historical with days=90 and stats_only=true, uses high_30d and std_30d directly, compares price_end with dca_baseline_90d, and explicitly reports dca_baseline_90d_partial or missing data without fabricating values."
+  },
+  {
+    "id": "defi.read_contract.caller_context.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Use read_contract, not a convenience balance tool, to call the read-only balanceOf(address) view on the Ethereum USDC contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 for wallet 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 at the latest block. Pass the wallet as caller_address and use args_json for the balanceOf argument. Return the balance and state the caller context."
+      }
+    ],
+    "expected_tool_calls": ["read_contract"],
+    "expected_tool_args": {
+      "read_contract": {
+        "caller_address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+      }
+    },
+    "expected_text_contains": ["balance", "caller"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 700000,
+    "scorer": "llm_judge",
+    "rubric": "Calls read_contract with caller_address context, uses a view-only ABI, reports the returned balance, and does not claim that a transaction was signed or submitted."
+  },
+  {
+    "id": "defi.lending_rates.usds_registry.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Compare the current USDS supply and borrow APYs on Aave v3 and Compound v3 on Ethereum mainnet. Query both protocols for the USDS asset, report the live APYs or clearly label any missing data, and do not invent rates."
+      }
+    ],
+    "expected_tool_calls": ["get_lending_rates"],
+    "expected_tool_args": {
+      "get_lending_rates": {
+        "protocol": "all",
+        "chain_id": 1,
+        "assets": ["USDS"]
+      }
+    },
+    "expected_text_contains": ["USDS", "Aave", "Compound", "APY"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 700000,
+    "scorer": "llm_judge",
+    "rubric": "Calls get_lending_rates with protocol=all, chain_id=1, and assets=[USDS]. Compares Aave v3 and Compound v3 supply and borrow APYs using live values when available, and labels missing or partial data instead of fabricating rates."
   }
 ]

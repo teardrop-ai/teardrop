@@ -39,6 +39,10 @@ async def test_get_yield_rates_preserves_apy_mean_7d(monkeypatch):
     assert result["total_matching"] == 1
     assert result["pools"][0]["apy_mean_7d"] == pytest.approx(5.0)
     assert result["pools"][0]["apy_mean_30d"] == pytest.approx(4.7)
+    assert result["provenance"]["provider"] == "DeFiLlama"
+    assert result["provenance"]["cache_hit"] is False
+    assert result["provenance"]["source_fetched_at"] is not None
+    assert result["provenance"]["source_urls"] == ["https://yields.llama.fi/pools"]
 
 
 @pytest.mark.anyio
@@ -88,7 +92,43 @@ async def test_get_yield_rates_uses_redis_cache_when_available(monkeypatch):
 
     assert result["total_matching"] == 1
     assert result["pools"][0]["project"] == "aave-v3"
+    assert result["provenance"]["cache_hit"] is True
+    assert result["provenance"]["source_fetched_at"] is None
+    assert result["provenance"]["cache_age_seconds"] is None
     mock_fetch.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_invalid_cached_source_timestamp_is_null(monkeypatch):
+    class _FakeRedis:
+        async def get(self, key):
+            return (
+                '{"data":[{"pool":"pool-1","project":"aave-v3","symbol":"USDC",'
+                '"chain":"Ethereum","tvlUsd":2000000,"apy":5.2}],'
+                '"source_fetched_at":"invalid"}'
+            )
+
+    monkeypatch.setattr("tools.definitions.get_yield_rates.get_redis", lambda: _FakeRedis())
+    monkeypatch.setattr("tools.definitions.get_yield_rates._fetch_pools", AsyncMock(return_value=[]))
+
+    result = await get_yield_rates(min_tvl_usd=0, limit=5)
+
+    assert result["provenance"]["cache_hit"] is True
+    assert result["provenance"]["source_fetched_at"] is None
+    assert result["provenance"]["cache_age_seconds"] is None
+
+
+@pytest.mark.anyio
+async def test_get_yield_rates_failed_fetch_has_no_source_timestamp(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_yield_rates.get_redis", lambda: None)
+    monkeypatch.setattr("tools.definitions.get_yield_rates._pools_cache", {})
+    monkeypatch.setattr("tools.definitions.get_yield_rates._fetch_pools", AsyncMock(return_value=[]))
+
+    result = await get_yield_rates(min_tvl_usd=0, limit=5)
+
+    assert result["pools"] == []
+    assert result["provenance"]["cache_hit"] is False
+    assert result["provenance"]["source_fetched_at"] is None
 
 
 @pytest.mark.anyio

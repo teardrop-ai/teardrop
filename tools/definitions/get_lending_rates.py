@@ -392,9 +392,10 @@ async def get_lending_rates(
 
 TOOL = ToolDefinition(
     name="get_lending_rates",
-    version="1.0.0",
+    version="1.1.0",
     description=(
-        "Get current on-chain lending supply/borrow rates for Aave v3 and Compound v3 on Ethereum or Base. "
+        "Get current on-chain lending supply/borrow rates for expanded Aave v3 reserves and Compound v3 markets "
+        "on Ethereum or Base. "
         "Returns per-asset APY snapshots and Compound utilization where available. "
         "Useful for protocol-specific stablecoin yield comparisons (e.g., USDC on Aave vs Compound)."
     ),

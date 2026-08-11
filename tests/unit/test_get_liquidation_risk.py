@@ -261,7 +261,7 @@ class TestCompound:
         result = await get_liquidation_risk(wallet_addresses=[_WALLET_A], chain_id=1)
 
         markets = result["results"][0]["compound"]
-        assert len(markets) == 3  # All 3 Ethereum Compound markets return same mock
+        assert len(markets) == 4  # All Ethereum Compound markets return same mock
         for m in markets:
             assert m["risk_tier"] == "borrowing"
             assert m["is_liquidatable"] is False
@@ -331,7 +331,7 @@ class TestFailureIsolation:
 
         r = result["results"][0]
         assert r["aave"] is None
-        assert len(r["compound"]) == 3
+        assert len(r["compound"]) == 4
         error_protocols = {e["protocol"] for e in r["errors"]}
         assert "aave_v3" in error_protocols
         # overall_tier reflects compound borrowing state
@@ -437,7 +437,7 @@ class TestOutputSchema:
         from tools.definitions.get_liquidation_risk import TOOL
 
         assert TOOL.name == "get_liquidation_risk"
-        assert TOOL.version == "1.0.0"
+        assert TOOL.version == "1.1.0"
         assert "liquidation" in TOOL.tags
         assert "aave" in TOOL.tags
         assert "compound" in TOOL.tags

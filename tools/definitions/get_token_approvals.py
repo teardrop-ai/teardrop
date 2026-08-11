@@ -296,10 +296,11 @@ async def get_token_approvals(
 
 TOOL = ToolDefinition(
     name="get_token_approvals",
-    version="1.0.0",
+    version="1.1.0",
     description=(
-        "Audit ERC-20 token allowances for a wallet address. Returns all non-zero approvals "
-        "across curated DeFi protocol spenders (Uniswap, Aave, Compound, 1inch, 0x, OpenSea). "
+        "Audit ERC-20 token allowances for a wallet address. By default, returns all non-zero approvals "
+        "for assets in the shared tracked-asset registry across curated DeFi protocol spenders "
+        "(Uniswap, Aave, Compound, 1inch, 0x, OpenSea). "
         "Flags unlimited approvals with risk levels: high=unknown spender, medium=trusted protocol, "
         "low=bounded amount. Use before swaps to verify approval state, or after security incidents "
         "to detect active exploit vectors. Ethereum mainnet and Base only."

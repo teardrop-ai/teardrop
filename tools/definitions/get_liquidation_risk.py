@@ -368,9 +368,9 @@ async def get_liquidation_risk(
 
 TOOL = ToolDefinition(
     name="get_liquidation_risk",
-    version="1.0.0",
+    version="1.1.0",
     description=(
-        "Assess DeFi liquidation risk for up to 50 wallets across Aave v3 and Compound v3 on "
+        "Assess DeFi liquidation risk for up to 50 wallets across expanded Aave v3 and Compound v3 coverage on "
         "Ethereum (chain_id=1) or Base (chain_id=8453). Returns per-wallet health factor and "
         "tiered risk classification (liquidatable, critical, warning, caution, healthy, no_debt) "
         "plus an overall_tier aggregate across protocols, and a summary count for alert "

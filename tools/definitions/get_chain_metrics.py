@@ -13,6 +13,7 @@ import aiohttp
 from pydantic import BaseModel, Field, field_validator
 
 from tools._internals._http_session import get_defillama_session
+from tools._internals.provenance import DataProvenance, attach_provenance, utc_now_iso
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,11 @@ _RETRY_BACKOFF_SECONDS = 0.25
 
 _result_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _chains_cache: tuple[float, list[dict[str, Any]]] | None = None
+_chains_cache_source_fetched_at: str | None = None
 _chain_history_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_chain_history_cache_source_fetched_at: dict[str, str | None] = {}
 _chain_fees_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_chain_fees_cache_source_fetched_at: dict[str, str | None] = {}
 
 
 def _store_cached(cache: dict[str, tuple[float, Any]], key: str, expires_at: float, value: Any, now: float) -> None:
@@ -114,6 +118,10 @@ class GetChainMetricsOutput(BaseModel):
     note: str
     error: str | None = None
     error_type: str | None = None
+    provenance: DataProvenance | None = Field(
+        default=None,
+        description="Source and freshness metadata for the DeFiLlama response.",
+    )
 
 
 def _safe_float(value: Any) -> float | None:
@@ -227,14 +235,16 @@ def _cached_chains(now: float) -> list[dict[str, Any]] | None:
 
 
 async def _get_chains_snapshot(now: float) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
+    global _chains_cache, _chains_cache_source_fetched_at
+
     cached = _cached_chains(now)
     if cached is not None:
         return cached, None, None
 
     payload, error_type, error = await _fetch_chains()
     if payload is not None:
-        global _chains_cache
         _chains_cache = (now + _CACHE_TTL_SECONDS, payload)
+        _chains_cache_source_fetched_at = utc_now_iso()
     return payload, error_type, error
 
 
@@ -247,6 +257,7 @@ async def _get_chain_history(chain: str, now: float) -> tuple[list[dict[str, Any
     payload, error_type, error = await _fetch_chain_history(chain)
     if payload is not None:
         _store_cached(_chain_history_cache, cache_key, now + _CACHE_TTL_SECONDS, payload, now)
+        _chain_history_cache_source_fetched_at[cache_key] = utc_now_iso()
     return payload, error_type, error
 
 
@@ -259,6 +270,7 @@ async def _get_chain_fees(chain: str, now: float) -> tuple[dict[str, Any] | None
     payload, error_type, error = await _fetch_chain_fees(chain)
     if payload is not None:
         _store_cached(_chain_fees_cache, cache_key, now + _CACHE_TTL_SECONDS, payload, now)
+        _chain_fees_cache_source_fetched_at[cache_key] = utc_now_iso()
     return payload, error_type, error
 
 
@@ -351,6 +363,28 @@ def _cache_key(chains: list[str] | None, days: int, limit: int) -> str:
     )
 
 
+def _source_urls(selected: list[dict[str, Any]]) -> list[str]:
+    urls = [f"{_DEFILLAMA_BASE_URL}/chains"]
+    for item in selected:
+        chain = item.get("name")
+        if not isinstance(chain, str) or not chain.strip():
+            continue
+        encoded_chain = quote(chain, safe="")
+        urls.extend(
+            [
+                f"{_DEFILLAMA_BASE_URL}/v2/historicalChainTvl/{encoded_chain}",
+                f"{_DEFILLAMA_BASE_URL}/overview/fees/{encoded_chain}",
+            ]
+        )
+    return list(dict.fromkeys(urls))
+
+
+def _earliest_source_timestamp(timestamps: list[str | None]) -> str | None:
+    if not timestamps or any(not isinstance(timestamp, str) for timestamp in timestamps):
+        return None
+    return min(timestamps)
+
+
 async def get_chain_metrics(
     chains: list[str] | None = None,
     days: int = 30,
@@ -365,8 +399,9 @@ async def get_chain_metrics(
     now = time.monotonic()
     cached = _result_cache.get(key)
     if cached and now < cached[0]:
-        return cached[1]
+        return attach_provenance(cached[1], "DeFiLlama", [], cache_hit=True)
 
+    snapshot_cache_hit = _chains_cache is not None and now < _chains_cache[0]
     snapshot, snapshot_error_type, snapshot_error = await _get_chains_snapshot(now)
     if snapshot is None:
         result = GetChainMetricsOutput(
@@ -377,8 +412,17 @@ async def get_chain_metrics(
             error=snapshot_error or "DeFiLlama /chains request failed",
             error_type=snapshot_error_type or "upstream_error",
         ).model_dump()
+        result = attach_provenance(
+            result,
+            "DeFiLlama",
+            [f"{_DEFILLAMA_BASE_URL}/chains"],
+            source_fetched_at=None,
+            cache_ttl_seconds=_ERROR_CACHE_TTL_SECONDS,
+        )
         _store_cached(_result_cache, key, now + _ERROR_CACHE_TTL_SECONDS, result, now)
         return result
+
+    source_timestamps: list[str | None] = [_chains_cache_source_fetched_at]
 
     snapshots_by_name: dict[str, dict[str, Any]] = {}
     for item in snapshot:
@@ -401,6 +445,13 @@ async def get_chain_metrics(
             reverse=True,
         )[:validated_limit]
 
+    supplement_cache_hit = any(
+        (cached_history := _chain_history_cache.get(str(item["name"]).casefold())) is not None
+        and now < cached_history[0]
+        or (cached_fees := _chain_fees_cache.get(str(item["name"]).casefold())) is not None
+        and now < cached_fees[0]
+        for item in selected
+    )
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SUPPLEMENTS)
     task_by_chain = {
         str(item["name"]): asyncio.create_task(_fetch_chain_supplement(str(item["name"]), now, semaphore)) for item in selected
@@ -429,6 +480,14 @@ async def get_chain_metrics(
                 (None, "upstream_error", f"Chain metrics supplement failed: {type(exc).__name__}"),
                 (None, "upstream_error", f"Chain metrics supplement failed: {type(exc).__name__}"),
             )
+
+    for item in selected:
+        chain_key = str(item["name"]).casefold()
+        history_result, fees_result = supplement_by_chain[chain_key]
+        if history_result[0] is not None:
+            source_timestamps.append(_chain_history_cache_source_fetched_at.get(chain_key))
+        if fees_result[0] is not None:
+            source_timestamps.append(_chain_fees_cache_source_fetched_at.get(chain_key))
 
     entries: list[ChainMetricsEntry] = []
     if normalized_chains:
@@ -462,13 +521,21 @@ async def get_chain_metrics(
             "Partial upstream gaps are reported per row."
         ),
     ).model_dump()
+    result = attach_provenance(
+        result,
+        "DeFiLlama",
+        _source_urls(selected),
+        cache_hit=snapshot_cache_hit or supplement_cache_hit,
+        source_fetched_at=_earliest_source_timestamp(source_timestamps),
+        cache_ttl_seconds=_CACHE_TTL_SECONDS,
+    )
     _store_cached(_result_cache, key, now + _CACHE_TTL_SECONDS, result, now)
     return result
 
 
 TOOL = ToolDefinition(
     name="get_chain_metrics",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Compare blockchain ecosystem health using DeFiLlama current TVL, 7-day and 30-day TVL "
         "changes, and aggregate fee activity. Pass chains such as ['Ethereum', 'Arbitrum', 'Solana'] "

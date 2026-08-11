@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from eth_abi import decode as abi_decode
@@ -275,13 +275,13 @@ def _build_mock_w3(
 
     mock_w3.eth.contract.return_value = mock_contract
 
-    # block_number is an async property on AsyncWeb3 — awaitable on access
+    # block_number is an async property on AsyncWeb3 - awaitable on access.
     async def _bn():
         if "block_number" in raise_on:
             raise Exception("block_number failure")
         return block_number
 
-    mock_w3.eth.block_number = _bn()
+    type(mock_w3.eth).block_number = PropertyMock(side_effect=_bn)
 
     return mock_w3
 
@@ -421,12 +421,14 @@ class TestCompoundV3:
         # base_decimals differ (USDC/USDT=6, WETH=18) so formatted values differ.
         # At least the 6-decimal markets should show the full 5000 supply.
         markets = result["compound_v3"]
-        assert len(markets) == 3
+        assert len(markets) == 4
         usdc_markets = [m for m in markets if m["base_asset_symbol"] in ("USDC", "USDT")]
         assert len(usdc_markets) == 2
         for m in usdc_markets:
             assert float(m["supplied_amount"]) == 5000.0
             assert m["is_liquidatable"] is False
+        usdc_market = next(m for m in markets if m["base_asset_symbol"] == "USDC")
+        assert usdc_market["base_asset_address"] == "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 
     async def test_market_with_collateral(self, test_settings, monkeypatch):
         from tools.definitions.get_defi_positions import get_defi_positions
@@ -455,13 +457,13 @@ class TestCompoundV3:
         result = await get_defi_positions(wallet_address=_WALLET, chain_id=1)
 
         markets = result["compound_v3"]
-        assert len(markets) == 3
+        assert len(markets) == 4
         # Only USDC/USDT (6-dec) markets will show the full 1000 borrow;
         # WETH market sees same raw int / 1e18 → effectively 0. Verify collateral
         # and liquidation status are tracked on every market regardless.
         for m in markets:
-            assert len(m["collateral"]) == 1
-            assert m["collateral"][0]["amount"] == str(10**18)
+            assert len(m["collateral"]) >= 1
+            assert all(c["amount"] == str(10**18) for c in m["collateral"])
         usdc_like = [m for m in markets if m["base_asset_symbol"] in ("USDC", "USDT")]
         assert len(usdc_like) == 2
         for m in usdc_like:
@@ -764,10 +766,43 @@ class TestOutputSchema:
         from tools.definitions.get_defi_positions import TOOL
 
         assert TOOL.name == "get_defi_positions"
-        assert TOOL.version == "1.0.0"
+        assert TOOL.version == "1.1.0"
         assert "aave" in TOOL.tags
         assert "compound" in TOOL.tags
         assert "uniswap" in TOOL.tags
+
+    def test_registry_includes_verified_expansions(self):
+        import tools.definitions.get_defi_positions as gdp
+
+        assert gdp._AAVE_V3_DATA_PROVIDER == {
+            1: "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD",
+            8453: "0x0F43731EB8d45A581f4a36DD74F5f358bc90C73A",
+        }
+
+        ethereum_reserves = {reserve["symbol"]: reserve for reserve in gdp._AAVE_V3_TRACKED_RESERVES[1]}
+        assert ethereum_reserves["USDS"] == {
+            "symbol": "USDS",
+            "address": "0xdC035D45d973E3EC169d2276DDab16f1e407384F",
+            "decimals": "18",
+        }
+        assert ethereum_reserves["rsETH"]["decimals"] == "18"
+
+        base_reserves = {reserve["symbol"]: reserve for reserve in gdp._AAVE_V3_TRACKED_RESERVES[8453]}
+        assert base_reserves["wrsETH"]["address"] == "0xEDfa23602D0EC14714057867A78d01e94176BEA0"
+
+        for chain_id, market_address, base_address in (
+            (1, "0x5D409e56D886231aDAf00c8775665AD0f9897b56", "0xdC035D45d973E3EC169d2276DDab16f1e407384F"),
+            (8453, "0x2c776041CCFe903071AF44aa147368a9c8EEA518", "0x820C137fa70C8691f0e44Dc420a5e53c168921Dc"),
+        ):
+            market = next(m for m in gdp._COMPOUND_V3_MARKETS[chain_id] if m["name"] == "cUSDSv3")
+            assert market["address"] == market_address
+            assert market["base_asset_address"] == base_address
+            assert market["base_decimals"] == "18"
+
+        for markets in gdp._COMPOUND_V3_MARKETS.values():
+            for market in markets:
+                assert Web3.is_checksum_address(market["base_asset_address"])
+                assert market["base_asset_address"] != market["address"]
 
     async def test_get_defi_positions_timeout_handling(self, monkeypatch):
         """Test that get_defi_positions handles slow protocol branches with 45s timeouts."""

@@ -15,6 +15,7 @@ import aiohttp
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from tools._internals._http_session import get_defillama_session
+from tools._internals.provenance import DataProvenance, attach_provenance
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,20 @@ _SLUG_ALIASES: dict[str, str] = {
     "curve": "curve-dex",
     "maker": "makerdao",
 }
+
+
+def _current_tvl_url(slug: str) -> str:
+    return f"{_DEFILLAMA_BASE_URL}/tvl/{slug}"
+
+
+def _protocol_detail_url(slug: str) -> str:
+    return f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
+
+
+def _source_urls(slug: str, include_historical: bool) -> list[str]:
+    if include_historical:
+        return [_protocol_detail_url(slug), _current_tvl_url(slug)]
+    return [_current_tvl_url(slug)]
 
 
 def _normalize_protocol_slug(raw: str) -> str:
@@ -146,6 +161,10 @@ class GetProtocolTvlOutput(BaseModel):
     note: str
     error: str | None = None
     error_type: str | None = None
+    provenance: DataProvenance | None = Field(
+        default=None,
+        description="Source and freshness metadata for the DeFiLlama response.",
+    )
 
 
 # ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -153,7 +172,7 @@ class GetProtocolTvlOutput(BaseModel):
 
 async def _fetch_current_tvl(slug: str) -> tuple[float | None, str | None, str | None]:
     """Call GET /tvl/{slug} — returns (value, error_type, error_message)."""
-    url = f"{_DEFILLAMA_BASE_URL}/tvl/{slug}"
+    url = _current_tvl_url(slug)
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
             session = await get_defillama_session()
@@ -185,7 +204,7 @@ async def _fetch_current_tvl(slug: str) -> tuple[float | None, str | None, str |
 
 async def _fetch_protocol_detail(slug: str) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Call GET /protocol/{slug} — returns (payload, error_type, error_message)."""
-    url = f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
+    url = _protocol_detail_url(slug)
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
             session = await get_defillama_session()
@@ -344,8 +363,9 @@ def _error_result(
     note: str,
     error_type: str,
     error: str,
+    include_historical: bool = False,
 ) -> dict[str, Any]:
-    return GetProtocolTvlOutput(
+    result = GetProtocolTvlOutput(
         protocol=protocol,
         current_tvl_usd=None,
         tvl_7d_change_pct=None,
@@ -356,6 +376,13 @@ def _error_result(
         error=error,
         error_type=error_type,
     ).model_dump()
+    return attach_provenance(
+        result,
+        "DeFiLlama",
+        _source_urls(protocol, include_historical),
+        cache_ttl_seconds=60,
+        source_fetched_at=None,
+    )
 
 
 async def _get_protocol_tvl_single(
@@ -372,7 +399,12 @@ async def _get_protocol_tvl_single(
 
     cached = _tvl_cache.get(cache_key)
     if cached and now < cached[0]:
-        return cached[1]
+        return attach_provenance(
+            cached[1],
+            "DeFiLlama",
+            [],
+            cache_hit=True,
+        )
 
     if not include_historical:
         # Fast path: single lightweight endpoint.
@@ -392,6 +424,7 @@ async def _get_protocol_tvl_single(
                 note="Protocol not found or DeFiLlama unavailable.",
                 error_type=error_type,
                 error=error,
+                include_historical=include_historical,
             )
             _tvl_cache[cache_key] = (now + 60, result)  # short TTL for error/not-found results
             return result
@@ -405,6 +438,12 @@ async def _get_protocol_tvl_single(
             historical_series=None,
             note="TVL sourced from DeFiLlama. Chain breakdown requires include_historical=True.",
         ).model_dump()
+        result = attach_provenance(
+            result,
+            "DeFiLlama",
+            _source_urls(slug, include_historical=False),
+            cache_ttl_seconds=_TVL_CACHE_TTL,
+        )
     else:
         # Detail path: richer endpoint with chains + full history. Fetch /tvl
         # in parallel so detail timeouts do not serialize fallback latency.
@@ -458,6 +497,12 @@ async def _get_protocol_tvl_single(
                     error=detail_error,
                     error_type=detail_error_type,
                 ).model_dump()
+                result = attach_provenance(
+                    result,
+                    "DeFiLlama",
+                    _source_urls(slug, include_historical=True),
+                    cache_ttl_seconds=60,
+                )
                 _tvl_cache[cache_key] = (now + 60, result)
                 return result
 
@@ -468,6 +513,7 @@ async def _get_protocol_tvl_single(
                 note="Protocol not found or DeFiLlama unavailable.",
                 error_type=error_type,
                 error=error,
+                include_historical=True,
             )
             _tvl_cache[cache_key] = (now + 60, result)  # short TTL for error/not-found results
             return result
@@ -514,6 +560,12 @@ async def _get_protocol_tvl_single(
                 "Fees/revenue are included when DeFiLlama reports them for the protocol."
             ),
         ).model_dump()
+        result = attach_provenance(
+            result,
+            "DeFiLlama",
+            _source_urls(slug, include_historical=True),
+            cache_ttl_seconds=_TVL_CACHE_TTL,
+        )
 
     _tvl_cache[cache_key] = (now + _TVL_CACHE_TTL, result)
     return result
@@ -574,6 +626,7 @@ async def get_protocol_tvl(
                         note="Protocol TVL lookup failed.",
                         error_type="upstream_error",
                         error=f"Protocol TVL lookup failed: {type(value).__name__}",
+                        include_historical=include_historical,
                     )
                 )
                 continue
@@ -584,6 +637,7 @@ async def get_protocol_tvl(
                     note="Protocol TVL lookup timed out in batch mode.",
                     error_type="batch_timeout",
                     error="Batch timeout exceeded while waiting for protocol TVL result.",
+                    include_historical=include_historical,
                 )
             )
 
@@ -600,7 +654,7 @@ async def get_protocol_tvl(
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
-    version="1.2.0",
+    version="1.3.0",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
         "Returns current TVL in USD, 7-day and 30-day percentage change, and a "
