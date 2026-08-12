@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -67,6 +67,49 @@ async def test_create_agent_schedule(api_client, test_settings, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_create_agent_schedule_passes_future_first_run_at(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+    create_mock = AsyncMock(return_value=_schedule())
+    monkeypatch.setattr("teardrop.routers.agent_schedules.create_scheduled_run", create_mock)
+    first_run_at = datetime.now(timezone.utc) + timedelta(hours=2)
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={
+            "name": "Daily check",
+            "prompt": "Summarize risk",
+            "interval_seconds": 3600,
+            "first_run_at": first_run_at.isoformat(),
+        },
+    )
+
+    assert resp.status_code == 201
+    assert create_mock.await_args.kwargs["first_run_at"] == first_run_at
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("first_run_at", ["2030-01-01T00:00:00", "2020-01-01T00:00:00Z"])
+async def test_create_agent_schedule_rejects_invalid_first_run_at(api_client, test_settings, monkeypatch, first_run_at):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={
+            "name": "Daily check",
+            "prompt": "Summarize risk",
+            "interval_seconds": 3600,
+            "first_run_at": first_run_at,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_create_agent_schedule_rejects_limit(api_client, test_settings, monkeypatch):
     test_settings.scheduled_runs_enabled = True
     test_settings.scheduled_runs_max_per_org = 1
@@ -114,6 +157,55 @@ async def test_update_agent_schedule_only_passes_set_fields(api_client, test_set
     assert resp.status_code == 200
     kwargs = update_mock.await_args.kwargs
     assert kwargs == {"enabled": False}
+
+
+@pytest.mark.anyio
+async def test_run_agent_schedule_now_queues_enabled_schedule(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    schedule = _schedule()
+    queue_mock = AsyncMock(return_value=schedule)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.get_scheduled_run", AsyncMock(return_value=schedule))
+    monkeypatch.setattr("teardrop.routers.agent_schedules.queue_scheduled_run_now", queue_mock)
+
+    resp = await api_client.post("/agent/schedules/sched-1/run")
+
+    assert resp.status_code == 202
+    assert resp.json()["schedule_id"] == "sched-1"
+    assert resp.json()["status"] == "queued"
+    queue_mock.assert_awaited_once_with("sched-1", "test-org-id")
+
+
+@pytest.mark.anyio
+async def test_run_agent_schedule_now_rejects_disabled_schedule(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    schedule = _schedule()
+    schedule.enabled = False
+    queue_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.agent_schedules.get_scheduled_run", AsyncMock(return_value=schedule))
+    monkeypatch.setattr("teardrop.routers.agent_schedules.queue_scheduled_run_now", queue_mock)
+
+    resp = await api_client.post("/agent/schedules/sched-1/run")
+
+    assert resp.status_code == 409
+    queue_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_run_agent_schedule_now_rejects_event_trigger(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    schedule = _schedule()
+    schedule.schedule_kind = "event"
+    queue_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.agent_schedules.get_scheduled_run", AsyncMock(return_value=schedule))
+    monkeypatch.setattr("teardrop.routers.agent_schedules.queue_scheduled_run_now", queue_mock)
+
+    resp = await api_client.post("/agent/schedules/sched-1/run")
+
+    assert resp.status_code == 404
+    queue_mock.assert_not_awaited()
 
 
 @pytest.mark.anyio

@@ -105,11 +105,12 @@ async def create_scheduled_run(
     prompt: str,
     interval_seconds: int,
     callback_url: str | None,
+    first_run_at: datetime | None = None,
 ) -> ScheduledRun:
     pool = _get_pool()
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
-    next_run_at = now + timedelta(seconds=interval_seconds)
+    next_run_at = first_run_at or now + timedelta(seconds=interval_seconds)
     row = await pool.fetchrow(
         f"""
         INSERT INTO scheduled_runs (
@@ -259,7 +260,7 @@ async def update_scheduled_run(
     if interval_seconds is not _UNSET:
         interval_placeholder = _add(interval_seconds)
         updates.append(f"interval_seconds = {interval_placeholder}")
-        updates.append(f"next_run_at = NOW() + ({interval_placeholder} * INTERVAL '1 second')")
+        updates.append(f"next_run_at = NOW() + ({interval_placeholder}::int * INTERVAL '1 second')")
     if enabled is not _UNSET:
         enabled_placeholder = _add(enabled)
         updates.append(f"enabled = {enabled_placeholder}")
@@ -283,6 +284,22 @@ async def update_scheduled_run(
         RETURNING {_RUN_COLUMNS}
         """,
         *params,
+    )
+    return _row_to_scheduled_run(row) if row is not None else None
+
+
+async def queue_scheduled_run_now(schedule_id: str, org_id: str) -> ScheduledRun | None:
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        f"""
+        UPDATE scheduled_runs
+        SET next_run_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND org_id = $2
+          AND schedule_kind = 'interval' AND enabled = TRUE
+        RETURNING {_RUN_COLUMNS}
+        """,
+        schedule_id,
+        org_id,
     )
     return _row_to_scheduled_run(row) if row is not None else None
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -18,6 +19,7 @@ from scheduling import (
     get_scheduled_run,
     list_scheduled_run_results,
     list_scheduled_runs,
+    queue_scheduled_run_now,
     update_scheduled_run,
 )
 from teardrop.config import get_settings
@@ -32,6 +34,7 @@ class CreateScheduledRunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8_000)
     interval_seconds: int = Field(..., ge=1)
     callback_url: str | None = Field(default=None, max_length=2048)
+    first_run_at: datetime | None = None
 
 
 class UpdateScheduledRunRequest(BaseModel):
@@ -82,6 +85,12 @@ class ScheduledRunResultsResponse(BaseModel):
 
 class ScheduleDeletedResponse(BaseModel):
     status: Literal["deleted"]
+
+
+class ScheduleRunNowResponse(BaseModel):
+    schedule_id: str
+    status: Literal["queued"]
+    next_run_at: str = Field(..., description="ISO 8601 timestamp.")
 
 
 def _serialize_schedule(schedule) -> dict[str, object]:
@@ -145,6 +154,23 @@ def _validate_interval(interval_seconds: int) -> None:
         )
 
 
+def _normalize_first_run_at(first_run_at: datetime | None) -> datetime | None:
+    if first_run_at is None:
+        return None
+    if first_run_at.tzinfo is None or first_run_at.utcoffset() is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="first_run_at must include a timezone.",
+        )
+    normalized = first_run_at.astimezone(timezone.utc)
+    if normalized <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="first_run_at must be in the future.",
+        )
+    return normalized
+
+
 @router.post("/agent/schedules", tags=["Agent"], response_model=ScheduledRunItem, status_code=status.HTTP_201_CREATED)
 async def create_agent_schedule(
     body: CreateScheduledRunRequest,
@@ -155,6 +181,7 @@ async def create_agent_schedule(
     org_id = _require_org_id(payload, "No org_id in token — scheduled runs require an org-scoped credential.")
     user_id = str(payload.get("sub") or "")
     _validate_interval(body.interval_seconds)
+    first_run_at = _normalize_first_run_at(body.first_run_at)
     await _validate_callback_url(body.callback_url)
     if await count_scheduled_runs(org_id) >= settings.scheduled_runs_max_per_org:
         raise HTTPException(
@@ -168,6 +195,7 @@ async def create_agent_schedule(
         prompt=body.prompt,
         interval_seconds=body.interval_seconds,
         callback_url=body.callback_url,
+        first_run_at=first_run_at,
     )
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=_serialize_schedule(schedule))
 
@@ -190,6 +218,34 @@ async def get_agent_schedule(schedule_id: str, payload: dict = Depends(require_a
     if schedule is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled run not found.")
     return JSONResponse(content=_serialize_schedule(schedule))
+
+
+@router.post(
+    "/agent/schedules/{schedule_id}/run",
+    tags=["Agent"],
+    response_model=ScheduleRunNowResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_agent_schedule_now(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
+    if not settings.scheduled_runs_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled runs are disabled.")
+    org_id = _require_org_id(payload, "No org_id in token — scheduled runs require an org-scoped credential.")
+    schedule = await get_scheduled_run(schedule_id, org_id)
+    if schedule is None or schedule.schedule_kind != "interval":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled run not found.")
+    if not schedule.enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Scheduled run is disabled.")
+    queued = await queue_scheduled_run_now(schedule_id, org_id)
+    if queued is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Scheduled run is no longer enabled.")
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "schedule_id": queued.id,
+            "status": "queued",
+            "next_run_at": queued.next_run_at.isoformat(),
+        },
+    )
 
 
 @router.patch("/agent/schedules/{schedule_id}", tags=["Agent"], response_model=ScheduledRunItem)
