@@ -40,6 +40,29 @@ _DELETE_SCHEDULED_RUN_RESULTS_SQL = """
     SELECT COUNT(*) FROM deleted
 """
 
+_DELETE_EVENT_DISPATCH_KEYS_SQL = """
+    WITH candidates AS (
+        SELECT ctid
+                FROM event_dispatch_keys AS dispatch_key
+                WHERE created_at < NOW() - make_interval(days => $1)
+                    AND NOT EXISTS (
+                            SELECT 1
+                            FROM event_dispatch_leases AS lease
+                            WHERE lease.schedule_id = dispatch_key.schedule_id
+                                AND lease.idempotency_key = dispatch_key.idempotency_key
+                                AND lease.status IN ('reserved', 'running')
+                    )
+        ORDER BY created_at
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM event_dispatch_keys
+        WHERE ctid IN (SELECT ctid FROM candidates)
+        RETURNING 1
+    )
+    SELECT COUNT(*) FROM deleted
+"""
+
 _DELETE_ORG_TOOL_EXECUTION_EVENTS_SQL = """
     WITH candidates AS (
         SELECT ctid
@@ -94,6 +117,7 @@ _DELETE_EXPIRED_SIWE_SESSIONS_SQL = """
 class RetentionSweepResult:
     checkpoint_threads: int = 0
     scheduled_run_results: int = 0
+    event_dispatch_keys: int = 0
     org_tool_execution_events: int = 0
     telemetry_run_starts: int = 0
     expired_siwe_login_sessions: int = 0
@@ -103,6 +127,7 @@ class RetentionSweepResult:
         return (
             self.checkpoint_threads
             + self.scheduled_run_results
+            + self.event_dispatch_keys
             + self.org_tool_execution_events
             + self.telemetry_run_starts
             + self.expired_siwe_login_sessions
@@ -216,10 +241,17 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
         )
 
     scheduled_run_results = 0
+    event_dispatch_keys = 0
     if settings.scheduled_run_results_ttl_days > 0:
         scheduled_run_results = await _delete_ttl_rows(
             pool,
             _DELETE_SCHEDULED_RUN_RESULTS_SQL,
+            settings.scheduled_run_results_ttl_days,
+            batch_size,
+        )
+        event_dispatch_keys = await _delete_ttl_rows(
+            pool,
+            _DELETE_EVENT_DISPATCH_KEYS_SQL,
             settings.scheduled_run_results_ttl_days,
             batch_size,
         )
@@ -246,6 +278,7 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
     return RetentionSweepResult(
         checkpoint_threads=checkpoint_threads,
         scheduled_run_results=scheduled_run_results,
+        event_dispatch_keys=event_dispatch_keys,
         org_tool_execution_events=org_tool_execution_events,
         telemetry_run_starts=telemetry_run_starts,
         expired_siwe_login_sessions=expired_siwe_login_sessions,

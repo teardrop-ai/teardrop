@@ -777,9 +777,26 @@ class Settings(BaseSettings):
         default=8,
         ge=1,
         description=(
-            "Maximum number of in-flight event-triggered executions per process. "
+            "Maximum number of in-flight event-triggered executions across the cluster. "
             "Inbound dispatches beyond this return HTTP 429 back-pressure."
         ),
+    )
+    event_triggers_max_concurrency_per_org: int = Field(
+        default=4,
+        ge=1,
+        description="Maximum cluster-wide in-flight event executions for one organization.",
+    )
+    event_triggers_recovery_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Interval for reconciling expired event-dispatch leases.",
+    )
+    event_triggers_recovery_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Maximum expired event-dispatch leases reconciled per recovery tick.",
     )
     event_triggers_prompt_max_chars: int = Field(
         default=12_000,

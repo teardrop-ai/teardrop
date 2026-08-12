@@ -33,9 +33,34 @@ def _event_schedule(enabled: bool = True, trigger_token: str = "tok-abc") -> Sim
     )
 
 
+def _event_result(status: str = "completed") -> SimpleNamespace:
+    return SimpleNamespace(
+        id="result-1",
+        schedule_id="evt-1",
+        org_id="test-org-id",
+        run_id="run-1",
+        status=status,
+        output_text="The event was handled.",
+        cost_usdc=10_000,
+        error="",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 def _enable(monkeypatch, test_settings):
     test_settings.event_triggers_enabled = True
+    test_settings.event_triggers_max_concurrency_per_org = 4
+    test_settings.scheduled_runs_max_consecutive_failures = 5
     monkeypatch.setattr("teardrop.routers.agent_event_triggers.settings", test_settings)
+
+
+def _mock_lease_lifecycle(monkeypatch, *, run_id: str = "evt-run-id") -> AsyncMock:
+    reserve_mock = AsyncMock(return_value=SimpleNamespace(run_id=run_id, outcome="accepted"))
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.reserve_event_dispatch_lease", reserve_mock)
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.start_event_dispatch_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.finish_event_dispatch_lease", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.fail_event_dispatch", AsyncMock(return_value=None))
+    return reserve_mock
 
 
 # ── Management CRUD ──────────────────────────────────────────────────────────
@@ -147,6 +172,36 @@ async def test_dispatch_bad_secret_returns_401(anon_client, test_settings, monke
 
 
 @pytest.mark.anyio
+async def test_dispatch_malformed_json_returns_400(anon_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_event_trigger_for_dispatch",
+        AsyncMock(return_value=(_event_schedule(), _SECRET_HASH)),
+    )
+    resp = await anon_client.post(
+        "/agent/events/tok-abc",
+        content=b"{not-json",
+        headers={"X-Teardrop-Trigger-Secret": _SECRET},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_dispatch_scalar_json_returns_400(anon_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_event_trigger_for_dispatch",
+        AsyncMock(return_value=(_event_schedule(), _SECRET_HASH)),
+    )
+    resp = await anon_client.post(
+        "/agent/events/tok-abc",
+        json=["not", "an", "object"],
+        headers={"X-Teardrop-Trigger-Secret": _SECRET},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
 async def test_dispatch_disabled_trigger_returns_404(anon_client, test_settings, monkeypatch):
     _enable(monkeypatch, test_settings)
     monkeypatch.setattr(
@@ -172,11 +227,8 @@ async def test_dispatch_accepts_and_runs_in_background(anon_client, test_setting
         "teardrop.routers.agent_event_triggers.get_existing_dispatch",
         AsyncMock(return_value=None),
     )
-    monkeypatch.setattr(
-        "teardrop.routers.agent_event_triggers.reserve_event_dispatch",
-        AsyncMock(return_value=("evt-run-id", True)),
-    )
-    exec_mock = AsyncMock(return_value=None)
+    _mock_lease_lifecycle(monkeypatch)
+    exec_mock = AsyncMock(return_value=_event_result())
     monkeypatch.setattr("teardrop.routers.agent_event_triggers.execute_event_run", exec_mock)
 
     resp = await anon_client.post(
@@ -195,6 +247,30 @@ async def test_dispatch_accepts_and_runs_in_background(anon_client, test_setting
     exec_mock.assert_awaited_once()
     assert exec_mock.await_args.kwargs["prompt"] == "Handle payment"
     assert exec_mock.await_args.kwargs["run_id"] == "evt-run-id"
+
+
+@pytest.mark.anyio
+async def test_dispatch_without_idempotency_key_persists_run_identity(anon_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_event_trigger_for_dispatch",
+        AsyncMock(return_value=(_event_schedule(), _SECRET_HASH)),
+    )
+    reserve_mock = _mock_lease_lifecycle(monkeypatch, run_id="generated-run-id")
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.execute_event_run",
+        AsyncMock(return_value=_event_result()),
+    )
+
+    resp = await anon_client.post(
+        "/agent/events/tok-abc",
+        json={"kind": "payment"},
+        headers={"X-Teardrop-Trigger-Secret": _SECRET},
+    )
+
+    assert resp.status_code == 202
+    assert reserve_mock.await_args.kwargs["idempotency_key"].startswith("run:")
+    assert resp.json()["result_path"].endswith("/runs/generated-run-id")
 
 
 @pytest.mark.anyio
@@ -236,8 +312,10 @@ async def test_dispatch_backpressure_returns_429(anon_client, test_settings, mon
         "teardrop.routers.agent_event_triggers.get_existing_dispatch",
         AsyncMock(return_value=None),
     )
-    # Saturate the in-process concurrency counter.
-    monkeypatch.setattr("teardrop.routers.agent_event_triggers._inflight_event_runs", 10_000)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.reserve_event_dispatch_lease",
+        AsyncMock(return_value=SimpleNamespace(run_id="unused", outcome="saturated")),
+    )
 
     resp = await anon_client.post(
         "/agent/events/tok-abc",
@@ -257,3 +335,117 @@ async def test_dispatch_disabled_feature_returns_404(anon_client, test_settings,
         headers={"X-Teardrop-Trigger-Secret": _SECRET},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_event_lease_heartbeat_stops_when_ownership_is_lost(monkeypatch):
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.asyncio.sleep", AsyncMock(return_value=None))
+    renew_mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.renew_event_dispatch_lease", renew_mock)
+
+    from teardrop.routers.agent_event_triggers import _renew_event_lease
+
+    await _renew_event_lease("run-1", 180)
+
+    renew_mock.assert_awaited_once()
+    assert renew_mock.await_args.args[0] == "run-1"
+
+
+@pytest.mark.anyio
+async def test_background_execution_failure_persists_sanitized_terminal_result(monkeypatch):
+    schedule = _event_schedule()
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.start_event_dispatch_lease",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.execute_event_run",
+        AsyncMock(side_effect=RuntimeError("sensitive provider detail")),
+    )
+    fail_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.fail_event_dispatch", fail_mock)
+
+    from teardrop.routers.agent_event_triggers import _run_event_in_background
+
+    await _run_event_in_background(schedule, "rendered prompt", "run-1", 180)
+
+    fail_mock.assert_awaited_once()
+    assert fail_mock.await_args.kwargs == {
+        "schedule_id": "evt-1",
+        "org_id": "test-org-id",
+        "run_id": "run-1",
+        "owner_id": fail_mock.await_args.kwargs["owner_id"],
+        "max_consecutive_failures": 5,
+    }
+
+
+# ── A2A task polling ────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_get_event_trigger_run_returns_submitted_for_reserved_run(api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_scheduled_run",
+        AsyncMock(return_value=_event_schedule()),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_scheduled_run_result",
+        AsyncMock(return_value=None),
+    )
+
+    resp = await api_client.get("/agent/event-triggers/evt-1/runs/run-1")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == "run-1"
+    assert body["status"]["state"] == "TASK_STATE_SUBMITTED"
+    assert body["artifacts"] == []
+
+
+@pytest.mark.anyio
+async def test_get_event_trigger_run_returns_completed_artifact(api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_scheduled_run",
+        AsyncMock(return_value=_event_schedule()),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_scheduled_run_result",
+        AsyncMock(return_value=_event_result()),
+    )
+
+    resp = await api_client.get("/agent/event-triggers/evt-1/runs/run-1")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert body["artifacts"][0]["parts"][0]["text"] == "The event was handled."
+
+
+@pytest.mark.anyio
+async def test_get_event_trigger_run_hides_unknown_run(api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.get_scheduled_run",
+        AsyncMock(return_value=_event_schedule()),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
+        AsyncMock(return_value=False),
+    )
+    result_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.agent_event_triggers.get_scheduled_run_result", result_mock)
+
+    resp = await api_client.get("/agent/event-triggers/evt-1/runs/unknown")
+
+    assert resp.status_code == 404
+    result_mock.assert_not_awaited()

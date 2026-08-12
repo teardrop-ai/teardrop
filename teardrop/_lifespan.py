@@ -21,6 +21,7 @@ from org_tools import close_org_tools_db, init_org_tools_db
 from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_tick
 from scripts.generate_keys import generate_keypair
 from teardrop._background_tasks import (
+    _event_dispatch_recovery_loop,
     _memory_cleanup_loop,
     _onboarding_credit_outbox_loop,
     _prewarm_cache_prefixes,
@@ -121,6 +122,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_reputation_rollup_loop()))
         if settings.retention_sweep_enabled:
             bg_tasks.append(asyncio.create_task(_retention_sweep_loop()))
+        if settings.event_triggers_enabled:
+            bg_tasks.append(asyncio.create_task(_event_dispatch_recovery_loop()))
         if settings.scheduled_runs_enabled:
             bg_tasks.append(
                 asyncio.create_task(

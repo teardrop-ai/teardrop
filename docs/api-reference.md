@@ -235,6 +235,24 @@ Agent allowlist and delegation history. Agents must be added to the allowlist be
 | `GET` | `/admin/a2a/agents/{org_id}` | Admin | List trusted agents for a specific org |
 | `DELETE` | `/admin/a2a/agents/{agent_id}` | Admin | Remove an agent from an org's allowlist |
 
+### Event-Triggered Runs
+
+Org-scoped event-trigger registration requires a Bearer JWT containing `org_id`. The public dispatch endpoint requires the trigger secret header and accepts a JSON object payload.
+
+Dispatch concurrency is enforced cluster-wide through Postgres leases. Saturated requests return `429`; duplicate idempotency keys return the original run identity without executing again.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/agent/event-triggers` | Bearer | Register a prompt template and receive a one-time trigger secret |
+| `GET` | `/agent/event-triggers` | Bearer | List event triggers for the authenticated org |
+| `GET` | `/agent/event-triggers/{id}` | Bearer | Get one event trigger |
+| `PATCH` | `/agent/event-triggers/{id}` | Bearer | Update trigger configuration |
+| `DELETE` | `/agent/event-triggers/{id}` | Bearer | Delete an event trigger |
+| `POST` | `/agent/event-triggers/{id}/rotate-secret` | Bearer | Rotate and return a new one-time trigger secret |
+| `GET` | `/agent/event-triggers/{id}/runs` | Bearer | List trigger results with cursor pagination |
+| `GET` | `/agent/event-triggers/{id}/runs/{run_id}` | Bearer | Poll one run as an A2A task |
+| `POST` | `/agent/events/{trigger_token}` | Trigger secret | Dispatch a JSON event and receive `202 Accepted` with a run ID |
+
 ---
 
 ### Calling the agent (PowerShell)

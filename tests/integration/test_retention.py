@@ -90,6 +90,33 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
     )
     await pool.execute(
         """
+        INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
+        VALUES ('schedule-1', 'event-key-1', 'event-run-1', $1)
+        """,
+        old,
+    )
+    await pool.execute(
+        """
+        INSERT INTO event_dispatch_leases (
+            run_id, schedule_id, org_id, idempotency_key, owner_id,
+            status, lease_expires_at, finished_at, created_at, updated_at
+        )
+        VALUES (
+            'event-run-1', 'schedule-1', 'org-1', 'event-key-1', 'worker-1',
+            'failed', $1, $1, $1, $1
+        )
+        """,
+        old,
+    )
+    await pool.execute(
+        """
+        INSERT INTO event_trigger_events (id, schedule_id, org_id, run_id, event_type, status, created_at)
+        VALUES ('event-audit-1', 'schedule-1', 'org-1', 'event-run-1', 'run_settled', 'failed', $1)
+        """,
+        old,
+    )
+    await pool.execute(
+        """
         INSERT INTO org_tool_events (id, org_id, tool_id, tool_name, event_type, actor_id, created_at)
         VALUES ('tool-event-1', 'org-1', 'tool-1', 'weather', 'executed', 'user-1', $1)
         """,
@@ -143,6 +170,7 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
 
     assert result.checkpoint_threads == 1
     assert result.scheduled_run_results == 1
+    assert result.event_dispatch_keys == 1
     assert result.org_tool_execution_events == 1
     assert result.telemetry_run_starts == 1
     assert result.expired_siwe_login_sessions == 1
@@ -150,6 +178,9 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
     assert await pool.fetchval("SELECT COUNT(*) FROM checkpoint_blobs") == 0
     assert await pool.fetchval("SELECT COUNT(*) FROM checkpoint_writes") == 0
     assert await pool.fetchval("SELECT COUNT(*) FROM scheduled_run_results") == 0
+    assert await pool.fetchval("SELECT COUNT(*) FROM event_dispatch_keys") == 0
+    assert await pool.fetchval("SELECT COUNT(*) FROM event_dispatch_leases") == 0
+    assert await pool.fetchval("SELECT COUNT(*) FROM event_trigger_events") == 1
     assert await pool.fetchval("SELECT COUNT(*) FROM org_tool_events WHERE event_type = 'executed'") == 0
     assert await pool.fetchval("SELECT COUNT(*) FROM siwe_login_sessions") == 0
     assert await pool.fetchval("SELECT COUNT(*) FROM usage_events") == 1

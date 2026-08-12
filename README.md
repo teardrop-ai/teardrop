@@ -138,7 +138,9 @@ Beyond fixed intervals, organizations can register **event triggers** that run t
 ```
 EVENT_TRIGGERS_ENABLED=true                         # Toggle reactive event-triggered runs (inbound ingress)
 EVENT_TRIGGERS_MAX_PER_ORG=20                       # Max event triggers allowed per org (active + inactive)
-EVENT_TRIGGERS_MAX_CONCURRENCY=8                    # Max in-flight inbound runs per process (beyond this → HTTP 429)
+EVENT_TRIGGERS_MAX_CONCURRENCY=8                    # Max in-flight inbound runs across the cluster
+EVENT_TRIGGERS_MAX_CONCURRENCY_PER_ORG=4            # Per-org cluster-wide in-flight cap
+EVENT_TRIGGERS_RECOVERY_INTERVAL_SECONDS=30         # Reconcile abandoned execution leases
 EVENT_TRIGGERS_PROMPT_MAX_CHARS=12000               # Max rendered prompt length after payload interpolation
 ```
 
@@ -150,9 +152,12 @@ EVENT_TRIGGERS_PROMPT_MAX_CHARS=12000               # Max rendered prompt length
 - `DELETE /agent/event-triggers/{id}` — Delete a trigger
 - `POST /agent/event-triggers/{id}/rotate-secret` — Rotate the signing secret (returns the new secret once)
 - `GET /agent/event-triggers/{id}/runs` — Query run results (cursor pagination)
+- `GET /agent/event-triggers/{id}/runs/{run_id}` — Poll one run as an A2A task (`TASK_STATE_SUBMITTED`, `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`)
 
 **Inbound dispatch (public, secret-authenticated):**
-- `POST /agent/events/{trigger_token}` — Fire the trigger. Authenticate with the per-trigger secret via the `X-Teardrop-Trigger-Secret` header (constant-time compared). Optional `X-Idempotency-Key` (or an `idempotency_key` body field) gives at-most-once execution across webhook retries. The JSON body is rendered into the prompt template via `{{field}}` placeholders (`{{event_json}}` injects the full payload); substitution is scalar-only and length-capped to resist prompt/format-string injection. The agent runs in the background and the endpoint returns `202 Accepted` with a `run_id`; results are retrievable via the runs endpoint and the optional callback. Inbound load is bounded by `EVENT_TRIGGERS_MAX_CONCURRENCY` (returns `429` when saturated) and a 64 KB payload cap.
+- `POST /agent/events/{trigger_token}` — Fire the trigger. Authenticate with the per-trigger secret via the `X-Teardrop-Trigger-Secret` header (constant-time compared). Optional `X-Idempotency-Key` (or an `idempotency_key` body field) gives at-most-once execution across webhook retries. The JSON body is rendered into the prompt template via `{{field}}` placeholders (`{{event_json}}` injects the full payload); substitution is scalar-only and length-capped to resist prompt/format-string injection. The agent runs in the background and the endpoint returns `202 Accepted` with a `run_id`; results are retrievable via the runs endpoint and the optional callback. Postgres execution leases enforce global and per-org cluster concurrency (returning `429` when saturated), and the payload cap is 64 KB.
+
+When enabled, the public A2A Agent Card adds the `event_trigger_ingress` skill and publishes registration, dispatch, and task-polling endpoint templates. Registration is JWT-authenticated and org-scoped; dispatch requires the per-trigger secret. Dispatch accepts an empty body or a JSON object only, applies IP and trigger rate limits, and persists every run identity so an A2A client can poll without scanning result pages. Abandoned leases become terminal failed tasks rather than remaining submitted indefinitely. Event-trigger lifecycle, dispatch, and settlement metadata are retained in an insert-only audit table; payloads and secrets are never stored in that audit record.
 
 Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly.
 

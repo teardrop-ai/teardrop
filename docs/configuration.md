@@ -87,9 +87,27 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `RETENTION_SWEEP_BATCH_SIZE` | Maximum rows or checkpoint threads deleted per batch (default: `500`, maximum: `5000`) |
 | `CHECKPOINT_TTL_DAYS` | Retain inactive LangGraph threads for this many days (default: `45`; `0` disables checkpoint cleanup) |
 | `SCHEDULED_RUN_RESULTS_TTL_DAYS` | Retain scheduled/event output records for this many days (default: `30`; `0` keeps them indefinitely) |
+| `SCHEDULED_RUNS_ENABLED` | Enable the recurring scheduled-run worker (default: `false`) |
+| `SCHEDULED_RUNS_TICK_INTERVAL_SECONDS` | Poll interval for due schedules (default: `60`) |
+| `SCHEDULED_RUNS_MIN_INTERVAL_SECONDS` | Minimum schedule interval (default: `300`) |
+| `SCHEDULED_RUNS_MAX_PER_ORG` | Maximum schedules per org, including inactive schedules (default: `20`) |
+| `SCHEDULED_RUNS_MAX_CONSECUTIVE_FAILURES` | Auto-disable threshold for repeated scheduled failures (default: `5`) |
+| `SCHEDULED_RUNS_EXECUTION_TIMEOUT_SECONDS` | Per-run scheduled execution timeout (default: `120`) |
+| `SCHEDULED_RUNS_MAX_CONCURRENCY` | Maximum scheduled executions per worker tick (default: `4`) |
+| `EVENT_TRIGGERS_ENABLED` | Enable reactive event-trigger ingress and Agent Card discovery (default: `false`) |
+| `EVENT_TRIGGERS_MAX_PER_ORG` | Maximum event triggers per org, including inactive triggers (default: `20`) |
+| `EVENT_TRIGGERS_MAX_CONCURRENCY` | Maximum in-flight event executions across all instances (default: `8`) |
+| `EVENT_TRIGGERS_MAX_CONCURRENCY_PER_ORG` | Maximum cluster-wide in-flight event executions per org (default: `4`) |
+| `EVENT_TRIGGERS_RECOVERY_INTERVAL_SECONDS` | Expired execution-lease reconciliation interval (default: `30`) |
+| `EVENT_TRIGGERS_RECOVERY_BATCH_SIZE` | Maximum expired leases finalized per recovery tick (default: `100`) |
+| `EVENT_TRIGGERS_PROMPT_MAX_CHARS` | Maximum rendered event prompt length (default: `12000`) |
+| `A2A_INBOUND_ENABLED` | Enable inbound A2A message handling (default: `true`) |
+| `A2A_INBOUND_TIMEOUT_SECONDS` | Inbound A2A execution timeout (default: `60`) |
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
 | `SENTRY_DSN` | Sentry error tracking DSN (optional; leave empty to disable) |
+
+Event-trigger admission uses a short cluster-global Postgres advisory lock so global and per-org limits remain exact. The default concurrency is intentionally small; benchmark and redesign admission counters before raising the global limit above roughly 50.
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Refresh token validity window in days (default: `30`) |
 | `RATE_LIMIT_AUTH_RPM` | Per-IP rate limit for `/token` and `/auth/siwe/nonce` (default: `20`) |
 | `RATE_LIMIT_REGISTER_RPM` | Per-IP rate limit for `POST /register` (default: `5`) |

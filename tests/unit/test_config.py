@@ -91,6 +91,21 @@ def test_agent_max_tool_iterations_default():
     assert s.agent_max_tool_iterations == 4
 
 
+def test_event_trigger_cluster_control_defaults_and_bounds():
+    settings = Settings()
+    assert settings.event_triggers_max_concurrency == 8
+    assert settings.event_triggers_max_concurrency_per_org == 4
+    assert settings.event_triggers_recovery_interval_seconds == 30
+    assert settings.event_triggers_recovery_batch_size == 100
+
+    with pytest.raises(ValueError):
+        Settings(event_triggers_max_concurrency_per_org=0)
+    with pytest.raises(ValueError):
+        Settings(event_triggers_recovery_interval_seconds=4)
+    with pytest.raises(ValueError):
+        Settings(event_triggers_recovery_batch_size=1001)
+
+
 def test_agent_max_tool_iterations_env_override(monkeypatch):
     monkeypatch.setenv("AGENT_MAX_TOOL_ITERATIONS", "5")
     s = Settings()

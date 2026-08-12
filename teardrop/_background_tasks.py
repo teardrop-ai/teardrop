@@ -13,6 +13,7 @@ import asyncpg
 from agent.cache_prewarm import prewarm_org_prefix
 from billing import cleanup_expired_payment_nonces, process_onboarding_credit_outbox, process_pending_settlements
 from marketplace import reputation_rollup_once
+from scheduling import recover_expired_event_dispatches
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import cleanup_expired_memories
@@ -129,6 +130,15 @@ async def _retention_sweep_iter() -> None:
     )
 
 
+async def _event_dispatch_recovery_iter() -> None:
+    recovered = await recover_expired_event_dispatches(
+        limit=settings.event_triggers_recovery_batch_size,
+        max_consecutive_failures=settings.scheduled_runs_max_consecutive_failures,
+    )
+    if recovered:
+        logger.warning("Event dispatch recovery: finalized %d expired leases", recovered)
+
+
 async def _settlement_retry_loop() -> None:
     """Periodically retry failed settlements (runs as background task)."""
     await _run_periodic(
@@ -196,6 +206,16 @@ async def _retention_sweep_loop() -> None:
         _retention_sweep_iter,
         settings.retention_sweep_interval_seconds,
         monitor_slug="retention-sweep",
+    )
+
+
+async def _event_dispatch_recovery_loop() -> None:
+    """Reconcile abandoned multi-instance event executions into terminal tasks."""
+    await _run_periodic(
+        "Event dispatch recovery",
+        _event_dispatch_recovery_iter,
+        settings.event_triggers_recovery_interval_seconds,
+        monitor_slug="event-dispatch-recovery",
     )
 
 

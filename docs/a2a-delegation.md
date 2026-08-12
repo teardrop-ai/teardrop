@@ -73,6 +73,19 @@ External agents can call Teardrop directly over `POST /message:send`.
 - The current implementation is a single-turn blocking endpoint: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
 - Operators may disable the surface with `A2A_INBOUND_ENABLED=false`; the endpoint then returns `404` and the public agent card stops advertising `a2a_message`.
 
+## A2A Event-Trigger Control Plane
+
+When `EVENT_TRIGGERS_ENABLED=true`, the public Agent Card advertises an `event_trigger_ingress` skill with registration, dispatch, and task-polling endpoint templates. This is a control-plane capability, not a generic read-only tool call:
+
+1. An authenticated, org-scoped caller registers a prompt template through `POST /agent/event-triggers` and receives a secret once.
+2. An event source posts a JSON object to `/agent/events/{trigger_token}` with `X-Teardrop-Trigger-Secret`.
+3. Teardrop rate-limits the source, verifies the secret in constant time, renders the bounded prompt, atomically reserves a durable run identity and cluster execution lease, and returns `202 Accepted`.
+4. The caller polls `/agent/event-triggers/{id}/runs/{run_id}` for an A2A-shaped task. The initial state is `TASK_STATE_SUBMITTED`; persisted outcomes map to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED` for credit-skipped runs.
+
+Dispatch payloads must be valid JSON objects and are capped at 64 KiB. Idempotency keys remain supported, and every dispatch receives a durable internal reservation so polling works even when the caller did not provide an idempotency key. Postgres leases enforce global and per-org concurrency across instances; healthy workers renew ownership, while expired leases are reconciled into terminal failures without re-executing potentially billable work. `pushNotifications` remains false until Teardrop implements authenticated task webhooks.
+
+Trigger lifecycle, dispatch, secret rejection, and settlement metadata are written to the insert-only `event_trigger_events` audit table. The table excludes payloads, prompts, callback URLs, secrets, and secret hashes; financial truth remains in the existing credit, usage, and settlement ledgers.
+
 ---
 
 ## Allowlist & Budget Control

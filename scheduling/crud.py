@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from scheduling.context import _get_pool
 from scheduling.models import ScheduledRun, ScheduledRunResult
+from shared.audit import insert_event_row
+
+logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
@@ -24,6 +29,20 @@ _RUN_COLUMNS = (
 )
 _RUN_COLUMNS_SR = ", ".join(f"sr.{col.strip()}" for col in _RUN_COLUMNS.split(","))
 
+_EVENT_TRIGGER_EVENT_INSERT_SQL = (
+    "INSERT INTO event_trigger_events"
+    " (id, schedule_id, org_id, run_id, event_type, status, cost_usdc, error)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+)
+
+_EVENT_LEASE_LOCK_KEY = 0x54445250
+
+
+@dataclass(frozen=True, slots=True)
+class EventDispatchLeaseResult:
+    run_id: str
+    outcome: str
+
 
 def _row_to_scheduled_run(row: Any) -> ScheduledRun:
     return ScheduledRun(**dict(row))
@@ -31,6 +50,41 @@ def _row_to_scheduled_run(row: Any) -> ScheduledRun:
 
 def _row_to_scheduled_run_result(row: Any) -> ScheduledRunResult:
     return ScheduledRunResult(**dict(row))
+
+
+async def record_event_trigger_event(
+    *,
+    schedule_id: str,
+    org_id: str,
+    event_type: str,
+    run_id: str = "",
+    status: str = "",
+    cost_usdc: int = 0,
+    error: str = "",
+) -> None:
+    """Record bounded event-trigger metadata without affecting the main operation."""
+    try:
+        pool = _get_pool()
+        await insert_event_row(
+            pool,
+            insert_sql=_EVENT_TRIGGER_EVENT_INSERT_SQL,
+            values=(
+                schedule_id,
+                org_id,
+                run_id,
+                event_type,
+                status,
+                max(0, cost_usdc),
+                error[:1024],
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Event-trigger audit unavailable schedule_id=%s run_id=%s event_type=%s",
+            schedule_id,
+            run_id,
+            event_type,
+        )
 
 
 async def count_scheduled_runs(org_id: str, schedule_kind: str = "interval") -> int:
@@ -283,6 +337,27 @@ async def list_scheduled_run_results(
     return [_row_to_scheduled_run_result(row) for row in rows]
 
 
+async def get_scheduled_run_result(
+    schedule_id: str,
+    org_id: str,
+    run_id: str,
+) -> ScheduledRunResult | None:
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT id, schedule_id, org_id, run_id, status, output_text, cost_usdc, error, created_at
+        FROM scheduled_run_results
+        WHERE schedule_id = $1 AND org_id = $2 AND run_id = $3
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        schedule_id,
+        org_id,
+        run_id,
+    )
+    return _row_to_scheduled_run_result(row) if row is not None else None
+
+
 async def record_scheduled_run_result(
     *,
     schedule_id: str,
@@ -346,6 +421,369 @@ async def reserve_event_dispatch(schedule_id: str, idempotency_key: str, run_id:
     return (str(existing) if existing is not None else run_id), False
 
 
+async def reserve_event_dispatch_lease(
+    *,
+    schedule_id: str,
+    org_id: str,
+    idempotency_key: str,
+    run_id: str,
+    owner_id: str,
+    lease_seconds: int,
+    global_limit: int,
+    org_limit: int,
+) -> EventDispatchLeaseResult:
+    """Atomically reserve an idempotent run and a cluster-wide execution slot."""
+    pool = _get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", _EVENT_LEASE_LOCK_KEY)
+            existing = await connection.fetchval(
+                "SELECT run_id FROM event_dispatch_keys WHERE schedule_id = $1 AND idempotency_key = $2",
+                schedule_id,
+                idempotency_key,
+            )
+            if existing is not None:
+                return EventDispatchLeaseResult(str(existing), "duplicate")
+
+            active_global = await connection.fetchval(
+                """
+                SELECT COUNT(*) FROM event_dispatch_leases
+                WHERE status IN ('reserved', 'running') AND lease_expires_at > NOW()
+                """
+            )
+            if int(active_global or 0) >= global_limit:
+                return EventDispatchLeaseResult(run_id, "saturated")
+
+            active_org = await connection.fetchval(
+                """
+                SELECT COUNT(*) FROM event_dispatch_leases
+                WHERE org_id = $1
+                  AND status IN ('reserved', 'running')
+                  AND lease_expires_at > NOW()
+                """,
+                org_id,
+            )
+            if int(active_org or 0) >= org_limit:
+                return EventDispatchLeaseResult(run_id, "saturated")
+
+            await connection.execute(
+                """
+                INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
+                VALUES ($1, $2, $3, NOW())
+                """,
+                schedule_id,
+                idempotency_key,
+                run_id,
+            )
+            await connection.execute(
+                """
+                INSERT INTO event_dispatch_leases (
+                    run_id, schedule_id, org_id, idempotency_key, owner_id,
+                    status, lease_expires_at
+                )
+                VALUES ($1, $2, $3, $4, $5, 'reserved',
+                        NOW() + make_interval(secs => $6))
+                """,
+                run_id,
+                schedule_id,
+                org_id,
+                idempotency_key,
+                owner_id,
+                lease_seconds,
+            )
+            await insert_event_row(
+                connection,
+                insert_sql=_EVENT_TRIGGER_EVENT_INSERT_SQL,
+                values=(schedule_id, org_id, run_id, "dispatch_accepted", "", 0, ""),
+            )
+            return EventDispatchLeaseResult(run_id, "accepted")
+
+
+async def start_event_dispatch_lease(run_id: str, owner_id: str, lease_seconds: int) -> bool:
+    pool = _get_pool()
+    result = await pool.execute(
+        """
+        UPDATE event_dispatch_leases
+        SET status = 'running', started_at = COALESCE(started_at, NOW()),
+            lease_expires_at = NOW() + make_interval(secs => $3), updated_at = NOW()
+        WHERE run_id = $1 AND owner_id = $2 AND status = 'reserved'
+        """,
+        run_id,
+        owner_id,
+        lease_seconds,
+    )
+    return result.endswith("1")
+
+
+async def renew_event_dispatch_lease(run_id: str, owner_id: str, lease_seconds: int) -> bool:
+    """Extend an owned running lease without changing its lifecycle state."""
+    pool = _get_pool()
+    result = await pool.execute(
+        """
+        UPDATE event_dispatch_leases
+        SET lease_expires_at = NOW() + make_interval(secs => $3), updated_at = NOW()
+        WHERE run_id = $1 AND owner_id = $2 AND status = 'running'
+        """,
+        run_id,
+        owner_id,
+        lease_seconds,
+    )
+    return result.endswith("1")
+
+
+async def finish_event_dispatch_lease(
+    *,
+    schedule_id: str,
+    org_id: str,
+    run_id: str,
+    owner_id: str,
+    result: ScheduledRunResult,
+) -> bool:
+    """Commit the terminal lease state and immutable operational audit together."""
+    terminal_status = "completed" if result.status == "completed" else "failed"
+    pool = _get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            updated = await connection.fetchval(
+                """
+                UPDATE event_dispatch_leases
+                SET status = $3, finished_at = NOW(), lease_expires_at = NOW(),
+                    last_error = $4, updated_at = NOW()
+                WHERE run_id = $1 AND owner_id = $2
+                  AND status IN ('reserved', 'running')
+                RETURNING run_id
+                """,
+                run_id,
+                owner_id,
+                terminal_status,
+                ("Event run failed." if terminal_status == "failed" else ""),
+            )
+            if updated is None:
+                return False
+            await insert_event_row(
+                connection,
+                insert_sql=_EVENT_TRIGGER_EVENT_INSERT_SQL,
+                values=(
+                    schedule_id,
+                    org_id,
+                    run_id,
+                    "run_settled",
+                    result.status,
+                    max(0, result.cost_usdc),
+                    "Event run failed." if terminal_status == "failed" else "",
+                ),
+            )
+            return True
+
+
+async def fail_event_dispatch(
+    *,
+    schedule_id: str,
+    org_id: str,
+    run_id: str,
+    owner_id: str,
+    max_consecutive_failures: int,
+    error: str = "Event run failed.",
+) -> ScheduledRunResult | None:
+    """Persist one sanitized failed result and terminal lease after an unexpected error."""
+    pool = _get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            lease = await connection.fetchrow(
+                """
+                SELECT status FROM event_dispatch_leases
+                WHERE run_id = $1 AND owner_id = $2
+                FOR UPDATE
+                """,
+                run_id,
+                owner_id,
+            )
+            if lease is None or lease["status"] not in {"reserved", "running"}:
+                return None
+            row = await connection.fetchrow(
+                """
+                SELECT id, schedule_id, org_id, run_id, status,
+                       output_text, cost_usdc, error, created_at
+                FROM scheduled_run_results
+                WHERE schedule_id = $1 AND org_id = $2 AND run_id = $3
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                schedule_id,
+                org_id,
+                run_id,
+            )
+            if row is None:
+                row = await connection.fetchrow(
+                    """
+                    INSERT INTO scheduled_run_results (
+                        id, schedule_id, org_id, run_id, status, output_text,
+                        cost_usdc, error, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, 'failed', '', 0, $5, NOW())
+                    ON CONFLICT (schedule_id, run_id) DO NOTHING
+                    RETURNING id, schedule_id, org_id, run_id, status,
+                              output_text, cost_usdc, error, created_at
+                    """,
+                    str(uuid.uuid4()),
+                    schedule_id,
+                    org_id,
+                    run_id,
+                    error[:1024],
+                )
+                if row is None:
+                    row = await connection.fetchrow(
+                        """
+                        SELECT id, schedule_id, org_id, run_id, status,
+                               output_text, cost_usdc, error, created_at
+                        FROM scheduled_run_results
+                        WHERE schedule_id = $1 AND org_id = $2 AND run_id = $3
+                        """,
+                        schedule_id,
+                        org_id,
+                        run_id,
+                    )
+                else:
+                    await connection.execute(
+                        """
+                        UPDATE scheduled_runs
+                        SET last_run_at = NOW(), consecutive_failures = consecutive_failures + 1,
+                            enabled = CASE
+                                WHEN consecutive_failures + 1 >= $2 THEN FALSE
+                                ELSE enabled
+                            END,
+                            updated_at = NOW()
+                        WHERE id = $1
+                        """,
+                        schedule_id,
+                        max_consecutive_failures,
+                    )
+            stored = _row_to_scheduled_run_result(row)
+            terminal_status = "completed" if stored.status == "completed" else "failed"
+            await connection.execute(
+                """
+                UPDATE event_dispatch_leases
+                SET status = $3, finished_at = NOW(), lease_expires_at = NOW(),
+                    last_error = $4, updated_at = NOW()
+                WHERE run_id = $1 AND owner_id = $2
+                """,
+                run_id,
+                owner_id,
+                terminal_status,
+                "" if terminal_status == "completed" else error[:1024],
+            )
+            await insert_event_row(
+                connection,
+                insert_sql=_EVENT_TRIGGER_EVENT_INSERT_SQL,
+                values=(schedule_id, org_id, run_id, "run_settled", stored.status, max(0, stored.cost_usdc), error[:1024]),
+            )
+            return stored
+
+
+async def recover_expired_event_dispatches(*, limit: int = 100, max_consecutive_failures: int = 5) -> int:
+    """Turn abandoned leases into terminal, pollable failures without re-execution."""
+    pool = _get_pool()
+    recovered = 0
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            rows = await connection.fetch(
+                """
+                SELECT run_id, schedule_id, org_id, owner_id
+                FROM event_dispatch_leases
+                WHERE status IN ('reserved', 'running') AND lease_expires_at <= NOW()
+                ORDER BY lease_expires_at, run_id
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+                """,
+                limit,
+            )
+            for lease in rows:
+                existing = await connection.fetchrow(
+                    """
+                    SELECT id, schedule_id, org_id, run_id, status,
+                           output_text, cost_usdc, error, created_at
+                    FROM scheduled_run_results
+                    WHERE schedule_id = $1 AND org_id = $2 AND run_id = $3
+                    """,
+                    lease["schedule_id"],
+                    lease["org_id"],
+                    lease["run_id"],
+                )
+                if existing is None:
+                    existing = await connection.fetchrow(
+                        """
+                        INSERT INTO scheduled_run_results (
+                            id, schedule_id, org_id, run_id, status,
+                            output_text, cost_usdc, error, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, 'failed', '', 0,
+                                'Event run recovery timed out.', NOW())
+                        ON CONFLICT (schedule_id, run_id) DO NOTHING
+                        RETURNING id, schedule_id, org_id, run_id, status,
+                                  output_text, cost_usdc, error, created_at
+                        """,
+                        str(uuid.uuid4()),
+                        lease["schedule_id"],
+                        lease["org_id"],
+                        lease["run_id"],
+                    )
+                    if existing is None:
+                        existing = await connection.fetchrow(
+                            """
+                            SELECT id, schedule_id, org_id, run_id, status,
+                                   output_text, cost_usdc, error, created_at
+                            FROM scheduled_run_results
+                            WHERE schedule_id = $1 AND org_id = $2 AND run_id = $3
+                            """,
+                            lease["schedule_id"],
+                            lease["org_id"],
+                            lease["run_id"],
+                        )
+                    else:
+                        await connection.execute(
+                            """
+                            UPDATE scheduled_runs
+                            SET last_run_at = NOW(), consecutive_failures = consecutive_failures + 1,
+                                enabled = CASE
+                                    WHEN consecutive_failures + 1 >= $2 THEN FALSE
+                                    ELSE enabled
+                                END,
+                                updated_at = NOW()
+                            WHERE id = $1
+                            """,
+                            lease["schedule_id"],
+                            max_consecutive_failures,
+                        )
+                stored = _row_to_scheduled_run_result(existing)
+                terminal_status = "completed" if stored.status == "completed" else "failed"
+                await connection.execute(
+                    """
+                    UPDATE event_dispatch_leases
+                    SET status = $2, finished_at = NOW(), lease_expires_at = NOW(),
+                        last_error = $3, updated_at = NOW()
+                    WHERE run_id = $1
+                    """,
+                    lease["run_id"],
+                    terminal_status,
+                    "" if terminal_status == "completed" else "Event run recovery timed out.",
+                )
+                await insert_event_row(
+                    connection,
+                    insert_sql=_EVENT_TRIGGER_EVENT_INSERT_SQL,
+                    values=(
+                        lease["schedule_id"],
+                        lease["org_id"],
+                        lease["run_id"],
+                        "run_settled",
+                        stored.status,
+                        max(0, stored.cost_usdc),
+                        "" if terminal_status == "completed" else "Event run recovery timed out.",
+                    ),
+                )
+                recovered += 1
+    return recovered
+
+
 async def get_existing_dispatch(schedule_id: str, idempotency_key: str) -> str | None:
     pool = _get_pool()
     value = await pool.fetchval(
@@ -354,6 +792,16 @@ async def get_existing_dispatch(schedule_id: str, idempotency_key: str) -> str |
         idempotency_key,
     )
     return str(value) if value is not None else None
+
+
+async def event_dispatch_exists(schedule_id: str, run_id: str) -> bool:
+    pool = _get_pool()
+    value = await pool.fetchval(
+        "SELECT 1 FROM event_dispatch_keys WHERE schedule_id = $1 AND run_id = $2 LIMIT 1",
+        schedule_id,
+        run_id,
+    )
+    return value is not None
 
 
 async def mark_scheduled_run_skipped(schedule_id: str) -> None:

@@ -52,13 +52,14 @@ class TestRetentionSweep:
                 [],
             ]
         )
-        pool.fetchval = AsyncMock(side_effect=[2, 0, 1, 1, 1])
+        pool.fetchval = AsyncMock(side_effect=[2, 0, 0, 1, 1, 1])
 
         with patch.object(retention_module, "_pool", pool):
             result = await retention_module.retention_sweep_once(_settings())
 
         assert result.checkpoint_threads == 2
         assert result.scheduled_run_results == 2
+        assert result.event_dispatch_keys == 0
         assert result.org_tool_execution_events == 1
         assert result.telemetry_run_starts == 1
         assert result.expired_siwe_login_sessions == 1

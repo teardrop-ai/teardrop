@@ -49,6 +49,37 @@ async def test_agent_card_shape(api_client):
 
 
 @pytest.mark.anyio
+async def test_agent_card_advertises_event_trigger_control_plane(api_client, test_settings):
+    test_settings.event_triggers_enabled = True
+
+    response = await api_client.get("/.well-known/agent-card.json")
+
+    assert response.status_code == 200
+    body = response.json()
+    capability = body["capabilities"]["eventTriggers"]
+    assert capability["registration_endpoint"] == "/agent/event-triggers"
+    assert capability["task_endpoint_template"].endswith("/{run_id}")
+    assert capability["max_event_bytes"] == 64 * 1024
+    assert body["endpoints"]["event_trigger_dispatch"] == "/agent/events/{trigger_token}"
+    skill = next(item for item in body["skills"] if item["id"] == "event_trigger_ingress")
+    assert "webhooks" in skill["tags"]
+    assert "secret" not in body
+    assert body["capabilities"]["pushNotifications"] is False
+
+
+@pytest.mark.anyio
+async def test_agent_card_hides_disabled_event_trigger_control_plane(api_client, test_settings):
+    test_settings.event_triggers_enabled = False
+
+    response = await api_client.get("/.well-known/agent-card.json")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "eventTriggers" not in body["capabilities"]
+    assert "event_trigger_ingress" not in {item["id"] for item in body["skills"]}
+
+
+@pytest.mark.anyio
 async def test_agent_card_includes_public_tool_reputation(api_client, monkeypatch):
     snapshot = {
         "generated_at": "2026-08-02T12:00:00+00:00",

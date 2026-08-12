@@ -179,6 +179,54 @@ def _build_agent_card_content(
         }
         endpoints["marketplace_catalog"] = "/marketplace/catalog"
 
+    skills = [
+        {
+            "id": "task_planning",
+            "name": "task_planning",
+            "description": "Break complex tasks into actionable steps.",
+        },
+        *registry.to_a2a_skills(reputation),
+        {
+            "id": "a2ui_rendering",
+            "name": "a2ui_rendering",
+            "description": "Declarative UI component generation (table, form, text, button, etc.).",
+        },
+    ]
+    if card_settings.event_triggers_enabled:
+        capabilities["eventTriggers"] = {
+            "enabled": True,
+            "registration_endpoint": "/agent/event-triggers",
+            "dispatch_endpoint_template": "/agent/events/{trigger_token}",
+            "task_endpoint_template": "/agent/event-triggers/{schedule_id}/runs/{run_id}",
+            "registration_auth": "bearer_jwt",
+            "dispatch_auth": "X-Teardrop-Trigger-Secret",
+            "max_event_bytes": 64 * 1024,
+            "max_per_org": card_settings.event_triggers_max_per_org,
+            "max_concurrency": card_settings.event_triggers_max_concurrency,
+            "max_concurrency_per_org": card_settings.event_triggers_max_concurrency_per_org,
+        }
+        endpoints["event_trigger_registration"] = "/agent/event-triggers"
+        endpoints["event_trigger_dispatch"] = "/agent/events/{trigger_token}"
+        endpoints["event_trigger_task"] = "/agent/event-triggers/{schedule_id}/runs/{run_id}"
+        skills.append(
+            {
+                "id": "event_trigger_ingress",
+                "name": "event_trigger_ingress",
+                "description": (
+                    "Register an authenticated event subscription that starts a bounded agent task "
+                    "and returns an A2A task ID for polling."
+                ),
+                "tags": ["events", "webhooks", "automation", "scheduling"],
+                "examples": [
+                    "Start a task when a deployment fails.",
+                    "Run this workflow when a marketplace payment settles.",
+                    "Notify me when a monitored price changes.",
+                ],
+                "inputModes": ["application/json"],
+                "outputModes": ["application/json"],
+            }
+        )
+
     card: dict[str, Any] = {
         "schema_version": "1.0",
         "protocolVersion": "1.0",
@@ -199,19 +247,7 @@ def _build_agent_card_content(
         "endpoints": endpoints,
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["text/plain", "application/json"],
-        "skills": [
-            {
-                "id": "task_planning",
-                "name": "task_planning",
-                "description": "Break complex tasks into actionable steps.",
-            },
-            *registry.to_a2a_skills(reputation),
-            {
-                "id": "a2ui_rendering",
-                "name": "a2ui_rendering",
-                "description": "Declarative UI component generation (table, form, text, button, etc.).",
-            },
-        ],
+        "skills": skills,
         "tools": registry.to_a2a_tool_list(reputation),
         "authentication": {
             "required": True,
