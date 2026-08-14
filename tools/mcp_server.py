@@ -14,13 +14,13 @@ in tools/definitions/ will automatically expose it here.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 import sys
 from typing import Annotated, Any
 
-import fastmcp
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 
 from teardrop._meta import APP_VERSION
@@ -70,27 +70,18 @@ def _signature_default_for_field(field_info: Any) -> Any:
 
 # ─── Build FastMCP server ─────────────────────────────────────────────────────
 
-s = get_settings()
 
-mcp = fastmcp.FastMCP(
-    name="Teardrop",
-    version=APP_VERSION,
-    instructions=MCP_SERVER_DESCRIPTION,
-    website_url=s.app_base_url if s.app_base_url else None,
-    icons=[{"src": s.agent_card_icon_url}] if s.agent_card_icon_url else None,
-)
-
-
-def _register_tools_with_mcp() -> None:
+def _register_tools_with_mcp(server: FastMCP) -> None:
     """Auto-register all active tools from the registry with FastMCP."""
     for tool_def in registry.to_mcp_tool_defs():
         name = tool_def["name"]
         description = tool_def["description"]
         input_schema = tool_def["input_schema"]
+        output_model = tool_def["output_model"]
         implementation = tool_def["implementation"]
 
         # Create a closure to capture the current tool_def values
-        def _make_handler(impl: Any, schema: Any) -> Any:
+        def _make_handler(impl: Any, schema: Any, result_model: Any) -> Any:
             async def handler(**kwargs: Any) -> Any:
                 validated = schema(**kwargs)
                 return await impl(**validated.model_dump())
@@ -106,25 +97,47 @@ def _register_tools_with_mcp() -> None:
                 )
                 for name, fi in schema.model_fields.items()
             ]
-            handler.__signature__ = inspect.Signature(params)
+            handler.__signature__ = inspect.Signature(
+                params,
+                return_annotation=result_model if result_model is not None else inspect.Signature.empty,
+            )
             handler.__annotations__ = {p.name: p.annotation for p in params if p.annotation is not inspect.Parameter.empty}
+            if result_model is not None:
+                handler.__annotations__["return"] = result_model
             return handler
 
-        handler = _make_handler(implementation, input_schema)
+        handler = _make_handler(implementation, input_schema, output_model)
         handler.__name__ = f"mcp_{name}"
         handler.__doc__ = description
 
-        mcp.tool(
+        server.tool(
             name=name,
             description=description,
             title=tool_def.get("title"),
-            output_schema=tool_def.get("output_schema"),
             annotations=tool_def.get("annotations"),
         )(handler)
         logger.debug("MCP: registered tool %s", name)
 
 
-_register_tools_with_mcp()
+def create_mcp_server() -> FastMCP:
+    """Create an isolated official FastMCP server with Teardrop tools."""
+    settings = get_settings()
+    server = FastMCP(
+        name="Teardrop",
+        instructions=MCP_SERVER_DESCRIPTION,
+        website_url=settings.app_base_url if settings.app_base_url else None,
+        icons=[{"src": settings.agent_card_icon_url}] if settings.agent_card_icon_url else None,
+        stateless_http=True,
+        json_response=True,
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    server._mcp_server.version = APP_VERSION
+    _register_tools_with_mcp(server)
+    return server
+
+
+mcp = create_mcp_server()
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
@@ -138,7 +151,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting Teardrop MCP server (transport=%s)", transport)
-    asyncio.run(mcp.run_async(transport=transport))
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

@@ -295,11 +295,16 @@ class ToolRegistry:
         defs: list[dict[str, Any]] = []
         for tool in self.list_latest():
             raw_output_schema = None
+            output_model = None
             if tool.output_schema is not None:
                 if isinstance(tool.output_schema, dict):
                     raw_output_schema = tool.output_schema
                 else:
                     raw_output_schema = tool.output_schema.model_json_schema()
+                    output_model = tool.output_schema
+
+            if _mcp_safe_output_schema(raw_output_schema) is None:
+                output_model = None
 
             defs.append(
                 {
@@ -308,6 +313,7 @@ class ToolRegistry:
                     "description": tool.description,
                     "input_schema": tool.input_schema,
                     "output_schema": _mcp_safe_output_schema(raw_output_schema),
+                    "output_model": output_model,
                     "annotations": tool.annotations or {"readOnlyHint": True},
                     "implementation": tool.implementation,
                 }

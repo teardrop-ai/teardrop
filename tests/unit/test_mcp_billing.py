@@ -27,10 +27,11 @@ def billing_client(test_settings, monkeypatch):
         config.get_settings.cache_clear()
 
         from teardrop.mcp_gateway import MCPGatewayMiddleware
-        from tools.mcp_server import mcp
+        from tools.mcp_server import create_mcp_server
 
-        mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
-        mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+        mcp = create_mcp_server()
+        mounted_mcp_app = mcp.streamable_http_app()
+        mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
         mounted_app.add_middleware(MCPGatewayMiddleware)
         mounted_app.mount("/tools/mcp", mounted_mcp_app)
 
@@ -185,10 +186,11 @@ async def test_billing_disabled_skips_everything(test_settings, monkeypatch, tes
     monkeypatch.setenv("MCP_BILLING_ENABLED", "false")
     config.get_settings.cache_clear()
     from teardrop.mcp_gateway import MCPGatewayMiddleware
-    from tools.mcp_server import mcp
+    from tools.mcp_server import create_mcp_server
 
-    mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
-    mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+    mcp = create_mcp_server()
+    mounted_mcp_app = mcp.streamable_http_app()
+    mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", mounted_mcp_app)
 

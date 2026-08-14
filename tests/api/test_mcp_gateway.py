@@ -196,10 +196,11 @@ async def test_mcp_app_real_handshake():
 async def test_mounted_mcp_normalizes_no_slash_path():
     """POST /tools/mcp should hit the mounted FastMCP app, not /tools/{tool_id}."""
     from teardrop.mcp_gateway import MCPGatewayMiddleware
-    from tools.mcp_server import mcp
+    from tools.mcp_server import create_mcp_server
 
-    mounted_mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
-    mounted_app = FastAPI(lifespan=mounted_mcp_app.lifespan)
+    mcp = create_mcp_server()
+    mounted_mcp_app = mcp.streamable_http_app()
+    mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", mounted_mcp_app)
 

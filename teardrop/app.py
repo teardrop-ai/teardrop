@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -254,18 +255,23 @@ def _validate_production_config(s: "Settings") -> None:
 
 lifespan = build_lifespan(_validate_production_config)
 
-
-from fastmcp.utilities.lifespan import combine_lifespans  # noqa: E402
-
 from tools.mcp_server import mcp as _mcp_server  # noqa: E402
 
-mcp_app = _mcp_server.http_app(path="/", stateless_http=True, json_response=True)
+mcp_app = _mcp_server.streamable_http_app()
+
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    async with lifespan(app):
+        async with _mcp_server.session_manager.run():
+            yield
+
 
 app = FastAPI(
     title="Teardrop",
     description=("The open API and billing gateway for autonomous economic agents"),
     version=APP_VERSION,
-    lifespan=combine_lifespans(lifespan, mcp_app.lifespan),
+    lifespan=_app_lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
