@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Standalone FastMCP server exposing Teardrop tools over MCP protocol.
+"""Standalone MCP server exposing Teardrop tools over MCP protocol.
 
 Run independently for tool discovery and reuse across multiple agents:
     python tools/mcp_server.py
@@ -19,7 +19,7 @@ import logging
 import sys
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 
@@ -68,11 +68,11 @@ def _signature_default_for_field(field_info: Any) -> Any:
     return field_info.default
 
 
-# ─── Build FastMCP server ─────────────────────────────────────────────────────
+# ─── Build MCP server ─────────────────────────────────────────────────────────
 
 
-def _register_tools_with_mcp(server: FastMCP) -> None:
-    """Auto-register all active tools from the registry with FastMCP."""
+def _register_tools_with_mcp(server: MCPServer) -> None:
+    """Auto-register all active tools from the registry with MCPServer."""
     for tool_def in registry.to_mcp_tool_defs():
         name = tool_def["name"]
         description = tool_def["description"]
@@ -87,7 +87,7 @@ def _register_tools_with_mcp(server: FastMCP) -> None:
                 return await impl(**validated.model_dump())
 
             # Inject an explicit typed signature from the Pydantic model so
-            # FastMCP 3.x can build its JSON schema (it inspects __signature__).
+            # MCPServer builds its JSON schema by inspecting __signature__.
             params = [
                 inspect.Parameter(
                     name,
@@ -119,22 +119,28 @@ def _register_tools_with_mcp(server: FastMCP) -> None:
         logger.debug("MCP: registered tool %s", name)
 
 
-def create_mcp_server() -> FastMCP:
-    """Create an isolated official FastMCP server with Teardrop tools."""
+def create_mcp_server() -> MCPServer:
+    """Create an isolated official MCP server with Teardrop tools."""
     settings = get_settings()
-    server = FastMCP(
+    server = MCPServer(
         name="Teardrop",
         instructions=MCP_SERVER_DESCRIPTION,
         website_url=settings.app_base_url if settings.app_base_url else None,
         icons=[{"src": settings.agent_card_icon_url}] if settings.agent_card_icon_url else None,
-        stateless_http=True,
-        json_response=True,
-        streamable_http_path="/",
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        version=APP_VERSION,
     )
-    server._mcp_server.version = APP_VERSION
     _register_tools_with_mcp(server)
     return server
+
+
+def build_mcp_app(server: MCPServer) -> Any:
+    """Build the mounted stateless Streamable HTTP application."""
+    return server.streamable_http_app(
+        streamable_http_path="/",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 
 
 mcp = create_mcp_server()

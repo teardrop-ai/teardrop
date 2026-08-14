@@ -1,6 +1,6 @@
 """Transport integration-style tests for MCP client tool discovery and invocation.
 
-These tests start a real local FastMCP server over Streamable HTTP and validate
+These tests start a real local MCPServer over Streamable HTTP and validate
 that mcp_client builds LangChain tools and successfully invokes them.
 """
 
@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 import mcp_client
 from mcp_client import OrgMcpServer
@@ -30,14 +31,14 @@ def _find_free_port() -> int:
 @pytest.fixture
 async def echo_server_url():
     """Start a real local Streamable HTTP MCP server and return its endpoint URL."""
-    app = FastMCP(name="echo")
+    app = MCPServer(name="echo")
 
     @app.tool(name="echo_greeting")
     def echo_greeting(name: str) -> str:
         return f"Hello, {name}!"
 
     port = _find_free_port()
-    asgi_app = app.streamable_http_app()
+    asgi_app = app.streamable_http_app(transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 
     server = uvicorn.Server(
         uvicorn.Config(
@@ -55,14 +56,14 @@ async def echo_server_url():
     while not server.started and time.monotonic() < deadline:
         if serve_task.done():
             await serve_task
-            raise RuntimeError("FastMCP test server exited before startup")
+            raise RuntimeError("MCPServer test server exited before startup")
         await asyncio.sleep(0.05)
 
     if not server.started:
         server.should_exit = True
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(serve_task, timeout=5)
-        raise RuntimeError("Timed out waiting for FastMCP test server to start")
+        raise RuntimeError("Timed out waiting for MCPServer test server to start")
 
     try:
         yield f"http://127.0.0.1:{port}/mcp"

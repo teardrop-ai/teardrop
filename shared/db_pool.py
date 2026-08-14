@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ __all__ = ["CheckViolation", "PgConnection", "PgPool", "UniqueViolation", "creat
 _PLACEHOLDER_RE = re.compile(r"\$([1-9][0-9]*)")
 
 Row = Mapping[str, Any]
+logger = logging.getLogger(__name__)
 
 
 def translate_sql(query: str) -> str:
@@ -112,6 +114,7 @@ async def create_pool(
     min_size: int = 4,
     max_size: int = 4,
     command_timeout: float = 30.0,
+    open_timeout: float = 60.0,
     configure: Callable[[AsyncConnection[Row]], Awaitable[None]] | None = None,
     name: str = "teardrop-application",
 ) -> PgPool:
@@ -131,7 +134,20 @@ async def create_pool(
         },
         name=name,
     )
-    await raw_pool.open(wait=True)
+    try:
+        await raw_pool.open(wait=True, timeout=open_timeout)
+    except Exception as exc:
+        logger.error(
+            "Failed to initialize Postgres pool '%s' (min_size=%d max_size=%d open_timeout=%.1fs): %s: %s",
+            name,
+            min_size,
+            max_size,
+            open_timeout,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        raise
     return PgPool(raw_pool)
 
 

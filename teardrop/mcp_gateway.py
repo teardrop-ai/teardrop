@@ -76,7 +76,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         )
 
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
-        # FastMCP is mounted at /tools/mcp and serves its root at "/".
+        # MCPServer is mounted at /tools/mcp and serves its root at "/".
         # Normalizing the bare mount path avoids FastAPI falling through to
         # /tools/{tool_id} and returning a method-mismatch 405.
         if self._mounted:
@@ -158,7 +158,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if isinstance(pending_debit, Response):
             return pending_debit
 
-        # ── Forward to FastMCP ────────────────────────────────────────────
+        # ── Forward to MCPServer ──────────────────────────────────────────
         response = await call_next(request)
 
         # ── Post-response: settle billing ─────────────────────────────────
@@ -329,7 +329,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         request.state.x402_billing = billing
         request.state.mcp_org_id = None
         request.state.mcp_auth_method = "x402"
-        return None  # success — continue to billing / FastMCP
+        return None  # success — continue to billing / MCPServer
 
     async def _billing_gate(self, request: Request) -> tuple | Response | None:
         """Pre-request billing gate for ``tools/call`` requests.

@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 
 def _mcp_safe_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return an MCP-safe output schema for live FastMCP registration.
+    """Return an MCP-safe output schema for live MCPServer registration.
 
-    FastMCP only accepts object-root output schemas. For non-object roots we
+    MCPServer only accepts object-root output schemas. For non-object roots we
     leave the live schema unset rather than changing the structured output shape
     seen by MCP clients.
     """

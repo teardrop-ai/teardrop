@@ -72,6 +72,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             settings.pg_dsn,
             configure=_init_conn,
             command_timeout=settings.pg_command_timeout,
+            open_timeout=settings.pg_pool_open_timeout_seconds,
             min_size=settings.pg_pool_min_size,
             max_size=settings.pg_pool_max_size,
         )

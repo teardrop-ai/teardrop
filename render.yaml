@@ -22,6 +22,10 @@ services:
       # Format: postgresql://user:password@host/dbname
       - key: DATABASE_URL
         sync: false
+      # Allow a cold Neon compute endpoint up to one minute to establish the
+      # initial application connections during deploy.
+      - key: PG_POOL_OPEN_TIMEOUT_SECONDS
+        value: "60"
 
       # Auto-generated strong secret for client-credentials JWT auth.
       - key: JWT_CLIENT_SECRET

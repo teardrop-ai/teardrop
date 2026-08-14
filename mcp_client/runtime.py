@@ -103,6 +103,9 @@ async def discover_mcp_tools_with_schema(server: OrgMcpServer) -> tuple[list[dic
 
     tools: list[dict[str, Any]] = []
     for mcp_tool in response.tools[: settings.max_mcp_tools_per_server]:
+        input_schema = getattr(mcp_tool, "input_schema", None)
+        if input_schema is None:
+            input_schema = getattr(mcp_tool, "inputSchema", None)
         output_schema = getattr(mcp_tool, "outputSchema", None)
         if output_schema is None:
             output_schema = getattr(mcp_tool, "output_schema", None)
@@ -110,7 +113,7 @@ async def discover_mcp_tools_with_schema(server: OrgMcpServer) -> tuple[list[dic
             {
                 "name": mcp_tool.name,
                 "description": mcp_tool.description or "",
-                "input_schema": mcp_tool.inputSchema or {},
+                "input_schema": input_schema or {},
                 "output_schema": output_schema if isinstance(output_schema, dict) else None,
             }
         )

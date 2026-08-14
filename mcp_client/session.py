@@ -25,29 +25,26 @@ _sessions: dict[str, tuple[Any, AsyncExitStack, float]] = {}
 def _ssrf_safe_mcp_http_client(
     headers: dict[str, str] | None = None,
     timeout: Any = None,
-    auth: Any = None,
 ) -> Any:
-    """httpx client factory for ``streamablehttp_client`` that pins SSRF-safe IPs.
+    """Build an httpx2 client that pins every connection to SSRF-safe IPs.
 
     Re-validates and pins every connection (including redirects) to an IP that
     passed the SSRF blocklist, closing the DNS-rebinding TOCTOU window for
     outbound MCP traffic.
     """
-    import httpx
+    import httpx2
 
-    from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
+    from tools.definitions.http_fetch import make_ssrf_safe_httpx2_transport
 
     kwargs: dict[str, Any] = {
         "follow_redirects": True,
-        "transport": make_ssrf_safe_httpx_transport(),
+        "transport": make_ssrf_safe_httpx2_transport(),
     }
     if timeout is not None:
         kwargs["timeout"] = timeout
     if headers is not None:
         kwargs["headers"] = headers
-    if auth is not None:
-        kwargs["auth"] = auth
-    return httpx.AsyncClient(**kwargs)
+    return httpx2.AsyncClient(**kwargs)
 
 
 class _SessionPool:
@@ -73,8 +70,9 @@ class _SessionPool:
 
     async def get_or_create(self, server: OrgMcpServer) -> Any:
         """Return a cached MCP ClientSession or create a new one."""
+        import httpx2
         from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
 
         settings = get_settings()
         now = time.monotonic()
@@ -89,15 +87,20 @@ class _SessionPool:
         headers = await self._build_auth_headers(server)
         exit_stack = AsyncExitStack()
         try:
-            transport = await exit_stack.enter_async_context(
-                streamablehttp_client(
-                    url=server.url,
+            connect_timeout = float(settings.mcp_client_connect_timeout_seconds)
+            http_client = await exit_stack.enter_async_context(
+                _ssrf_safe_mcp_http_client(
                     headers=headers or None,
-                    timeout=float(settings.mcp_client_connect_timeout_seconds),
-                    httpx_client_factory=_ssrf_safe_mcp_http_client,
+                    timeout=httpx2.Timeout(connect_timeout, read=300.0),
                 )
             )
-            read_stream, write_stream, _ = transport
+            transport = await exit_stack.enter_async_context(
+                streamable_http_client(
+                    url=server.url,
+                    http_client=http_client,
+                )
+            )
+            read_stream, write_stream = transport
             session = await exit_stack.enter_async_context(ClientSession(read_stream, write_stream))
             # Wait for initialization. We use a generous timeout here to avoid flaky CI connections.
             await asyncio.wait_for(

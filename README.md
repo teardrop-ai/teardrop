@@ -695,7 +695,7 @@ agent/
   state.py          # AgentState, A2UIComponent, TaskStatus schemas
 tools/
   registry.py       # ToolRegistry: versioned, with deprecation lifecycle
-  mcp_server.py     # Standalone FastMCP server for MCP protocol clients
+  mcp_server.py     # Standalone MCPServer for MCP protocol clients
   definitions/      # One file per tool (calculate, get_datetime, web_search, …)
   __init__.py       # Global registry singleton, get_langchain_tools()
 migrations/

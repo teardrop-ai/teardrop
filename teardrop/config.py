@@ -480,6 +480,11 @@ class Settings(BaseSettings):
         default=30.0,
         description="Default Postgres statement timeout in seconds for all DB queries.",
     )
+    pg_pool_open_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="Maximum time to wait for the initial Postgres pool connections during startup.",
+    )
     pg_pool_min_size: int = Field(
         default=2,
         ge=1,

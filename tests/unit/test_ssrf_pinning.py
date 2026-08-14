@@ -12,6 +12,7 @@ import socket
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import httpx2
 import pytest
 
 from tools.definitions import http_fetch
@@ -138,6 +139,36 @@ async def test_httpx_transport_pins_validated_ip():
         result = await transport.handle_async_request(request)
     assert result == "resp"
     # Connection rewritten to the pinned IP, but Host + SNI preserve the real host.
+    assert request.url.host == "93.184.216.34"
+    assert request.headers["host"] == "example.com"
+    assert request.extensions.get("sni_hostname") == "example.com"
+
+
+async def test_httpx2_transport_blocks_rebinding():
+    transport = http_fetch.make_ssrf_safe_httpx2_transport()
+    request = httpx2.Request("GET", "https://rebind.example.com/")
+    with patch.object(
+        http_fetch,
+        "async_validate_url_with_ips",
+        new=AsyncMock(return_value=("Hostname resolves to blocked IP: 10.0.0.5", [])),
+    ):
+        with pytest.raises(httpx2.ConnectError):
+            await transport.handle_async_request(request)
+
+
+async def test_httpx2_transport_pins_validated_ip():
+    transport = http_fetch.make_ssrf_safe_httpx2_transport()
+    request = httpx2.Request("GET", "https://example.com/path")
+    with (
+        patch.object(
+            http_fetch,
+            "async_validate_url_with_ips",
+            new=AsyncMock(return_value=(None, ["93.184.216.34"])),
+        ),
+        patch.object(httpx2.AsyncHTTPTransport, "handle_async_request", new=AsyncMock(return_value="resp")),
+    ):
+        result = await transport.handle_async_request(request)
+    assert result == "resp"
     assert request.url.host == "93.184.216.34"
     assert request.headers["host"] == "example.com"
     assert request.extensions.get("sni_hostname") == "example.com"

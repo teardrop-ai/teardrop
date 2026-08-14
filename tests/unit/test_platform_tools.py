@@ -326,10 +326,10 @@ def billing_client(test_settings, monkeypatch):
         config.get_settings.cache_clear()
 
         from teardrop.mcp_gateway import MCPGatewayMiddleware
-        from tools.mcp_server import create_mcp_server
+        from tools.mcp_server import build_mcp_app, create_mcp_server
 
         mcp = create_mcp_server()
-        mounted_mcp_app = mcp.streamable_http_app()
+        mounted_mcp_app = build_mcp_app(mcp)
         mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
         mounted_app.add_middleware(MCPGatewayMiddleware)
         mounted_app.mount("/tools/mcp", mounted_mcp_app)
@@ -356,7 +356,7 @@ class TestMCPBillingGatePlatformTools:
                 "jsonrpc": "2.0",
                 "method": "tools/call",
                 "id": 1,
-                "params": {"name": "get_token_price", "arguments": {"symbols": "eth"}},
+                "params": {"name": "get_token_price", "arguments": {"tokens": ["eth"]}},
             }
         )
 
@@ -370,7 +370,7 @@ class TestMCPBillingGatePlatformTools:
                     new_callable=AsyncMock,
                     return_value=MagicMock(verified=True, billing_method="credit", error=None),
                 ),
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 2000)) as mock_debit,
             ):
                 resp = await client.post(
                     "/tools/mcp",
@@ -382,11 +382,12 @@ class TestMCPBillingGatePlatformTools:
                 )
 
         if resp.status_code == 200:
+            assert mock_debit.call_count == 1, resp.text
             mock_debit.assert_called_once_with("test-org-id", 2000, reason="mcp:get_token_price")
 
     @pytest.mark.asyncio
-    async def test_non_platform_tool_uses_default_cost(self, billing_client, test_jwt_token):
-        """A non-platform, non-marketplace tool falls back to default pricing."""
+    async def test_zero_cost_tool_uses_override(self, billing_client, test_jwt_token):
+        """A zero-cost platform override takes precedence over default pricing."""
 
         body = json.dumps(
             {
@@ -407,7 +408,7 @@ class TestMCPBillingGatePlatformTools:
                     new_callable=AsyncMock,
                     return_value=MagicMock(verified=True, billing_method="credit", error=None),
                 ),
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 0)) as mock_debit,
             ):
                 resp = await client.post(
                     "/tools/mcp",
@@ -419,8 +420,8 @@ class TestMCPBillingGatePlatformTools:
                 )
 
         if resp.status_code == 200:
-            # Should use default cost (1000), not a platform price
-            mock_debit.assert_called_once_with("test-org-id", 1000, reason="mcp:calculate")
+            assert mock_debit.call_count == 1, resp.text
+            mock_debit.assert_called_once_with("test-org-id", 0, reason="mcp:calculate")
 
 
 # ─── Migration 046: web3 primitive tools ────────────────────────────────────
@@ -699,8 +700,8 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                     "billing.verify_credit",
                     new_callable=AsyncMock,
                     return_value=MagicMock(verified=True, billing_method="credit", error=None),
-                ),
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+                ) as mock_verify,
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 5000)) as mock_debit,
                 patch(
                     "marketplace.get_marketplace_tool_by_name",
                     new_callable=AsyncMock,
@@ -716,8 +717,10 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                     },
                 )
 
-        if resp.status_code == 200:
-            mock_debit.assert_called_once_with("test-org-id", 5000, reason="mcp:acme/weather")
+        assert resp.status_code == 200
+        mock_verify.assert_awaited_once_with("test-org-id", 5000)
+        mock_debit.assert_not_awaited()
+        assert resp.json()["result"]["isError"] is True
 
     async def test_qualified_tool_bare_override_wins(self, billing_client, test_jwt_token):
         body = json.dumps(
@@ -740,7 +743,7 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                     new_callable=AsyncMock,
                     return_value=MagicMock(verified=True, billing_method="credit", error=None),
                 ) as mock_verify,
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=True),
+                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 9000)),
                 patch(
                     "marketplace.get_marketplace_tool_by_name",
                     new_callable=AsyncMock,

@@ -26,10 +26,10 @@ def x402_client(test_settings, monkeypatch):
         config.get_settings.cache_clear()
 
         from teardrop.mcp_gateway import MCPGatewayMiddleware
-        from tools.mcp_server import create_mcp_server
+        from tools.mcp_server import build_mcp_app, create_mcp_server
 
         mcp = create_mcp_server()
-        mounted_mcp_app = mcp.streamable_http_app()
+        mounted_mcp_app = build_mcp_app(mcp)
         mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
         mounted_app.add_middleware(MCPGatewayMiddleware)
         mounted_app.mount("/tools/mcp", mounted_mcp_app)
@@ -128,7 +128,7 @@ async def test_invalid_payment_returns_402(x402_client):
 
 @pytest.mark.asyncio
 async def test_valid_payment_passes_through(x402_client):
-    """No Bearer + valid x402 payment → request reaches FastMCP."""
+    """No Bearer + valid x402 payment reaches MCPServer."""
     async with x402_client() as client:
         with patch(
             "billing.verify_payment",
@@ -155,10 +155,10 @@ async def test_x402_disabled_returns_401(test_settings, monkeypatch):
     monkeypatch.setenv("MCP_X402_ENABLED", "false")
     config.get_settings.cache_clear()
     from teardrop.mcp_gateway import MCPGatewayMiddleware
-    from tools.mcp_server import create_mcp_server
+    from tools.mcp_server import build_mcp_app, create_mcp_server
 
     mcp = create_mcp_server()
-    mounted_mcp_app = mcp.streamable_http_app()
+    mounted_mcp_app = build_mcp_app(mcp)
     mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", mounted_mcp_app)

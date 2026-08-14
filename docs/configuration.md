@@ -28,6 +28,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
 | `DATABASE_URL` | Neon Postgres connection string |
+| `PG_POOL_OPEN_TIMEOUT_SECONDS` | Maximum startup wait for the initial Postgres pool connections (default: `60`) |
 | `BILLING_ENABLED` | `true` to activate x402 payments |
 | `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |

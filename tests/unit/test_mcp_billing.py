@@ -27,10 +27,10 @@ def billing_client(test_settings, monkeypatch):
         config.get_settings.cache_clear()
 
         from teardrop.mcp_gateway import MCPGatewayMiddleware
-        from tools.mcp_server import create_mcp_server
+        from tools.mcp_server import build_mcp_app, create_mcp_server
 
         mcp = create_mcp_server()
-        mounted_mcp_app = mcp.streamable_http_app()
+        mounted_mcp_app = build_mcp_app(mcp)
         mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
         mounted_app.add_middleware(MCPGatewayMiddleware)
         mounted_app.mount("/tools/mcp", mounted_mcp_app)
@@ -163,7 +163,7 @@ async def test_billing_debits_on_success(billing_client, test_jwt_token):
                 new_callable=AsyncMock,
                 return_value=BillingResult(verified=True, billing_method="credit"),
             ),
-            patch("billing.debit_credit", new_callable=AsyncMock, return_value=True) as mock_debit,
+            patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 500)) as mock_debit,
         ):
             resp = await client.post(
                 "/tools/mcp",
@@ -174,7 +174,7 @@ async def test_billing_debits_on_success(billing_client, test_jwt_token):
                 },
             )
 
-    # FastMCP processes the request (may fail at tool level, but billing fires).
+    # MCPServer processes the request (may fail at tool level, but billing fires).
     if resp.status_code == 200:
         mock_debit.assert_called_once_with("test-org-id", 500, reason="mcp:web_search")
 
@@ -186,10 +186,10 @@ async def test_billing_disabled_skips_everything(test_settings, monkeypatch, tes
     monkeypatch.setenv("MCP_BILLING_ENABLED", "false")
     config.get_settings.cache_clear()
     from teardrop.mcp_gateway import MCPGatewayMiddleware
-    from tools.mcp_server import create_mcp_server
+    from tools.mcp_server import build_mcp_app, create_mcp_server
 
     mcp = create_mcp_server()
-    mounted_mcp_app = mcp.streamable_http_app()
+    mounted_mcp_app = build_mcp_app(mcp)
     mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", mounted_mcp_app)

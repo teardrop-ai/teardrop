@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import httpx
+import httpx2
 from pydantic import BaseModel, Field
 
 from tools.registry import ToolDefinition
@@ -244,6 +245,32 @@ class _SSRFGuardHTTPXTransport(httpx.AsyncHTTPTransport):
 def make_ssrf_safe_httpx_transport() -> httpx.AsyncHTTPTransport:
     """Build an httpx transport that pins connections to SSRF-validated IPs."""
     return _SSRFGuardHTTPXTransport()
+
+
+class _SSRFGuardHTTPX2Transport(httpx2.AsyncHTTPTransport):
+    """httpx2 transport that re-validates and pins every connection."""
+
+    async def handle_async_request(self, request: "httpx2.Request") -> "httpx2.Response":
+        original_host = request.url.host
+        if not original_host:
+            raise httpx2.ConnectError("SSRF guard: missing host", request=request)
+
+        error, ips = await async_validate_url_with_ips(str(request.url))
+        if error:
+            raise httpx2.ConnectError(f"SSRF guard: {error}", request=request)
+
+        pinned_ip = ips[0]
+        if pinned_ip != original_host:
+            request.url = request.url.copy_with(host=pinned_ip)
+            request.headers["host"] = f"{original_host}:{request.url.port}" if request.url.port else original_host
+            request.extensions = {**request.extensions, "sni_hostname": original_host}
+
+        return await super().handle_async_request(request)
+
+
+def make_ssrf_safe_httpx2_transport() -> httpx2.AsyncHTTPTransport:
+    """Build an httpx2 transport that pins connections to SSRF-validated IPs."""
+    return _SSRFGuardHTTPX2Transport()
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────

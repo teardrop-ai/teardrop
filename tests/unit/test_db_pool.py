@@ -78,6 +78,7 @@ async def test_create_pool_uses_application_connection_defaults() -> None:
             min_size=2,
             max_size=6,
             command_timeout=12.5,
+            open_timeout=45.0,
         )
 
     assert isinstance(pool, PgPool)
@@ -89,4 +90,4 @@ async def test_create_pool_uses_application_connection_defaults() -> None:
     assert kwargs["kwargs"]["autocommit"] is True
     assert kwargs["kwargs"]["row_factory"] is not None
     assert kwargs["kwargs"]["options"] == "-c statement_timeout=12500"
-    raw_pool.open.assert_awaited_once_with(wait=True)
+    raw_pool.open.assert_awaited_once_with(wait=True, timeout=45.0)

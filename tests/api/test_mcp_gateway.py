@@ -109,7 +109,7 @@ async def test_auth_gate_rejects_expired_token(mcp_client, test_settings):
 
 @pytest.mark.asyncio
 async def test_auth_gate_passes_valid_token(mcp_client, test_jwt_token):
-    """POST /tools/mcp with valid JWT executing tools/call passes through to FastMCP layer."""
+    """POST /tools/mcp with valid JWT executing tools/call passes through to MCPServer."""
     resp = await mcp_client.post(
         "/tools/mcp",
         content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
@@ -118,7 +118,7 @@ async def test_auth_gate_passes_valid_token(mcp_client, test_jwt_token):
             "Authorization": f"Bearer {test_jwt_token}",
         },
     )
-    # FastMCP handles the request — may be 200 or a JSON-RPC error, but NOT 401.
+    # MCPServer handles the request — may be 200 or a JSON-RPC error, but NOT 401.
     assert resp.status_code != 401
 
 
@@ -149,11 +149,11 @@ async def test_non_mcp_path_not_intercepted(mcp_client):
 
 @pytest.mark.asyncio
 async def test_mcp_app_real_handshake():
-    """Verify FastMCP stateless streamable layer returns a valid initialize handshake."""
+    """Verify MCPServer stateless streamable layer returns a valid initialize handshake."""
     from teardrop.app import mcp_app
 
     async with mcp_app.router.lifespan_context(mcp_app):
-        # We test FastMCP's ASGI app directly here because testing it through proxy
+        # We test MCPServer's ASGI app directly here because testing it through proxy
         # requires the full FastAPI DB-connected lifespan.
         async with AsyncClient(
             transport=ASGITransport(app=mcp_app), base_url="http://test", headers={"Accept": "application/json"}
@@ -194,12 +194,12 @@ async def test_mcp_app_real_handshake():
 
 @pytest.mark.asyncio
 async def test_mounted_mcp_normalizes_no_slash_path():
-    """POST /tools/mcp should hit the mounted FastMCP app, not /tools/{tool_id}."""
+    """POST /tools/mcp should hit the mounted MCP app, not /tools/{tool_id}."""
     from teardrop.mcp_gateway import MCPGatewayMiddleware
-    from tools.mcp_server import create_mcp_server
+    from tools.mcp_server import build_mcp_app, create_mcp_server
 
     mcp = create_mcp_server()
-    mounted_mcp_app = mcp.streamable_http_app()
+    mounted_mcp_app = build_mcp_app(mcp)
     mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", mounted_mcp_app)

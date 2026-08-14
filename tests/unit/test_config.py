@@ -206,14 +206,17 @@ def test_x402_upto_max_amount_atomic_unparseable_returns_zero():
 
 def test_pg_pool_size_defaults():
     s = Settings()
+    assert s.pg_pool_open_timeout_seconds == 60.0
     assert s.pg_pool_min_size == 2
     assert s.pg_pool_max_size == 6
 
 
 def test_pg_pool_size_env_overrides(monkeypatch):
+    monkeypatch.setenv("PG_POOL_OPEN_TIMEOUT_SECONDS", "75")
     monkeypatch.setenv("PG_POOL_MIN_SIZE", "3")
     monkeypatch.setenv("PG_POOL_MAX_SIZE", "9")
     s = Settings()
+    assert s.pg_pool_open_timeout_seconds == 75.0
     assert s.pg_pool_min_size == 3
     assert s.pg_pool_max_size == 9
 
@@ -221,3 +224,8 @@ def test_pg_pool_size_env_overrides(monkeypatch):
 def test_pg_pool_size_invalid_bounds():
     with pytest.raises(ValueError, match="pg_pool_max_size"):
         Settings(pg_pool_min_size=8, pg_pool_max_size=4)
+
+
+def test_pg_pool_open_timeout_must_be_positive():
+    with pytest.raises(ValueError, match="greater than 0"):
+        Settings(pg_pool_open_timeout_seconds=0)

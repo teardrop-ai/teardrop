@@ -255,9 +255,10 @@ def _validate_production_config(s: "Settings") -> None:
 
 lifespan = build_lifespan(_validate_production_config)
 
+from tools.mcp_server import build_mcp_app  # noqa: E402
 from tools.mcp_server import mcp as _mcp_server  # noqa: E402
 
-mcp_app = _mcp_server.streamable_http_app()
+mcp_app = build_mcp_app(_mcp_server)
 
 
 @asynccontextmanager
@@ -302,7 +303,7 @@ async def add_security_headers(request: Request, call_next: Callable[[Request], 
     return response
 
 
-# ─── MCP gateway (auth / billing / x402 — wraps FastMCP ASGI app) ────────────
+# ─── MCP gateway (auth / billing / x402 — wraps MCPServer ASGI app) ──────────
 from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer  # noqa: E402
 
 # Keep the gateway on the Streamable HTTP mount only. REST endpoints such as
