@@ -12,7 +12,8 @@ langchain-google-genai>=1.0.0
 langsmith>=0.8.0
 
 # ─── MCP (Model Context Protocol) ──────────────────────────────────────────────
-mcp>=1.26.0
+# FastMCP is imported from mcp.server.fastmcp; mcp 2.x removed that module path.
+mcp>=1.26.0,<2.0.0
 
 # ─── Tool Providers ────────────────────────────────────────────────────────────
 tavily-python>=0.5.0
