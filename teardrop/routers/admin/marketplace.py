@@ -176,6 +176,7 @@ class SweepStatusItem(BaseModel):
 
 class SweepStatusResponse(BaseModel):
     pending: list[SweepStatusItem]
+    in_flight: list[SweepStatusItem]
     exhausted: list[SweepStatusItem]
 
 
@@ -187,9 +188,10 @@ async def admin_marketplace_sweep_status(
 
     Useful for diagnosing why an org's earnings have not been settled.
     """
-    from marketplace import list_exhausted_withdrawals, list_pending_withdrawals
+    from marketplace import list_exhausted_withdrawals, list_in_flight_withdrawals, list_pending_withdrawals
 
     pending = await list_pending_withdrawals()
+    in_flight = await list_in_flight_withdrawals()
     exhausted = await list_exhausted_withdrawals()
 
     def _fmt(w: object) -> dict:
@@ -210,6 +212,7 @@ async def admin_marketplace_sweep_status(
     return JSONResponse(
         content={
             "pending": [_fmt(w) for w in pending],
+            "in_flight": [_fmt(w) for w in in_flight],
             "exhausted": [_fmt(w) for w in exhausted],
         }
     )
@@ -229,14 +232,14 @@ async def admin_marketplace_sweep_retry(
     withdrawal_id: str,
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
-    """Admin: reset a failed or exhausted withdrawal so the next sweep retries it."""
+    """Admin: reset a failed, exhausted, or reconciled in-flight withdrawal."""
     from marketplace import reset_withdrawal
 
     found = await reset_withdrawal(withdrawal_id)
     if not found:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Withdrawal not found or not in 'failed'/'exhausted' status.",
+            detail="Withdrawal not found or not recoverable.",
         )
     return JSONResponse(content={"status": "pending", "id": withdrawal_id})
 
@@ -250,14 +253,14 @@ async def admin_reset_withdrawal(
     withdrawal_id: str,
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
-    """Admin: reset a failed withdrawal to pending so it can be re-processed."""
+    """Admin: reset a failed or reconciled in-flight withdrawal to pending."""
     from marketplace import reset_withdrawal
 
     found = await reset_withdrawal(withdrawal_id)
     if not found:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Withdrawal not found or not in 'failed' status.",
+            detail="Withdrawal not found or not recoverable.",
         )
     return JSONResponse(content={"status": "pending", "id": withdrawal_id})
 

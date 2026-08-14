@@ -384,8 +384,8 @@ async def transfer_usdc(
             )
             tx_hash = getattr(result, "transaction_hash", None) or str(result)
     except Exception as exc:
-        logger.error("transfer_usdc: CDP transfer failed: %s", exc)
-        raise RuntimeError(f"CDP transfer failed: {exc}") from exc
+        logger.error("transfer_usdc: CDP transfer failed error_type=%s", type(exc).__name__)
+        raise RuntimeError("CDP transfer failed") from exc
 
     logger.info("transfer_usdc: success tx_hash=%s", tx_hash)
     return tx_hash

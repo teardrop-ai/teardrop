@@ -374,8 +374,13 @@ class TestRequestWithdrawal:
 def _make_conn_mock(withdrawal_row, earnings_rows):
     """Build pool+conn mocks for process_withdrawal, which uses acquire()/transaction()."""
     mock_conn = AsyncMock()
+    if withdrawal_row is None:
+        mock_conn.fetchrow = AsyncMock(return_value=None)
+    else:
+        in_flight_row = {**withdrawal_row, "status": "in_flight"}
+        mock_conn.fetchrow = AsyncMock(side_effect=[withdrawal_row, in_flight_row])
     mock_conn.fetch = AsyncMock(return_value=earnings_rows)
-    mock_conn.execute = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=f"UPDATE {len(earnings_rows)}")
 
     # conn.transaction() must be an async context manager
     mock_tx = AsyncMock()
@@ -416,6 +421,7 @@ class TestProcessWithdrawal:
             "id": "w-1",
             "org_id": "org-1",
             "amount_usdc": 700,
+            "tx_hash": "",
             "wallet": _VALID_ADDR,
             "status": "pending",
             "created_at": _NOW,
@@ -434,9 +440,9 @@ class TestProcessWithdrawal:
         await process_withdrawal("w-1")
 
         # Two execute calls: UPDATE earnings + UPDATE withdrawal
-        assert mock_conn.execute.call_count == 2
+        assert mock_conn.execute.call_count == 3
         first_call_args = mock_conn.execute.call_args_list[0].args
-        settled_ids = first_call_args[1]  # second arg to first execute
+        settled_ids = first_call_args[2]  # third arg to first execute
         assert sorted(settled_ids) == ["e1", "e3"]
 
     @pytest.mark.anyio
@@ -446,6 +452,7 @@ class TestProcessWithdrawal:
             "id": "w-2",
             "org_id": "org-1",
             "amount_usdc": 300,
+            "tx_hash": "",
             "wallet": _VALID_ADDR,
             "status": "pending",
             "created_at": _NOW,
@@ -472,14 +479,27 @@ class TestProcessWithdrawal:
 class TestCompleteWithdrawal:
     @pytest.mark.anyio
     async def test_records_tx_hash(self, monkeypatch):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value={"status": "settled", "tx_hash": ""})
+        mock_conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        mock_tx = AsyncMock()
+        mock_tx.__aenter__ = AsyncMock(return_value=None)
+        mock_tx.__aexit__ = AsyncMock(return_value=False)
+        mock_conn.transaction = MagicMock(return_value=mock_tx)
+
+        mock_acquire = AsyncMock()
+        mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_acquire.__aexit__ = AsyncMock(return_value=False)
+
         mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock()
+        mock_pool.acquire = MagicMock(return_value=mock_acquire)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
         await complete_withdrawal("w-1", "0xdeadbeefdeadbeef")
 
-        mock_pool.execute.assert_called_once()
-        call_args = mock_pool.execute.call_args.args
+        mock_conn.execute.assert_called_once()
+        call_args = mock_conn.execute.call_args.args
         assert call_args[1] == "w-1"  # withdrawal_id
         assert call_args[2] == "0xdeadbeefdeadbeef"  # tx_hash
 
@@ -727,13 +747,31 @@ class TestListOrgWithdrawals:
 # ─── reset_withdrawal ─────────────────────────────────────────────────────────
 
 
+def _make_reset_pool(status: str | None):
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow = AsyncMock(return_value=None if status is None else {"status": status})
+    mock_conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    mock_tx = AsyncMock()
+    mock_tx.__aenter__ = AsyncMock(return_value=None)
+    mock_tx.__aexit__ = AsyncMock(return_value=False)
+    mock_conn.transaction = MagicMock(return_value=mock_tx)
+
+    mock_acquire = AsyncMock()
+    mock_acquire.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire.__aexit__ = AsyncMock(return_value=False)
+
+    mock_pool = MagicMock()
+    mock_pool.acquire = MagicMock(return_value=mock_acquire)
+    return mock_pool
+
+
 @pytest.mark.anyio
 class TestResetWithdrawal:
     async def test_returns_true_when_reset(self, monkeypatch):
         from marketplace import reset_withdrawal
 
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock(return_value="UPDATE 1")
+        mock_pool = _make_reset_pool("failed")
         monkeypatch.setattr("marketplace._pool", mock_pool)
         result = await reset_withdrawal("w-1")
         assert result is True
@@ -741,8 +779,7 @@ class TestResetWithdrawal:
     async def test_returns_false_when_not_found(self, monkeypatch):
         from marketplace import reset_withdrawal
 
-        mock_pool = MagicMock()
-        mock_pool.execute = AsyncMock(return_value="UPDATE 0")
+        mock_pool = _make_reset_pool(None)
         monkeypatch.setattr("marketplace._pool", mock_pool)
         result = await reset_withdrawal("bad-id")
         assert result is False

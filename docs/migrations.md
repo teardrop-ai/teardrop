@@ -101,6 +101,7 @@ python -m migrations.runner
 | `085_agent_commerce_discoverability.sql` | Adds commerce-facing `marketplace_description` and search `tags` to platform tools, and `tags` to org tools; seeds flagship descriptions/tags |
 | `086_event_trigger_a2a_control_plane.sql` | Adds org/trigger/run result lookup indexing and insert-only event-trigger audit events for A2A task polling and lifecycle governance |
 | `087_event_trigger_control_plane_hardening.sql` | Adds multi-instance event-dispatch leases, global/per-org admission, heartbeat ownership, and abandoned-run recovery |
+| `088_withdrawal_in_flight.sql` | Links claimed earnings to withdrawals and adds the manual-reconciliation `in_flight` state |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

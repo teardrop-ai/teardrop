@@ -449,7 +449,7 @@ curl https://api.teardrop.ai/marketplace/withdrawals \
 | Status | Meaning |
 |---|---|
 | `pending` | Queued for processing |
-| `processing` | On-chain transfer initiated |
+| `in_flight` | Transfer submitted or confirmation is ambiguous; requires operator reconciliation |
 | `settled` | USDC confirmed on-chain |
 | `failed` | Transfer failed; contact support |
 
@@ -463,5 +463,5 @@ Pagination works the same way as earnings: pass `next_cursor` as `cursor`.
 |---|---|
 | `422 settlement wallet` on publish | Complete Step 2 first |
 | `422 invalid settlement wallet` | Use a valid `0x` + 40 hex address; Teardrop stores the checksummed form automatically |
-| Withdrawal stays `pending` for >30 min | The auto-sweep runs every 24 hours by default (configurable via `MARKETPLACE_SWEEP_INTERVAL_SECONDS`); if still stuck after a full sweep cycle, contact support who can trigger an admin reset |
+| Withdrawal stays `pending` for >30 min | The auto-sweep runs every 24 hours by default (configurable via `MARKETPLACE_SWEEP_INTERVAL_SECONDS`); if it becomes `in_flight`, support must reconcile the chain result before retrying |
 | `429 Too Many Requests` on catalog | Back off for 60 seconds (`Retry-After` header) |

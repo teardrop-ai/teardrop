@@ -55,7 +55,7 @@ async def marketplace_sweep_once() -> int:
           AND NOT EXISTS (
               SELECT 1 FROM tool_author_withdrawals w
               WHERE w.org_id = e.org_id
-                AND w.status IN ('pending', 'failed')
+                                AND w.status IN ('pending', 'failed', 'in_flight')
                 AND (w.next_sweep_at IS NULL OR w.next_sweep_at > NOW())
           )
         GROUP BY e.org_id
@@ -109,6 +109,12 @@ async def marketplace_sweep_once() -> int:
                     org_id,
                     total,
                     result.tx_hash,
+                )
+            elif result.status == "in_flight":
+                logger.warning(
+                    "marketplace_sweep: withdrawal requires manual reconciliation id=%s org=%s",
+                    withdrawal_id,
+                    org_id,
                 )
             else:
                 row = await pool.fetchrow(

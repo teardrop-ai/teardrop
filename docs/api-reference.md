@@ -174,8 +174,8 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `POST` | `/admin/billing/pending/{id}/retry` | Admin | Retry a specific failed settlement |
 | `GET` | `/admin/orgs/{org_id}/spending` | Admin | Get org spending config (caps, pause status) |
 | `PATCH` | `/admin/orgs/{org_id}/spending` | Admin | Update org spending caps and pause status |
-| `GET` | `/admin/marketplace/sweep-status` | Admin | Status of all pending withdrawals |
-| `POST` | `/admin/marketplace/sweep-retry/{id}` | Admin | Reset an exhausted withdrawal for retry |
+| `GET` | `/admin/marketplace/sweep-status` | Admin | Status of pending, in-flight, and exhausted withdrawals |
+| `POST` | `/admin/marketplace/sweep-retry/{id}` | Admin | Reset a failed, exhausted, or reconciled in-flight withdrawal after chain verification |
 | `POST` | `/admin/marketplace/process-withdrawal/{id}` | Admin | Manually process a single withdrawal |
 
 ### Custom Tools

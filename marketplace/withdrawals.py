@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import sentry_sdk
 
@@ -18,6 +19,13 @@ from marketplace.models import AuthorWithdrawal
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _TransferResult:
+    tx_hash: str
+    status: Literal["settled", "failed", "in_flight"]
+    error: str = ""
 
 
 class _WithdrawalService:
@@ -83,14 +91,56 @@ class _WithdrawalService:
             settled_at=None,
         )
 
-    async def _load_pending_withdrawal(self, withdrawal_id: str):
-        row = await self._pool.fetchrow(
-            "SELECT * FROM tool_author_withdrawals WHERE id = $1 AND status = 'pending'",
-            withdrawal_id,
-        )
-        if row is None:
-            raise ValueError("Withdrawal not found or not in 'pending' status")
-        return row
+    async def _claim_withdrawal(self, withdrawal_id: str) -> tuple[dict[str, Any], int]:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT * FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                    withdrawal_id,
+                )
+                if row is None or row["status"] != "pending":
+                    raise ValueError("Withdrawal not found or not in 'pending' status")
+
+                withdrawal = dict(row)
+                settled_ids, settled_total = await self._select_earnings_to_settle(
+                    conn,
+                    org_id=withdrawal["org_id"],
+                    amount_usdc=withdrawal["amount_usdc"],
+                )
+                if not settled_ids or settled_total <= 0:
+                    error = "No pending earnings available for withdrawal"
+                    await conn.execute(
+                        """
+                        UPDATE tool_author_withdrawals
+                        SET status = 'failed', tx_hash = '', settled_at = NULL, last_sweep_error = $2
+                        WHERE id = $1 AND status = 'pending'
+                        """,
+                        withdrawal_id,
+                        error,
+                    )
+                    withdrawal.update(status="failed", tx_hash="", settled_at=None, last_sweep_error=error)
+                    return withdrawal, 0
+
+                await conn.execute(
+                    """
+                    UPDATE tool_author_earnings
+                    SET status = 'settled', withdrawal_id = $1
+                    WHERE id = ANY($2::text[]) AND status = 'pending' AND withdrawal_id IS NULL
+                    """,
+                    withdrawal_id,
+                    settled_ids,
+                )
+
+                await conn.execute(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'in_flight', tx_hash = '', settled_at = NULL, last_sweep_error = ''
+                    WHERE id = $1 AND status = 'pending'
+                    """,
+                    withdrawal_id,
+                )
+                withdrawal.update(status="in_flight", tx_hash="", settled_at=None, last_sweep_error="")
+                return withdrawal, settled_total
 
     async def _select_earnings_to_settle(
         self,
@@ -102,7 +152,7 @@ class _WithdrawalService:
         earnings_rows = await conn.fetch(
             """
             SELECT id, author_share_usdc FROM tool_author_earnings
-            WHERE org_id = $1 AND status = 'pending'
+            WHERE org_id = $1 AND status = 'pending' AND withdrawal_id IS NULL
             ORDER BY created_at ASC
             FOR UPDATE
             """,
@@ -129,10 +179,11 @@ class _WithdrawalService:
         withdrawal_id: str,
         dest_wallet: str,
         settled_total: int,
-    ) -> tuple[str, bool, str]:
+    ) -> _TransferResult:
         if settled_total <= 0 or not self._settings.agent_wallet_enabled:
-            return "", False, ""
+            return _TransferResult("", "failed", "Transfer amount must be positive")
 
+        tx_hash = ""
         try:
             from teardrop.agent_wallets import transfer_usdc, verify_usdc_transfer
 
@@ -148,120 +199,135 @@ class _WithdrawalService:
                 tx_hash,
                 settled_total,
             )
-
-            try:
-                confirmed = await verify_usdc_transfer(
-                    tx_hash=tx_hash,
-                    chain_id=self._settings.marketplace_settlement_chain_id,
-                    timeout_seconds=self._settings.marketplace_tx_confirm_timeout_seconds,
-                )
-            except ValueError:
-                logger.warning(
-                    "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
-                    tx_hash,
-                    withdrawal_id,
-                )
-                confirmed = True
-
-            if not confirmed:
-                raise RuntimeError(f"Transaction {tx_hash} was reverted on-chain")
-            return tx_hash, False, ""
         except Exception as exc:
-            logger.error("process_withdrawal: CDP transfer failed id=%s: %s", withdrawal_id, exc)
+            logger.error(
+                "process_withdrawal: CDP transfer failed id=%s error_type=%s",
+                withdrawal_id,
+                type(exc).__name__,
+            )
             with sentry_sdk.new_scope() as scope:
                 scope.set_tag("withdrawal_id", str(withdrawal_id))
                 scope.set_tag("rail", "cdp")
                 sentry_sdk.capture_exception(exc)
-            return "", True, str(exc)
+            return _TransferResult("", "failed", "CDP transfer failed")
 
-    async def process(self, withdrawal_id: str) -> AuthorWithdrawal:
-        """Process a pending withdrawal and return the resulting state."""
-        if not self._settings.agent_wallet_enabled:
-            raise RuntimeError("Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first")
+        try:
+            confirmed = await verify_usdc_transfer(
+                tx_hash=tx_hash,
+                chain_id=self._settings.marketplace_settlement_chain_id,
+                timeout_seconds=self._settings.marketplace_tx_confirm_timeout_seconds,
+            )
+        except ValueError:
+            logger.warning(
+                "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
+                tx_hash,
+                withdrawal_id,
+            )
+            confirmed = True
+        except Exception as exc:
+            logger.error(
+                "process_withdrawal: TX confirmation unavailable id=%s error_type=%s",
+                withdrawal_id,
+                type(exc).__name__,
+            )
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("withdrawal_id", str(withdrawal_id))
+                scope.set_tag("rail", "cdp")
+                sentry_sdk.capture_exception(exc)
+            return _TransferResult(tx_hash, "in_flight", "Transaction submitted; confirmation unavailable")
 
-        row = await self._load_pending_withdrawal(withdrawal_id)
-        org_id = row["org_id"]
-        amount = row["amount_usdc"]
-        dest_wallet = row["wallet"]
+        if not confirmed:
+            return _TransferResult(tx_hash, "failed", "Transaction reverted on-chain")
+        return _TransferResult(tx_hash, "settled")
 
+    async def _settle_withdrawal(self, withdrawal_id: str, tx_hash: str) -> None:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                settled_ids, settled_total = await self._select_earnings_to_settle(
-                    conn,
-                    org_id=org_id,
-                    amount_usdc=amount,
+                row = await conn.fetchrow(
+                    "SELECT status, tx_hash FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                    withdrawal_id,
                 )
-
-                if settled_ids:
-                    await conn.execute(
-                        """
-                        UPDATE tool_author_earnings
-                        SET status = 'settled'
-                        WHERE id = ANY($1::text[])
-                        """,
-                        settled_ids,
-                    )
-
-                tx_hash, transfer_failed, transfer_error = await self._attempt_transfer(
-                    withdrawal_id=withdrawal_id,
-                    dest_wallet=dest_wallet,
-                    settled_total=settled_total,
-                )
-
-                now = datetime.now(timezone.utc)
-                if transfer_failed:
-                    if settled_ids:
-                        await conn.execute(
-                            """
-                            UPDATE tool_author_earnings
-                            SET status = 'pending'
-                            WHERE id = ANY($1::text[])
-                            """,
-                            settled_ids,
-                        )
-                    await conn.execute(
-                        """
-                        UPDATE tool_author_withdrawals
-                        SET status = 'failed', settled_at = $2, last_sweep_error = $3
-                        WHERE id = $1
-                        """,
-                        withdrawal_id,
-                        now,
-                        transfer_error,
-                    )
-                    return AuthorWithdrawal(
-                        id=withdrawal_id,
-                        org_id=org_id,
-                        amount_usdc=amount,
-                        tx_hash="",
-                        wallet=dest_wallet,
-                        status="failed",
-                        last_sweep_error=transfer_error,
-                        created_at=row["created_at"],
-                        settled_at=now,
-                    )
-
+                if row is None or row["status"] != "in_flight":
+                    raise RuntimeError("Withdrawal is no longer awaiting settlement")
                 await conn.execute(
                     """
                     UPDATE tool_author_withdrawals
-                    SET status = 'settled', tx_hash = $2, settled_at = $3
-                    WHERE id = $1
+                    SET status = 'settled', tx_hash = $2, settled_at = NOW(), last_sweep_error = ''
+                    WHERE id = $1 AND status = 'in_flight'
                     """,
                     withdrawal_id,
                     tx_hash,
-                    now,
                 )
 
-        return AuthorWithdrawal(
-            id=withdrawal_id,
-            org_id=org_id,
-            amount_usdc=amount,
-            tx_hash=tx_hash,
-            wallet=dest_wallet,
-            status="settled",
-            created_at=row["created_at"],
-            settled_at=now,
+    async def _release_withdrawal(self, withdrawal_id: str, error: str) -> None:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT status FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                    withdrawal_id,
+                )
+                if row is None or row["status"] != "in_flight":
+                    raise RuntimeError("Withdrawal is no longer awaiting settlement")
+                await conn.execute(
+                    """
+                    UPDATE tool_author_earnings
+                    SET status = 'pending', withdrawal_id = NULL
+                    WHERE withdrawal_id = $1 AND status = 'settled'
+                    """,
+                    withdrawal_id,
+                )
+                await conn.execute(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'failed', tx_hash = '', settled_at = NULL, last_sweep_error = $2
+                    WHERE id = $1 AND status = 'in_flight'
+                    """,
+                    withdrawal_id,
+                    error,
+                )
+
+    async def _record_in_flight(self, withdrawal_id: str, tx_hash: str, error: str) -> None:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.fetchrow(
+                    "SELECT status FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                    withdrawal_id,
+                )
+                await conn.execute(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET tx_hash = $2, last_sweep_error = $3
+                    WHERE id = $1 AND status = 'in_flight'
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                    error,
+                )
+
+    async def process(self, withdrawal_id: str) -> AuthorWithdrawal:
+        """Process a pending withdrawal without holding a DB transaction over network I/O."""
+        if not self._settings.agent_wallet_enabled:
+            raise RuntimeError("Cannot process withdrawal: AGENT_WALLET_ENABLED is false — enable agent wallets first")
+
+        withdrawal, settled_total = await self._claim_withdrawal(withdrawal_id)
+        if withdrawal["status"] == "failed":
+            return AuthorWithdrawal(**withdrawal)
+
+        result = await self._attempt_transfer(
+            withdrawal_id=withdrawal_id,
+            dest_wallet=withdrawal["wallet"],
+            settled_total=settled_total,
         )
+        if result.status == "settled":
+            await self._settle_withdrawal(withdrawal_id, result.tx_hash)
+            withdrawal.update(status="settled", tx_hash=result.tx_hash, settled_at=datetime.now(timezone.utc))
+        elif result.status == "failed":
+            await self._release_withdrawal(withdrawal_id, result.error)
+            withdrawal.update(status="failed", tx_hash="", settled_at=None, last_sweep_error=result.error)
+        else:
+            await self._record_in_flight(withdrawal_id, result.tx_hash, result.error)
+            withdrawal.update(status="in_flight", tx_hash=result.tx_hash, last_sweep_error=result.error)
+        return AuthorWithdrawal(**withdrawal)
 
 
 def _get_withdrawal_service() -> _WithdrawalService:
@@ -281,11 +347,34 @@ async def process_withdrawal(withdrawal_id: str) -> AuthorWithdrawal:
 async def complete_withdrawal(withdrawal_id: str, tx_hash: str) -> None:
     """Record the on-chain transaction hash for a processed withdrawal."""
     pool = _get_pool()
-    await pool.execute(
-        "UPDATE tool_author_withdrawals SET tx_hash = $2 WHERE id = $1",
-        withdrawal_id,
-        tx_hash,
-    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT status, tx_hash FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                withdrawal_id,
+            )
+            if row is None:
+                raise ValueError("Withdrawal not found")
+            if row["status"] == "in_flight":
+                if row["tx_hash"] and row["tx_hash"] != tx_hash:
+                    raise ValueError("Withdrawal already has a different transaction hash")
+                await conn.execute(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'settled', tx_hash = $2, settled_at = NOW(), last_sweep_error = ''
+                    WHERE id = $1 AND status = 'in_flight'
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                )
+            else:
+                if row["tx_hash"] and row["tx_hash"] != tx_hash:
+                    raise ValueError("Withdrawal already has a different transaction hash")
+                await conn.execute(
+                    "UPDATE tool_author_withdrawals SET tx_hash = $2 WHERE id = $1",
+                    withdrawal_id,
+                    tx_hash,
+                )
 
 
 async def list_pending_withdrawals(org_id: str | None = None) -> list[AuthorWithdrawal]:
@@ -322,21 +411,56 @@ async def list_org_withdrawals(
 
 
 async def reset_withdrawal(withdrawal_id: str) -> bool:
-    """Reset a failed or exhausted withdrawal back to pending for re-processing."""
+    """Reset a failed or exhausted withdrawal after confirming no transfer occurred."""
     pool = _get_pool()
-    result = await pool.execute(
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT status FROM tool_author_withdrawals WHERE id = $1 FOR UPDATE",
+                withdrawal_id,
+            )
+            if row is None or row["status"] not in {"failed", "exhausted", "in_flight"}:
+                return False
+
+            if row["status"] == "in_flight":
+                await conn.execute(
+                    """
+                    UPDATE tool_author_earnings
+                    SET status = 'pending', withdrawal_id = NULL
+                    WHERE withdrawal_id = $1 AND status = 'settled'
+                    """,
+                    withdrawal_id,
+                )
+
+            await conn.execute(
+                """
+                UPDATE tool_author_withdrawals
+                SET status = 'pending',
+                    tx_hash = '',
+                    settled_at = NULL,
+                    sweep_attempt_count = 0,
+                    last_sweep_error = '',
+                    next_sweep_at = NULL
+                WHERE id = $1 AND status IN ('failed', 'exhausted', 'in_flight')
+                """,
+                withdrawal_id,
+            )
+            return True
+
+
+async def list_in_flight_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:
+    """Return withdrawals awaiting manual on-chain reconciliation."""
+    pool = _get_pool()
+    rows = await pool.fetch(
         """
-        UPDATE tool_author_withdrawals
-        SET status = 'pending',
-            settled_at = NULL,
-            sweep_attempt_count = 0,
-            last_sweep_error = '',
-            next_sweep_at = NULL
-        WHERE id = $1 AND status IN ('failed', 'exhausted')
+        SELECT * FROM tool_author_withdrawals
+        WHERE status = 'in_flight'
+        ORDER BY created_at ASC
+        LIMIT $1
         """,
-        withdrawal_id,
+        limit,
     )
-    return result.split()[-1] != "0"
+    return [AuthorWithdrawal(**dict(row)) for row in rows]
 
 
 async def list_exhausted_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:

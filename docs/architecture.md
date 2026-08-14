@@ -45,6 +45,10 @@ Retention sweeps are batched, parameterized, and log per-table counts on every p
 
 ---
 
+### Marketplace Withdrawal Settlement
+
+Marketplace earnings are claimed in a short database transaction before CDP network I/O. The withdrawal then moves through `pending` → `in_flight` → `settled` or `failed`; `in_flight` claims are excluded from automatic sweeps until an administrator confirms the on-chain result. Claimed earnings carry their withdrawal ID, so reset can release only the affected rows. A confirmation timeout is never retried automatically because the transfer may already have been broadcast; reset is permitted only after the chain shows no transfer occurred.
+
 ## Streaming & Server-Sent Events (`teardrop/routers/agent.py`)
 
 The main streaming endpoint `POST /agent/run` returns a live Server-Sent Events (SSE) stream. 

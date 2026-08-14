@@ -59,7 +59,7 @@ class AuthorWithdrawal(BaseModel):
     amount_usdc: int
     tx_hash: str
     wallet: str
-    status: str  # "pending" | "settled" | "failed" | "exhausted"
+    status: str  # "pending" | "in_flight" | "settled" | "failed" | "exhausted"
     created_at: datetime
     settled_at: datetime | None = None
     sweep_attempt_count: int = 0

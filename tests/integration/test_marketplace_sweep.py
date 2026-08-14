@@ -13,6 +13,7 @@ import pytest
 import marketplace as marketplace_module
 import teardrop.users as users_module
 from marketplace import (
+    complete_withdrawal,
     marketplace_sweep_once,
     reset_withdrawal,
     set_author_config,
@@ -91,6 +92,7 @@ async def test_sweep_end_to_end_mock_cdp(sweep_db_pool):
     with (
         patch("marketplace.get_settings") as mock_settings,
         patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash")),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
     ):
         settings = MagicMock()
         settings.marketplace_minimum_withdrawal_usdc = 100_000
@@ -119,6 +121,204 @@ async def test_sweep_end_to_end_mock_cdp(sweep_db_pool):
     )
     assert wd_row["status"] == "settled"
     assert wd_row["tx_hash"] == "0xtxhash"
+
+
+@pytest.mark.anyio
+async def test_sweep_does_not_rebroadcast_after_finalize_failure(sweep_db_pool):
+    """A DB failure after broadcast leaves an in-flight claim that sweep skips."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-finalize-fail-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    transfer = AsyncMock(return_value="0xfinalize-fail")
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=transfer),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+        patch(
+            "marketplace.withdrawals._WithdrawalService._settle_withdrawal",
+            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+
+        first_count = await marketplace_sweep_once()
+        second_count = await marketplace_sweep_once()
+
+    assert first_count == 0
+    assert second_count == 0
+    assert transfer.await_count == 1
+
+    withdrawal = await pool.fetchrow(
+        "SELECT id, status, tx_hash FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    assert withdrawal["status"] == "in_flight"
+    assert withdrawal["tx_hash"] == ""
+    earning = await pool.fetchrow(
+        "SELECT status, withdrawal_id FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert earning["status"] == "settled"
+    assert earning["withdrawal_id"] == withdrawal["id"]
+
+
+@pytest.mark.anyio
+async def test_sweep_confirmation_timeout_requires_manual_reconciliation(sweep_db_pool):
+    """A submitted transaction with unknown confirmation stays in-flight."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-confirm-timeout-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    transfer = AsyncMock(return_value="0xconfirmation-timeout")
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=transfer),
+        patch(
+            "teardrop.agent_wallets.verify_usdc_transfer",
+            new=AsyncMock(side_effect=TimeoutError("confirmation timeout")),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+
+        count = await marketplace_sweep_once()
+        second_count = await marketplace_sweep_once()
+
+    assert count == 0
+    assert second_count == 0
+    assert transfer.await_count == 1
+    withdrawal = await pool.fetchrow(
+        "SELECT status, tx_hash FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    assert withdrawal["status"] == "in_flight"
+    assert withdrawal["tx_hash"] == "0xconfirmation-timeout"
+
+
+@pytest.mark.anyio
+async def test_reset_in_flight_withdrawal_releases_claimed_earnings(sweep_db_pool):
+    """Resetting an unreconciled claim makes its earnings retryable."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-reset-in-flight-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xreset-retry")),
+        patch(
+            "teardrop.agent_wallets.verify_usdc_transfer",
+            new=AsyncMock(side_effect=TimeoutError("confirmation timeout")),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+        await marketplace_sweep_once()
+
+    withdrawal_id = await pool.fetchval(
+        "SELECT id FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    assert await reset_withdrawal(withdrawal_id) is True
+
+    earning = await pool.fetchrow(
+        "SELECT status, withdrawal_id FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert earning["status"] == "pending"
+    assert earning["withdrawal_id"] is None
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xreset-success")),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+        assert await marketplace_sweep_once() == 1
+
+
+@pytest.mark.anyio
+async def test_complete_in_flight_withdrawal_preserves_claimed_earnings(sweep_db_pool):
+    """Completing an in-flight claim records the verified on-chain transaction."""
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-complete-in-flight-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xmanual-complete")),
+        patch(
+            "teardrop.agent_wallets.verify_usdc_transfer",
+            new=AsyncMock(side_effect=TimeoutError("confirmation timeout")),
+        ),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+        await marketplace_sweep_once()
+
+    withdrawal_id = await pool.fetchval(
+        "SELECT id FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    await complete_withdrawal(withdrawal_id, "0xmanual-confirmed")
+
+    withdrawal = await pool.fetchrow(
+        "SELECT status, tx_hash FROM tool_author_withdrawals WHERE id = $1",
+        withdrawal_id,
+    )
+    earning = await pool.fetchrow(
+        "SELECT status, withdrawal_id FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert withdrawal["status"] == "settled"
+    assert withdrawal["tx_hash"] == "0xmanual-confirmed"
+    assert earning["status"] == "settled"
+    assert earning["withdrawal_id"] == withdrawal_id
 
 
 @pytest.mark.anyio

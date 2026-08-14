@@ -83,6 +83,7 @@ _LIST_PENDING_WITHDRAWALS_ORIG = _withdrawals.list_pending_withdrawals
 _LIST_ORG_WITHDRAWALS_ORIG = _withdrawals.list_org_withdrawals
 _RESET_WITHDRAWAL_ORIG = _withdrawals.reset_withdrawal
 _LIST_EXHAUSTED_WITHDRAWALS_ORIG = _withdrawals.list_exhausted_withdrawals
+_LIST_IN_FLIGHT_WITHDRAWALS_ORIG = _withdrawals.list_in_flight_withdrawals
 _GET_WITHDRAWAL_SERVICE_ORIG = _withdrawals._get_withdrawal_service
 _NOTIFY_SUBSCRIBERS_OF_DEACTIVATION_ORIG = _withdrawals.notify_subscribers_of_deactivation
 _AUTO_DEACTIVATE_TOOL_FOR_HEALTH_ORIG = _withdrawals.auto_deactivate_tool_for_health
@@ -427,6 +428,11 @@ async def reset_withdrawal(withdrawal_id: str) -> bool:
     return await _call_async(_RESET_WITHDRAWAL_ORIG, withdrawal_id)
 
 
+async def list_in_flight_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:
+    """Return withdrawals awaiting manual on-chain reconciliation."""
+    return await _call_async(_LIST_IN_FLIGHT_WITHDRAWALS_ORIG, limit)
+
+
 async def list_exhausted_withdrawals(limit: int = 50) -> list[AuthorWithdrawal]:
     """Return withdrawals that have exhausted their on-chain retry budget."""
     return await _call_async(_LIST_EXHAUSTED_WITHDRAWALS_ORIG, limit)
@@ -546,6 +552,7 @@ __all__ = [
     "list_pending_withdrawals",
     "list_org_withdrawals",
     "reset_withdrawal",
+    "list_in_flight_withdrawals",
     "list_exhausted_withdrawals",
     "_get_withdrawal_service",
     "notify_subscribers_of_deactivation",
