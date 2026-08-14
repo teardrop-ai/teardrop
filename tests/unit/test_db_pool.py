@@ -89,5 +89,27 @@ async def test_create_pool_uses_application_connection_defaults() -> None:
     assert kwargs["open"] is False
     assert kwargs["kwargs"]["autocommit"] is True
     assert kwargs["kwargs"]["row_factory"] is not None
-    assert kwargs["kwargs"]["options"] == "-c statement_timeout=12500"
+    # statement_timeout must NOT go in the startup packet: Neon's PgBouncer
+    # pooler rejects it. It is set per session via the configure callback.
+    assert "options" not in kwargs["kwargs"]
     raw_pool.open.assert_awaited_once_with(wait=True, timeout=45.0)
+
+    connection = MagicMock()
+    connection.execute = AsyncMock()
+    await kwargs["configure"](connection)
+    connection.execute.assert_awaited_once_with("SET statement_timeout = 12500")
+
+
+async def test_create_pool_configure_wraps_user_callback() -> None:
+    raw_pool = MagicMock()
+    raw_pool.open = AsyncMock()
+    user_configure = AsyncMock()
+
+    with patch("shared.db_pool.AsyncConnectionPool", return_value=raw_pool) as pool_factory:
+        await create_pool("postgresql://example", configure=user_configure)
+
+    connection = MagicMock()
+    connection.execute = AsyncMock()
+    await pool_factory.call_args.kwargs["configure"](connection)
+    connection.execute.assert_awaited_once_with("SET statement_timeout = 30000")
+    user_configure.assert_awaited_once_with(connection)

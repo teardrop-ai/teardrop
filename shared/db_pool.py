@@ -118,19 +118,30 @@ async def create_pool(
     configure: Callable[[AsyncConnection[Row]], Awaitable[None]] | None = None,
     name: str = "teardrop-application",
 ) -> PgPool:
-    """Create and open the application pool with consistent connection defaults."""
+    """Create and open the application pool with consistent connection defaults.
+
+    ``statement_timeout`` is applied per session inside ``configure`` rather than
+    via the startup packet's ``options`` parameter: Neon's PgBouncer pooler
+    endpoint rejects arbitrary startup options ("unsupported startup parameter"),
+    which prevented pool initialization entirely.
+    """
     statement_timeout_ms = max(1, round(command_timeout * 1000))
+
+    async def _configure(connection: AsyncConnection[Row]) -> None:
+        await connection.execute(f"SET statement_timeout = {statement_timeout_ms}")
+        if configure is not None:
+            await configure(connection)
+
     raw_pool = AsyncConnectionPool(
         conninfo=conninfo,
         min_size=min_size,
         max_size=max_size,
         open=False,
-        configure=configure,
+        configure=_configure,
         check=AsyncConnectionPool.check_connection,
         kwargs={
             "autocommit": True,
             "row_factory": dict_row,
-            "options": f"-c statement_timeout={statement_timeout_ms}",
         },
         name=name,
     )
