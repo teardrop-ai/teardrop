@@ -473,7 +473,7 @@ async def store_run_decision(
                   confidence, slots_snapshot, tool_names, outcome, outcome_source, outcome_at,
                   source, schema_version, taxonomy_version, thread_id, user_message, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12,
-                      $13, CASE WHEN $11 = 0 THEN NULL ELSE NOW() END, $14, $15, $16, $17, $18)
+                      $13, CASE WHEN $11::smallint = 0 THEN NULL ELSE NOW() END, $14, $15, $16, $17, $18)
             ON CONFLICT (run_id) DO NOTHING
             RETURNING id
             """,

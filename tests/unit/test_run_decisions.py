@@ -152,6 +152,7 @@ class TestStoreRunDecision:
         assert stored is True
         call_args = pool.fetchrow.call_args.args
         assert "outcome_at" in call_args[0]
+        assert "CASE WHEN $11::smallint = 0" in call_args[0]
         assert call_args[11] == -1
         assert call_args[12] == "auto"
 
