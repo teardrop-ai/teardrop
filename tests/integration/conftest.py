@@ -11,8 +11,9 @@ import subprocess
 import time
 import uuid
 
-import asyncpg
 import pytest
+
+from shared.db_pool import create_pool
 
 _TEST_DB_URL = os.getenv("DATABASE_URL", "")
 
@@ -105,12 +106,12 @@ def docker_postgres():
 
 @pytest.fixture
 async def db_pool(docker_postgres: str):
-    """Create an asyncpg pool, initialise all schemas, yield pool, truncate tables."""
+    """Create a Postgres pool, initialise all schemas, yield pool, truncate tables."""
     from teardrop.usage import init_usage_db
     from teardrop.users import init_user_db
     from teardrop.wallets import init_wallets_db
 
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-shared")
 
     await init_user_db(pool)
     await init_wallets_db(pool)

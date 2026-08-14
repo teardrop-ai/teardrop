@@ -74,11 +74,11 @@ async def test_verify_secret_wrong_password(db_pool):
 
 @pytest.mark.anyio
 async def test_duplicate_email_raises(db_pool):
-    import asyncpg
+    from shared.db_pool import UniqueViolation
 
     org = await create_org("Org E")
     await create_user("dup@example.com", "pass", org.id)
-    with pytest.raises(asyncpg.UniqueViolationError):
+    with pytest.raises(UniqueViolation):
         await create_user("dup@example.com", "other", org.id)
 
 

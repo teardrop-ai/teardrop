@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import asyncpg
 import pytest
 
 import marketplace as marketplace_module
@@ -18,6 +17,7 @@ from marketplace import (
     reset_withdrawal,
     set_author_config,
 )
+from shared.db_pool import PgPool, create_pool
 from teardrop.users import create_org
 
 _VALID_ADDR = "0x1234567890123456789012345678901234567890"
@@ -31,7 +31,7 @@ async def sweep_db_pool(docker_postgres: str):
     """Isolated DB pool with migrations applied for sweep integration tests."""
     from migrations.runner import apply_pending
 
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-marketplace-sweep")
     await apply_pending(pool)
 
     marketplace_module._pool = pool
@@ -60,7 +60,7 @@ async def sweep_db_pool(docker_postgres: str):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _seed_org_with_earnings(pool: asyncpg.Pool, org_id: str, amount: int) -> None:
+async def _seed_org_with_earnings(pool: PgPool, org_id: str, amount: int) -> None:
     """Insert a pending earnings row for the org."""
     await pool.execute(
         """

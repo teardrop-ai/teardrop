@@ -9,7 +9,6 @@ import json
 import logging
 from typing import Any
 
-import asyncpg
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
@@ -17,6 +16,7 @@ from pydantic import BaseModel
 from billing import build_402_response_body
 from marketplace.reputation import get_public_reputation_snapshot
 from org_tools import list_marketplace_tools
+from shared.db_pool import PgPool
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
@@ -378,7 +378,7 @@ async def root() -> RedirectResponse:
 @router.get("/health", tags=["System"])
 async def health_check(request: Request) -> JSONResponse:
     """Liveness probe – returns service status, version, and DB connectivity."""
-    pool: asyncpg.Pool | None = getattr(request.app.state, "pool", None)
+    pool: PgPool | None = getattr(request.app.state, "pool", None)
     if pool is not None:
         try:
             await pool.execute("SELECT 1")

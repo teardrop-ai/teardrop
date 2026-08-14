@@ -10,8 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
 
-import asyncpg
 from fastapi import FastAPI
+from psycopg import AsyncConnection
 
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from billing import close_billing, init_billing
@@ -20,6 +20,7 @@ from mcp_client import close_mcp_client_db, init_mcp_client_db
 from org_tools import close_org_tools_db, init_org_tools_db
 from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_tick
 from scripts.generate_keys import generate_keypair
+from shared.db_pool import Row, create_pool
 from teardrop._background_tasks import (
     _event_dispatch_recovery_loop,
     _memory_cleanup_loop,
@@ -59,17 +60,17 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         generate_keypair(Path(__file__).resolve().parent.parent / "keys")
         validate_production_config(settings)
 
-        async def _init_conn(conn: asyncpg.Connection) -> None:
+        async def _init_conn(conn: AsyncConnection[Row]) -> None:
             try:
-                from pgvector.asyncpg import register_vector
+                from pgvector.psycopg import register_vector_async
 
-                await register_vector(conn)
+                await register_vector_async(conn)
             except Exception:
                 pass
 
-        pool = await asyncpg.create_pool(
+        pool = await create_pool(
             settings.pg_dsn,
-            init=_init_conn,
+            configure=_init_conn,
             command_timeout=settings.pg_command_timeout,
             min_size=settings.pg_pool_min_size,
             max_size=settings.pg_pool_max_size,

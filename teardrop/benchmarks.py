@@ -15,8 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg
-
+from shared.db_pool import PgPool
 from teardrop.cache import get_redis
 
 logger = logging.getLogger(__name__)
@@ -225,10 +224,10 @@ def get_model_context_specs(provider: str, model: str) -> dict[str, Any]:
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_benchmarks_db(pool: asyncpg.Pool) -> None:
+async def init_benchmarks_db(pool: PgPool) -> None:
     global _pool
     _pool = pool
 
@@ -238,7 +237,7 @@ async def close_benchmarks_db() -> None:
     _pool = None
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Benchmarks DB not initialised")
     return _pool

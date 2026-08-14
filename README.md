@@ -665,7 +665,7 @@ For the complete tracking list of database schema migrations, seed entries, and 
 
 ### Neon (production)
 
-Set `DATABASE_URL` to your Neon connection string (no `+asyncpg` prefix needed — the app strips it automatically).
+Set `DATABASE_URL` to your Neon connection string. Plain `postgresql://` is preferred; legacy `postgresql+asyncpg://` values remain accepted.
 
 ---
 

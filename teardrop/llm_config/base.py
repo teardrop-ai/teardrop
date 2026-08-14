@@ -3,7 +3,7 @@
 """Per-org LLM configuration foundation — models, encryption, pool, cache, CRUD.
 
 This module holds the storage and persistence layer for org LLM configs:
-LLM-specific encryption (BYOK keys), the ``OrgLlmConfig`` model, the asyncpg
+LLM-specific encryption (BYOK keys), the ``OrgLlmConfig`` model, the Postgres
 pool wiring, the TTL cache, and the CRUD / config-dict-builder helpers.
 
 Smart routing lives in :mod:`teardrop.llm_config.routing`.
@@ -18,10 +18,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
 
+from shared.db_pool import PgPool, Row
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
 
@@ -95,11 +95,11 @@ class OrgLlmConfig(BaseModel):
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_llm_config_db(pool: asyncpg.Pool) -> None:
-    """Store the asyncpg pool reference.  Called during app lifespan startup."""
+async def init_llm_config_db(pool: PgPool) -> None:
+    """Store the Postgres pool reference. Called during app lifespan startup."""
     global _pool
     _pool = pool
     logger.info("LLM config DB ready")
@@ -113,7 +113,7 @@ async def close_llm_config_db() -> None:
         logger.info("LLM config DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("LLM config DB not initialised — call init_llm_config_db() first")
     return _pool
@@ -143,7 +143,7 @@ async def invalidate_llm_config_cache(org_id: str) -> None:
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 
-def _row_to_config(row: asyncpg.Record) -> OrgLlmConfig:
+def _row_to_config(row: Row) -> OrgLlmConfig:
     """Map a DB row to an ``OrgLlmConfig`` model."""
     return OrgLlmConfig(
         org_id=row["org_id"],

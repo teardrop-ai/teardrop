@@ -16,8 +16,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg
-
 from org_tools.base import (
     _VALID_MARKETPLACE_CATEGORIES,
     OrgTool,
@@ -28,6 +26,7 @@ from org_tools.base import (
     normalize_marketplace_tags,
 )
 from org_tools.cache import invalidate_marketplace_cache, invalidate_org_tools_cache
+from shared.db_pool import UniqueViolation
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -123,7 +122,7 @@ async def create_org_tool(
             now,
             normalized_tags,
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise ValueError(f"Tool '{name}' already exists for this organisation")
 
     await _record_event(org_id, tool_id, name, "created", actor_id)

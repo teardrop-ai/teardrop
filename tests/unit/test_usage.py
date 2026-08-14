@@ -208,7 +208,15 @@ class TestGetUsage:
         from teardrop.usage import get_usage_by_user
 
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(5, 1000, 500, 10, 3000))
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "total_runs": 5,
+                "total_tokens_in": 1000,
+                "total_tokens_out": 500,
+                "total_tool_calls": 10,
+                "total_duration_ms": 3000,
+            }
+        )
         with patch.object(usage_module, "_pool", pool):
             summary = await get_usage_by_user("user-1")
         assert isinstance(summary, UsageSummary)
@@ -228,7 +236,15 @@ class TestGetUsage:
         from teardrop.usage import get_usage_by_user
 
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(0, 0, 0, 0, 0))
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "total_runs": 0,
+                "total_tokens_in": 0,
+                "total_tokens_out": 0,
+                "total_tool_calls": 0,
+                "total_duration_ms": 0,
+            }
+        )
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
         end = datetime(2026, 12, 31, tzinfo=timezone.utc)
         with patch.object(usage_module, "_pool", pool):
@@ -241,7 +257,15 @@ class TestGetUsage:
         from teardrop.usage import get_usage_by_org
 
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(3, 600, 300, 5, 1500))
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "total_runs": 3,
+                "total_tokens_in": 600,
+                "total_tokens_out": 300,
+                "total_tool_calls": 5,
+                "total_duration_ms": 1500,
+            }
+        )
         with patch.object(usage_module, "_pool", pool):
             summary = await get_usage_by_org("org-1")
         assert summary.total_runs == 3

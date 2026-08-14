@@ -478,13 +478,13 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     pg_command_timeout: float = Field(
         default=30.0,
-        description="Default asyncpg command timeout in seconds for all DB queries.",
+        description="Default Postgres statement timeout in seconds for all DB queries.",
     )
     pg_pool_min_size: int = Field(
         default=2,
         ge=1,
         description=(
-            "Minimum number of asyncpg connections kept open in the pool. "
+            "Minimum number of Postgres connections kept open in the pool. "
             "Lower values reduce idle memory footprint on small instances."
         ),
     )
@@ -492,7 +492,7 @@ class Settings(BaseSettings):
         default=6,
         ge=1,
         description=(
-            "Maximum number of asyncpg connections allowed in the pool. "
+            "Maximum number of Postgres connections allowed in the pool. "
             "Cap this to avoid memory spikes from large per-connection buffers."
         ),
     )

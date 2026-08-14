@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Usage accounting data layer (async Postgres via asyncpg).
+"""Usage accounting data layer (async Postgres).
 
 Provides:
 - UsageEvent model
@@ -18,9 +18,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal, cast
 
-import asyncpg
 from pydantic import BaseModel, Field
 
+from shared.db_pool import PgPool
 from teardrop._meta import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -95,10 +95,10 @@ class TelemetryCompletenessResponse(BaseModel):
 
 # ─── Database initialisation ─────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_usage_db(pool: asyncpg.Pool) -> None:
+async def init_usage_db(pool: PgPool) -> None:
     """Create usage_events table if it doesn't exist."""
     global _pool
     _pool = pool
@@ -140,7 +140,7 @@ async def close_usage_db() -> None:
         logger.info("Usage DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Usage DB not initialised — call init_usage_db() first")
     return _pool
@@ -372,8 +372,11 @@ async def _aggregate_usage(
     # column is always a literal from our own code, never user input
     idx = 2
     query = f"""
-        SELECT COUNT(*), COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0),
-               COALESCE(SUM(tool_calls),0), COALESCE(SUM(duration_ms),0)
+         SELECT COUNT(*) AS total_runs,
+             COALESCE(SUM(tokens_in), 0) AS total_tokens_in,
+             COALESCE(SUM(tokens_out), 0) AS total_tokens_out,
+             COALESCE(SUM(tool_calls), 0) AS total_tool_calls,
+             COALESCE(SUM(duration_ms), 0) AS total_duration_ms
         FROM usage_events
         WHERE {column} = $1
     """
@@ -392,9 +395,9 @@ async def _aggregate_usage(
     if row is None:
         return UsageSummary()
     return UsageSummary(
-        total_runs=row[0],
-        total_tokens_in=row[1],
-        total_tokens_out=row[2],
-        total_tool_calls=row[3],
-        total_duration_ms=row[4],
+        total_runs=row["total_runs"],
+        total_tokens_in=row["total_tokens_in"],
+        total_tokens_out=row["total_tokens_out"],
+        total_tool_calls=row["total_tool_calls"],
+        total_duration_ms=row["total_duration_ms"],
     )

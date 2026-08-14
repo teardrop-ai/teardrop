@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import json
 
-import asyncpg
 import pytest
 
 import marketplace as marketplace_module
 from marketplace import reputation_rollup_once
 from migrations.runner import apply_pending
+from shared.db_pool import create_pool
 
 
 @pytest.fixture
 async def reputation_db_pool(docker_postgres: str):
     """Apply the full schema and bind the marketplace worker to an isolated pool."""
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-reputation")
     await apply_pending(pool)
     marketplace_module._pool = pool
 

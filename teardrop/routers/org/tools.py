@@ -9,7 +9,6 @@ import logging
 import time
 from typing import Any, Literal
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -27,6 +26,7 @@ from org_tools import (
     update_org_tool,
     validate_safe_schema_subset,
 )
+from shared.db_pool import UniqueViolation
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.rate_limit import _enforce_rate_limit
@@ -268,7 +268,7 @@ async def create_tool(
             tags=body.tags,
             base_price_usdc=body.base_price_usdc,
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Tool '{body.name}' already exists for this org.",

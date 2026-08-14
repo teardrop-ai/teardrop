@@ -6,16 +6,16 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import asyncpg
 import pytest
 
 from migrations.runner import apply_pending
+from shared.db_pool import create_pool
 from teardrop.retention import close_retention_db, init_retention_db, retention_sweep_once
 
 
 @pytest.fixture
 async def retention_db_pool(docker_postgres: str):
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-retention")
     await apply_pending(pool)
     await init_retention_db(pool)
     yield pool

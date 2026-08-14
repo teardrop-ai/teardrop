@@ -8,8 +8,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-import asyncpg  # type: ignore[import-not-found]
-
 from mcp_client.base import (
     OrgMcpServer,
     _encrypt_token,
@@ -20,6 +18,7 @@ from mcp_client.base import (
 )
 from mcp_client.cache import invalidate_mcp_cache
 from mcp_client.session import _evict_session
+from shared.db_pool import UniqueViolation
 from teardrop.config import get_settings
 
 
@@ -80,7 +79,7 @@ async def create_org_mcp_server(
             timeout_seconds,
             now,
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise ValueError(f"MCP server '{name}' already exists for this organisation")
 
     await _record_event(org_id, server_id, name, "created", actor_id)

@@ -58,8 +58,8 @@ class TestMemoryEntry:
 class TestStoreMemory:
     async def test_stores_successfully(self, test_settings):
         pool = _pool()
-        # First fetchrow: count_memories returns (5,), second: INSERT RETURNING id
-        pool.fetchrow = AsyncMock(side_effect=[(5,), {"id": "m-new"}])
+        # First fetchrow: count_memories, second: INSERT RETURNING id
+        pool.fetchrow = AsyncMock(side_effect=[{"memory_count": 5}, {"id": "m-new"}])
         cache: dict[str, tuple[float, bool]] = {}
 
         with (
@@ -76,7 +76,7 @@ class TestStoreMemory:
 
     async def test_returns_none_when_limit_reached(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(1000,))  # at default limit
+        pool.fetchrow = AsyncMock(return_value={"memory_count": 1000})  # at default limit
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -90,7 +90,7 @@ class TestStoreMemory:
 
     async def test_truncates_content_to_500_chars(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(side_effect=[(0,), {"id": "m-trunc"}])
+        pool.fetchrow = AsyncMock(side_effect=[{"memory_count": 0}, {"id": "m-trunc"}])
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -104,7 +104,7 @@ class TestStoreMemory:
 
     async def test_swallows_exceptions(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(side_effect=[(0,), Exception("DB error")])
+        pool.fetchrow = AsyncMock(side_effect=[{"memory_count": 0}, Exception("DB error")])
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -258,7 +258,7 @@ class TestListMemories:
 class TestCountMemories:
     async def test_returns_count(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(42,))
+        pool.fetchrow = AsyncMock(return_value={"memory_count": 42})
 
         with patch.object(memory_module, "_pool", pool):
             count = await memory_module.count_memories("org-1")
@@ -408,7 +408,7 @@ class TestExtractAndStoreMemories:
 
     async def test_extracts_and_stores(self, test_settings):
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(0,))
+        pool.fetchrow = AsyncMock(return_value={"memory_count": 0})
 
         with (
             patch.object(memory_module, "_pool", pool),
@@ -444,7 +444,7 @@ class TestExtractAndStoreMemories:
     async def test_scheduled_stateless_run_stores_decision_but_no_facts(self, test_settings):
         """Scheduled background analyses capture a decision label without facts."""
         pool = _pool()
-        pool.fetchrow = AsyncMock(return_value=(0,))
+        pool.fetchrow = AsyncMock(return_value={"memory_count": 0})
         decision = {
             "action": "compare_yields",
             "reasoning": "stablecoin screening",

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Wallet and SIWE nonce data layer (async Postgres via asyncpg).
+"""Wallet and SIWE nonce data layer (async Postgres).
 
 Provides:
 - Wallet model and CRUD (linking Ethereum addresses to users/orgs)
@@ -14,9 +14,9 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-import asyncpg
 from pydantic import BaseModel
 
+from shared.db_pool import PgPool
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
 
@@ -37,10 +37,10 @@ class Wallet(BaseModel):
 
 # ─── Database initialisation ─────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_wallets_db(pool: asyncpg.Pool) -> None:
+async def init_wallets_db(pool: PgPool) -> None:
     """Create wallets and siwe_nonces tables if they don't exist."""
     global _pool
     _pool = pool
@@ -80,7 +80,7 @@ async def close_wallets_db() -> None:
         logger.info("Wallets DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Wallets DB not initialised — call init_wallets_db() first")
     return _pool

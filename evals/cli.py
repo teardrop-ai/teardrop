@@ -189,19 +189,20 @@ async def _run_promotion(args: argparse.Namespace) -> int:
         print("promote requires --org-id", file=sys.stderr)
         return 2
 
-    import asyncpg
+    from shared.db_pool import create_pool
 
-    connection = await asyncpg.connect(args.pg_dsn)
+    pool = await create_pool(args.pg_dsn, min_size=1, max_size=1, name="eval-promotion")
     try:
-        async with connection.transaction(readonly=True):
-            candidates = await _query_promotion_candidates(
-                connection,
-                org_id=org_id,
-                lookback_days=args.lookback_days,
-                limit=args.limit,
-            )
+        async with pool.acquire() as connection:
+            async with connection.transaction(readonly=True):
+                candidates = await _query_promotion_candidates(
+                    connection,
+                    org_id=org_id,
+                    lookback_days=args.lookback_days,
+                    limit=args.limit,
+                )
     finally:
-        await connection.close()
+        await pool.close()
 
     rendered = _render_promotion_queue(candidates)
     if args.output:

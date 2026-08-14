@@ -91,10 +91,10 @@ async def test_delete_wallet_wrong_user(test_user):
 
 @pytest.mark.anyio
 async def test_unique_constraint_address_chain(test_user):
-    import asyncpg
+    from shared.db_pool import UniqueViolation
 
     await create_wallet(_ADDR_1, 1, test_user.id, test_user.org_id)
-    with pytest.raises(asyncpg.UniqueViolationError):
+    with pytest.raises(UniqueViolation):
         await create_wallet(_ADDR_1, 1, test_user.id, test_user.org_id)
 
 

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Awaitable, Callable
 
-import asyncpg
+from shared.db_pool import PgConnection, PgPool
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,9 @@ class BillingDelegationService:
     def __init__(
         self,
         *,
-        get_pool: Callable[[], asyncpg.Pool],
+        get_pool: Callable[[], PgPool],
         get_settings: Callable[[], object],
-        get_daily_debit_spend: Callable[[asyncpg.Connection | asyncpg.Pool, str], Awaitable[int]],
+        get_daily_debit_spend: Callable[[PgConnection | PgPool, str], Awaitable[int]],
         debit_credit: Callable[[str, int, str], Awaitable[tuple[bool, int]]],
         get_live_pricing_for_model: Callable[..., Awaitable[object | None]],
     ):

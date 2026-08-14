@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-import asyncpg
 import httpx
 from pydantic import BaseModel
 
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -55,11 +55,11 @@ class AgentWallet(BaseModel):
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_agent_wallets_db(pool: asyncpg.Pool) -> None:
-    """Store the asyncpg pool reference. Called during app lifespan startup."""
+async def init_agent_wallets_db(pool: PgPool) -> None:
+    """Store the Postgres pool reference. Called during app lifespan startup."""
     global _pool
     _pool = pool
     settings = get_settings()
@@ -76,7 +76,7 @@ async def close_agent_wallets_db() -> None:
         logger.info("Agent wallets DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Agent wallets DB not initialised — call init_agent_wallets_db() first")
     return _pool

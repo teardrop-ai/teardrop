@@ -18,22 +18,21 @@ import sys
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import asyncpg  # noqa: E402
-
+from shared.db_pool import UniqueViolation, create_pool  # noqa: E402
 from teardrop.config import get_settings  # noqa: E402
 from teardrop.users import close_user_db, create_org, create_user, init_user_db  # noqa: E402
 
 
 async def main() -> None:
     settings = get_settings()
-    pool = await asyncpg.create_pool(settings.pg_dsn)
+    pool = await create_pool(settings.pg_dsn)
     await init_user_db(pool)
 
     # ── Create default org ────────────────────────────────────────────────
     try:
         org = await create_org("teardrop-default")
         print(f"Created org:  id={org.id}  name={org.name}")
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         print("Default org already exists — skipping.")
         await close_user_db()
         await pool.close()

@@ -8,7 +8,6 @@ other billing tables are available.
 
 from __future__ import annotations
 
-import asyncpg
 import pytest
 
 import billing as billing_module
@@ -25,6 +24,7 @@ from billing import (
     record_settlement,
     verify_credit,
 )
+from shared.db_pool import create_pool
 from teardrop.usage import UsageEvent, record_usage_event
 from teardrop.users import create_org, create_user
 
@@ -36,7 +36,7 @@ async def billing_db_pool(docker_postgres: str):
     """Pool with all migrations applied; wires billing/user/usage module pools."""
     from migrations.runner import apply_pending
 
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-billing")
     await apply_pending(pool)
 
     billing_module._pool = pool

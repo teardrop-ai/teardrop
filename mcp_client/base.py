@@ -14,11 +14,10 @@ import logging
 from datetime import datetime
 from typing import Literal
 
-import asyncpg
 from pydantic import BaseModel
 
 from shared.audit import insert_event_row
-from shared.db_pool import bind_pool, require_pool, unbind_pool
+from shared.db_pool import PgPool, Row, bind_pool, require_pool, unbind_pool
 from tools.shared import decrypt_header_value, encrypt_header_value
 
 logger = logging.getLogger(__name__)
@@ -57,11 +56,11 @@ class OrgMcpServer(BaseModel):
 
 # ─── Database pool ────────────────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_mcp_client_db(pool: asyncpg.Pool) -> None:
-    """Store the asyncpg pool reference.  Called during app lifespan startup."""
+async def init_mcp_client_db(pool: PgPool) -> None:
+    """Store the Postgres pool reference. Called during app lifespan startup."""
     global _pool
     _pool = bind_pool(_POOL_SCOPE, pool)
     logger.info("MCP client DB ready")
@@ -79,7 +78,7 @@ async def close_mcp_client_db() -> None:
         logger.info("MCP client DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     return require_pool(
         _POOL_SCOPE,
         _pool,
@@ -133,7 +132,7 @@ async def _record_event(
 # ─── Row mapping ──────────────────────────────────────────────────────────────
 
 
-def _row_to_model(row: asyncpg.Record) -> OrgMcpServer:
+def _row_to_model(row: Row) -> OrgMcpServer:
     """Map a DB row to an OrgMcpServer model."""
     return OrgMcpServer(
         id=row["id"],

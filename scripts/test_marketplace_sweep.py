@@ -34,10 +34,9 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import asyncpg
-
 import marketplace
 from marketplace import marketplace_sweep_once
+from shared.db_pool import PgPool, create_pool
 from teardrop.config import get_settings
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -98,7 +97,7 @@ def _expected_withdrawal_id(org_id: str) -> str:
 # ─── DB helpers ───────────────────────────────────────────────────────────────
 
 
-async def _seed_org(pool: asyncpg.Pool, org_id: str, name: str) -> None:
+async def _seed_org(pool: PgPool, org_id: str, name: str) -> None:
     await pool.execute(
         """
         INSERT INTO orgs (id, name, slug, created_at)
@@ -112,7 +111,7 @@ async def _seed_org(pool: asyncpg.Pool, org_id: str, name: str) -> None:
     )
 
 
-async def _seed_author_config(pool: asyncpg.Pool, org_id: str) -> None:
+async def _seed_author_config(pool: PgPool, org_id: str) -> None:
     await pool.execute(
         """
         INSERT INTO tool_author_config
@@ -125,7 +124,7 @@ async def _seed_author_config(pool: asyncpg.Pool, org_id: str) -> None:
     )
 
 
-async def _seed_earnings(pool: asyncpg.Pool, org_id: str, amount: int) -> None:
+async def _seed_earnings(pool: PgPool, org_id: str, amount: int) -> None:
     await pool.execute(
         """
         INSERT INTO tool_author_earnings
@@ -141,7 +140,7 @@ async def _seed_earnings(pool: asyncpg.Pool, org_id: str, amount: int) -> None:
     )
 
 
-async def _cleanup(pool: asyncpg.Pool, org_ids: list[str]) -> None:
+async def _cleanup(pool: PgPool, org_ids: list[str]) -> None:
     if not org_ids:
         return
     await pool.execute("DELETE FROM tool_author_earnings WHERE org_id = ANY($1::text[])", org_ids)
@@ -153,7 +152,7 @@ async def _cleanup(pool: asyncpg.Pool, org_ids: list[str]) -> None:
 # ─── Scenario 1: happy path ───────────────────────────────────────────────────
 
 
-async def test_happy_path(pool: asyncpg.Pool, run_id: str, verbose: bool) -> list[str]:
+async def test_happy_path(pool: PgPool, run_id: str, verbose: bool) -> list[str]:
     print("\n[Test 1] Happy path — 3 orgs with $0.50 pending earnings each")
 
     org_ids = [f"smk-swp-{run_id[:8]}-{i}" for i in range(1, 4)]
@@ -204,7 +203,7 @@ async def test_happy_path(pool: asyncpg.Pool, run_id: str, verbose: bool) -> lis
 # ─── Scenario 2: idempotency ──────────────────────────────────────────────────
 
 
-async def test_idempotency(pool: asyncpg.Pool, org_ids: list[str]) -> None:
+async def test_idempotency(pool: PgPool, org_ids: list[str]) -> None:
     print("\n[Test 2] Idempotency — re-running sweep in same epoch creates no duplicates")
 
     mock_transfer = AsyncMock(return_value=_MOCK_TX)
@@ -221,7 +220,7 @@ async def test_idempotency(pool: asyncpg.Pool, org_ids: list[str]) -> None:
 # ─── Scenario 3: deterministic IDs ───────────────────────────────────────────
 
 
-async def test_deterministic_ids(pool: asyncpg.Pool, org_ids: list[str]) -> None:
+async def test_deterministic_ids(pool: PgPool, org_ids: list[str]) -> None:
     print("\n[Test 3] Deterministic IDs — withdrawal IDs match SHA-256(org+epoch)")
 
     for oid in org_ids:
@@ -233,7 +232,7 @@ async def test_deterministic_ids(pool: asyncpg.Pool, org_ids: list[str]) -> None
 # ─── Scenario 4: CDP failure ──────────────────────────────────────────────────
 
 
-async def test_cdp_failure(pool: asyncpg.Pool, run_id: str) -> list[str]:
+async def test_cdp_failure(pool: PgPool, run_id: str) -> list[str]:
     print("\n[Test 4] CDP failure — withdrawal is marked 'failed' with backoff")
 
     oid = f"smk-swp-{run_id[:8]}-fail"
@@ -269,7 +268,7 @@ async def test_cdp_failure(pool: asyncpg.Pool, run_id: str) -> list[str]:
 # ─── Scenario 5: below minimum ───────────────────────────────────────────────
 
 
-async def test_below_minimum(pool: asyncpg.Pool, run_id: str) -> list[str]:
+async def test_below_minimum(pool: PgPool, run_id: str) -> list[str]:
     print(f"\n[Test 5] Below minimum — org with ${_BELOW_MIN / 1_000_000:.4f} pending is skipped")
 
     oid = f"smk-swp-{run_id[:8]}-low"
@@ -324,9 +323,9 @@ async def main() -> None:
     print("Teardrop marketplace_sweep_once() smoke-test")
     print(f"  Network : {args.network}  (CDP mocked — no on-chain activity)")
     print(f"  Run ID  : {run_id[:8]}")
-    print(f"  DSN     : {args.pg_dsn[:40]}{'…' if len(args.pg_dsn) > 40 else ''}")
+    print("  DSN     : configured")
 
-    pool = await asyncpg.create_pool(args.pg_dsn, min_size=1, max_size=3)
+    pool = await create_pool(args.pg_dsn, min_size=1, max_size=3, name="marketplace-sweep-smoke")
     marketplace._pool = pool
 
     all_org_ids: list[str] = []

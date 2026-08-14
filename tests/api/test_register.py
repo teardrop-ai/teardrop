@@ -96,11 +96,11 @@ async def test_register_issues_verification_token(anon_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_register_duplicate_raises_409(anon_client, monkeypatch):
-    import asyncpg
+    from shared.db_pool import UniqueViolation
 
     monkeypatch.setattr(
         "teardrop.routers.auth.register_org_and_user",
-        AsyncMock(side_effect=asyncpg.UniqueViolationError()),
+        AsyncMock(side_effect=UniqueViolation()),
     )
 
     resp = await anon_client.post(

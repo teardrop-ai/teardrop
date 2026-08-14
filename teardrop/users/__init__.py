@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""User and organisation data layer (async Postgres via asyncpg).
+"""User and organisation data layer (async Postgres).
 
 Provides:
 - Org / User Pydantic models

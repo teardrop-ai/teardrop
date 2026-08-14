@@ -4,17 +4,15 @@
 
 from __future__ import annotations
 
-import asyncpg
-
-from shared.db_pool import bind_pool, require_pool, unbind_pool
+from shared.db_pool import PgConnection, PgPool, bind_pool, require_pool, unbind_pool
 from teardrop.cache import TTLCache
 
 _POOL_SCOPE = "billing"
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 _daily_spend_caches: dict[str, TTLCache[int]] = {}
 
 
-def _bind_pool(pool: asyncpg.Pool) -> asyncpg.Pool:
+def _bind_pool(pool: PgPool) -> PgPool:
     """Bind and store the billing DB pool for this process."""
     global _pool
     _pool = bind_pool(_POOL_SCOPE, pool)
@@ -25,7 +23,7 @@ def _has_pool() -> bool:
     return _pool is not None
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     return require_pool(_POOL_SCOPE, _pool, "Billing DB not initialised")
 
 
@@ -36,7 +34,7 @@ def _clear_pool() -> None:
     unbind_pool(_POOL_SCOPE)
 
 
-async def _get_daily_debit_spend(executor: asyncpg.Connection | asyncpg.Pool, org_id: str) -> int:
+async def _get_daily_debit_spend(executor: PgConnection | PgPool, org_id: str) -> int:
     """Return 24h rolling debit spend in atomic USDC for an org."""
     daily_row = await executor.fetchrow(
         """

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncpg
 import pytest
 
 from migrations.runner import apply_pending
@@ -13,11 +12,12 @@ from scheduling import (
     reserve_event_dispatch_lease,
     start_event_dispatch_lease,
 )
+from shared.db_pool import create_pool
 
 
 @pytest.fixture
 async def event_control_pool(docker_postgres: str):
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-event-trigger")
     await apply_pending(pool)
     await init_scheduling_db(pool)
     yield pool

@@ -21,8 +21,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Awaitable, Callable, TypeVar
 
-import asyncpg
-
 import billing.context as _ctx
 import billing.history as _history
 import billing.pricing as _pricing
@@ -32,6 +30,7 @@ import billing.x402 as _x402
 from billing.credit import BillingCreditService
 from billing.delegation import BillingDelegationService
 from billing.models import BillingResult, PricingRule, ToolPricingOverride, atomic_usdc_to_price_str
+from shared.db_pool import PgConnection, PgPool
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
 
@@ -87,7 +86,7 @@ _HANDLE_STRIPE_WEBHOOK_ORIG = _stripe.handle_stripe_webhook
 _GET_STRIPE_SESSION_STATUS_ORIG = _stripe.get_stripe_session_status
 
 # Root-level compatibility state patched by tests.
-_pool: asyncpg.Pool | None = _ctx._pool
+_pool: PgPool | None = _ctx._pool
 _daily_spend_caches = _ctx._daily_spend_caches
 
 _server = _x402._server
@@ -169,11 +168,11 @@ def _call_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         _sync_from_modules()
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     return _call_sync(_GET_POOL_ORIG)
 
 
-async def _get_daily_debit_spend(executor: asyncpg.Connection | asyncpg.Pool, org_id: str) -> int:
+async def _get_daily_debit_spend(executor: PgConnection | PgPool, org_id: str) -> int:
     return await _call_async(_GET_DAILY_DEBIT_SPEND_ORIG, executor, org_id)
 
 
@@ -426,7 +425,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
 
 
 # x402 API
-async def init_billing(pool: asyncpg.Pool) -> None:
+async def init_billing(pool: PgPool) -> None:
     """Initialise billing state (DB pool, x402 facilitator, pricing caches) at startup."""
     await _call_async(_INIT_BILLING_ORIG, pool)
 

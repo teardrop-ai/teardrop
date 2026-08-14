@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Foundational state for the user/org data layer.
 
-Holds the shared asyncpg pool, schema initialisation, password hashing helpers,
+Holds the shared Postgres pool, schema initialisation, password hashing helpers,
 and small utilities. Kept free of intra-package dependencies so the other
 ``teardrop.users`` submodules can build on it without import cycles.
 """
@@ -15,7 +15,7 @@ import logging
 import os
 import re
 
-import asyncpg
+from shared.db_pool import PgPool
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,10 @@ def verify_secret(secret: str, hashed: str, salt_hex: str) -> bool:
 
 # ─── Database initialisation ─────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_user_db(pool: asyncpg.Pool) -> None:
+async def init_user_db(pool: PgPool) -> None:
     """Create users/orgs tables if they don't exist."""
     global _pool
     _pool = pool
@@ -125,7 +125,7 @@ async def close_user_db() -> None:
         logger.info("User DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("User DB not initialised — call init_user_db() first")
     return _pool

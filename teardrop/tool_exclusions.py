@@ -19,17 +19,17 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-import asyncpg
+from shared.db_pool import PgPool
 
 logger = logging.getLogger(__name__)
 
 MAX_EXCLUSIONS_PER_ORG = 50
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_tool_exclusions_db(pool: asyncpg.Pool) -> None:
-    """Store the asyncpg pool reference. Called during app lifespan startup."""
+async def init_tool_exclusions_db(pool: PgPool) -> None:
+    """Store the Postgres pool reference. Called during app lifespan startup."""
     global _pool
     _pool = pool
     logger.info("Tool exclusions DB ready")
@@ -43,7 +43,7 @@ async def close_tool_exclusions_db() -> None:
         logger.info("Tool exclusions DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Tool exclusions DB not initialised — call init_tool_exclusions_db() first")
     return _pool

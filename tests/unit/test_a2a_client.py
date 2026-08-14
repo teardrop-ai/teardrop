@@ -427,7 +427,7 @@ class TestExtractResultText:
 
 
 class _FakeRecord(dict):
-    """Minimal asyncpg Record shim: dict() works because we inherit dict."""
+    """Minimal database row shim: dict() works because we inherit dict."""
 
 
 class TestCheckDelegationAllowed:

@@ -9,9 +9,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
-import asyncpg
 import sentry_sdk
 
+from shared.db_pool import PgConnection, PgPool
 from teardrop.cache import TTLCache
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,9 @@ class BillingCreditService:
     def __init__(
         self,
         *,
-        get_pool: Callable[[], asyncpg.Pool],
+        get_pool: Callable[[], PgPool],
         get_daily_spend_cache: Callable[[str], TTLCache[int]],
-        get_daily_debit_spend_fn: Callable[[asyncpg.Connection | asyncpg.Pool, str], Awaitable[int]],
+        get_daily_debit_spend_fn: Callable[[PgConnection | PgPool, str], Awaitable[int]],
         billing_result_factory: Callable[..., Any],
     ):
         self._get_pool = get_pool
@@ -44,7 +44,7 @@ class BillingCreditService:
         )
         return int(row["balance_usdc"]) if row is not None else 0
 
-    async def get_daily_debit_spend(self, executor: asyncpg.Connection | asyncpg.Pool, org_id: str) -> int:
+    async def get_daily_debit_spend(self, executor: PgConnection | PgPool, org_id: str) -> int:
         """Return 24h rolling debit spend in atomic USDC for an org."""
         daily_row = await executor.fetchrow(
             """

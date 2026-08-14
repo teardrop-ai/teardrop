@@ -7,13 +7,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-import asyncpg
-
+from shared.db_pool import PgPool
 from teardrop.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 _STALE_CHECKPOINT_THREADS_SQL = """
     SELECT thread_id
@@ -134,7 +133,7 @@ class RetentionSweepResult:
         )
 
 
-async def init_retention_db(pool: asyncpg.Pool) -> None:
+async def init_retention_db(pool: PgPool) -> None:
     """Bind the shared application pool after migrations have completed."""
     global _pool
     _pool = pool
@@ -146,7 +145,7 @@ async def close_retention_db() -> None:
     _pool = None
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Retention DB not initialised - call init_retention_db() first")
     return _pool
@@ -173,7 +172,7 @@ async def touch_checkpoint_thread(thread_id: str) -> None:
 
 
 async def _delete_stale_checkpoint_threads(
-    pool: asyncpg.Pool,
+    pool: PgPool,
     ttl_days: int,
     batch_size: int,
 ) -> int:
@@ -202,7 +201,7 @@ async def _delete_stale_checkpoint_threads(
                 total_deleted += len(thread_ids)
 
 
-async def _delete_ttl_rows(pool: asyncpg.Pool, delete_sql: str, ttl_days: int, batch_size: int) -> int:
+async def _delete_ttl_rows(pool: PgPool, delete_sql: str, ttl_days: int, batch_size: int) -> int:
     """Delete a bounded set of old rows until the table has no more candidates."""
     total_deleted = 0
     while True:
@@ -212,7 +211,7 @@ async def _delete_ttl_rows(pool: asyncpg.Pool, delete_sql: str, ttl_days: int, b
             return total_deleted
 
 
-async def _delete_expired_siwe_sessions(pool: asyncpg.Pool, batch_size: int) -> int:
+async def _delete_expired_siwe_sessions(pool: PgPool, batch_size: int) -> int:
     """Delete expired SIWE sessions, including their short-lived token material."""
     total_deleted = 0
     while True:

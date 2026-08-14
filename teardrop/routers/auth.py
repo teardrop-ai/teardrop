@@ -10,13 +10,13 @@ import logging
 import re
 from typing import Literal
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from billing import clear_onboarding_credit_outbox, grant_onboarding_credit
 from shared.captcha import verify_turnstile
+from shared.db_pool import UniqueViolation
 from shared.email import send_invite_email, send_verification_email
 from teardrop import rate_limit as _rate_limit
 from teardrop.auth import create_access_token, require_auth
@@ -332,7 +332,7 @@ async def register(body: RegisterRequest, request: Request) -> JSONResponse:
             secret=body.password,
             acquisition_source=body.acquisition_source,
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with that email or organisation name already exists.",
@@ -577,7 +577,7 @@ async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JS
             role=invite.role,
             is_verified=True,  # accepting the invite is the trust signal
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with that email already exists.",

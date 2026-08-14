@@ -43,16 +43,16 @@ PyJWT>=2.13.0,<3.0.0
 cryptography>=50.0.0,<51.0.0
 
 # ─── Observability (Sentry) ────────────────────────────────────────────────────
-# Errors + cron monitoring. fastapi/asyncpg integrations auto-enabled.
+# Errors + cron monitoring. FastAPI integration auto-enabled.
 # Pinned to 2.x where the crons.monitor context-manager API is stable.
-sentry-sdk[fastapi,asyncpg]>=2.18,<3
+sentry-sdk[fastapi]>=2.18,<3
 
 # ─── Redis (optional) ─────────────────────────────────────────────────────────────
 redis[asyncio]>=5.0.0
 # ─── Postgres (Neon) ───────────────────────────────────────────────────────────
 langgraph-checkpoint-postgres>=3.0.0
 psycopg[binary]>=3.1.0
-asyncpg>=0.30.0
+psycopg-pool>=3.2.0
 
 # ─── pgvector (vector embeddings for persistent memory) ───────────────────────
 pgvector>=0.3.6

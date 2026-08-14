@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import uuid
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from shared.db_pool import PgPool, UniqueViolation
 from teardrop.dependencies import require_admin
 
 router = APIRouter()
@@ -52,7 +52,7 @@ async def admin_add_a2a_agent(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Add a trusted A2A agent to an org's allowlist."""
-    pool: asyncpg.Pool = request.app.state.pool
+    pool: PgPool = request.app.state.pool
     agent_id = str(uuid.uuid4())
     try:
         await pool.execute(
@@ -68,7 +68,7 @@ async def admin_add_a2a_agent(
             body.require_x402,
             body.jwt_forward,
         )
-    except asyncpg.UniqueViolationError:
+    except UniqueViolation:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This agent URL is already in the org's allowlist",
@@ -94,7 +94,7 @@ async def admin_list_a2a_agents(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """List all trusted A2A agents for an org."""
-    pool: asyncpg.Pool = request.app.state.pool
+    pool: PgPool = request.app.state.pool
     rows = await pool.fetch(
         "SELECT id, org_id, agent_url, label, max_cost_usdc, require_x402, jwt_forward, created_at"
         " FROM a2a_allowed_agents WHERE org_id = $1 ORDER BY created_at",
@@ -128,7 +128,7 @@ async def admin_delete_a2a_agent(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Remove an A2A agent from an org's allowlist."""
-    pool: asyncpg.Pool = request.app.state.pool
+    pool: PgPool = request.app.state.pool
     result = await pool.execute(
         "DELETE FROM a2a_allowed_agents WHERE id = $1",
         agent_id,

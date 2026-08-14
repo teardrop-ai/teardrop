@@ -8,12 +8,11 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
-import asyncpg
-
 from agent.cache_prewarm import prewarm_org_prefix
 from billing import cleanup_expired_payment_nonces, process_onboarding_credit_outbox, process_pending_settlements
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import cleanup_expired_memories
@@ -219,7 +218,7 @@ async def _event_dispatch_recovery_loop() -> None:
     )
 
 
-async def _prewarm_cache_prefixes(pool: asyncpg.Pool) -> None:
+async def _prewarm_cache_prefixes(pool: PgPool) -> None:
     """Warm provider prompt caches for the most active org/model prefixes."""
     if not settings.agent_cache_prewarm_enabled:
         return

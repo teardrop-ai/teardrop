@@ -12,12 +12,12 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
-import asyncpg
 import sentry_sdk
 
 from billing.context import _bind_pool, _clear_pool, _get_pool, _has_pool, _reset_daily_spend_caches
 from billing.models import BillingResult, atomic_usdc_to_price_str
 from billing.pricing import get_current_pricing, get_live_pricing, reset_pricing_caches
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def _get_server():
     return _server
 
 
-async def init_billing(pool: asyncpg.Pool) -> None:
+async def init_billing(pool: PgPool) -> None:
     """Initialise x402 resource server and cache payment requirements."""
     global _server, _requirements_cache, _last_requirements_price_usdc
     global _exact_requirements_cache, _upto_requirements_cache

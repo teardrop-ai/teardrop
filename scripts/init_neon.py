@@ -14,8 +14,7 @@ import sys
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import asyncpg  # noqa: E402
-
+from shared.db_pool import create_pool  # noqa: E402
 from teardrop.config import get_settings  # noqa: E402
 from teardrop.usage import close_usage_db, init_usage_db  # noqa: E402
 from teardrop.users import close_user_db, init_user_db  # noqa: E402
@@ -29,9 +28,9 @@ async def main() -> None:
         sys.exit(1)
 
     print("Connecting to Postgres …")
-    pool = await asyncpg.create_pool(dsn)
+    pool = await create_pool(dsn)
 
-    # ── Application tables (asyncpg) ─────────────────────────────────────
+    # ── Application tables ────────────────────────────────────────────────
     await init_user_db(pool)
     print("  ✓ orgs + users tables ready")
 

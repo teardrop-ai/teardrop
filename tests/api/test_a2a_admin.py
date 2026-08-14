@@ -8,7 +8,7 @@ import pytest
 
 
 def _mock_pool(*, execute_return="INSERT 0 1", fetch_return=None, execute_side_effect=None):
-    """Create a mock asyncpg pool with configurable responses."""
+    """Create a mock Postgres pool with configurable responses."""
     pool = MagicMock()
     pool.execute = AsyncMock(return_value=execute_return, side_effect=execute_side_effect)
     pool.fetch = AsyncMock(return_value=fetch_return or [])
@@ -37,11 +37,10 @@ async def test_add_a2a_agent(admin_api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_add_a2a_agent_duplicate(admin_api_client):
-    import asyncpg
-
+    from shared.db_pool import UniqueViolation
     from teardrop.main import app
 
-    pool = _mock_pool(execute_side_effect=asyncpg.UniqueViolationError("duplicate"))
+    pool = _mock_pool(execute_side_effect=UniqueViolation("duplicate"))
     app.state.pool = pool
 
     resp = await admin_api_client.post(

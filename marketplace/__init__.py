@@ -16,8 +16,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable, TypeVar
 
-import asyncpg
-
 import marketplace._catalog_pricing as _catalog_pricing
 import marketplace.catalog as _catalog
 import marketplace.context as _ctx
@@ -35,6 +33,7 @@ from marketplace.models import (
     MarketplaceTool,
     validate_eip55_address,
 )
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 
 T = TypeVar("T")
@@ -95,7 +94,7 @@ _MARKETPLACE_SWEEP_LOOP_ORIG = _worker._marketplace_sweep_loop
 _REPUTATION_ROLLUP_ONCE_ORIG = _worker.reputation_rollup_once
 
 # Root-level mutable compatibility state patched by tests.
-_pool: asyncpg.Pool | None = _ctx._pool
+_pool: PgPool | None = _ctx._pool
 _SUBSCRIPTION_CACHE = _subscriptions._SUBSCRIPTION_CACHE
 PLATFORM_SLUG = _catalog.PLATFORM_SLUG
 PlatformToolSubscriptionError = _subscriptions.PlatformToolSubscriptionError
@@ -154,7 +153,7 @@ def _call_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
         _sync_from_modules()
 
 
-async def init_marketplace_db(pool: asyncpg.Pool) -> None:
+async def init_marketplace_db(pool: PgPool) -> None:
     """Initialise marketplace tables and caches at application startup."""
     await _call_async(_INIT_MARKETPLACE_DB_ORIG, pool)
 
@@ -164,7 +163,7 @@ async def close_marketplace_db() -> None:
     await _call_async(_CLOSE_MARKETPLACE_DB_ORIG)
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     return _call_sync(_GET_POOL_ORIG)
 
 

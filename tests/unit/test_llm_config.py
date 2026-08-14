@@ -86,7 +86,7 @@ def _make_row(
     routing_preference: str = "default",
     is_byok: bool = False,
 ) -> dict:
-    """Simulate an asyncpg Record as a dict (supports __getitem__)."""
+    """Simulate a database row as a dict (supports __getitem__)."""
     now = datetime.now(timezone.utc)
     return {
         "org_id": org_id,

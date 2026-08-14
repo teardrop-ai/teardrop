@@ -6,18 +6,16 @@ from __future__ import annotations
 
 import logging
 
-import asyncpg
-
-from shared.db_pool import bind_pool, require_pool, unbind_pool
+from shared.db_pool import PgPool, bind_pool, require_pool, unbind_pool
 
 logger = logging.getLogger(__name__)
 
 _POOL_SCOPE = "marketplace"
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_marketplace_db(pool: asyncpg.Pool) -> None:
-    """Store the asyncpg pool reference. Called during app lifespan startup."""
+async def init_marketplace_db(pool: PgPool) -> None:
+    """Store the Postgres pool reference. Called during app lifespan startup."""
     global _pool
     _pool = bind_pool(_POOL_SCOPE, pool)
     logger.info("Marketplace DB ready")
@@ -32,7 +30,7 @@ async def close_marketplace_db() -> None:
         logger.info("Marketplace DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     return require_pool(
         _POOL_SCOPE,
         _pool,

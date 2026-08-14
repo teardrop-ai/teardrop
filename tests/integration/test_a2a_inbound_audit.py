@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import asyncpg
 import pytest
 
 import billing.context as billing_context
 from migrations.runner import apply_pending
 from shared.audit import insert_event_row
+from shared.db_pool import CheckViolation, create_pool
 from teardrop.routers.a2a_messages import _A2A_INBOUND_EVENT_INSERT_SQL, _record_inbound_event
 
 
 @pytest.fixture
 async def audit_db_pool(docker_postgres: str):
-    pool = await asyncpg.create_pool(docker_postgres, min_size=1, max_size=5)
+    pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-a2a-audit")
     await apply_pending(pool)
     billing_context._bind_pool(pool)
 
@@ -113,7 +113,7 @@ async def test_record_inbound_event_appends_rows_for_same_run(audit_db_pool):
 
 
 async def test_a2a_inbound_events_check_constraint_rejects_invalid_task_state(audit_db_pool):
-    with pytest.raises(asyncpg.CheckViolationError):
+    with pytest.raises(CheckViolation):
         await insert_event_row(
             audit_db_pool,
             insert_sql=_A2A_INBOUND_EVENT_INSERT_SQL,

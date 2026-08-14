@@ -233,12 +233,12 @@ async def test_accept_invite_no_email_restriction_any_email_ok(anon_client, monk
 
 @pytest.mark.anyio
 async def test_accept_invite_duplicate_email_409(anon_client, monkeypatch):
-    import asyncpg
+    from shared.db_pool import UniqueViolation
 
     invite = _mock_invite(email=None)
     monkeypatch.setattr("teardrop.routers.auth.get_org_invite", AsyncMock(return_value=invite))
     monkeypatch.setattr("teardrop.routers.auth.consume_org_invite", AsyncMock(return_value=True))
-    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(side_effect=asyncpg.UniqueViolationError()))
+    monkeypatch.setattr("teardrop.routers.auth.create_user", AsyncMock(side_effect=UniqueViolation()))
 
     resp = await anon_client.post(
         "/register/invite",

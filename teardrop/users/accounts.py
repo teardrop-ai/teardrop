@@ -169,7 +169,7 @@ async def register_org_and_user(
 ) -> tuple[Org, User]:
     """Transactionally create an org + an unverified user for self-serve registration.
 
-    Raises asyncpg.UniqueViolationError if the org name or email already exists.
+    Raises a Postgres unique-violation error if the org name or email already exists.
     """
     pool = _get_pool()
     hashed, salt_hex = _hash_secret(secret)

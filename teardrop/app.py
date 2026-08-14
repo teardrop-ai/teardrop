@@ -77,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 
 # ─── Sentry ──────────────────────────────────────────────────────────────────
-# Initialize before FastAPI() so the FastAPI/Starlette/asyncpg integrations
+# Initialize before FastAPI() so the FastAPI/Starlette integrations
 # can hook in. No-op when SENTRY_DSN is empty.
 from shared.observability import init_sentry  # noqa: E402
 

@@ -7,11 +7,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-import asyncpg
+from shared.db_pool import PgPool
 
 
 async def insert_event_row(
-    pool: asyncpg.Pool,
+    pool: PgPool,
     *,
     insert_sql: str,
     values: tuple[Any, ...],

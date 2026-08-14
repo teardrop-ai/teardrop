@@ -18,7 +18,7 @@ import logging
 import sys
 from pathlib import Path
 
-import asyncpg
+from shared.db_pool import PgPool, create_pool
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +38,13 @@ def _discover_migrations() -> list[Path]:
     return files
 
 
-async def _get_applied(pool: asyncpg.Pool) -> set[str]:
+async def _get_applied(pool: PgPool) -> set[str]:
     await pool.execute(_CREATE_TRACKING_TABLE)
     rows = await pool.fetch("SELECT version FROM _migrations ORDER BY version")
     return {r["version"] for r in rows}
 
 
-async def apply_pending(pool: asyncpg.Pool) -> list[str]:
+async def apply_pending(pool: PgPool) -> list[str]:
     """Apply all pending migrations. Returns the list of versions applied."""
     applied = await _get_applied(pool)
     all_files = _discover_migrations()
@@ -73,7 +73,7 @@ async def apply_pending(pool: asyncpg.Pool) -> list[str]:
     return newly_applied
 
 
-async def get_status(pool: asyncpg.Pool) -> dict[str, list[str]]:
+async def get_status(pool: PgPool) -> dict[str, list[str]]:
     """Return {'applied': [...], 'pending': [...]} for diagnostic use."""
     applied = await _get_applied(pool)
     all_versions = [f.stem for f in _discover_migrations()]
@@ -95,7 +95,7 @@ async def _main(args: argparse.Namespace) -> None:
         print("ERROR: DATABASE_URL is not set.", file=sys.stderr)
         sys.exit(1)
 
-    pool = await asyncpg.create_pool(settings.pg_dsn)
+    pool = await create_pool(settings.pg_dsn)
     try:
         if args.status:
             status = await get_status(pool)

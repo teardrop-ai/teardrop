@@ -29,9 +29,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import asyncpg
 from pydantic import BaseModel, Field
 
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 from teardrop.usage import normalize_telemetry_source
 
@@ -51,7 +51,7 @@ class MemoryEntry(BaseModel):
 
 # ─── Database initialisation ─────────────────────────────────────────────────
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 _memory_count_cache: dict[str, tuple[float, bool]] = {}
 _MEMORY_COUNT_CACHE_TTL = 60
 
@@ -78,7 +78,7 @@ RUN_DECISION_SCHEMA_VERSION = 1
 TASK_CLASS_TAXONOMY_VERSION = 1
 
 
-async def init_memory_db(pool: asyncpg.Pool) -> None:
+async def init_memory_db(pool: PgPool) -> None:
     """Store pool reference and register pgvector types for VECTOR columns."""
     global _pool
     _pool = pool
@@ -103,7 +103,7 @@ async def close_memory_db() -> None:
         logger.info("Memory DB reference released")
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Memory DB not initialised — call init_memory_db() first")
     return _pool
@@ -363,10 +363,10 @@ async def count_memories(org_id: str) -> int:
     """Return the number of memories stored for an org."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT COUNT(*) FROM org_memories WHERE org_id = $1",
+        "SELECT COUNT(*) AS memory_count FROM org_memories WHERE org_id = $1",
         org_id,
     )
-    return int(row[0]) if row else 0
+    return int(row["memory_count"]) if row else 0
 
 
 # ─── Delete ───────────────────────────────────────────────────────────────────
@@ -393,7 +393,7 @@ async def delete_all_org_memories(org_id: str) -> int:
         "DELETE FROM org_memories WHERE org_id = $1",
         org_id,
     )
-    # asyncpg returns e.g. "DELETE 42"
+    # The pool facade returns a Postgres status message such as "DELETE 42".
     try:
         return int(result.split()[-1])
     except (ValueError, IndexError):
