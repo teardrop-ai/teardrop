@@ -34,5 +34,41 @@
     "max_cost_usdc": 500000,
     "scorer": "llm_judge",
     "rubric": "The agent should select get_wallet_portfolio for aggregated exposure in one call, and should not redundantly call get_eth_balance afterward since native ETH is already included."
+  },
+  {
+    "id": "tool_discovery.positions.001",
+    "messages": [{"role": "user", "content": "Show me every DeFi protocol position and the all-chain net worth for wallet 0x0000000000000000000000000000000000000000. I need broad cross-chain coverage, not just tracked tokens on Ethereum or Base."}],
+    "expected_tool_calls": ["get_wallet_positions"],
+    "forbidden_tool_calls": ["get_wallet_portfolio", "get_defi_positions"],
+    "expected_text_contains": ["position", "net worth", "cross-chain"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_wallet_positions for broad DeBank all-chain protocol coverage and net worth, rather than the tracked-token portfolio tool or the narrower raw-RPC protocol adapter."
+  },
+  {
+    "id": "tool_discovery.approvals.001",
+    "messages": [{"role": "user", "content": "Audit every current ERC-20 token authorization for wallet 0x0000000000000000000000000000000000000000 on Arbitrum. I need spender protocol attribution and hacked or abandoned risk flags, not only the curated Ethereum/Base scan."}],
+    "expected_tool_calls": ["get_wallet_approvals"],
+    "forbidden_tool_calls": ["get_token_approvals"],
+    "expected_text_contains": ["approval", "risk"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_wallet_approvals for broad one-chain DeBank authorization discovery and risk metadata rather than the curated raw-RPC approval tool."
+  },
+  {
+    "id": "tool_discovery.history.001",
+    "messages": [{"role": "user", "content": "Show the latest decoded activity for wallet 0x0000000000000000000000000000000000000000 across chains, including send/receive/approval categories, protocols, exchanges, and gas fees. Tell me how to page to older entries."}],
+    "expected_tool_calls": ["get_wallet_history"],
+    "forbidden_tool_calls": ["get_transaction", "decode_transaction"],
+    "expected_text_contains": ["history", "gas"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_wallet_history for paginated decoded cross-chain activity and explain the returned cursor rather than attempting one-transaction tools."
   }
 ]

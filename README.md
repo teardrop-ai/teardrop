@@ -1,4 +1,12 @@
-# teardrop
+```
+████████╗███████╗ █████╗ ██████╗ ██████╗ ██████╗  ██████╗ ██████╗
+╚══██╔══╝██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗
+   ██║   █████╗  ███████║██████╔╝██║  ██║██████╔╝██║   ██║██████╔╝
+   ██║   ██╔══╝  ██╔══██║██╔══██╗██║  ██║██╔══██╗██║   ██║██╔═══╝
+   ██║   ███████╗██║  ██║██║  ██║██████╔╝██║  ██║╚██████╔╝██║
+   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
+```
+
 Teardrop is a streaming AI agent API. You send it a message; it reasons using your configured LLM (Anthropic, OpenAI, Google, or OpenRouter), optionally calls tools, builds a structured UI component tree, and streams everything back as Server-Sent Events. It implements four open protocols simultaneously: **AG-UI** (streaming events), **A2A** (agent discoverability), **MCP** (tool serving), and **x402** (per-request payments in USDC on Base, no subscription required).
 
 ---
@@ -7,159 +15,49 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using yo
 
 ### Agent-to-Agent (A2A) Delegation
 
-Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features:
-- **Allowlist control**: Restrict which agents your org can delegate to
-- **JWT forwarding**: Automatically forward authentication context when delegating (set `jwt_forward: true` on agent rules)
-- **Per-run quotas**: Limit delegation calls per agent run (configurable via `A2A_DELEGATION_MAX_PER_RUN`)
-- **Optional billing**: Debit credits for delegations with per-agent cost caps plus org pause and 24h spend-limit enforcement
+Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features include allowlist control, JWT forwarding, per-run quotas, and optional credit billing with per-agent cost caps plus org pause and 24h spend-limit enforcement.
 
-**Environment variables:**
-```
-A2A_INBOUND_ENABLED=true                         # Enable public inbound POST /message:send
-A2A_INBOUND_TIMEOUT_SECONDS=60                  # Agent execution timeout for inbound A2A calls
-A2A_DELEGATION_ENABLED=true                      # Enable agent-to-agent delegation
-A2A_DELEGATION_REQUIRE_ALLOWLIST=true            # Enforce allowlist (default: true)
-A2A_DELEGATION_MAX_PER_RUN=3                     # Max delegations per run (default: 3)
-A2A_DELEGATION_BILLING_ENABLED=true              # Debit credits for delegations
-A2A_DELEGATION_MAX_COST_USDC=100000              # Global delegation cost cap (atomic)
-A2A_DELEGATION_PLATFORM_FEE_BPS=500              # Platform fee in basis points (5%)
-A2A_DELEGATION_TIMEOUT_SECONDS=120               # HTTP timeout for delegation calls
-```
+For the full protocol specification, environment variables, allowlists, and billing event payloads, see [docs/a2a-delegation.md](docs/a2a-delegation.md).
 
 ### Platform Tool Marketplace
 
-Teardrop exposes 25+ built-in, metered tools through the marketplace catalog. Callers can invoke them:
+Teardrop exposes 30 built-in, metered tools through the marketplace catalog. Callers can invoke them:
 - Via the **MCP gateway** at `GET /tools/mcp` (direct tool invocation, billed per call).
 - As **tools called during agent runs** (via `POST /agent/run` when the agent decides to use them; billed in the run's usage cost).
 
 For the complete list of tools, detailed descriptions, and their per-call prices, please refer to the [docs/tools-catalog.md](docs/tools-catalog.md).
 
-Note: For agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
+Enable with `MARKETPLACE_ENABLED=true`. When enabled, tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`. Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages, author profiles, and LLM-friendly discovery at `GET /marketplace/llms.txt`. Aggregate quality metrics are available at `GET /.well-known/reputation.json`. Marketplace authors can register external MCP servers and publish discovered tools as listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`.
 
-Enable with `MARKETPLACE_ENABLED=true`. When enabled:
-- Tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`
-- Public catalog responses include `category`, `total_calls`, `reputation_score`, `success_rate`, privacy-thresholded `unique_caller_count`, `health_status`, `is_healthy`, `display_name`, `tool_name`, and the full `input_schema`
-- Aggregate quality metrics for active tools are available at `GET /.well-known/reputation.json` and are embedded in public A2A/MCP platform-tool entries
-- Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages at `GET /marketplace/catalog/{org_slug}/{tool_name}`, author profiles at `GET /marketplace/authors/{org_slug}`, and LLM-friendly discovery at `GET /marketplace/llms.txt` (per-tool entries with description, price, health, and reputation link)
-- Catalog search matches tool names, descriptions, and intent tags; platform tools expose a distinct commerce-facing `marketplace_description`
-- Marketplace authors can register external MCP servers and turn discovered tools into listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`; publish may omit `input_schema` and `output_schema` to reuse the server's normalized discovery result
-- Platform tools are always available during agent runs and are not subscribable via `POST /marketplace/subscriptions`
-- Agent runs that call these tools incur their marketplace prices (in addition to token costs)
-- Per-org pricing overrides are supported via `POST /admin/pricing/tools`; overrides apply to both MCP gateway and agent run calls
-
----
+Platform tools are always available during agent runs, are not subscribable via `POST /marketplace/subscriptions`, and incur their marketplace prices (in addition to token costs). Per-org pricing overrides are supported via `POST /admin/pricing/tools`; for agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
 ### Marketplace Settlement & USDC Sweeping
 
-Organizations can monetize their agents via a Marketplace. Earned fees are settled to organization wallets on-chain via Coinbase Developer Platform (CDP).
+Organizations can monetize their agents via a Marketplace. Earned fees are settled to organization wallets on-chain via Coinbase Developer Platform (CDP). When an org requests a withdrawal, Teardrop settles earned fees to a ledger entry (pending), attempts an on-chain USDC transfer via CDP to the org's specified address, and records the `tx_hash` on success (or reverts to pending on failure).
 
-**Auto-sweep settings** (configure in `.env`):
-```
-MARKETPLACE_SETTLEMENT_CDP_ACCOUNT=td-marketplace   # CDP account for settlement transfers
-MARKETPLACE_SETTLEMENT_CHAIN_ID=84532               # Chain ID: 84532=Base Sepolia (testnet), 8453=Base mainnet (production)
-MARKETPLACE_TX_CONFIRM_TIMEOUT_SECONDS=90          # Timeout for on-chain tx receipt (90s for mainnet congestion tolerance)
-MARKETPLACE_AUTO_SWEEP_ENABLED=true                # Enable automatic earnings sweep
-MARKETPLACE_SWEEP_INTERVAL_SECONDS=86400           # Sweep cadence (86400 = 1 day)
-```
-
-**Admin APIs:**
-- `POST /admin/marketplace/sweep` — Manually trigger earnings sweep for pending orgs
-- `GET /admin/marketplace/settlement-balance` — Query the settlement wallet USDC balance
-
-When an org requests a withdrawal, Teardrop:
-1. Settles earned fees to a ledger entry (pending)
-2. Attempts on-chain USDC transfer via CDP to the org's specified address
-3. Records the tx_hash on success, or reverts to pending on failure
-
----
+Auto-sweep is configured via `MARKETPLACE_AUTO_SWEEP_ENABLED` and related `MARKETPLACE_*` settings (see [docs/configuration.md](docs/configuration.md)). Admin APIs: `POST /admin/marketplace/sweep` (manual sweep) and `GET /admin/marketplace/settlement-balance`.
 
 ### Verified-Email Onboarding Credit
 
-Teardrop can grant a small prepaid credit balance to newly verified organizations so a first agent run is possible without immediately setting up a wallet or card. This is **disabled by default** and is intended only as a conversion aid, not as a source of withdrawable marketplace earnings.
+Teardrop can grant a small prepaid credit balance to newly verified organizations so a first agent run is possible without immediately setting up a wallet or card. This is **disabled by default** (`ONBOARDING_CREDIT_ENABLED=false`) and is intended only as a conversion aid, not as a source of withdrawable marketplace earnings.
 
-**How it works:**
-- The grant is awarded only after a user successfully consumes a single-use email verification token (`GET /auth/verify-email`).
-- Token consumption, marking the user verified, and enqueueing onboarding-credit eligibility are committed atomically in one transaction, so a valid token is never "spent" without a durable record of the org's eligibility.
-- The grant amount is immutable and recorded in `org_onboarding_credit_grants`.
-- The balance, ledger row, and grant marker are written in one transaction.
-- Duplicate verifications are harmless: the grant marker makes the operation idempotent.
-- If the immediate grant attempt fails (e.g. a transient DB error), the request still returns `{ "verified": true }` and the failure is logged at warning level without a traceback. The durable outbox row created during verification ensures a background worker (`ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS`, default 60s) retries the grant until it succeeds — the credit can never be permanently lost due to a transient failure.
+The grant is awarded after a user consumes a single-use email verification token (`GET /auth/verify-email`). Token consumption, marking the user verified, and enqueueing eligibility are committed atomically; the grant is idempotent and retried by a background worker until it succeeds. Promotional credit can be used for platform tools, org webhook tools, MCP tools, and the base agent run cost, but **cannot** call marketplace author tools. A real top-up (Stripe, on-chain USDC, admin top-up, or refund) converts the org to normal credit status and removes the marketplace restriction. x402-paid SIWE calls are unaffected.
 
-**Restrictions on promotional credit:**
-- Promotional credit can be used for platform tools, org webhook tools, MCP tools, and the base agent run cost.
-- It **cannot** call marketplace author tools (qualified names such as `acme/weather`) through `POST /agent/run`, the SSE streaming route, `GET /tools/mcp`, or `POST /mcp/v1`.
-- Marketplace author earnings and usage statistics are suppressed for promotional runs even if a tool bypasses planner filtering.
-- A real top-up (Stripe, on-chain USDC, admin top-up, or refund) converts the org to normal credit status and removes the marketplace restriction.
-- x402-paid SIWE calls are unaffected and never treated as promotional.
-
-**Environment variables:**
-```
-ONBOARDING_CREDIT_ENABLED=false   # Set to true to enable verified-email grants
-ONBOARDING_CREDIT_USDC=500000     # Default $0.50 in atomic USDC (max $10.00)
-ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS=60  # Background retry poll interval for failed grants
-```
-
-Check `GET /billing/balance` after verification to see the granted balance. Once the promotional balance is exhausted, use the existing Stripe or on-chain USDC top-up flows.
-
----
+Check `GET /billing/balance` after verification to see the granted balance. See [docs/configuration.md](docs/configuration.md) for the `ONBOARDING_CREDIT_*` settings.
 
 ### Unattended (Scheduled) Agent Runs
 
-Organizations can schedule recurring, unattended agent runs with integrated credit-only billing, stored execution history, and real-time status callbacks.
+Organizations can schedule recurring, unattended agent runs with integrated credit-only billing, stored execution history, and real-time status callbacks. Managed via the `/agent/schedules` API (`POST`/`GET`/`PATCH`/`DELETE`, plus `GET /agent/schedules/{id}/runs` for cursor-paginated results).
 
-**Scheduled runs settings** (configure in `.env` or system environment):
-```
-SCHEDULED_RUNS_ENABLED=true                         # Toggle unattended scheduled run background worker
-SCHEDULED_RUNS_TICK_INTERVAL_SECONDS=60             # Polling interval in seconds to claim due runs
-SCHEDULED_RUNS_MIN_INTERVAL_SECONDS=300             # Minimum interval in seconds (default: 5 minutes)
-SCHEDULED_RUNS_MAX_PER_ORG=20                       # Max schedules allowed per org (active + inactive)
-SCHEDULED_RUNS_MAX_CONSECUTIVE_FAILURES=5           # Auto-disable consecutive execution failures threshold
-SCHEDULED_RUNS_EXECUTION_TIMEOUT_SECONDS=120        # Timeout in seconds for a single scheduled agent execution
-SCHEDULED_RUNS_MAX_CONCURRENCY=4                    # Max scheduled executions run concurrently per tick (<= pg pool headroom)
-```
-
-**Developer APIs (under `/agent/schedules`):**
-- `POST /agent/schedules` — Register a new scheduled prompt and interval
-- `GET /agent/schedules` — List current schedules for the authenticated org
-- `GET /agent/schedules/{id}` — Get single schedule configuration
-- `PATCH /agent/schedules/{id}` — Partially update schedule properties (e.g. toggle `enabled` or adjust `interval_seconds`)
-- `DELETE /agent/schedules/{id}` — Permanently delete a schedule definition
-- `GET /agent/schedules/{id}/runs` — Query run results (with cursor-based pagination)
-
-When scheduled executions are due, the worker claims a batch using a row-locking query (`FOR UPDATE SKIP LOCKED`) and advances each run's `next_run_at` atomically at claim time. Claimed runs execute concurrently up to `SCHEDULED_RUNS_MAX_CONCURRENCY`, with per-run failure isolation so one error never aborts the rest of the batch. Each execution prepares a dedicated agent thread, verifies credits, and runs the agent. Completed, failed, timed-out, and credit-skipped runs are archived under `scheduled_run_results`. If configured, execution results are dispatched to an HTTPS-only, SSRF-checked callback URL. Because claims use `SKIP LOCKED`, multiple worker instances can run side by side to scale throughput horizontally.
-
----
+Due runs are claimed with a row-locking query (`FOR UPDATE SKIP LOCKED`) and execute concurrently with per-run failure isolation, so multiple worker instances can scale horizontally. Results are archived under `scheduled_run_results` and can be dispatched to an HTTPS-only, SSRF-checked callback URL. Configure via `SCHEDULED_RUNS_*` settings (see [docs/configuration.md](docs/configuration.md)).
 
 ### Event-Triggered (Reactive) Runs
 
 Beyond fixed intervals, organizations can register **event triggers** that run the agent in response to inbound webhooks (e.g. an on-chain event, a CRM update, a CI signal). An event trigger stores a prompt *template*; the inbound JSON payload is interpolated into it at dispatch time. Event triggers reuse the same execution core, credit billing, result history, and callback delivery as scheduled runs.
 
-**Event-trigger settings** (configure in `.env` or system environment):
-```
-EVENT_TRIGGERS_ENABLED=true                         # Toggle reactive event-triggered runs (inbound ingress)
-EVENT_TRIGGERS_MAX_PER_ORG=20                       # Max event triggers allowed per org (active + inactive)
-EVENT_TRIGGERS_MAX_CONCURRENCY=8                    # Max in-flight inbound runs across the cluster
-EVENT_TRIGGERS_MAX_CONCURRENCY_PER_ORG=4            # Per-org cluster-wide in-flight cap
-EVENT_TRIGGERS_RECOVERY_INTERVAL_SECONDS=30         # Reconcile abandoned execution leases
-EVENT_TRIGGERS_PROMPT_MAX_CHARS=12000               # Max rendered prompt length after payload interpolation
-```
+Managed via the `/agent/event-triggers` API (CRUD, secret rotation, and run polling). Inbound dispatch is `POST /agent/events/{trigger_token}`, authenticated with a per-trigger secret via the `X-Teardrop-Trigger-Secret` header, with optional idempotency keys and scalar-only, length-capped prompt interpolation to resist injection. Postgres execution leases enforce global and per-org concurrency (returning `429` when saturated).
 
-**Management APIs (org-scoped JWT, under `/agent/event-triggers`):**
-- `POST /agent/event-triggers` — Create a trigger; the signing **secret is returned once** (only its SHA-256 hash is stored)
-- `GET /agent/event-triggers` — List triggers for the authenticated org
-- `GET /agent/event-triggers/{id}` — Get a single trigger
-- `PATCH /agent/event-triggers/{id}` — Update name, prompt template, `enabled`, or `callback_url`
-- `DELETE /agent/event-triggers/{id}` — Delete a trigger
-- `POST /agent/event-triggers/{id}/rotate-secret` — Rotate the signing secret (returns the new secret once)
-- `GET /agent/event-triggers/{id}/runs` — Query run results (cursor pagination)
-- `GET /agent/event-triggers/{id}/runs/{run_id}` — Poll one run as an A2A task (`TASK_STATE_SUBMITTED`, `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`)
-
-**Inbound dispatch (public, secret-authenticated):**
-- `POST /agent/events/{trigger_token}` — Fire the trigger. Authenticate with the per-trigger secret via the `X-Teardrop-Trigger-Secret` header (constant-time compared). Optional `X-Idempotency-Key` (or an `idempotency_key` body field) gives at-most-once execution across webhook retries. The JSON body is rendered into the prompt template via `{{field}}` placeholders (`{{event_json}}` injects the full payload); substitution is scalar-only and length-capped to resist prompt/format-string injection. The agent runs in the background and the endpoint returns `202 Accepted` with a `run_id`; results are retrievable via the runs endpoint and the optional callback. Postgres execution leases enforce global and per-org cluster concurrency (returning `429` when saturated), and the payload cap is 64 KB.
-
-When enabled, the public A2A Agent Card adds the `event_trigger_ingress` skill and publishes registration, dispatch, and task-polling endpoint templates. Registration is JWT-authenticated and org-scoped; dispatch requires the per-trigger secret. Dispatch accepts an empty body or a JSON object only, applies IP and trigger rate limits, and persists every run identity so an A2A client can poll without scanning result pages. Abandoned leases become terminal failed tasks rather than remaining submitted indefinitely. Event-trigger lifecycle, dispatch, and settlement metadata are retained in an insert-only audit table; payloads and secrets are never stored in that audit record.
-
-Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly.
+Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly. Configure via `EVENT_TRIGGERS_*` settings (see [docs/configuration.md](docs/configuration.md)).
 
 ---
 
@@ -207,7 +105,7 @@ Minimum required contents:
 # Global LLM provider fallback: anthropic | openai | google | openrouter (default: openrouter)
 # Note: Each org can override via PUT /llm-config
 AGENT_PROVIDER=openrouter
-# Default model is deepseek/deepseek-v4-flash.
+# Default model is deepseek/deepseek-v4-flash-0731.
 # For OpenRouter DeepSeek models, Teardrop delegates provider eligibility to the API key's OpenRouter data policy.
 OPENROUTER_API_KEY=sk-or-...      # required if AGENT_PROVIDER=openrouter
 # ANTHROPIC_API_KEY=sk-ant-...     # required if AGENT_PROVIDER=anthropic
@@ -353,7 +251,6 @@ $token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
     -Method Post -ContentType "application/json" `
     -Body '{"client_id":"teardrop-client","client_secret":"<secret>"}').access_token
 
-# Set provider + model + routing strategy
 Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
     -Method Put -ContentType "application/json" `
     -Headers @{ Authorization = "Bearer $token" } `
@@ -366,32 +263,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
     } | ConvertTo-Json
 ```
 
-### Example: BYOK — use your own OpenAI key
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
-    -Method Put -ContentType "application/json" `
-    -Headers @{ Authorization = "Bearer $token" } `
-    -Body @{
-        provider = "openai"
-        model = "gpt-4o"
-        api_key = "sk-..."  # your key (encrypted at rest)
-    } | ConvertTo-Json
-```
-
-### Example: Self-hosted vLLM or Ollama
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
-    -Method Put -ContentType "application/json" `
-    -Headers @{ Authorization = "Bearer $token" } `
-    -Body @{
-        provider = "openai"
-        model = "meta-llama/Llama-2-7b-chat"
-        api_base = "http://gpu-cluster.internal:8000/v1"
-        api_key = "your-local-key-or-token"
-    } | ConvertTo-Json
-```
+For BYOK, add your own `api_key` (encrypted at rest). For self-hosted endpoints (vLLM, Ollama, or any OpenAI-compatible server), set `api_base` to your endpoint URL.
 
 ### Routing preferences
 
@@ -430,43 +302,9 @@ Teardrop continuously tracks operational metrics for every LLM deployed. These b
 | `GET` | `/models/benchmarks` | — | Public: all models with catalogue metadata + live metrics |
 | `GET` | `/models/benchmarks/org` | Bearer | Org-scoped: metrics for your org's usage only |
 
-### Example response
-
-```powershell
-Invoke-RestMethod -Uri "http://localhost:8000/models/benchmarks" | ConvertTo-Json | ForEach-Object { $_ | Out-String }
-```
-
-Returns:
-```json
-{
-  "models": [
-    {
-      "provider": "anthropic",
-      "model": "claude-haiku-4-5-20251001",
-      "display_name": "Claude Haiku 4.5",
-      "context_window": 200000,
-      "supports_tools": true,
-      "quality_tier": 2,
-      "pricing": {
-        "tokens_in_cost_per_1k": 0.80,
-        "tokens_out_cost_per_1k": 4.00,
-        "tool_call_cost": 0.001
-      },
-      "benchmarks": {
-        "total_runs_7d": 156,
-        "avg_latency_ms": 450.2,
-        "p95_latency_ms": 1200.5,
-        "avg_cost_usdc_per_run": 0.015,
-        "avg_tokens_per_sec": 52.3
-      }
-    },
-    ...
-  ],
-  "updated_at": "2026-04-16T14:22:00Z"
-}
-```
-
 ### Understanding the metrics
+
+Each model entry includes catalogue metadata (`provider`, `model`, `display_name`, `context_window`, `supports_tools`, `quality_tier`, `pricing`) plus live `benchmarks`:
 
 - **total_runs_7d**: Number of runs using this model in the last 7 days (benchmarks only included if >= 10 runs)
 - **avg_latency_ms**: Average time (ms) from start to completion
@@ -483,25 +321,9 @@ Teardrop implements the [x402 payment protocol](https://x402.org). When `BILLING
 
 ### How it works
 
-```
-Client                         Teardrop                     x402 Facilitator
-  │                               │                               │
-  │── POST /agent/run ───────────►│                               │
-  │   (no payment header)         │                               │
-  │◄── 402 Payment Required ──────│                               │
-  │    PAYMENT-REQUIRED: <v2>     │                               │
-  │    X-PAYMENT-REQUIRED: <reqs> │                               │
-  │                               │                               │
-  │── POST /agent/run ───────────►│                               │
-  │   Payment-Signature: <signed> │── verify payment ────────────►│
-  │                               │◄─ verified ───────────────────│
-  │◄── SSE stream ────────────────│                               │
-  │   (TEXT, TOOL, SURFACE...)    │                               │
-  │   BILLING_SETTLEMENT          │── settle (actual cost*) ─────►│
-  │   { tx_hash, amount_usdc }    │◄─ tx confirmed ───────────────│
-```
+Teardrop implements the [x402 payment protocol](https://x402.org). When `BILLING_ENABLED=true`, requests must include payment. Set `BILLING_ENABLED=false` (default) to run without billing during development.
 
-\* **exact**: settles the signed amount. **upto**: settles actual usage cost ≤ client-signed ceiling.
+An unpaid `POST /agent/run` returns a `402 Payment Required` with the x402 v2 `PaymentRequired` envelope (`PAYMENT-REQUIRED` header, plus legacy `X-PAYMENT-REQUIRED`). The client signs the payment and retries with a `Payment-Signature` header; Teardrop verifies it with the facilitator, streams the SSE response, and emits a `BILLING_SETTLEMENT` event with the on-chain `tx_hash` after the run.
 
 ### Payment methods by auth type
 
@@ -518,17 +340,8 @@ Client                         Teardrop                     x402 Facilitator
 | `exact` (default) | Client signs the exact run price; facilitator settles that amount. | `X402_SCHEME=exact` |
 | `upto` | Client signs a ceiling (`X402_UPTO_MAX_AMOUNT`); after the run, Teardrop settles the actual usage cost (≤ ceiling) via Permit2. | `X402_SCHEME=upto` |
 
-### Configuration
-
-```
-BILLING_ENABLED=true
-X402_PAY_TO_ADDRESS=0xYourTreasuryWallet
-X402_NETWORK=eip155:8453          # Base mainnet (eip155:84532 = Base Sepolia)
-X402_FACILITATOR_URL=https://x402.org/facilitator
-X402_SCHEME=upto                  # "exact" (default) or "upto" (usage-based settlement)
-X402_UPTO_MAX_AMOUNT=$0.50        # Max ceiling per-run for upto (ignored for exact)
-BILLABLE_AUTH_METHODS=["siwe", "client_credentials", "email"]    # All three auth methods billed by default
-```
+> **upto client requirement**: Before using `X402_SCHEME=upto`, the paying wallet must approve Permit2 for USDC on the target chain once:
+> `IERC20(USDC).approve(PERMIT2_ADDRESS, type(uint256).max)`. This is a one-time on-chain transaction per wallet. Clients that have not approved Permit2 can always use `scheme: exact` from the `accepts` array in the 402 response as a fallback.
 
 ### Pricing
 
@@ -559,9 +372,6 @@ Invoke-RestMethod -Uri "http://localhost:8000/agent/run" `
 
 The stream will include a `BILLING_SETTLEMENT` event with the on-chain `tx_hash` after the run completes.
 
-> **upto client requirement**: Before using `X402_SCHEME=upto`, the paying wallet must approve Permit2 for USDC on the target chain once:
-> `IERC20(USDC).approve(PERMIT2_ADDRESS, type(uint256).max)`. This is a one-time on-chain transaction per wallet. Clients that have not approved Permit2 can always use `scheme: exact` from the `accepts` array in the 402 response as a fallback.
-
 ### Credit top-up (machine callers)
 
 Admins can add prepaid USDC credit to an org's balance:
@@ -572,6 +382,8 @@ Invoke-RestMethod -Uri "http://localhost:8000/admin/credits/topup" `
     -Headers @{ Authorization = "Bearer $adminToken" } `
     -Body '{"org_id":"org-123","amount_usdc":1000000}'   # $1.00
 ```
+
+For the full set of billing environment variables (`BILLING_ENABLED`, `X402_*`, `BILLABLE_AUTH_METHODS`, etc.), see [docs/configuration.md](docs/configuration.md).
 
 ---
 
@@ -585,18 +397,9 @@ For a detailed protocol specification, system configurations, allowlists, and bi
 
 ## Publishing to Agentic Market
 
-Use the full public URL of the paid A2A surface, for example `https://api.teardrop.dev/message:send`, with method `POST`.
+Use the full public URL of the paid A2A surface, for example `https://api.teardrop.dev/message:send`, with method `POST`. Do not register the bare origin `https://api.teardrop.dev/` (`GET /` redirects to `/docs`, and `POST /` is not a paid entrypoint).
 
-Do not register the bare origin `https://api.teardrop.dev/`. `GET /` redirects to `/docs`, and `POST /` is not a paid Teardrop entrypoint.
-
-Agentic Market validators may probe `/.well-known/x402`, `/.well-known/x402.json`, and the configured endpoint URL. Teardrop serves those discovery aliases publicly and issues the x402 challenge on unpaid anonymous `POST /message:send` requests before body validation.
-
-That challenge now includes:
-
-- `PAYMENT-REQUIRED` with the full x402 v2 `PaymentRequired` envelope.
-- `X-PAYMENT-REQUIRED` as a legacy alias for older clients that only decode the requirement list.
-- Top-level `resource.url` describing the paid surface.
-- Top-level `extensions.bazaar` describing the A2A request and response shape.
+Agentic Market validators may probe `/.well-known/x402`, `/.well-known/x402.json`, and the configured endpoint URL. Teardrop serves those discovery aliases publicly and issues the x402 challenge on unpaid anonymous `POST /message:send` requests before body validation. The challenge includes the full x402 v2 `PaymentRequired` envelope (`PAYMENT-REQUIRED`), a legacy `X-PAYMENT-REQUIRED` alias, a top-level `resource.url` describing the paid surface, and `extensions.bazaar` describing the A2A request/response shape.
 
 ## Publishing to Smithery
 
@@ -672,65 +475,39 @@ Set `DATABASE_URL` to your Neon connection string. Plain `postgresql://` is pref
 ## Project structure
 
 ```
-app.py              # FastAPI app, lifespan, middleware, background workers, router registration
-routers/            # APIRouter modules (agent.py: POST /agent/run SSE + GET /agent/tools)
-agent_stream.py     # AG-UI SSE framing and A2UI stream-filter helpers
-auth.py             # RS256 JWT & refresh tokens (auth methods: email, client_credentials, SIWE)
-billing/            # x402 billing layer, pricing, invoice queries, credit system
-cache.py            # Redis cache helpers
-config.py           # Settings via pydantic-settings (reads .env)
-memory.py           # Per-org pgvector memory: LLM extraction, recall, CRUD
-mcp_client/         # Per-org MCP client: CRUD, session pool, tool discovery
-org_tools/          # Per-org custom webhook tools: CRUD, caching, execution
-usage.py            # UsageEvent model, usage recording and aggregation
-users.py            # Org + User models, CRUD, PBKDF2-SHA256 password hashing
-wallets.py          # User wallet management, SIWE nonce lifecycle
-agent_wallets.py    # CDP-backed agent wallet provisioning, balance queries, audit
-agent/
-  graph.py          # LangGraph StateGraph definition and routing
-  runtime_context.py # Request-scoped, non-checkpointed tool dependencies
-  runtime_events.py # Framework-neutral event adapter
-  llm.py            # Multi-provider LLM factory (Anthropic, OpenAI, Google, OpenRouter)
-  nodes.py          # planner, tool_executor, ui_generator implementations
-  state.py          # AgentState, A2UIComponent, TaskStatus schemas
+teardrop/
+  app.py              # FastAPI app, lifespan, middleware, background workers, router registration
+  main.py             # Compatibility entrypoint (re-exports teardrop.app)
+  routers/            # APIRouter modules (agent.py, billing.py, marketplace.py, auth.py, admin/, org/, …)
+  config.py           # Settings via pydantic-settings (reads .env)
+  auth.py             # RS256 JWT & refresh tokens (email, client_credentials, SIWE)
+  users/              # Org + User models, CRUD, PBKDF2-SHA256 password hashing
+  billing/            # x402 billing layer, pricing, invoice queries, credit system
+  marketplace/        # Marketplace catalog, earnings, reputation, subscriptions, withdrawals
+  mcp_client/         # Per-org MCP client: CRUD, session pool, tool discovery
+  org_tools/          # Per-org custom webhook tools: CRUD, caching, execution
+  memory.py           # Per-org pgvector memory: LLM extraction, recall, CRUD
+  agent/              # LangGraph graph, nodes, LLM factory, runtime context/events
+  agent_runtime.py    # Agent run orchestration (scheduled/event-triggered runs)
+  mcp_gateway.py      # MCP gateway middleware (direct tool invocation + billing)
 tools/
-  registry.py       # ToolRegistry: versioned, with deprecation lifecycle
-  mcp_server.py     # Standalone MCPServer for MCP protocol clients
-  definitions/      # One file per tool (calculate, get_datetime, web_search, …)
-  __init__.py       # Global registry singleton, get_langchain_tools()
+  registry.py         # ToolRegistry: versioned, with deprecation lifecycle
+  mcp_server.py       # Standalone MCPServer for MCP protocol clients
+  definitions/        # One file per tool (calculate, get_datetime, web_search, …)
 migrations/
-  runner.py         # Applies SQL migrations in order
-  versions/         # 001_baseline through 039_new_model_pricing_seed
-shared/             # Internal shared utilities: db pool registry, audit inserts, webhook caller
-scripts/
-  generate_keys.py  # Generate RSA keypair → keys/private.pem + keys/public.pem
-  audit_dependencies.py  # Review direct Python dependencies for OSV vulnerabilities and upgrade drift
-  init_neon.py      # Initialize Neon Postgres schema
-  seed_users.py     # Create default org + admin user for local dev
+  runner.py           # Applies SQL migrations in order
+  versions/           # 001_baseline through 088_withdrawal_in_flight
+shared/               # Internal shared utilities: db pool registry, audit inserts, webhook caller
+scripts/              # generate_keys.py, seed_users.py, audit_dependencies.py, export_api_spec.py, …
 ```
+
+For the complete architectural design, execution flow state diagrams, SSE stream event descriptions, and structured A2UI component schemas, consult the [docs/architecture.md](docs/architecture.md) reference.
 
 ---
 
 ## Coinbase Developer Platform Integration
 
-Teardrop can provision per-org USDC wallets via Coinbase Developer Platform (CDP) for receiving delegation payments and marketplace earnings. This requires:
-
-1. **CDP Account**: Create one at [https://cdp.coinbase.com](https://cdp.coinbase.com)
-2. **API Credentials**:
-   - Go to Developer Settings → API Keys
-   - Create a key with `wallet:create` permission
-   - Note the **Key ID** and **Key Secret** (Ed25519 or ECDSA)
-   - Note the **Wallet Secret** (used to decrypt keys stored in AWS Nitro Enclaves)
-3. **Environment variables**:
-   ```
-   AGENT_WALLET_ENABLED=true
-   CDP_API_KEY_ID=<your-key-id>
-   CDP_API_KEY_SECRET=<your-key-secret>
-   CDP_WALLET_SECRET=<your-wallet-secret>
-   CDP_NETWORK=base-sepolia       # or 'base' for mainnet
-   AGENT_WALLET_MAX_BALANCE_USDC=100000000  # $100 balance cap (optional)
-   ```
-4. **Pricing**: CDP charges $0.005 per operation. Free tier includes 5,000 ops/month.
+Teardrop can provision per-org USDC wallets via Coinbase Developer Platform (CDP) for receiving delegation payments and marketplace earnings. This requires a CDP account ([cdp.coinbase.com](https://cdp.coinbase.com)) and an API key with `wallet:create` permission (Key ID, Key Secret, and Wallet Secret). Configure via the `AGENT_WALLET_*` and `CDP_*` environment variables (see [docs/configuration.md](docs/configuration.md)). CDP charges $0.005 per operation; the free tier includes 5,000 ops/month.
 
 Each org can hold one wallet per chain (e.g., Base Sepolia testnet, Base mainnet). Wallets auto-receive delegation payments and MCP marketplace earnings.
 

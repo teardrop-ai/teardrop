@@ -270,6 +270,7 @@ class Settings(BaseSettings):
     # ── Tool Providers ──────────────────────────────────────────────────────────
     tavily_api_key: str = Field(default="", description="Tavily API key for web search")
     coingecko_api_key: str = Field(default="", description="CoinGecko demo API key (optional, raises rate limits)")
+    debank_api_key: str = Field(default="", description="DeBank Cloud API key for wallet positions")
     coingecko_api_url: str = Field(
         default="https://api.coingecko.com/api/v3",
         description="CoinGecko API base URL",

@@ -9,6 +9,9 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | Tool | Price/call |
 |------|------------|
 | `get_wallet_portfolio` | $0.004 (4,000 atomic) |
+| `get_wallet_positions` | $0.020 (20,000 atomic) |
+| `get_wallet_approvals` | $0.004 (4,000 atomic) |
+| `get_wallet_history` | $0.006 (6,000 atomic) |
 | `web_search` | $0.015 (15,000 atomic) |
 | `get_token_price` | $0.002 (2,000 atomic) |
 | `get_token_price_historical` | $0.004 (4,000 atomic) |
@@ -50,13 +53,19 @@ In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` hav
 
 `get_wallet_portfolio` tracks the major assets used by the Ethereum and Base lending/staking adapters, including `wstETH`, `cbETH`, `rETH`, `weETH`, and `cbBTC` where deployed. The same tracked-asset registry supplies the default token set for `get_token_approvals`; untracked assets remain explicitly excluded from both default scans.
 
+`get_wallet_positions` uses DeBank Cloud for broad, all-chain protocol positions and optional net worth. Its data is third-party portfolio analytics and may be stale, including occasional long refresh delays; use raw-RPC tools for liquidation, swap quotes, and transaction-critical checks. Set `include_net_worth=false` when only protocol positions are needed. Set `include_token_balances=true` when complete cross-chain wallet token discovery is required; this adds one DeBank provider request and returns `token_balances`.
+
+`get_wallet_approvals` uses DeBank's token authorization discovery for one requested chain at a time. It returns spender exposure, protocol attribution, and hacked/abandoned flags, but is not block-accurate and does not inspect NFT approvals or off-chain Permit2 sub-permits. Use `get_token_approvals` for the free, block-accurate Ethereum/Base scan of curated tokens and spenders; call `get_wallet_approvals` once per chain when broad discovery is more important than cost.
+
+`get_wallet_history` returns one page (maximum 20 entries) of DeBank's decoded cross-chain wallet activity, including protocol, token, exchange, and gas metadata. Use `next_cursor` as the next `start_time` to page backward. It is activity data, not a complete ledger, PnL, or cost-basis engine.
+
 DeFiLlama analytics tools `get_yield_rates`, `get_protocol_tvl`, and `get_chain_metrics` include an optional machine-readable `provenance` object. It reports the provider, source URL(s), response retrieval time, source fetch time, cache hit status, source age, and cache TTL. Cached responses preserve the original source timestamp and receive a new retrieval timestamp; failed upstream fetches leave `source_fetched_at` null.
 
 ---
 
 ## Tool Definitions
 
-All system tool implementations are under [tools/definitions/](tools/definitions/). The following 27 tools are currently registered:
+All system tool implementations are under [tools/definitions/](tools/definitions/). The following 30 tools are currently registered:
 
 | Tool | Description |
 |------|-------------|
@@ -73,6 +82,9 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `get_token_price` | Crypto asset price in USD (or any supported currency) via CoinGecko. |
 | `get_transaction` | Transaction details and status by hash. |
 | `get_wallet_portfolio` | Aggregated token holdings and USD value for an Ethereum or Base wallet, including major spot, lending, liquid-staking, restaking, and stablecoin assets. |
+| `get_wallet_positions` | All-chain DeBank protocol positions, token lists, and optional net worth for an EVM wallet. |
+| `get_wallet_approvals` | DeBank token authorization exposure, spender protocol attribution, and risk flags for one chain. |
+| `get_wallet_history` | One paginated page of DeBank decoded wallet transaction history with protocol, token, exchange, and gas metadata. |
 | `http_fetch` | Fetches and extracts content from a URL. Includes SSRF protection — private/cloud-metadata IPs are blocked, and every redirect hop is re-validated before being followed. |
 | `read_contract` | Calls `view`/`pure` functions on any smart contract by ABI fragment, with optional `caller_address` context for `msg.sender`-dependent views. Calls are read-only and use bounded RPC timeout/retry handling. |
 | `resolve_ens` | Resolves ENS name → address or address → ENS primary name. |

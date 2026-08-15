@@ -62,6 +62,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `BYOK_TIER_PRICING_ENABLED` | `true` to use per-token orchestration pricing for BYOK orgs (seeded by migration 041). When `false`, uses legacy flat `byok_platform_fee_usdc`. Default: `false` for backward compatibility. |
 | `OPENROUTER_API_KEY` | Required if `AGENT_PROVIDER=openrouter` |
 | `COINGECKO_API_KEY` | CoinGecko API key for live price data (optional; rate-limited without key) |
+| `DEBANK_API_KEY` | DeBank Cloud API key for DeBank-backed wallet tools (`get_wallet_positions`, `get_wallet_approvals`, and `get_wallet_history`) (optional; tools return a configuration error when unset) |
 | `TAVILY_API_KEY` | Tavily API key for the `web_search` tool (optional; web search disabled without it) |
 | `ETHEREUM_RPC_URL` | Ethereum mainnet JSON-RPC URL (required by Ethereum-based tools) |
 | `BASE_RPC_URL` | Base L2 JSON-RPC URL (required by Base-based tools and marketplace auto-sweep) |
