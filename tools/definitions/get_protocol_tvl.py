@@ -58,8 +58,18 @@ def _protocol_detail_url(slug: str) -> str:
     return f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
 
 
-def _protocol_summary_url(slug: str, metric: str) -> str:
-    return f"{_DEFILLAMA_BASE_URL}/summary/{metric}/{slug}"
+def _protocol_summary_url(slug: str, metric: str, data_type: str | None = None) -> str:
+    """Build a DeFiLlama per-protocol economic summary URL.
+
+    DeFiLlama exposes fees and revenue through the same ``/summary/fees/{slug}``
+    endpoint; revenue is selected with the ``dataType=dailyRevenue`` query param.
+    There is no ``/summary/revenue/{slug}`` endpoint (it returns HTTP 500), so
+    revenue must always be requested via the fees endpoint with that dataType.
+    """
+    url = f"{_DEFILLAMA_BASE_URL}/summary/{metric}/{slug}"
+    if data_type:
+        url += f"?dataType={data_type}"
+    return url
 
 
 def _source_urls(slug: str, include_historical: bool) -> list[str]:
@@ -68,7 +78,7 @@ def _source_urls(slug: str, include_historical: bool) -> list[str]:
             _protocol_detail_url(slug),
             _current_tvl_url(slug),
             _protocol_summary_url(slug, "fees"),
-            _protocol_summary_url(slug, "revenue"),
+            _protocol_summary_url(slug, "fees", data_type="dailyRevenue"),
         ]
     return [_current_tvl_url(slug)]
 
@@ -243,9 +253,15 @@ async def _fetch_protocol_detail(slug: str) -> tuple[dict[str, Any] | None, str 
 async def _fetch_protocol_summary(
     slug: str,
     metric: str,
+    data_type: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-    """Call a DeFiLlama per-protocol economic summary endpoint."""
-    url = _protocol_summary_url(slug, metric)
+    """Call a DeFiLlama per-protocol economic summary endpoint.
+
+    ``data_type`` selects the metric variant on the fees endpoint (e.g.
+    ``dailyRevenue`` for revenue). Revenue has no dedicated endpoint, so it is
+    always fetched through ``/summary/fees/{slug}?dataType=dailyRevenue``.
+    """
+    url = _protocol_summary_url(slug, metric, data_type=data_type)
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         try:
             session = await get_defillama_session()
@@ -605,11 +621,14 @@ async def _get_protocol_tvl_single(
         summary_payloads: dict[str, dict[str, Any] | None] = {}
         summary_error_types: dict[str, str] = {}
         if missing_metrics:
+            # Revenue has no dedicated DeFiLlama endpoint; it is served by the
+            # fees endpoint with dataType=dailyRevenue. Fees use the default.
+            summary_specs = [(metric, "fees", "dailyRevenue" if metric == "revenue" else None) for metric in missing_metrics]
             summary_results = await asyncio.gather(
-                *(_fetch_protocol_summary(slug, metric) for metric in missing_metrics),
+                *(_fetch_protocol_summary(slug, url_metric, data_type=data_type) for _, url_metric, data_type in summary_specs),
                 return_exceptions=True,
             )
-            for metric, summary_result in zip(missing_metrics, summary_results):
+            for (metric, _, _), summary_result in zip(summary_specs, summary_results):
                 if isinstance(summary_result, Exception):
                     logger.warning(
                         "DeFiLlama protocol %s summary failed for %s: %s",

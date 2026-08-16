@@ -48,7 +48,7 @@ async def test_include_historical_prefers_detail_and_fetches_fallback_in_paralle
         "https://api.llama.fi/protocol/aave-v3",
         "https://api.llama.fi/tvl/aave-v3",
         "https://api.llama.fi/summary/fees/aave-v3",
-        "https://api.llama.fi/summary/revenue/aave-v3",
+        "https://api.llama.fi/summary/fees/aave-v3?dataType=dailyRevenue",
     ]
 
 
@@ -265,8 +265,8 @@ async def test_include_historical_uses_rolling_value_for_incomplete_current_fee_
         ],
     }
 
-    async def _summary(_slug: str, metric: str):
-        if metric == "fees":
+    async def _summary(_slug: str, metric: str, data_type: str | None = None):
+        if metric == "fees" and data_type is None:
             return {"total24h": 300.0, "totalDataChart": chart}, None, None
         return None, "not_found", "revenue unavailable"
 
@@ -325,8 +325,8 @@ async def test_include_historical_uses_protocol_summary_series(monkeypatch):
         ],
     }
 
-    async def _summary(_slug: str, metric: str):
-        if metric == "fees":
+    async def _summary(_slug: str, metric: str, data_type: str | None = None):
+        if metric == "fees" and data_type is None:
             return (
                 {
                     "total24h": 150.0,
@@ -350,6 +350,59 @@ async def test_include_historical_uses_protocol_summary_series(monkeypatch):
     assert result["fees_7d_change_pct"] == pytest.approx(50.0)
     assert result["current_revenue_usd"] is None
     assert result["revenue_error_type"] == "upstream_error"
+
+
+@pytest.mark.anyio
+async def test_include_historical_fetches_revenue_via_fees_endpoint_with_daily_revenue(monkeypatch):
+    """Revenue must be requested through /summary/fees with dataType=dailyRevenue.
+
+    DeFiLlama has no /summary/revenue endpoint (it returns HTTP 500), so revenue
+    is served by the fees endpoint with the dailyRevenue dataType. This test
+    asserts the fetch is routed correctly and revenue values are extracted.
+    """
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    detail_payload = {
+        "tvl": [
+            {"date": 1700000000, "totalLiquidityUSD": 1000.0},
+            {"date": 1700086400, "totalLiquidityUSD": 1100.0},
+        ],
+    }
+
+    calls: list[tuple[str, str, str | None]] = []
+
+    async def _summary(slug: str, metric: str, data_type: str | None = None):
+        calls.append((slug, metric, data_type))
+        if metric == "fees" and data_type is None:
+            return (
+                {"total24h": 150.0, "totalDataChart": [[1700000000, 100.0], [1700086400, 150.0]]},
+                None,
+                None,
+            )
+        if metric == "fees" and data_type == "dailyRevenue":
+            return (
+                {"total24h": 75.0, "totalDataChart": [[1700000000, 50.0], [1700086400, 75.0]]},
+                None,
+                None,
+            )
+        return None, "upstream_error", "unexpected"
+
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_detail",
+        AsyncMock(return_value=detail_payload),
+    )
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_protocol_summary", _summary)
+
+    result = await get_protocol_tvl("liquity", include_historical=True, days=30)
+
+    assert ("liquity", "fees", None) in calls
+    assert ("liquity", "fees", "dailyRevenue") in calls
+    assert result["current_fees_usd"] == pytest.approx(150.0)
+    assert result["fees_7d_change_pct"] == pytest.approx(50.0)
+    assert result["current_revenue_usd"] == pytest.approx(75.0)
+    assert result["revenue_7d_change_pct"] == pytest.approx(50.0)
+    assert result["revenue_error_type"] is None
 
 
 @pytest.mark.anyio
