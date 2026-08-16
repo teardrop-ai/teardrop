@@ -170,6 +170,46 @@ class TestStoreRunDecision:
 
         assert stored is False
 
+    async def test_outcome_at_and_source_columns_are_not_swapped(self, test_settings):
+        """Regression: outcome_at must bind the CASE expression, source must bind $13.
+
+        A prior bug swapped these, inserting the source string (e.g. 'api') into the
+        TIMESTAMPTZ outcome_at column, which raised
+        ``invalid input syntax for type timestamp with time zone: "api"``.
+        """
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value={"id": "d-1"})
+
+        with patch.object(memory_module, "_pool", pool):
+            stored = await memory_module.store_run_decision(
+                org_id="org-1",
+                user_id="user-1",
+                run_id="run-1",
+                decision={"action": "a", "reasoning": "r"},
+                outcome=1,
+                outcome_source="auto",
+                source="schedule",
+            )
+
+        assert stored is True
+        call_args = pool.fetchrow.call_args.args
+        sql = call_args[0]
+
+        # Column list order: ... outcome, outcome_source, outcome_at, source, ...
+        columns = sql.split("(")[1].split(")")[0]
+        col_names = [c.strip().split()[0] for c in columns.split(",")]
+        outcome_at_idx = col_names.index("outcome_at")
+        source_idx = col_names.index("source")
+
+        # VALUES clause: $13 is the source param; outcome_at must be the CASE expr.
+        values = sql.split("VALUES")[1]
+        value_tokens = [v.strip() for v in values.split(",")]
+        assert value_tokens[outcome_at_idx] == "CASE WHEN $11::smallint = 0 THEN NULL ELSE NOW() END"
+        assert value_tokens[source_idx] == "$13"
+
+        # The source param ($13) must carry the normalized source value.
+        assert call_args[13] == "schedule"
+
 
 # ─── list_run_decisions ───────────────────────────────────────────────────────
 
