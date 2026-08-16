@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -248,6 +250,42 @@ async def test_include_historical_extracts_fees_and_revenue(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_include_historical_uses_rolling_value_for_incomplete_current_fee_day(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    today = datetime.now(timezone.utc).date()
+    start = datetime.combine(today - timedelta(days=30), datetime.min.time(), tzinfo=timezone.utc)
+    chart = [[int((start + timedelta(days=offset)).timestamp()), 100.0] for offset in range(31)]
+    chart[-8][1] = 400.0
+    chart[-1][1] = 0.0
+    detail_payload = {
+        "tvl": [
+            {"date": int(start.timestamp()), "totalLiquidityUSD": 1000.0},
+            {"date": int((start + timedelta(days=30)).timestamp()), "totalLiquidityUSD": 1100.0},
+        ],
+    }
+
+    async def _summary(_slug: str, metric: str):
+        if metric == "fees":
+            return {"total24h": 300.0, "totalDataChart": chart}, None, None
+        return None, "not_found", "revenue unavailable"
+
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_detail",
+        AsyncMock(return_value=detail_payload),
+    )
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_protocol_summary", _summary)
+
+    result = await get_protocol_tvl("liquity", include_historical=True, days=30)
+
+    assert result["current_fees_usd"] == pytest.approx(300.0)
+    assert result["fees_7d_change_pct"] == pytest.approx(-25.0)
+    assert result["fees_30d_change_pct"] == pytest.approx(200.0)
+    assert result["revenue_error_type"] == "not_found"
+
+
+@pytest.mark.anyio
 async def test_include_historical_fees_fail_open_when_absent(monkeypatch):
     monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
 
@@ -311,6 +349,47 @@ async def test_include_historical_uses_protocol_summary_series(monkeypatch):
     assert result["current_fees_usd"] == pytest.approx(150.0)
     assert result["fees_7d_change_pct"] == pytest.approx(50.0)
     assert result["current_revenue_usd"] is None
+    assert result["revenue_error_type"] == "upstream_error"
+
+
+@pytest.mark.anyio
+async def test_batch_protocols_compact_historical_payload(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    async def _fake_single(protocol: str | None = None, include_historical: bool = False, days: int = 30):
+        return {
+            "protocol": protocol,
+            "current_tvl_usd": 1000.0,
+            "tvl_7d_change_pct": 1.0,
+            "tvl_30d_change_pct": 2.0,
+            "chain_breakdown": [{"chain": "Ethereum", "tvl_usd": 1000.0}],
+            "historical_series": [{"date": "2026-08-16", "tvl_usd": 1000.0}],
+            "current_fees_usd": 10.0,
+            "fees_7d_change_pct": 1.0,
+            "fees_30d_change_pct": 2.0,
+            "current_revenue_usd": None,
+            "revenue_7d_change_pct": None,
+            "revenue_30d_change_pct": None,
+            "revenue_error_type": "upstream_error",
+            "note": "ok",
+            "error": None,
+            "error_type": None,
+            "provenance": None,
+        }
+
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._get_protocol_tvl_single", _fake_single)
+
+    result = await get_protocol_tvl(
+        protocols=["liquity", "railgun", "tornado-cash"],
+        include_historical=True,
+        days=30,
+    )
+
+    assert len(result) == 3
+    assert all(item["chain_breakdown"] == [] for item in result)
+    assert all(item["historical_series"] is None for item in result)
+    assert all(item["current_fees_usd"] == 10.0 for item in result)
+    assert len(json.dumps(result)) < 4000
 
 
 @pytest.mark.anyio

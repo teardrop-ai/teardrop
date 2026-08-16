@@ -1333,6 +1333,39 @@ class TestToolExecutorNode:
         assert isinstance(result["messages"][0], ToolMessage)
         assert result["task_status"] == TaskStatus.PLANNING
 
+    async def test_truncated_protocol_batch_preserves_full_slots(self, test_settings):
+        test_settings.agent_max_tool_result_chars = 100
+        tool_call = {"id": "call-1", "name": "get_protocol_tvl", "args": {"protocols": ["liquity"]}}
+        last_msg = _make_ai_message(tool_calls=[tool_call])
+        payload = [
+            {
+                "protocol": "liquity",
+                "current_tvl_usd": 1000.0,
+                "tvl_7d_change_pct": 1.0,
+                "tvl_30d_change_pct": 2.0,
+                "current_fees_usd": 300.0,
+                "fees_7d_change_pct": -25.0,
+                "fees_30d_change_pct": 200.0,
+                "current_revenue_usd": None,
+                "revenue_7d_change_pct": None,
+                "revenue_30d_change_pct": None,
+                "revenue_error_type": "upstream_error",
+                "chain_breakdown": [],
+                "historical_series": None,
+                "note": "ok",
+            }
+        ]
+        mock_tool = MagicMock()
+        mock_tool.ainvoke = AsyncMock(return_value=payload)
+
+        state = _make_state(messages=[last_msg])
+        with patch.object(nodes_module, "_cached_tools_by_name", {"get_protocol_tvl": mock_tool}):
+            result = await tool_executor_node(state)
+
+        assert "TRUNCATED" in result["messages"][0].content
+        assert result["slots"]["tvl"]["liquity"]["current_fees_usd"] == 300.0
+        assert result["slots"]["tvl"]["liquity"]["revenue_error_type"] == "upstream_error"
+
     async def test_failed_tool_does_not_abort_other_tools(self, test_settings):
         """One failing tool should return an error ToolMessage, not raise."""
         calls = [

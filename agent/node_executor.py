@@ -161,6 +161,7 @@ async def _execute_single_tool(
         "name": tool_name,
         "elapsed_ms": elapsed,
         "content": content,
+        "full_content": result.content,
         "billable": result.billable,
         "error_class": result.error_class,
     }
@@ -538,7 +539,11 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
 
     slots = dict(state.slots)
     for res in results:
-        slots = summarize_into_slots(res["name"], str(res.get("content", "")), slots)
+        slots = summarize_into_slots(
+            res["name"],
+            str(res.get("full_content", res.get("content", ""))),
+            slots,
+        )
 
     next_plan = plan
     if using_plan and plan is not None:

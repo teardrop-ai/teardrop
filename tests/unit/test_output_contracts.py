@@ -233,6 +233,7 @@ def test_fallback_is_machine_parseable_and_explicitly_insufficient():
 
     assert payload["task_class"] == ETH_PRIMITIVE_FEES_TASK
     assert payload["schema_version"] == 1
+    assert payload["generated_at"]
     assert payload["contract_status"] == "validation_failed"
     assert payload["data_gaps"] == ["OUTPUT_CONTRACT_VALIDATION_FAILED"]
     assert summary == "No labels emitted because the output contract could not be validated."

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +121,7 @@ def build_contract_failure(contract: OutputContract) -> str:
     payload = {
         "task_class": contract.task_class,
         "schema_version": contract.schema_version,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "contract_status": "validation_failed",
         "data_gaps": ["OUTPUT_CONTRACT_VALIDATION_FAILED"],
     }

@@ -127,6 +127,13 @@ def _write_get_protocol_tvl(payload: dict[str, Any], slots: dict[str, Any]) -> d
         "current_tvl_usd": payload.get("current_tvl_usd"),
         "tvl_7d_change_pct": payload.get("tvl_7d_change_pct"),
         "tvl_30d_change_pct": payload.get("tvl_30d_change_pct"),
+        "current_fees_usd": payload.get("current_fees_usd"),
+        "fees_7d_change_pct": payload.get("fees_7d_change_pct"),
+        "fees_30d_change_pct": payload.get("fees_30d_change_pct"),
+        "current_revenue_usd": payload.get("current_revenue_usd"),
+        "revenue_7d_change_pct": payload.get("revenue_7d_change_pct"),
+        "revenue_30d_change_pct": payload.get("revenue_30d_change_pct"),
+        "revenue_error_type": payload.get("revenue_error_type"),
         "note": payload.get("note"),
     }
     slots["tvl"] = tvl

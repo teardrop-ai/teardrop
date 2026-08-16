@@ -35,6 +35,9 @@ def test_summarize_protocol_tvl_into_slots():
     payload = (
         '{"protocol":"aave","current_tvl_usd":12345.67,'
         '"tvl_7d_change_pct":1.25,"tvl_30d_change_pct":-3.5,'
+        '"current_fees_usd":100.0,"fees_7d_change_pct":2.5,"fees_30d_change_pct":-1.5,'
+        '"current_revenue_usd":50.0,"revenue_7d_change_pct":1.5,"revenue_30d_change_pct":-0.5,'
+        '"revenue_error_type":"upstream_error",'
         '"chain_breakdown":[{"chain":"Ethereum","tvl_usd":1000}],'
         '"historical_series":[{"date":"2026-05-01","tvl_usd":1000}],'
         '"note":"ok"}'
@@ -45,6 +48,10 @@ def test_summarize_protocol_tvl_into_slots():
     assert slots["tvl"]["aave"]["current_tvl_usd"] == 12345.67
     assert slots["tvl"]["aave"]["tvl_7d_change_pct"] == 1.25
     assert slots["tvl"]["aave"]["tvl_30d_change_pct"] == -3.5
+    assert slots["tvl"]["aave"]["current_fees_usd"] == 100.0
+    assert slots["tvl"]["aave"]["fees_7d_change_pct"] == 2.5
+    assert slots["tvl"]["aave"]["current_revenue_usd"] == 50.0
+    assert slots["tvl"]["aave"]["revenue_error_type"] == "upstream_error"
     assert slots["tvl"]["aave"]["note"] == "ok"
     assert "chain_breakdown" not in slots["tvl"]["aave"]
     assert "historical_series" not in slots["tvl"]["aave"]

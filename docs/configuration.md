@@ -24,6 +24,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `AGENT_LLM_TIMEOUT_SECONDS` | Timeout in seconds for the planner LLM call (default: `180`). |
 | `AGENT_TOOL_EXECUTOR_TIMEOUT_SECONDS` | Timeout in seconds for the overall tool execution node (default: `120`). |
 | `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
+| `AGENT_MAX_TOOL_RESULT_CHARS` | Maximum characters retained in each planner-visible tool message before bounded truncation (default: `8000`). Structured tool facts are summarized into planner slots before truncation. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |

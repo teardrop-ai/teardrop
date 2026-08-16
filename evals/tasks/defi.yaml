@@ -41,7 +41,7 @@
     "messages": [
       {
         "role": "user",
-        "content": "TASK_CLASS: eth_primitive_fees. Analyze liquity, railgun, tornado-cash, aave-v3, uniswap, lido, and makerdao using one batched get_protocol_tvl call with include_historical=true and days=30, plus one get_token_price call for LQTY, RAIL, TORN, AAVE, UNI, LDO, and MKR in USD. Return the exact JSON contract first, then --- and a short summary. Preserve nulls as DATA_GAP."
+        "content": "TASK_CLASS: eth_primitive_fees. Analyze liquity, railgun, tornado-cash, aave-v3, uniswap, lido, and makerdao using one batched get_protocol_tvl call with include_historical=true and days=30, plus one get_token_price call for LQTY, RAIL, TORN, AAVE, UNI, LDO, and MKR in USD. Verify that the returned protocol slug set contains all seven requested slugs; if a slug is absent, mark its fields DATA_GAP and do not infer that the batch was truncated unless the tool explicitly reports truncation. Return the exact JSON contract first, then --- and a short summary. Preserve nulls as DATA_GAP."
       }
     ],
     "expected_tool_calls": ["get_protocol_tvl", "get_token_price"],
@@ -60,7 +60,7 @@
     "max_duration_ms": 60000,
     "max_cost_usdc": 1000000,
     "scorer": "llm_judge",
-    "rubric": "Calls each required tool exactly once with the requested basket, emits a valid eth_primitive_fees JSON object before any summary text, includes all seven protocol rows, and records missing upstream fields explicitly instead of fabricating values."
+    "rubric": "Calls each required tool exactly once with the requested basket, verifies all seven returned protocol slugs before labeling, emits a valid eth_primitive_fees JSON object before any summary text, includes all seven protocol rows, and records missing upstream fields explicitly instead of fabricating values or attributing omissions to truncation without tool evidence."
   },
   {
     "id": "defi.entry_timing.001",

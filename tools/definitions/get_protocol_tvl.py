@@ -167,6 +167,7 @@ class GetProtocolTvlOutput(BaseModel):
     current_revenue_usd: float | None = None
     revenue_7d_change_pct: float | None = None
     revenue_30d_change_pct: float | None = None
+    revenue_error_type: str | None = None
     note: str
     error: str | None = None
     error_type: str | None = None
@@ -394,6 +395,30 @@ def _economic_current_value(payload: dict[str, Any] | None, series: list[tuple[s
     return series[-1][1] if series else None
 
 
+def _align_economic_series(payload: dict[str, Any] | None, series: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Replace an incomplete current-day zero with DeFiLlama's rolling value.
+
+    DeFiLlama can publish ``total24h`` before the current day's chart bucket is
+    populated. Using that zero as the denominator makes a valid protocol look
+    like it suffered a 100% collapse.
+    """
+    if not payload or not series:
+        return series
+
+    try:
+        rolling_value = float(payload.get("total24h"))
+    except (TypeError, ValueError):
+        return series
+    if rolling_value <= 0:
+        return series
+
+    latest_date, latest_value = series[-1]
+    current_date = datetime.now(timezone.utc).date().isoformat()
+    if latest_date == current_date and latest_value == 0:
+        return [*series[:-1], (latest_date, rolling_value)]
+    return series
+
+
 def _compute_change_pct(series: list[Any], days_ago: int) -> float | None:
     """Compute percentage change vs. N days ago from a sorted daily series.
 
@@ -578,6 +603,7 @@ async def _get_protocol_tvl_single(
 
         missing_metrics = [metric for metric in ("fees", "revenue") if not _extract_fee_series(detail, 365, metric)]
         summary_payloads: dict[str, dict[str, Any] | None] = {}
+        summary_error_types: dict[str, str] = {}
         if missing_metrics:
             summary_results = await asyncio.gather(
                 *(_fetch_protocol_summary(slug, metric) for metric in missing_metrics),
@@ -591,8 +617,11 @@ async def _get_protocol_tvl_single(
                         slug,
                         type(summary_result).__name__,
                     )
+                    summary_error_types[metric] = "upstream_error"
                 elif isinstance(summary_result, tuple):
                     summary_payloads[metric] = summary_result[0] if isinstance(summary_result[0], dict) else None
+                    if isinstance(summary_result[1], str):
+                        summary_error_types[metric] = summary_result[1]
                 elif isinstance(summary_result, dict):
                     summary_payloads[metric] = summary_result
 
@@ -614,8 +643,14 @@ async def _get_protocol_tvl_single(
         # the per-protocol summary payloads. Missing upstream data stays null.
         fees_payload = detail if _extract_fee_series(detail, 365, "fees") else summary_payloads.get("fees")
         revenue_payload = detail if _extract_fee_series(detail, 365, "revenue") else summary_payloads.get("revenue")
-        fees_full = _extract_fee_series(fees_payload or {}, 365, "fees")
-        revenue_full = _extract_fee_series(revenue_payload or {}, 365, "revenue")
+        fees_full = _align_economic_series(
+            fees_payload,
+            _extract_fee_series(fees_payload or {}, 365, "fees"),
+        )
+        revenue_full = _align_economic_series(
+            revenue_payload,
+            _extract_fee_series(revenue_payload or {}, 365, "revenue"),
+        )
         fees_7d = _compute_change_pct(fees_full, 7)
         fees_30d = _compute_change_pct(fees_full, 30)
         revenue_7d = _compute_change_pct(revenue_full, 7)
@@ -634,6 +669,7 @@ async def _get_protocol_tvl_single(
             current_revenue_usd=_economic_current_value(revenue_payload, revenue_full),
             revenue_7d_change_pct=revenue_7d,
             revenue_30d_change_pct=revenue_30d,
+            revenue_error_type=summary_error_types.get("revenue"),
             note=(
                 "TVL sourced from DeFiLlama. "
                 f"Historical series covers up to {_MAX_HISTORICAL_POINTS} daily points. "
@@ -698,7 +734,10 @@ async def get_protocol_tvl(
         for idx, slug in enumerate(batch_slugs):
             value = results.get(idx)
             if isinstance(value, dict):
-                output.append(value)
+                compact = dict(value)
+                compact["chain_breakdown"] = []
+                compact["historical_series"] = None
+                output.append(compact)
                 continue
             if isinstance(value, Exception):
                 output.append(
@@ -770,6 +809,9 @@ TOOL = ToolDefinition(
         "You can also batch multiple protocols via "
         "protocols=[...]. Supports 3,000+ protocols including Aave, "
         "Uniswap, Curve, Compound, Lido, MakerDAO, and more. "
+        "Batch responses retain one compact economic summary per requested protocol; "
+        "single-protocol calls include chain and historical detail. "
+        "A revenue_error_type identifies an upstream revenue lookup failure. "
         "Use the DeFiLlama slug format: 'aave-v3', 'uniswap-v3', 'curve-dex'. "
         "Common aliases such as 'spark-protocol' and 'compound' are auto-corrected."
     ),
