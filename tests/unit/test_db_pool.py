@@ -54,6 +54,55 @@ def test_connection_delegates_transaction_context() -> None:
     raw_connection.transaction.assert_called_once_with(force_rollback=True)
 
 
+async def test_connection_executemany_translates_and_reorders_rows() -> None:
+    cursor = MagicMock()
+    cursor.executemany = AsyncMock()
+    cursor_context = MagicMock()
+    cursor_context.__aenter__ = AsyncMock(return_value=cursor)
+    cursor_context.__aexit__ = AsyncMock(return_value=False)
+    raw_connection = MagicMock()
+    raw_connection.cursor.return_value = cursor_context
+
+    await PgConnection(raw_connection).executemany(
+        "INSERT INTO t (a, b) VALUES ($2, $1)",
+        [("one", 1), ("two", 2)],
+    )
+
+    cursor.executemany.assert_awaited_once_with(
+        "INSERT INTO t (a, b) VALUES (%s, %s)",
+        [(1, "one"), (2, "two")],
+    )
+    cursor_context.__aexit__.assert_awaited_once()
+
+
+async def test_connection_executemany_skips_empty_batch() -> None:
+    raw_connection = MagicMock()
+
+    await PgConnection(raw_connection).executemany("INSERT INTO t (a) VALUES ($1)", [])
+
+    raw_connection.cursor.assert_not_called()
+
+
+async def test_pool_executemany_delegates_to_acquired_connection() -> None:
+    raw_connection = MagicMock()
+    cursor = MagicMock()
+    cursor.executemany = AsyncMock()
+    cursor_context = MagicMock()
+    cursor_context.__aenter__ = AsyncMock(return_value=cursor)
+    cursor_context.__aexit__ = AsyncMock(return_value=False)
+    raw_connection.cursor.return_value = cursor_context
+    connection_context = MagicMock()
+    connection_context.__aenter__ = AsyncMock(return_value=raw_connection)
+    connection_context.__aexit__ = AsyncMock(return_value=False)
+    raw_pool = MagicMock()
+    raw_pool.connection.return_value = connection_context
+
+    await PgPool(raw_pool).executemany("INSERT INTO t (a) VALUES ($1)", [(1,), (2,)])
+
+    cursor.executemany.assert_awaited_once_with("INSERT INTO t (a) VALUES (%s)", [(1,), (2,)])
+    connection_context.__aexit__.assert_awaited_once()
+
+
 async def test_pool_acquire_wraps_connection() -> None:
     raw_connection = MagicMock()
     connection_context = MagicMock()

@@ -150,8 +150,37 @@ async def test_protocol_tvl_result_cache_refreshes_retrieval_metadata(monkeypatc
 
 
 def test_protocol_tvl_version_and_schema_include_provenance():
-    assert TOOL.version == "1.3.0"
+    assert TOOL.version == "1.3.1"
     assert "provenance" in TOOL.output_schema["anyOf"][0]["properties"]
+
+
+def test_protocol_tvl_output_schema_validates_single_and_batch_results():
+    """Regression: $defs must be hoisted to the schema root so $refs resolve."""
+    from jsonschema import Draft7Validator
+
+    from tools.definitions.get_protocol_tvl import GetProtocolTvlOutput
+
+    single = GetProtocolTvlOutput(
+        protocol="aave-v3",
+        current_tvl_usd=1000.0,
+        tvl_7d_change_pct=None,
+        tvl_30d_change_pct=None,
+        chain_breakdown=[],
+        historical_series=None,
+        note="ok",
+    ).model_dump()
+    single["provenance"] = {
+        "provider": "DeFiLlama",
+        "source_urls": ["https://api.llama.fi/tvl/aave-v3"],
+        "retrieved_at": "2026-08-16T00:00:00Z",
+        "source_fetched_at": None,
+        "cache_hit": False,
+        "cache_age_seconds": None,
+        "cache_ttl_seconds": 300,
+    }
+
+    Draft7Validator(TOOL.output_schema).validate(single)
+    Draft7Validator(TOOL.output_schema).validate([single])
 
 
 @pytest.mark.anyio

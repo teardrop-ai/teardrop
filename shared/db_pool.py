@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -73,6 +73,20 @@ class PgConnection:
             return None
         return next(iter(row.values()))
 
+    async def executemany(self, query: str, args_seq: Iterable[Sequence[Any]]) -> None:
+        """Execute the same query for a batch of argument rows.
+
+        Placeholder translation/reordering is applied per row so repeated or
+        sparse ``$N`` indexes behave the same as in ``execute``/``fetch``.
+        """
+        rows = [tuple(row) for row in args_seq]
+        if not rows:
+            return
+        translated, _ = _prepare_query(query, rows[0])
+        params = [_prepare_query(query, row)[1] for row in rows]
+        async with self._connection.cursor() as cursor:
+            await cursor.executemany(translated, params)
+
     def transaction(self, *args: Any, **kwargs: Any):
         return self._connection.transaction(*args, **kwargs)
 
@@ -103,6 +117,10 @@ class PgPool:
     async def fetchval(self, query: str, *args: Any) -> Any:
         async with self.acquire() as connection:
             return await connection.fetchval(query, *args)
+
+    async def executemany(self, query: str, args_seq: Iterable[Sequence[Any]]) -> None:
+        async with self.acquire() as connection:
+            await connection.executemany(query, args_seq)
 
     async def close(self) -> None:
         await self._pool.close()

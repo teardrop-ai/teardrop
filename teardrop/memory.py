@@ -147,8 +147,12 @@ async def _generate_embedding(text: str) -> list[float]:
 
 
 def _embedding_to_vector_text(embedding: list[float]) -> str:
-    """Serialize an embedding using pgvector's database text format."""
-    from pgvector.psycopg import Vector
+    """Serialize an embedding using pgvector's database text format.
+
+    Import from the top-level ``pgvector`` package: pgvector 0.5.0 removed the
+    re-exported classes from ``pgvector.psycopg`` (register functions only).
+    """
+    from pgvector import Vector
 
     return Vector(embedding).to_text()
 

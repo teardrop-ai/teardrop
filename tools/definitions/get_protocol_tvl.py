@@ -650,11 +650,36 @@ async def get_protocol_tvl(
     )
 
 
+def _build_output_schema() -> dict[str, Any]:
+    """Build the JSON Schema for single or batch results.
+
+    ``model_json_schema()`` emits ``$defs`` next to ``$ref: '#/$defs/...'``
+    pointers that resolve against the document root, so the defs must be
+    hoisted out of each ``anyOf`` branch to the top level — otherwise every
+    result fails contract validation with unresolvable references.
+    """
+    single = GetProtocolTvlOutput.model_json_schema()
+    defs = single.pop("$defs", {})
+    schema: dict[str, Any] = {
+        "anyOf": [
+            single,
+            {
+                "type": "array",
+                "items": single,
+                "minItems": 1,
+            },
+        ]
+    }
+    if defs:
+        schema["$defs"] = defs
+    return schema
+
+
 # ─── Tool definition ──────────────────────────────────────────────────────────
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
-    version="1.3.0",
+    version="1.3.1",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
         "Returns current TVL in USD, 7-day and 30-day percentage change, and a "
@@ -669,15 +694,6 @@ TOOL = ToolDefinition(
     ),
     tags=["defi", "tvl", "finance", "protocol", "defillama"],
     input_schema=GetProtocolTvlInput,
-    output_schema={
-        "anyOf": [
-            GetProtocolTvlOutput.model_json_schema(),
-            {
-                "type": "array",
-                "items": GetProtocolTvlOutput.model_json_schema(),
-                "minItems": 1,
-            },
-        ]
-    },
+    output_schema=_build_output_schema(),
     implementation=get_protocol_tvl,
 )
