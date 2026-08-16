@@ -129,6 +129,95 @@ async def test_stream_replaces_buffered_primary_text_on_planner_retry():
 
 
 @pytest.mark.anyio
+async def test_stream_uses_canonical_output_contract_message():
+    canonical = '{"task_class":"eth_primitive_fees"}\n---\nHealth: insufficient_data'
+    graph = _EventGraph(
+        [
+            {
+                "event": "on_chat_model_stream",
+                "run_id": "planner-attempt",
+                "metadata": {"langgraph_node": "planner"},
+                "data": {"chunk": SimpleNamespace(content="I have all the data I need.")},
+            },
+            {
+                "event": "on_chain_end",
+                "name": "planner",
+                "data": {
+                    "output": {
+                        "task_status": "generating_ui",
+                        "messages": [SimpleNamespace(content=canonical)],
+                        "metadata": {"_output_contract_active": True, "_output_contract_ok": True},
+                    }
+                },
+            },
+            {"event": "on_chain_end", "name": "ui_generator", "data": {"output": {}}},
+        ]
+    )
+
+    events = [
+        event
+        async for event in stream_graph_events(
+            graph=graph,
+            initial_state=_InitialState(),
+            config={},
+            run_id="run-1",
+            settings=SimpleNamespace(app_env="production"),
+            org_id="org-1",
+            payload={},
+            result={},
+        )
+    ]
+
+    text = "".join(json.loads(event["data"])["delta"] for event in events if event["event"] == "TEXT_MESSAGE_CONTENT")
+    assert text == canonical
+
+
+@pytest.mark.anyio
+async def test_stream_does_not_replace_prose_on_contract_failure():
+    """If the contract failed, the SSE layer must not replace buffered prose with the failure envelope."""
+    failure_text = '{"task_class":"eth_primitive_fees","contract_status":"validation_failed"}'
+    graph = _EventGraph(
+        [
+            {
+                "event": "on_chat_model_stream",
+                "run_id": "planner-attempt",
+                "metadata": {"langgraph_node": "planner"},
+                "data": {"chunk": SimpleNamespace(content="I have all the data I need.")},
+            },
+            {
+                "event": "on_chain_end",
+                "name": "planner",
+                "data": {
+                    "output": {
+                        "task_status": "generating_ui",
+                        "messages": [SimpleNamespace(content=failure_text)],
+                        "metadata": {"_output_contract_active": True, "_output_contract_ok": False},
+                    }
+                },
+            },
+            {"event": "on_chain_end", "name": "ui_generator", "data": {"output": {}}},
+        ]
+    )
+
+    events = [
+        event
+        async for event in stream_graph_events(
+            graph=graph,
+            initial_state=_InitialState(),
+            config={},
+            run_id="run-1",
+            settings=SimpleNamespace(app_env="production"),
+            org_id="org-1",
+            payload={},
+            result={},
+        )
+    ]
+
+    text = "".join(json.loads(event["data"])["delta"] for event in events if event["event"] == "TEXT_MESSAGE_CONTENT")
+    assert text == "I have all the data I need."
+
+
+@pytest.mark.anyio
 async def test_planner_text_is_dropped_when_turn_requests_tool_calls():
     """Planner prose streamed on a turn that ends EXECUTING (tool_calls present)
     is never flushed — the client sees empty_response even though tokens_out > 0.

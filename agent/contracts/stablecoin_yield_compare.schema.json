@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "teardrop://output-contracts/stablecoin_yield_compare/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_class", "schema_version", "generated_at", "data_gaps", "stables", "executive_summary", "basket_metrics", "spread", "winner", "prediction", "market_analysis"],
+  "$defs": {
+    "gap": {"enum": ["yield", "best_apy_pct", "best_protocol", "pool_tvl_usd", "apy_mean_30d", "apy_base_pct", "apy_reward_pct", "price", "market_cap_usd", "volume_24h", "change_24h_pct"]},
+    "top_yield": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["symbol", "protocol", "apy_pct"],
+      "properties": {
+        "symbol": {"type": "string"},
+        "protocol": {"type": "string"},
+        "apy_pct": {"type": "number"}
+      }
+    }
+  },
+  "properties": {
+    "task_class": {"const": "stablecoin_yield_compare"},
+    "schema_version": {"const": 1},
+    "generated_at": {"type": ["string", "null"]},
+    "data_gaps": {"type": "array", "items": {"$ref": "#/$defs/gap"}, "uniqueItems": true},
+    "stables": {
+      "type": "array",
+      "minItems": 15,
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "basket", "best_apy_pct", "best_protocol", "pool_tvl_usd", "apy_base_pct", "apy_reward_pct", "reward_dominated", "price_usd", "market_cap_usd", "peg_deviation_bps", "peg_deviation", "data_gaps"],
+        "properties": {
+          "symbol": {"enum": ["LUSD", "BOLD", "crvUSD", "GHO", "DAI", "USDT", "USDC", "PYUSD", "RLUSD", "USDG", "USD1", "FDUSD", "TUSD", "USDP", "USDS"]},
+          "basket": {"enum": ["decentralized", "centralized"]},
+          "best_apy_pct": {"type": ["number", "null"]},
+          "best_protocol": {"type": ["string", "null"]},
+          "pool_tvl_usd": {"type": ["number", "null"]},
+          "apy_base_pct": {"type": ["number", "null"]},
+          "apy_reward_pct": {"type": ["number", "null"]},
+          "reward_dominated": {"type": ["boolean", "null"]},
+          "price_usd": {"type": ["number", "null"]},
+          "market_cap_usd": {"type": ["number", "null"]},
+          "peg_deviation_bps": {"type": ["number", "null"]},
+          "peg_deviation": {"type": ["boolean", "null"]},
+          "data_gaps": {"type": "array", "items": {"$ref": "#/$defs/gap"}, "uniqueItems": true}
+        }
+      }
+    },
+    "executive_summary": {"type": "string"},
+    "basket_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decentralized_avg_apy_pct", "centralized_avg_apy_pct", "spread_pct", "top_yield_decentralized", "top_yield_centralized", "decentralized_peg_health", "centralized_peg_health", "decentralized_reward_dominated", "centralized_reward_dominated"],
+      "properties": {
+        "decentralized_avg_apy_pct": {"type": ["number", "null"]},
+        "centralized_avg_apy_pct": {"type": ["number", "null"]},
+        "spread_pct": {"type": ["number", "null"]},
+        "top_yield_decentralized": {"$ref": "#/$defs/top_yield"},
+        "top_yield_centralized": {"$ref": "#/$defs/top_yield"},
+        "decentralized_peg_health": {"type": ["integer", "null"]},
+        "centralized_peg_health": {"type": ["integer", "null"]},
+        "decentralized_reward_dominated": {"type": ["integer", "null"]},
+        "centralized_reward_dominated": {"type": ["integer", "null"]}
+      }
+    },
+    "spread": {"type": ["number", "null"]},
+    "winner": {"enum": ["decentralized", "centralized", "tie", null]},
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["next_week_spread_direction", "next_week_basket_winner", "confidence", "rationale", "spread_outcome"],
+      "properties": {
+        "next_week_spread_direction": {"enum": ["widen", "narrow", "stable", null]},
+        "next_week_basket_winner": {"enum": ["decentralized", "centralized", "tie", null]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "rationale": {"type": "string"},
+        "spread_outcome": {"enum": ["correct", "incorrect", null]}
+      }
+    },
+    "market_analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["yield_regime", "peg_stress", "notable_shift"],
+      "properties": {
+        "yield_regime": {"enum": ["decentralized_premium", "centralized_premium", "parity", "insufficient_data"]},
+        "peg_stress": {"enum": ["none", "decentralized", "centralized", "both", "insufficient_data"]},
+        "notable_shift": {"type": "string"}
+      }
+    }
+  }
+}

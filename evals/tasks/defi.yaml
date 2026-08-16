@@ -37,6 +37,89 @@
     "rubric": "Calls get_protocol_tvl and cites the current TVL figure."
   },
   {
+    "id": "defi.eth_primitive_fees.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "TASK_CLASS: eth_primitive_fees. Analyze liquity, railgun, tornado-cash, aave-v3, uniswap, lido, and makerdao using one batched get_protocol_tvl call with include_historical=true and days=30, plus one get_token_price call for LQTY, RAIL, TORN, AAVE, UNI, LDO, and MKR in USD. Return the exact JSON contract first, then --- and a short summary. Preserve nulls as DATA_GAP."
+      }
+    ],
+    "expected_tool_calls": ["get_protocol_tvl", "get_token_price"],
+    "expected_tool_args": {
+      "get_protocol_tvl": {
+        "protocols": ["liquity", "railgun", "tornado-cash", "aave-v3", "uniswap", "lido", "makerdao"],
+        "include_historical": true,
+        "days": 30
+      },
+      "get_token_price": {
+        "tokens": ["LQTY", "RAIL", "TORN", "AAVE", "UNI", "LDO", "MKR"],
+        "vs_currency": "usd"
+      }
+    },
+    "expected_text_contains": ["eth_primitive_fees", "protocols", "basket_summary"],
+    "max_duration_ms": 60000,
+    "max_cost_usdc": 1000000,
+    "scorer": "llm_judge",
+    "rubric": "Calls each required tool exactly once with the requested basket, emits a valid eth_primitive_fees JSON object before any summary text, includes all seven protocol rows, and records missing upstream fields explicitly instead of fabricating values."
+  },
+  {
+    "id": "defi.entry_timing.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "TASK_CLASS: entry_timing_test. OUTPUT_CONTRACT: entry_timing_test. Analyze the fixed ten-token basket using exactly one get_token_price_historical call with days=90, stats_only=true and one get_token_price call in USD. Return the contract JSON first, then --- and a report."
+      }
+    ],
+    "expected_tool_calls": ["get_token_price_historical", "get_token_price"],
+    "expected_tool_args": {
+      "get_token_price_historical": {
+        "tokens": ["proton-loan", "gains-network", "nosana", "liquity", "chain-2", "tornado-cash", "railgun", "aixbt", "venice-token", "orca"],
+        "days": 90,
+        "vs_currency": "usd",
+        "stats_only": true
+      },
+      "get_token_price": {
+        "tokens": ["proton-loan", "gains-network", "nosana", "liquity", "chain-2", "tornado-cash", "railgun", "aixbt", "venice-token", "orca"],
+        "vs_currency": "usd"
+      }
+    },
+    "expected_text_contains": ["entry_timing_test", "tokens", "actionable"],
+    "expected_json_shape": {"task_class": null, "schema_version": null, "tokens": null, "actionable": null},
+    "max_duration_ms": 60000,
+    "max_cost_usdc": 1000000,
+    "scorer": "json_shape",
+    "rubric": "Calls both market-data tools exactly once, emits the entry_timing_test JSON contract before the summary, preserves null data gaps, and provides exactly ten token rows."
+  },
+  {
+    "id": "defi.stablecoin_yield_compare.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "TASK_CLASS: stablecoin_yield_compare. OUTPUT_CONTRACT: stablecoin_yield_compare. Compare the fixed decentralized and centralized stablecoin baskets using exactly one get_yield_rates call and one get_token_price call. Return the contract JSON first, then --- and a report."
+      }
+    ],
+    "expected_tool_calls": ["get_yield_rates", "get_token_price"],
+    "expected_tool_args": {
+      "get_yield_rates": {
+        "stable_only": true,
+        "max_apy": 30,
+        "min_tvl_usd": 1000000,
+        "limit": 50,
+        "symbols_any": ["LUSD", "BOLD", "crvUSD", "GHO", "DAI", "USDT", "USDC", "PYUSD", "RLUSD", "USDG", "USD1", "FDUSD", "TUSD", "USDP", "USDS"]
+      },
+      "get_token_price": {
+        "tokens": ["LUSD", "BOLD", "crvUSD", "GHO", "DAI", "USDT", "USDC", "PYUSD", "RLUSD", "USDG", "USD1", "FDUSD", "TUSD", "USDP", "USDS"],
+        "vs_currency": "usd"
+      }
+    },
+    "expected_text_contains": ["stablecoin_yield_compare", "stables", "basket_metrics"],
+    "expected_json_shape": {"task_class": null, "schema_version": null, "stables": null, "basket_metrics": null, "prediction": null},
+    "max_duration_ms": 60000,
+    "max_cost_usdc": 1000000,
+    "scorer": "json_shape",
+    "rubric": "Calls both required tools exactly once, emits the stablecoin_yield_compare JSON contract before the summary, preserves nulls and gaps, and reports the fixed fifteen-symbol basket."
+  },
+  {
     "id": "defi.chain_health_landscape.001",
     "messages": [
       {

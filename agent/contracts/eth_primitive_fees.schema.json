@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "teardrop://output-contracts/eth_primitive_fees/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_class", "schema_version", "generated_at", "data_gaps", "label_definition", "basket_median_fee_to_fdv", "protocols", "basket_summary"],
+  "properties": {
+    "task_class": {"const": "eth_primitive_fees"},
+    "schema_version": {"const": 1},
+    "generated_at": {"type": "string"},
+    "data_gaps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "label_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["next_week_fee_direction", "cheap_expensive"],
+      "properties": {
+        "next_week_fee_direction": {"type": "string"},
+        "cheap_expensive": {"type": "string"}
+      }
+    },
+    "basket_median_fee_to_fdv": {"type": ["number", "null"]},
+    "protocols": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slug", "fees_7d_change_pct", "fees_30d_change_pct", "revenue_7d_change_pct", "revenue_30d_change_pct", "tvl_7d_change_pct", "fee_to_fdv", "price_24h_change_pct", "data_gaps", "prediction", "staking_link", "valuation_signal"],
+        "properties": {
+          "slug": {"enum": ["liquity", "railgun", "tornado-cash", "aave-v3", "uniswap", "lido", "makerdao"]},
+          "fees_7d_change_pct": {"type": ["number", "null"]},
+          "fees_30d_change_pct": {"type": ["number", "null"]},
+          "revenue_7d_change_pct": {"type": ["number", "null"]},
+          "revenue_30d_change_pct": {"type": ["number", "null"]},
+          "tvl_7d_change_pct": {"type": ["number", "null"]},
+          "fee_to_fdv": {"type": ["number", "null"]},
+          "price_24h_change_pct": {"type": ["number", "null"]},
+          "data_gaps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "prediction": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["next_week_fee_direction", "confidence", "rationale", "prediction_outcome"],
+            "properties": {
+              "next_week_fee_direction": {"enum": ["up", "down", "flat"]},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "rationale": {"type": "string"},
+              "prediction_outcome": {"enum": ["correct", "incorrect", null]}
+            }
+          },
+          "staking_link": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mechanism", "fee_trend_supports_yield", "reason"],
+            "properties": {
+              "mechanism": {"type": "string"},
+              "fee_trend_supports_yield": {"type": ["boolean", "null"]},
+              "reason": {"type": "string"}
+            }
+          },
+          "valuation_signal": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cheap_expensive", "reason"],
+            "properties": {
+              "cheap_expensive": {"enum": ["cheap", "expensive", "neutral", null]},
+              "reason": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "basket_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fees_30d_change_pct", "health_direction", "top_signal"],
+      "properties": {
+        "fees_30d_change_pct": {"type": ["number", "null"]},
+        "health_direction": {"enum": ["improving", "deteriorating", "mixed", "insufficient_data"]},
+        "top_signal": {"type": "string"}
+      }
+    }
+  }
+}

@@ -73,8 +73,13 @@ _SYMBOL_TO_ID: dict[str, str] = {
     "avax": "avalanche-2",
     "bnb": "binancecoin",
     "link": "chainlink",
+    "lqty": "liquity",
+    "rail": "railgun",
+    "torn": "tornado-cash",
     "uni": "uniswap",
     "aave": "aave",
+    "ldo": "lido-dao",
+    "mkr": "maker",
     "arb": "arbitrum",
     "op": "optimism",
     "doge": "dogecoin",
@@ -201,12 +206,12 @@ class GetTokenPriceOutput(BaseModel):
 
 async def _fetch_from_coingecko(ids: list[str], vs: str) -> dict[str, dict[str, Any]]:
     """Call CoinGecko for the given IDs. Returns raw per-ID data dict."""
-    url = (
-        f"https://api.coingecko.com/api/v3/simple/price"
-        f"?ids={','.join(ids)}&vs_currencies={vs}"
-        f"&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true"
-        f"&include_fully_diluted_valuation=true"
-    )
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {
+        "ids": ",".join(ids),
+        "vs_currency": vs,
+        "price_change_percentage": "24h",
+    }
     headers: dict[str, str] = {}
     try:
         api_key = get_settings().coingecko_api_key
@@ -217,9 +222,34 @@ async def _fetch_from_coingecko(ids: list[str], vs: str) -> dict[str, dict[str, 
 
     try:
         session = await get_coingecko_session()
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with session.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
             if resp.status == 200:
-                return await resp.json()
+                payload = await resp.json()
+                if isinstance(payload, dict):
+                    # Keep compatibility with cached fixtures and any legacy
+                    # proxy that still returns the simple-price shape.
+                    return payload
+                if not isinstance(payload, list):
+                    return {}
+
+                normalized: dict[str, dict[str, Any]] = {}
+                for item in payload:
+                    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                        continue
+                    coin_id = item["id"]
+                    normalized[coin_id] = {
+                        vs: item.get("current_price"),
+                        f"{vs}_market_cap": item.get("market_cap"),
+                        f"{vs}_24h_vol": item.get("total_volume"),
+                        f"{vs}_24h_change": item.get("price_change_percentage_24h"),
+                        f"{vs}_fully_diluted_valuation": item.get("fully_diluted_valuation"),
+                    }
+                return normalized
             logger.warning("CoinGecko returned status %d", resp.status)
     except Exception as exc:
         logger.warning("CoinGecko request failed: %s", exc)
@@ -283,7 +313,7 @@ async def get_token_price(tokens: list[str], vs_currency: str = "usd") -> dict[s
 
 TOOL = ToolDefinition(
     name="get_token_price",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "Get current price, 24h change, market cap, fully-diluted valuation, and "
         "volume for one or more "

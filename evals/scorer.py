@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
+
+from shared.json_output import extract_first_json_object
 
 
 def score_exact(expected: str, actual: str) -> float:
@@ -30,12 +31,10 @@ def score_not_contains(excluded_items: list[str], actual: str) -> float:
 
 
 def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
-    try:
-        payload = json.loads(actual)
-    except Exception:
+    extracted = extract_first_json_object(actual)
+    if extracted is None:
         return 0.0
-    if not isinstance(payload, dict):
-        return 0.0
+    payload, _, _ = extracted
 
     keys = list(expected_shape.keys())
     if not keys:

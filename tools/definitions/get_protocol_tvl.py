@@ -58,9 +58,18 @@ def _protocol_detail_url(slug: str) -> str:
     return f"{_DEFILLAMA_BASE_URL}/protocol/{slug}"
 
 
+def _protocol_summary_url(slug: str, metric: str) -> str:
+    return f"{_DEFILLAMA_BASE_URL}/summary/{metric}/{slug}"
+
+
 def _source_urls(slug: str, include_historical: bool) -> list[str]:
     if include_historical:
-        return [_protocol_detail_url(slug), _current_tvl_url(slug)]
+        return [
+            _protocol_detail_url(slug),
+            _current_tvl_url(slug),
+            _protocol_summary_url(slug, "fees"),
+            _protocol_summary_url(slug, "revenue"),
+        ]
     return [_current_tvl_url(slug)]
 
 
@@ -230,6 +239,39 @@ async def _fetch_protocol_detail(slug: str) -> tuple[dict[str, Any] | None, str 
     return None, "upstream_error", "DeFiLlama /protocol request failed"
 
 
+async def _fetch_protocol_summary(
+    slug: str,
+    metric: str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Call a DeFiLlama per-protocol economic summary endpoint."""
+    url = _protocol_summary_url(slug, metric)
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            session = await get_defillama_session()
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=_PROTOCOL_DETAIL_TIMEOUT_SECONDS)) as resp:
+                if resp.status == 200:
+                    payload = await resp.json()
+                    if isinstance(payload, dict):
+                        return payload, None, None
+                    return None, "malformed_response", f"DeFiLlama /summary/{metric} returned a non-object payload"
+                if resp.status == 404:
+                    return None, "not_found", f"DeFiLlama /summary/{metric} not found for protocol"
+                logger.warning("DeFiLlama /summary/%s returned status %d for %s", metric, resp.status, slug)
+                return None, "upstream_error", f"DeFiLlama /summary/{metric} returned HTTP {resp.status}"
+        except asyncio.TimeoutError:
+            logger.warning("DeFiLlama /summary/%s request timed out for %s", metric, slug)
+            return None, "timeout", f"DeFiLlama /summary/{metric} request timed out"
+        except (aiohttp.ClientPayloadError, aiohttp.ServerDisconnectedError) as exc:
+            if attempt >= _RETRY_ATTEMPTS:
+                logger.warning("DeFiLlama /summary/%s request failed for %s: %s", metric, slug, type(exc).__name__)
+                return None, "upstream_error", f"DeFiLlama /summary/{metric} request failed: {type(exc).__name__}"
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+        except Exception as exc:
+            logger.warning("DeFiLlama /summary/%s request failed for %s: %s", metric, slug, type(exc).__name__)
+            return None, "upstream_error", f"DeFiLlama /summary/{metric} request failed: {type(exc).__name__}"
+    return None, "upstream_error", f"DeFiLlama /summary/{metric} request failed"
+
+
 # ─── Data extraction helpers ──────────────────────────────────────────────────
 
 
@@ -304,21 +346,26 @@ def _extract_historical_series(detail: dict[str, Any], days: int) -> list[DailyT
 def _extract_fee_series(detail: dict[str, Any], days: int, field: str) -> list[tuple[str, float]]:
     """Extract a daily series for a DeFiLlama economic field (``fees``/``revenue``).
 
-    The field is a list of ``{date: unix_timestamp, <field>: float}``. We
-    deduplicate to one-per-day (last entry wins), trim to the requested window,
-    and cap at _MAX_HISTORICAL_POINTS. Returns ``[(date, value), ...]`` sorted
-    ascending, or ``[]`` when the field is absent/empty.
+    Protocol detail responses use ``{date: unix_timestamp, <field>: float}``,
+    while summary responses use ``[unix_timestamp, value]`` in ``totalDataChart``.
+    Both forms are normalized to ``[(date, value), ...]``.
     """
     raw: list[Any] = detail.get(field, [])
+    if not isinstance(raw, list) or not raw:
+        raw = detail.get("totalDataChart", [])
     if not isinstance(raw, list):
         return []
 
     by_day: dict[str, float] = {}
     for entry in raw:
         if not isinstance(entry, dict):
-            continue
-        ts = entry.get("date")
-        value = entry.get(field)
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                ts, value = entry[0], entry[1]
+            else:
+                continue
+        else:
+            ts = entry.get("date")
+            value = entry.get(field)
         if ts is None or value is None:
             continue
         try:
@@ -334,6 +381,17 @@ def _extract_fee_series(detail: dict[str, Any], days: int, field: str) -> list[t
     if len(sorted_days) > _MAX_HISTORICAL_POINTS:
         sorted_days = sorted_days[-_MAX_HISTORICAL_POINTS:]
     return sorted_days
+
+
+def _economic_current_value(payload: dict[str, Any] | None, series: list[tuple[str, float]]) -> float | None:
+    if payload is not None:
+        value = payload.get("total24h")
+        try:
+            if value is not None:
+                return float(value)
+        except (TypeError, ValueError):
+            pass
+    return series[-1][1] if series else None
 
 
 def _compute_change_pct(series: list[Any], days_ago: int) -> float | None:
@@ -518,6 +576,26 @@ async def _get_protocol_tvl_single(
             _tvl_cache[cache_key] = (now + 60, result)  # short TTL for error/not-found results
             return result
 
+        missing_metrics = [metric for metric in ("fees", "revenue") if not _extract_fee_series(detail, 365, metric)]
+        summary_payloads: dict[str, dict[str, Any] | None] = {}
+        if missing_metrics:
+            summary_results = await asyncio.gather(
+                *(_fetch_protocol_summary(slug, metric) for metric in missing_metrics),
+                return_exceptions=True,
+            )
+            for metric, summary_result in zip(missing_metrics, summary_results):
+                if isinstance(summary_result, Exception):
+                    logger.warning(
+                        "DeFiLlama protocol %s summary failed for %s: %s",
+                        metric,
+                        slug,
+                        type(summary_result).__name__,
+                    )
+                elif isinstance(summary_result, tuple):
+                    summary_payloads[metric] = summary_result[0] if isinstance(summary_result[0], dict) else None
+                elif isinstance(summary_result, dict):
+                    summary_payloads[metric] = summary_result
+
         chain_breakdown = _extract_chain_breakdown(detail)
         historical_series = _extract_historical_series(detail, days)
 
@@ -532,9 +610,12 @@ async def _get_protocol_tvl_single(
         tvl_7d = _compute_change_pct(sorted_full, 7)
         tvl_30d = _compute_change_pct(sorted_full, 30)
 
-        # Economic series (fees/revenue) — fail-open: None when absent.
-        fees_full = _extract_fee_series(detail, 365, "fees")
-        revenue_full = _extract_fee_series(detail, 365, "revenue")
+        # Economic series — use legacy detail fields when present, otherwise
+        # the per-protocol summary payloads. Missing upstream data stays null.
+        fees_payload = detail if _extract_fee_series(detail, 365, "fees") else summary_payloads.get("fees")
+        revenue_payload = detail if _extract_fee_series(detail, 365, "revenue") else summary_payloads.get("revenue")
+        fees_full = _extract_fee_series(fees_payload or {}, 365, "fees")
+        revenue_full = _extract_fee_series(revenue_payload or {}, 365, "revenue")
         fees_7d = _compute_change_pct(fees_full, 7)
         fees_30d = _compute_change_pct(fees_full, 30)
         revenue_7d = _compute_change_pct(revenue_full, 7)
@@ -547,10 +628,10 @@ async def _get_protocol_tvl_single(
             tvl_30d_change_pct=tvl_30d,
             chain_breakdown=chain_breakdown,
             historical_series=historical_series,
-            current_fees_usd=fees_full[-1][1] if fees_full else None,
+            current_fees_usd=_economic_current_value(fees_payload, fees_full),
             fees_7d_change_pct=fees_7d,
             fees_30d_change_pct=fees_30d,
-            current_revenue_usd=revenue_full[-1][1] if revenue_full else None,
+            current_revenue_usd=_economic_current_value(revenue_payload, revenue_full),
             revenue_7d_change_pct=revenue_7d,
             revenue_30d_change_pct=revenue_30d,
             note=(
@@ -679,7 +760,7 @@ def _build_output_schema() -> dict[str, Any]:
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
-    version="1.3.1",
+    version="1.4.0",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
         "Returns current TVL in USD, 7-day and 30-day percentage change, and a "

@@ -143,6 +143,11 @@ Tool use economy:
 Final synthesis style:
     - Keep synthesis concise and focused; avoid decorative markdown tables unless
         the user explicitly asks for tables.
+    - If the user specifies an OUTPUT_CONTRACT, emit the contract's raw JSON
+        object as the first response characters, followed by the requested
+        separator and human summary. Do not emit a preamble or JSON code fence.
+        Preserve nulls and never invent values; the contract validator will
+        reject extra keys or malformed objects.
     - Prefer short bullet sections and omit empty sections.
     - Cap yield recommendations to the top 5 relevant pools.
     - When tool results include specific numerical values (interest rates, APY,

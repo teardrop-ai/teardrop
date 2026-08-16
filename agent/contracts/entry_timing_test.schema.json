@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "teardrop://output-contracts/entry_timing_test/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_class", "schema_version", "generated_at", "data_gaps", "tokens", "actionable", "executive_summary", "summary"],
+  "properties": {
+    "task_class": {"const": "entry_timing_test"},
+    "schema_version": {"const": 1},
+    "generated_at": {"type": ["string", "null"]},
+    "data_gaps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "tokens": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "has_staking", "current_price_usd", "drawdown_pct", "volatility", "dca_baseline_price_usd", "signal_vs_dca", "signal", "entry_price_usd", "stop_price_usd", "volume_24h", "market_cap_usd", "confidence", "entry_outcome", "data_gaps"],
+        "properties": {
+          "id": {"type": "string"},
+          "has_staking": {"type": "integer", "enum": [0, 1]},
+          "current_price_usd": {"type": ["number", "null"]},
+          "drawdown_pct": {"type": ["number", "null"]},
+          "volatility": {"type": ["number", "null"]},
+          "dca_baseline_price_usd": {"type": ["number", "null"]},
+          "signal_vs_dca": {"type": ["boolean", "null"]},
+          "signal": {"enum": ["ENTRY", "HOLD", null]},
+          "entry_price_usd": {"type": ["number", "null"]},
+          "stop_price_usd": {"type": ["number", "null"]},
+          "volume_24h": {"type": ["number", "null"]},
+          "market_cap_usd": {"type": ["number", "null"]},
+          "confidence": {"enum": [1.0, 0.9, 0.8, 0.7, 0.5]},
+          "entry_outcome": {"enum": ["profitable", "stopped_out", "flat", null]},
+          "data_gaps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "actionable": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "entry_price_usd", "stop_price_usd", "staking_yield_note", "rationale"],
+        "properties": {
+          "id": {"type": "string"},
+          "entry_price_usd": {"type": ["number", "null"]},
+          "stop_price_usd": {"type": ["number", "null"]},
+          "staking_yield_note": {"type": "string"},
+          "rationale": {"type": "string"}
+        }
+      }
+    },
+    "executive_summary": {"type": "string"},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry_candidates", "risk_ranking", "notable_shift"],
+      "properties": {
+        "entry_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "drawdown_pct", "volatility", "has_staking", "confidence"],
+            "properties": {
+              "id": {"type": "string"},
+              "drawdown_pct": {"type": "number"},
+              "volatility": {"type": "number"},
+              "has_staking": {"type": "integer", "enum": [0, 1]},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        },
+        "risk_ranking": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"type": "string"}},
+        "notable_shift": {"type": "string"}
+      }
+    }
+  }
+}

@@ -167,6 +167,23 @@ async def stream_graph_events(
                 _ts = output.get("task_status", "")
                 status_ = (getattr(_ts, "value", None) or str(_ts)).strip().lower()
 
+                metadata = output.get("metadata") or {}
+                if metadata.get("_output_contract_active") and metadata.get("_output_contract_ok") is True:
+                    planner_messages = output.get("messages", [])
+                    planner_content = ""
+                    if planner_messages:
+                        last_planner_msg = planner_messages[-1]
+                        planner_content = (
+                            getattr(last_planner_msg, "content", "")
+                            if not isinstance(last_planner_msg, dict)
+                            else last_planner_msg.get("content", "")
+                        )
+                    _planner_token_buffer.clear()
+                    _text_filter = _A2UIStreamFilter()
+                    canonical_text = _coerce_stream_text(planner_content)
+                    if canonical_text:
+                        _planner_token_buffer.append((_last_msg_id, canonical_text))
+
                 if _should_flush_planner_buffer(status_):
                     emitted_chunks: list[tuple[str, str]] = []
                     for message_id, delta in _planner_token_buffer:

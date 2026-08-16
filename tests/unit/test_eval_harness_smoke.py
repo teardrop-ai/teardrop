@@ -3,6 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from evals.runner import RunArtifact, load_tasks, run_suite
+from evals.scorer import score_json_shape
+
+
+def test_json_shape_scoring_extracts_object_before_summary():
+    actual = '{"task_class":"entry_timing_test","schema_version":1}\n---\n## Report'
+
+    assert score_json_shape({"task_class": None, "schema_version": None}, actual) == 1.0
 
 
 async def test_forbidden_tool_calls_fail_task():

@@ -89,6 +89,11 @@ from agent.node_usage import (
     _accumulate_usage,
     _covered_defi_keys_from_result,  # noqa: F401  (re-exported for backward compatibility)
 )
+from agent.output_contracts import (
+    build_contract_failure,
+    detect_output_contract,
+    normalize_output,
+)
 from agent.planner_ir import parse_plan_from_text
 from agent.runtime_context import get_agent_run_context
 from agent.state import AgentState, TaskStatus
@@ -636,6 +641,52 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
                 )
                 response.tool_calls = []
 
+    output_contract = detect_output_contract(state.messages)
+    output_contract_active = output_contract is not None and not getattr(response, "tool_calls", None)
+    output_contract_ok = False
+    if output_contract_active and output_contract is not None:
+        normalized_output = normalize_output(output_contract, _ai_content_to_text(response.content))
+        if normalized_output is None:
+            logger.warning("planner_node: output contract validation failed; requesting one repair turn")
+            repair_messages = [
+                *messages,
+                response,
+                SystemMessage(content=output_contract.repair_prompt),
+            ]
+            repair_response = await _invoke_planner_llm(
+                active_llm,
+                repair_messages,
+                _timeout,
+                provider=response_provider,
+                model=response_model,
+            )
+            if not isinstance(repair_response, dict):
+                if not usage_already_recorded:
+                    state.metadata["_usage"] = _accumulate_usage(
+                        state,
+                        response,
+                        provider=response_provider,
+                        model=response_model,
+                    )
+                response = repair_response
+                usage_already_recorded = False
+                if getattr(response, "tool_calls", None):
+                    response.tool_calls = []
+                normalized_output = normalize_output(output_contract, _ai_content_to_text(response.content))
+                output_contract_ok = normalized_output is not None
+                if not output_contract_ok:
+                    response.content = build_contract_failure(output_contract)
+            else:
+                # Repair turn failed at the provider level; keep the original response
+                # but mark it as a contract failure so downstream consumers know.
+                response.content = build_contract_failure(output_contract)
+                output_contract_ok = False
+        else:
+            response.content = normalized_output
+            output_contract_ok = True
+        if getattr(response, "tool_calls", None):
+            response.tool_calls = []
+
     if not usage_already_recorded:
         usage = _accumulate_usage(state, response, provider=response_provider, model=response_model)
     else:
@@ -692,9 +743,15 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             _synthesis_forced,
         )
 
+    next_metadata = {**state.metadata, "_usage": usage, "_synthesis_forced": False}
+    if output_contract_active and output_contract is not None:
+        next_metadata["_output_contract"] = output_contract.task_class
+        next_metadata["_output_contract_active"] = True
+        next_metadata["_output_contract_ok"] = output_contract_ok
+
     return {
         "messages": [response],
         "task_status": next_status,
-        "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": False},
+        "metadata": next_metadata,
         "plan": next_plan,
     }

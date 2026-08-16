@@ -45,6 +45,8 @@ async def test_include_historical_prefers_detail_and_fetches_fallback_in_paralle
     assert result["provenance"]["source_urls"] == [
         "https://api.llama.fi/protocol/aave-v3",
         "https://api.llama.fi/tvl/aave-v3",
+        "https://api.llama.fi/summary/fees/aave-v3",
+        "https://api.llama.fi/summary/revenue/aave-v3",
     ]
 
 
@@ -150,7 +152,7 @@ async def test_protocol_tvl_result_cache_refreshes_retrieval_metadata(monkeypatc
 
 
 def test_protocol_tvl_version_and_schema_include_provenance():
-    assert TOOL.version == "1.3.1"
+    assert TOOL.version == "1.4.0"
     assert "provenance" in TOOL.output_schema["anyOf"][0]["properties"]
 
 
@@ -261,6 +263,10 @@ async def test_include_historical_fees_fail_open_when_absent(monkeypatch):
         AsyncMock(return_value=detail_payload),
     )
     monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_summary",
+        AsyncMock(return_value=(None, "not_found", "missing")),
+    )
 
     result = await get_protocol_tvl("railgun", include_historical=True, days=30)
 
@@ -268,6 +274,43 @@ async def test_include_historical_fees_fail_open_when_absent(monkeypatch):
     assert result["fees_7d_change_pct"] is None
     assert result["current_revenue_usd"] is None
     assert result["revenue_30d_change_pct"] is None
+
+
+@pytest.mark.anyio
+async def test_include_historical_uses_protocol_summary_series(monkeypatch):
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._tvl_cache", {})
+
+    detail_payload = {
+        "tvl": [
+            {"date": 1700000000, "totalLiquidityUSD": 1000.0},
+            {"date": 1700086400, "totalLiquidityUSD": 1100.0},
+        ],
+    }
+
+    async def _summary(_slug: str, metric: str):
+        if metric == "fees":
+            return (
+                {
+                    "total24h": 150.0,
+                    "totalDataChart": [[1700000000, 100.0], [1700086400, 150.0]],
+                },
+                None,
+                None,
+            )
+        return None, "upstream_error", "revenue unavailable"
+
+    monkeypatch.setattr(
+        "tools.definitions.get_protocol_tvl._fetch_protocol_detail",
+        AsyncMock(return_value=detail_payload),
+    )
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_current_tvl", AsyncMock(return_value=9999.0))
+    monkeypatch.setattr("tools.definitions.get_protocol_tvl._fetch_protocol_summary", _summary)
+
+    result = await get_protocol_tvl("aave-v3", include_historical=True, days=30)
+
+    assert result["current_fees_usd"] == pytest.approx(150.0)
+    assert result["fees_7d_change_pct"] == pytest.approx(50.0)
+    assert result["current_revenue_usd"] is None
 
 
 @pytest.mark.anyio

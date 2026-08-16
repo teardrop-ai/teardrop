@@ -36,6 +36,19 @@ class TestResolveId:
         assert _resolve_id("eth") == "ethereum"
         assert _resolve_id("USDC") == "usd-coin"
 
+    def test_eth_primitive_symbols_use_canonical_ids(self):
+        expected_ids = {
+            "LQTY": "liquity",
+            "RAIL": "railgun",
+            "TORN": "tornado-cash",
+            "AAVE": "aave",
+            "UNI": "uniswap",
+            "LDO": "lido-dao",
+            "MKR": "maker",
+        }
+
+        assert {symbol: _resolve_id(symbol) for symbol in expected_ids} == expected_ids
+
     def test_stablecoin_basket_symbols_use_canonical_ids(self):
         expected_ids = {
             "LUSD": "liquity-usd",
@@ -190,10 +203,41 @@ class TestGetTokenPrice:
         with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
             result = await get_token_price(tokens=["BTC"])
 
+        request_args, request_kwargs = mock_session.get.call_args
+        assert request_args[0].endswith("/coins/markets")
+        assert request_kwargs["params"]["ids"] == "bitcoin"
+        assert request_kwargs["params"]["vs_currency"] == "usd"
         assert result["vs_currency"] == "usd"
         assert len(result["prices"]) == 1
         assert result["prices"][0]["price"] == 65000.0
         assert result["prices"][0]["symbol"] == "BTC"
+        assert result["prices"][0]["fully_diluted_valuation"] == 1_300_000_000_000
+
+    async def test_markets_payload_maps_fully_diluted_valuation(self, test_settings, monkeypatch):
+        monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})
+
+        mock_session = MagicMock()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(
+            return_value=[
+                {
+                    "id": "bitcoin",
+                    "current_price": 65000.0,
+                    "market_cap": 1_200_000_000_000,
+                    "total_volume": 30_000_000_000,
+                    "price_change_percentage_24h": 2.5,
+                    "fully_diluted_valuation": 1_300_000_000_000,
+                }
+            ]
+        )
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = MagicMock(return_value=mock_resp)
+
+        with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):
+            result = await get_token_price(tokens=["BTC"])
+
         assert result["prices"][0]["fully_diluted_valuation"] == 1_300_000_000_000
 
     async def test_api_failure_returns_none_prices(self, test_settings, monkeypatch):
@@ -216,7 +260,7 @@ class TestGetTokenPrice:
     async def test_resolves_unknown_symbol_via_coins_list(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})
 
-        coin_map = {"lqty": "liquity", "liquity": "liquity"}
+        coin_map = {"foo": "liquity", "liquity": "liquity"}
         mock_session = MagicMock()
         mock_resp = AsyncMock()
         mock_resp.status = 200
@@ -309,7 +353,7 @@ class TestGetTokenPrice:
     async def test_mixed_known_and_unknown_tokens(self, test_settings, monkeypatch):
         monkeypatch.setattr("tools.definitions.get_token_price._token_cache", {})
 
-        coin_map = {"lqty": "liquity", "liquity": "liquity"}
+        coin_map = {"foo": "liquity", "liquity": "liquity"}
         mock_load = AsyncMock(return_value=coin_map)
         mock_session = MagicMock()
         mock_resp = AsyncMock()
@@ -338,11 +382,11 @@ class TestGetTokenPrice:
 
         with patch("tools.definitions.get_token_price._load_coins_list_index", mock_load):
             with patch("tools.definitions.get_token_price.get_coingecko_session", new=AsyncMock(return_value=mock_session)):  # noqa: E501
-                result = await get_token_price(tokens=["BTC", "LQTY"])
+                result = await get_token_price(tokens=["BTC", "FOO"])
 
-        mock_load.assert_called_once()  # coins list fetched exactly once for LQTY
+        mock_load.assert_called_once()  # coins list fetched exactly once for FOO
         btc = next(p for p in result["prices"] if p["symbol"] == "BTC")
-        lqty = next(p for p in result["prices"] if p["symbol"] == "LQTY")
+        lqty = next(p for p in result["prices"] if p["symbol"] == "FOO")
         assert btc["price"] == 65000.0
         assert lqty["price"] == 2.45
         assert lqty["id"] == "liquity"

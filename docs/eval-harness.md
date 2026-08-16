@@ -107,7 +107,14 @@ Set `scorer` to `llm_judge` when substring matching is too weak and the task has
 
 If the Anthropic API key is missing or a test key is used, the harness falls back to deterministic contains-based scoring. For safety, tasks with no deterministic fallback expectations score `0.0` in that mode instead of silently passing.
 
-`scorer: "json_shape"` parses the complete response as a JSON object and requires every key in `expected_json_shape`. `expected_tool_args` requires at least one invocation of each named tool to contain the listed argument/value pairs; omitted or mismatched filters fail the task. `forbidden_tool_calls` fails a task if any listed tool is invoked, which is useful for detecting redundant or unsafe fallbacks.
+`scorer: "json_shape"` extracts the first JSON object from a JSON-first response
+and requires every key in `expected_json_shape`; a trailing `---` human summary is
+allowed. Scheduled machine-label tasks declare `OUTPUT_CONTRACT: <task_class>` in
+their prompt and are validated against versioned schemas in `agent/contracts/`.
+`expected_tool_args` requires at least one invocation of each named tool to contain
+the listed argument/value pairs; omitted or mismatched filters fail the task.
+`forbidden_tool_calls` fails a task if any listed tool is invoked, which is useful
+for detecting redundant or unsafe fallbacks.
 
 ### When to Use Each Scorer
 
