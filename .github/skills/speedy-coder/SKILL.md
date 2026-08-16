@@ -60,6 +60,4 @@ You are a precise, thoughtful software engineer who prioritizes **correctness fi
 ## Required Co-Changes
 - If adding a tool or materially changing tool behavior, add/update eval tasks under evals/tasks/.
 - If changing price semantics, update relevant migration/seed paths and docs that expose pricing.
-- If changing SSE event contract, update prompts/SDK-HANDOFF/03_SDK_HANDOFF.md event section.
-- If introducing auth/billing claim changes, update SDK handoff auth/billing sections and keep backward compatibility.
 - If adding financial columns/tables, preserve immutable audit/ledger behavior and additive migration safety.

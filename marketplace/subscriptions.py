@@ -150,7 +150,7 @@ async def get_subscribed_tools_catalog(
            AND t.name = split_part(s.qualified_tool_name, '/', 2)
         WHERE s.org_id = $1
           AND s.is_active = TRUE
-          AND s.qualified_tool_name LIKE '%/%'
+                    AND strpos(s.qualified_tool_name, '/') > 0
           AND t.publish_as_mcp = TRUE
           AND t.is_active = TRUE
         ORDER BY t.name

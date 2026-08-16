@@ -21,6 +21,8 @@ async def test_get_subscribed_tools_catalog_empty(monkeypatch):
     tools = await get_subscribed_tools_catalog("org-1")
 
     assert tools == []
+    query = mock_pool.fetch.call_args.args[0]
+    assert "strpos(s.qualified_tool_name, '/') > 0" in query
 
 
 @pytest.mark.anyio

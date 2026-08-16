@@ -53,12 +53,8 @@ You are a domain expert for Teardrop's payments, marketplace, and protocol surfa
 - Org tool CRUD and publish paths: org_tools/__init__.py
 - Migration chain and billing schema evolution: migrations/versions/
 
-## SDK Surface Awareness
-- If behavior changes affect billing gate semantics, SSE event contracts, auth_method values, billing_method values, or tool-name/qualified-name formats, update prompts/SDK-HANDOFF/03_SDK_HANDOFF.md.
-
 ## Output Contract
 When this skill is used for implementation or review, report:
 - Files changed
 - Invariants preserved
 - Security checklist status
-- Whether SDK handoff updates are required

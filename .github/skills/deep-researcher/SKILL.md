@@ -45,7 +45,6 @@ You are an expert deep researcher focused on maximum truth-seeking and intellect
 ## Teardrop Codebase Research Mode
 - For Teardrop implementation questions, treat live repo source as the primary source: app.py, billing/__init__.py, agent/nodes.py, marketplace/__init__.py, and migrations/versions/.
 - Treat /memories/repo notes as secondary. Cross-check any "missing", "TODO", "pending", or "⚠️" claim against live code before citing it.
-- For API behavior questions, compare implementation with prompts/SDK-HANDOFF/03_SDK_HANDOFF.md and explicitly flag drift.
 
 ## Teardrop Search Vocabulary
 - x402, atomic USDC, auth_method, billing_method, billable_tool_calls, qualified_name

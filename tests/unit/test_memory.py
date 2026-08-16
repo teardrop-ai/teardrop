@@ -73,6 +73,9 @@ class TestStoreMemory:
         assert entry is not None
         assert entry.content == "a fact"
         assert pool.fetchrow.call_count == 2
+        insert_args = pool.fetchrow.call_args_list[1].args
+        assert "$5::vector" in insert_args[0]
+        assert insert_args[5].startswith("[")
 
     async def test_returns_none_when_limit_reached(self, test_settings):
         pool = _pool()
@@ -145,6 +148,9 @@ class TestRecallMemories:
 
         assert len(results) == 1
         assert results[0].content == "fact one"
+        query_args = pool.fetch.call_args.args
+        assert "embedding <=> $2::vector" in query_args[0]
+        assert query_args[2].startswith("[")
 
     async def test_returns_empty_on_error(self, test_settings):
         pool = _pool()

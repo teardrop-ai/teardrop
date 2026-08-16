@@ -58,7 +58,9 @@ The main streaming endpoint `POST /agent/run` returns a live Server-Sent Events 
 | Event | When |
 |-------|------|
 | `RUN_STARTED` | Immediately on executing the request |
+| `TEXT_MESSAGE_START` | Before the first text/assistant token chunk of a message |
 | `TEXT_MESSAGE_CONTENT` | Each text/assistant token chunk received from the provider |
+| `TEXT_MESSAGE_END` | After the final text/assistant token chunk of a message |
 | `TOOL_CALL_START` | Before a tool begins execution |
 | `TOOL_CALL_END` | After a tool returns output |
 | `SURFACE_UPDATE` | When A2UI components are ready |
@@ -67,19 +69,21 @@ The main streaming endpoint `POST /agent/run` returns a live Server-Sent Events 
 | `RUN_FINISHED` | Sent when the agent finishes normally |
 | `ERROR` | Sent on unhandled graph exceptions |
 | `DONE` | Sent immediately before connection closure |
+| `Custom` | Application-defined structured payloads (e.g. tool output, agent warnings) |
+
+`STATE_SNAPSHOT` is a reserved AG-UI event type but is not currently emitted.
 
 ---
 
 ## A2UI Component System (`agent/state.py`)
 
-The agent can return structured UI models alongside text. The current schema supports the following schema types in `A2UIComponent`:
+The agent can return structured UI models alongside text. `A2UIComponent` is a generic, recursive model — each component carries a `type` tag, a free-form `props` dict, and nested `children`:
 
-| Type | Properties |
-|------|------------|
-| `text` | `content`, `variant` (`body` \| `heading` \| `caption`) |
-| `table` | `columns`, `rows` |
-| `columns` | `children` |
-| `rows` | `children` |
-| `form` | `fields`, `submit_label` |
-| `button` | `label`, `action` |
-| `progress` | `value` (0–100), `label` |
+```python
+class A2UIComponent(BaseModel):
+    type: str = Field(..., description="Component type: text|table|columns|rows|form|button|progress")
+    props: dict[str, Any] = Field(default_factory=dict, description="Component properties")
+    children: list["A2UIComponent"] = Field(default_factory=list, description="Nested children")
+```
+
+The supported `type` values are `text`, `table`, `columns`, `rows`, `form`, `button`, and `progress`. Property shapes are not statically typed per component type — they are carried in the free-form `props` dict (e.g. `text` uses `content`/`variant`; `form` uses `fields`/`submit_label`; `button` uses `label`/`action`; `progress` uses `value`/`label`). The `ui_generator` node (`agent/node_ui.py`) either extracts A2UI JSON from the assistant message (`_extract_a2ui_from_text` / `_parse_a2ui_json`) or generates it, then binds the resulting components to the state.

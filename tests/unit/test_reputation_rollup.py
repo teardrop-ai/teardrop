@@ -25,6 +25,8 @@ class TestReputationRollupOnce:
 
         assert count == 0
         mock_pool.execute.assert_not_called()
+        query = mock_pool.fetch.call_args.args[0]
+        assert "strpos(tool_name, '/') > 0" in query
 
     @pytest.mark.anyio
     async def test_upserts_computed_reputation_score(self, monkeypatch):

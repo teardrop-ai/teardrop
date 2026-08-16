@@ -244,7 +244,7 @@ async def reputation_rollup_once() -> int:
         ),
         normalized_events AS (
             SELECT
-                CASE WHEN tool_name LIKE '%/%' THEN tool_name ELSE 'platform/' || tool_name END
+                CASE WHEN strpos(tool_name, '/') > 0 THEN tool_name ELSE 'platform/' || tool_name END
                     AS qualified_tool_name,
                 org_id,
                 success,

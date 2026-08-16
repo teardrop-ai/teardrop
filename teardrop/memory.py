@@ -146,6 +146,13 @@ async def _generate_embedding(text: str) -> list[float]:
     return await asyncio.get_event_loop().run_in_executor(None, _call)
 
 
+def _embedding_to_vector_text(embedding: list[float]) -> str:
+    """Serialize an embedding using pgvector's database text format."""
+    from pgvector.psycopg import Vector
+
+    return Vector(embedding).to_text()
+
+
 async def has_memories_cached(org_id: str) -> bool:
     """Return whether the org likely has memories, using a short-lived cache."""
     now = time.monotonic()
@@ -218,7 +225,7 @@ async def store_memory(
         if settings.memory_ttl_days > 0:
             expires_at = datetime.now(timezone.utc) + timedelta(days=settings.memory_ttl_days)
 
-        embedding = await _generate_embedding(content)
+        embedding = _embedding_to_vector_text(await _generate_embedding(content))
         entry = MemoryEntry(
             org_id=org_id,
             user_id=user_id,
@@ -231,7 +238,7 @@ async def store_memory(
             INSERT INTO org_memories
                 (id, org_id, user_id, content, embedding, source_run_id,
                  content_hash, expires_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
             ON CONFLICT (org_id, content_hash) WHERE content_hash IS NOT NULL
             DO NOTHING
             RETURNING id
@@ -277,7 +284,7 @@ async def recall_memories(
             return []
 
         pool = _get_pool()
-        query_embedding = await _generate_embedding(query_text)
+        query_embedding = _embedding_to_vector_text(await _generate_embedding(query_text))
 
         rows = await pool.fetch(
             """
@@ -285,7 +292,7 @@ async def recall_memories(
             FROM org_memories
             WHERE org_id = $1
               AND (expires_at IS NULL OR expires_at > NOW())
-            ORDER BY embedding <=> $2
+            ORDER BY embedding <=> $2::vector
             LIMIT $3
             """,
             org_id,
