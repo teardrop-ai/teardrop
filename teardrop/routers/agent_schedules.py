@@ -31,7 +31,7 @@ settings = get_settings()
 
 class CreateScheduledRunRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    prompt: str = Field(..., min_length=1, max_length=8_000)
+    prompt: str = Field(..., min_length=1, max_length=12_000)
     interval_seconds: int = Field(..., ge=1)
     callback_url: str | None = Field(default=None, max_length=2048)
     first_run_at: datetime | None = None
@@ -39,7 +39,7 @@ class CreateScheduledRunRequest(BaseModel):
 
 class UpdateScheduledRunRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    prompt: str | None = Field(default=None, min_length=1, max_length=8_000)
+    prompt: str | None = Field(default=None, min_length=1, max_length=12_000)
     interval_seconds: int | None = Field(default=None, ge=1)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)

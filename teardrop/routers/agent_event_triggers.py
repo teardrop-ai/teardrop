@@ -79,13 +79,13 @@ _pending_event_tasks: set[asyncio.Task] = set()
 
 class CreateEventTriggerRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    prompt: str = Field(..., min_length=1, max_length=8_000)
+    prompt: str = Field(..., min_length=1, max_length=12_000)
     callback_url: str | None = Field(default=None, max_length=2048)
 
 
 class UpdateEventTriggerRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    prompt: str | None = Field(default=None, min_length=1, max_length=8_000)
+    prompt: str | None = Field(default=None, min_length=1, max_length=12_000)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
 
