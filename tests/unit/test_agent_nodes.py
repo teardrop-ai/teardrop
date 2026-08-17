@@ -6,6 +6,7 @@ No real LLM calls or tool executions; all external interactions are mocked.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1469,6 +1470,32 @@ class TestToolExecutorNode:
         assert by_name["failing_tool"]["success"] is False
         assert by_name["failing_tool"]["error_class"]
         assert by_name["failing_tool"]["billable"] is False
+
+    async def test_tool_call_log_captures_args_only_for_opt_in_tools(self, test_settings):
+        calls = [
+            {"id": "c1", "name": "record_predictions", "args": {"predictions": {"value": 1}}},
+            {"id": "c2", "name": "calculate", "args": {"expression": "2+2"}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        prediction_tool = MagicMock()
+        prediction_tool.ainvoke = AsyncMock(return_value={"recorded": True})
+        prediction_tool.metadata = {"capture_args": True}
+        calculate_tool = MagicMock()
+        calculate_tool.ainvoke = AsyncMock(return_value={"result": 4.0})
+        calculate_tool.metadata = {"capture_args": False}
+
+        state = _make_state(messages=[last_msg])
+        with patch.object(
+            nodes_module,
+            "_cached_tools_by_name",
+            {"record_predictions": prediction_tool, "calculate": calculate_tool},
+        ):
+            result = await tool_executor_node(state)
+
+        by_name = {entry["tool_name"]: entry for entry in result["metadata"]["_usage"]["_tool_call_log"]}
+        assert json.loads(by_name["record_predictions"]["args_json"]) == {"predictions": {"value": 1}}
+        assert "args_json" not in by_name["calculate"]
 
     async def test_tool_call_log_accumulates_across_iterations(self, test_settings):
         call = {"id": "c1", "name": "calculate", "args": {"expression": "1+1"}}

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from billing import get_byok_platform_fee, get_current_pricing, verify_credit
+from labeling.ingest import ingest_scheduled_run_predictions
 from scheduling.crud import (
     mark_scheduled_run_failed,
     mark_scheduled_run_skipped,
@@ -27,7 +28,33 @@ from tools.definitions.http_fetch import async_validate_url, make_ssrf_safe_http
 logger = logging.getLogger(__name__)
 
 
-async def _deliver_callback(callback_url: str, payload: dict[str, object], schedule_id: str) -> None:
+async def _ingest_labeling_prediction(
+    *,
+    org_id: str,
+    schedule_id: str,
+    run_id: str,
+    tool_call_log: object,
+    output_text: str,
+) -> None:
+    try:
+        entries = tool_call_log if isinstance(tool_call_log, list) else []
+        await ingest_scheduled_run_predictions(
+            org_id=org_id,
+            schedule_id=schedule_id,
+            run_id=run_id,
+            tool_call_log=entries,
+            output_text=output_text,
+        )
+    except Exception as exc:
+        logger.warning("scheduled labeling ingestion failed run_id=%s error=%s", run_id, type(exc).__name__)
+
+
+async def _deliver_callback(
+    callback_url: str,
+    payload: dict[str, object],
+    schedule_id: str,
+    callback_format: str = "json",
+) -> None:
     parsed = urlparse(callback_url)
     host = parsed.hostname or "unknown"
     if parsed.scheme != "https":
@@ -44,7 +71,15 @@ async def _deliver_callback(callback_url: str, payload: dict[str, object], sched
             timeout=5.0,
             follow_redirects=False,
         ) as client:
-            resp = await client.post(callback_url, json=payload)
+            if callback_format == "text":
+                content = str(payload.get("output_text") or payload.get("error") or "")
+                resp = await client.post(
+                    callback_url,
+                    content=content,
+                    headers={"content-type": "text/plain; charset=utf-8"},
+                )
+            else:
+                resp = await client.post(callback_url, json=payload)
         if 300 <= resp.status_code < 400:
             logger.warning(
                 "scheduled callback redirect rejected schedule_id=%s host=%s status=%s",
@@ -131,6 +166,14 @@ async def _run_and_record(
         cost_usdc=result.usage_event.cost_usdc,
         error=error_text,
     )
+    if settings.labeling_enabled and result.task_state == "completed":
+        await _ingest_labeling_prediction(
+            org_id=schedule.org_id,
+            schedule_id=schedule.id,
+            run_id=run_id,
+            tool_call_log=result.usage_data.get("_tool_call_log", []),
+            output_text=result.output_text,
+        )
     if result.task_state == "completed":
         await mark_scheduled_run_succeeded(schedule.id)
     else:
@@ -152,6 +195,7 @@ async def _run_and_record(
                 "created_at": stored.created_at.isoformat(),
             },
             schedule.id,
+            schedule.callback_format,
         )
     return stored
 

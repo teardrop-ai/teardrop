@@ -95,6 +95,43 @@ _DELETE_TELEMETRY_RUN_STARTS_SQL = """
     SELECT COUNT(*) FROM deleted
 """
 
+_DELETE_LABELING_PREDICTIONS_SQL = """
+    WITH candidates AS (
+        SELECT id
+        FROM labeling_predictions
+        WHERE created_at < NOW() - make_interval(days => $1)
+        ORDER BY created_at, id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM labeling_predictions
+        WHERE id IN (SELECT id FROM candidates)
+        RETURNING 1
+    )
+    SELECT COUNT(*) FROM deleted
+"""
+
+_DELETE_LABELING_OBSERVATIONS_SQL = """
+    WITH candidates AS (
+        SELECT o.id
+        FROM labeling_observations o
+        WHERE o.fetched_at < NOW() - make_interval(days => $1)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM labeling_results r
+              WHERE r.observation_id = o.id
+          )
+        ORDER BY o.fetched_at, o.id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM labeling_observations
+        WHERE id IN (SELECT id FROM candidates)
+        RETURNING 1
+    )
+    SELECT COUNT(*) FROM deleted
+"""
+
 _DELETE_EXPIRED_SIWE_SESSIONS_SQL = """
     WITH candidates AS (
         SELECT ctid
@@ -119,6 +156,7 @@ class RetentionSweepResult:
     event_dispatch_keys: int = 0
     org_tool_execution_events: int = 0
     telemetry_run_starts: int = 0
+    labeling_predictions: int = 0
     expired_siwe_login_sessions: int = 0
 
     @property
@@ -129,6 +167,7 @@ class RetentionSweepResult:
             + self.event_dispatch_keys
             + self.org_tool_execution_events
             + self.telemetry_run_starts
+            + self.labeling_predictions
             + self.expired_siwe_login_sessions
         )
 
@@ -273,6 +312,22 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
             batch_size,
         )
 
+    labeling_predictions = 0
+    labeling_retention_days = int(getattr(settings, "labeling_retention_days", 0))
+    if labeling_retention_days > 0:
+        labeling_predictions = await _delete_ttl_rows(
+            pool,
+            _DELETE_LABELING_PREDICTIONS_SQL,
+            labeling_retention_days,
+            batch_size,
+        )
+        await _delete_ttl_rows(
+            pool,
+            _DELETE_LABELING_OBSERVATIONS_SQL,
+            labeling_retention_days,
+            batch_size,
+        )
+
     expired_siwe_login_sessions = await _delete_expired_siwe_sessions(pool, batch_size)
     return RetentionSweepResult(
         checkpoint_threads=checkpoint_threads,
@@ -280,5 +335,6 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
         event_dispatch_keys=event_dispatch_keys,
         org_tool_execution_events=org_tool_execution_events,
         telemetry_run_starts=telemetry_run_starts,
+        labeling_predictions=labeling_predictions,
         expired_siwe_login_sessions=expired_siwe_login_sessions,
     )

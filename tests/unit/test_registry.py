@@ -45,6 +45,14 @@ def test_register_and_get():
     assert found is tool
 
 
+def test_tool_definition_propagates_capture_args_metadata():
+    tool = _make_tool()
+    assert tool.to_langchain_tool().metadata["capture_args"] is False
+
+    tool.capture_args = True
+    assert tool.to_langchain_tool().metadata["capture_args"] is True
+
+
 def test_get_latest_returns_highest_version():
     reg = ToolRegistry()
     reg.register(_make_tool(version="1.0.0"))

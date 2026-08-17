@@ -59,6 +59,10 @@ class ToolDefinition(BaseModel):
     annotations: dict[str, Any] | None = Field(default=None, description="Optional MCP tool annotations (readOnlyHint, etc.)")
     timeout_seconds: float | None = Field(default=None, description="Optional per-call timeout override")
     max_calls_per_run: int | None = Field(default=None, description="Optional per-run call cap")
+    capture_args: bool = Field(
+        default=False,
+        description="Whether the executor may retain validated JSON arguments for this tool.",
+    )
     show_on_agent_card: bool = Field(
         default=True,
         description=(
@@ -96,6 +100,7 @@ class ToolDefinition(BaseModel):
                 "timeout_seconds": self.timeout_seconds,
                 "output_schema": self.output_schema,
                 "max_calls_per_run": self.max_calls_per_run,
+                "capture_args": self.capture_args,
             },
         )
 

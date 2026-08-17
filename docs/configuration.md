@@ -108,6 +108,12 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `A2A_INBOUND_TIMEOUT_SECONDS` | Inbound A2A execution timeout (default: `60`) |
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
+| `LABELING_ENABLED` | Enable asynchronous prediction labeling for registered definitions (default: `false`) |
+| `LABELING_TICK_INTERVAL_SECONDS` | Labeling worker poll interval (default: `300`) |
+| `LABELING_BATCH_SIZE` | Maximum target items claimed per labeling pass (default: `50`) |
+| `LABELING_MAX_PER_ORG` | Maximum concurrently leased labeling targets per organization (default: `10`) |
+| `LABELING_LEASE_SECONDS` | Target lease duration before another worker may reclaim it (default: `120`) |
+| `LABELING_RETENTION_DAYS` | Retain structured prediction labels for this many days (default: `365`; `0` keeps them indefinitely) |
 | `SENTRY_DSN` | Sentry error tracking DSN (optional; leave empty to disable) |
 
 Event-trigger admission uses a short cluster-global Postgres advisory lock so global and per-org limits remain exact. The default concurrency is intentionally small; benchmark and redesign admission counters before raising the global limit above roughly 50.

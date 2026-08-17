@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,7 @@ class ScheduledRun(BaseModel):
     cron_expr: str | None = None
     enabled: bool = True
     callback_url: str | None = None
+    callback_format: Literal["json", "text"] = "json"
     trigger_token: str | None = None
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None

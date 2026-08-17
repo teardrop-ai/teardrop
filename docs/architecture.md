@@ -40,8 +40,19 @@ Each graph invocation records its thread in `checkpoint_thread_activity` before 
 | Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |
 | `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events` | Immutable financial or audit records; never swept |
 | `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; each row carries `source` (`api`, `schedule`, `trigger`, or `a2a`); never swept |
+| `labeling_predictions`, targets, and results | Structured ML labels; 365 days by default via `LABELING_RETENTION_DAYS`; never mixed with billing ledgers |
 
 Retention sweeps are batched, parameterized, and log per-table counts on every pass. The Sentry cron monitor covers failed or stalled sweeps. Setting a configurable TTL to `0` disables that table's cleanup.
+
+## Generalized Labeling Data Plane (`labeling/`)
+
+Scheduled runs can call the internal `record_predictions` tool once with the exact machine-readable prediction document. Its arguments are retained only for this opt-in tool; ordinary tool telemetry remains hash-only. The scheduled runner stores the prediction asynchronously after a successful run, while the existing callback receives `output_text`, which is the mobile-friendly human report.
+
+Scheduled callbacks remain JSON by default for compatibility. Set a schedule's `callback_format` to `text` to POST only `output_text` as `text/plain`, which is suitable for ntfy and similar mobile endpoints.
+
+The labeling worker is disabled by default and uses six shared Postgres tables: versioned definitions, schedule bindings, predictions, target items, deduplicated observations, and append-only results. It claims target items with `FOR UPDATE SKIP LOCKED` leases, batches compatible provider requests, retries unavailable observations with bounded backoff, and never changes billing, settlement, usage, or scheduled-run status. The three current task classes use thin parser/provider/scorer adapters over the same engine; new trusted adapters add no tables or worker loops.
+
+Prediction payloads are bounded JSON, definition versions are immutable, server timestamps define evaluation windows, and organization scope is enforced on bindings, predictions, targets, results, and private observation scopes. Existing JSON-plus-report prompts remain supported through a bounded JSON-prefix fallback while migrated prompts send the JSON through `record_predictions` and return only the report.
 
 ---
 

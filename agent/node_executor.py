@@ -486,9 +486,7 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
 
     # ── Per-call telemetry log (ML/reputation foundation) ─────────────────
     # `results` is produced by asyncio.gather() over `dedup_calls`, so the two
-    # lists share order/length — zip is safe. Never persists raw tool_args,
-    # only the dedup hash (see _call_signature) to avoid leaking wallet
-    # addresses/secrets that may appear in tool arguments.
+    # lists share order/length — zip is safe.
     tool_call_log: list[dict[str, Any]] = list(usage.get("_tool_call_log", []))
 
     for dedup_call, result in zip(dedup_calls, results):
@@ -497,16 +495,18 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
         if name == "get_defi_positions":
             defi_positions_covered.update(_covered_defi_keys_from_result(result.get("content", "")))
         error_class = result.get("error_class")
-        tool_call_log.append(
-            {
-                "tool_name": name,
-                "success": error_class is None,
-                "error_class": error_class or "",
-                "elapsed_ms": int(result.get("elapsed_ms", 0)),
-                "billable": bool(result.get("billable", True)),
-                "args_hash": _call_signature(dedup_call["name"], dedup_call["args"]).split(":", 1)[-1],
-            }
-        )
+        entry = {
+            "tool_name": name,
+            "success": error_class is None,
+            "error_class": error_class or "",
+            "elapsed_ms": int(result.get("elapsed_ms", 0)),
+            "billable": bool(result.get("billable", True)),
+            "args_hash": _call_signature(dedup_call["name"], dedup_call["args"]).split(":", 1)[-1],
+        }
+        tool_metadata = getattr(tools_by_name.get(name), "metadata", {})
+        if isinstance(tool_metadata, dict) and tool_metadata.get("capture_args"):
+            entry["args_json"] = json.dumps(dedup_call["args"], sort_keys=True, separators=(",", ":"))
+        tool_call_log.append(entry)
 
     usage["_tool_call_counts"] = tool_call_counts
     usage["_defi_positions_covered"] = sorted(defi_positions_covered)

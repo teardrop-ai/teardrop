@@ -34,6 +34,7 @@ class CreateScheduledRunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=12_000)
     interval_seconds: int = Field(..., ge=1)
     callback_url: str | None = Field(default=None, max_length=2048)
+    callback_format: Literal["json", "text"] = "json"
     first_run_at: datetime | None = None
 
 
@@ -43,6 +44,7 @@ class UpdateScheduledRunRequest(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=1)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
+    callback_format: Literal["json", "text"] | None = None
 
 
 class ScheduledRunItem(BaseModel):
@@ -55,6 +57,7 @@ class ScheduledRunItem(BaseModel):
     interval_seconds: int
     enabled: bool
     callback_url: str | None = None
+    callback_format: Literal["json", "text"] = "json"
     next_run_at: str = Field(..., description="ISO 8601 timestamp.")
     last_run_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until first run.")
     consecutive_failures: int
@@ -104,6 +107,7 @@ def _serialize_schedule(schedule) -> dict[str, object]:
         "interval_seconds": schedule.interval_seconds,
         "enabled": schedule.enabled,
         "callback_url": schedule.callback_url,
+        "callback_format": getattr(schedule, "callback_format", "json"),
         "next_run_at": schedule.next_run_at.isoformat(),
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
         "consecutive_failures": schedule.consecutive_failures,
@@ -195,6 +199,7 @@ async def create_agent_schedule(
         prompt=body.prompt,
         interval_seconds=body.interval_seconds,
         callback_url=body.callback_url,
+        callback_format=body.callback_format,
         first_run_at=first_run_at,
     )
     return JSONResponse(status_code=status.HTTP_201_CREATED, content=_serialize_schedule(schedule))
@@ -273,6 +278,8 @@ async def update_agent_schedule_endpoint(
         update_kwargs["enabled"] = body.enabled
     if "callback_url" in update_fields:
         update_kwargs["callback_url"] = body.callback_url
+    if "callback_format" in update_fields and body.callback_format is not None:
+        update_kwargs["callback_format"] = body.callback_format
     schedule = await update_scheduled_run(
         schedule_id,
         org_id,

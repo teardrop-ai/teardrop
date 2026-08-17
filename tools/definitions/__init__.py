@@ -31,6 +31,7 @@ from tools.definitions.get_wallet_positions import TOOL as get_wallet_positions_
 from tools.definitions.get_yield_rates import TOOL as get_yield_rates_tool
 from tools.definitions.http_fetch import TOOL as http_fetch_tool
 from tools.definitions.read_contract import TOOL as read_contract_tool
+from tools.definitions.record_predictions import TOOL as record_predictions_tool
 from tools.definitions.resolve_ens import TOOL as resolve_ens_tool
 from tools.definitions.summarize_text import TOOL as count_text_stats_tool
 from tools.definitions.web_search import TOOL as web_search_tool
@@ -66,6 +67,7 @@ _ALL_TOOLS = [
     get_wallet_history_tool,
     get_wallet_positions_tool,
     read_contract_tool,
+    record_predictions_tool,
     resolve_ens_tool,
 ]
 

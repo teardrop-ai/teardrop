@@ -15,6 +15,7 @@ from psycopg import AsyncConnection
 
 from agent.graph import close_checkpointer, get_graph, init_checkpointer
 from billing import close_billing, init_billing
+from labeling import close_labeling_db, init_labeling_db
 from marketplace import close_marketplace_db, init_marketplace_db
 from mcp_client import close_mcp_client_db, init_mcp_client_db
 from org_tools import close_org_tools_db, init_org_tools_db
@@ -23,6 +24,7 @@ from scripts.generate_keys import generate_keypair
 from shared.db_pool import Row, create_pool
 from teardrop._background_tasks import (
     _event_dispatch_recovery_loop,
+    _labeling_loop,
     _memory_cleanup_loop,
     _onboarding_credit_outbox_loop,
     _prewarm_cache_prefixes,
@@ -101,6 +103,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await init_agent_wallets_db(pool)
         await init_scheduling_db(pool)
         await init_tool_exclusions_db(pool)
+        await init_labeling_db(pool)
 
         init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
         init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
@@ -126,6 +129,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_retention_sweep_loop()))
         if settings.event_triggers_enabled:
             bg_tasks.append(asyncio.create_task(_event_dispatch_recovery_loop()))
+        if settings.labeling_enabled:
+            bg_tasks.append(asyncio.create_task(_labeling_loop()))
         if settings.scheduled_runs_enabled:
             bg_tasks.append(
                 asyncio.create_task(
@@ -158,6 +163,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await close_scheduling_db()
         await close_retention_db()
         await close_tool_exclusions_db()
+        await close_labeling_db()
         await close_memory_db()
         await close_mcp_client_db()
         await close_org_tools_db()

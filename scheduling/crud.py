@@ -24,7 +24,7 @@ _UNSET = object()
 # lookup and popped before model construction so it is never serialized.
 _RUN_COLUMNS = (
     "id, org_id, user_id, name, prompt, schedule_kind, interval_seconds, "
-    "cron_expr, enabled, callback_url, trigger_token, next_run_at, last_run_at, "
+    "cron_expr, enabled, callback_url, callback_format, trigger_token, next_run_at, last_run_at, "
     "consecutive_failures, created_at, updated_at"
 )
 _RUN_COLUMNS_SR = ", ".join(f"sr.{col.strip()}" for col in _RUN_COLUMNS.split(","))
@@ -105,6 +105,7 @@ async def create_scheduled_run(
     prompt: str,
     interval_seconds: int,
     callback_url: str | None,
+    callback_format: str = "json",
     first_run_at: datetime | None = None,
 ) -> ScheduledRun:
     pool = _get_pool()
@@ -115,9 +116,9 @@ async def create_scheduled_run(
         f"""
         INSERT INTO scheduled_runs (
             id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-            cron_expr, enabled, callback_url, next_run_at, created_at, updated_at
+            cron_expr, enabled, callback_url, callback_format, next_run_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'interval', $6, NULL, TRUE, $7, $8, $9, $9)
+        VALUES ($1, $2, $3, $4, $5, 'interval', $6, NULL, TRUE, $7, $8, $9, $10, $10)
         RETURNING {_RUN_COLUMNS}
         """,
         run_id,
@@ -127,6 +128,7 @@ async def create_scheduled_run(
         prompt,
         interval_seconds,
         callback_url,
+        callback_format,
         next_run_at,
         now,
     )
@@ -142,6 +144,7 @@ async def create_event_trigger(
     callback_url: str | None,
     trigger_token: str,
     secret_hash: str,
+    callback_format: str = "json",
 ) -> ScheduledRun:
     """Insert an event-triggered run. Interval/next_run columns stay NULL so the
     polling worker (which filters ``schedule_kind = 'interval'``) ignores it."""
@@ -152,10 +155,10 @@ async def create_event_trigger(
         f"""
         INSERT INTO scheduled_runs (
             id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
-            cron_expr, enabled, callback_url, trigger_token, secret_hash,
-            next_run_at, created_at, updated_at
+            cron_expr, enabled, callback_url, callback_format, trigger_token,
+            secret_hash, next_run_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'event', NULL, NULL, TRUE, $6, $7, $8, NULL, $9, $9)
+        VALUES ($1, $2, $3, $4, $5, 'event', NULL, NULL, TRUE, $6, $7, $8, $9, NULL, $10, $10)
         RETURNING {_RUN_COLUMNS}
         """,
         run_id,
@@ -164,6 +167,7 @@ async def create_event_trigger(
         name,
         prompt,
         callback_url,
+        callback_format,
         trigger_token,
         secret_hash,
         now,
@@ -244,6 +248,7 @@ async def update_scheduled_run(
     interval_seconds: int | object = _UNSET,
     enabled: bool | object = _UNSET,
     callback_url: str | None | object = _UNSET,
+    callback_format: str | object = _UNSET,
 ) -> ScheduledRun | None:
     pool = _get_pool()
     updates: list[str] = []
@@ -271,6 +276,8 @@ async def update_scheduled_run(
             )
     if callback_url is not _UNSET:
         updates.append(f"callback_url = {_add(callback_url)}")
+    if callback_format is not _UNSET:
+        updates.append(f"callback_format = {_add(callback_format)}")
 
     if not updates:
         return await get_scheduled_run(schedule_id, org_id)

@@ -22,6 +22,7 @@ def register_routers(app: FastAPI) -> None:
         agent_schedules,
         auth,
         billing,
+        labeling,
         marketplace,
         marketplace_mcp,
         system,
@@ -41,6 +42,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(agent_event_triggers.router)
     app.include_router(a2a_messages.router)
     app.include_router(billing.router)
+    app.include_router(labeling.router)
     app.include_router(org_tools.router)
     app.include_router(org_mcp.router)
     app.include_router(org_a2a.router)

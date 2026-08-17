@@ -555,7 +555,7 @@
           },
           "message": {
             "description": "User message to send to the agent",
-            "maxLength": 4096,
+            "maxLength": 12000,
             "title": "Message",
             "type": "string"
           },
@@ -1079,7 +1079,7 @@
             "type": "string"
           },
           "prompt": {
-            "maxLength": 8000,
+            "maxLength": 12000,
             "minLength": 1,
             "title": "Prompt",
             "type": "string"
@@ -1333,6 +1333,14 @@
             "title": "Publish As Mcp",
             "type": "boolean"
           },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Tags",
+            "type": "array"
+          },
           "timeout_seconds": {
             "default": 10,
             "maximum": 30.0,
@@ -1363,6 +1371,15 @@
       },
       "CreateScheduledRunRequest": {
         "properties": {
+          "callback_format": {
+            "default": "json",
+            "enum": [
+              "json",
+              "text"
+            ],
+            "title": "Callback Format",
+            "type": "string"
+          },
           "callback_url": {
             "anyOf": [
               {
@@ -1374,6 +1391,18 @@
               }
             ],
             "title": "Callback Url"
+          },
+          "first_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Run At"
           },
           "interval_seconds": {
             "minimum": 1.0,
@@ -1387,7 +1416,7 @@
             "type": "string"
           },
           "prompt": {
-            "maxLength": 8000,
+            "maxLength": 12000,
             "minLength": 1,
             "title": "Prompt",
             "type": "string"
@@ -1536,7 +1565,7 @@
       "EventDispatchResponse": {
         "properties": {
           "result_path": {
-            "description": "Path to fetch this run's result: /agent/event-triggers/{id}/runs.",
+            "description": "A2A task endpoint for this run.",
             "title": "Result Path",
             "type": "string"
           },
@@ -1564,6 +1593,105 @@
           "result_path"
         ],
         "title": "EventDispatchResponse",
+        "type": "object"
+      },
+      "EventTaskArtifact": {
+        "properties": {
+          "artifactId": {
+            "title": "Artifactid",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/EventTaskArtifactPart"
+            },
+            "title": "Parts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifactId",
+          "name",
+          "parts"
+        ],
+        "title": "EventTaskArtifact",
+        "type": "object"
+      },
+      "EventTaskArtifactPart": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "EventTaskArtifactPart",
+        "type": "object"
+      },
+      "EventTaskResponse": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/EventTaskArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "contextId": {
+            "title": "Contextid",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Metadata",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EventTaskStatus"
+          }
+        },
+        "required": [
+          "id",
+          "contextId",
+          "status"
+        ],
+        "title": "EventTaskResponse",
+        "type": "object"
+      },
+      "EventTaskStatus": {
+        "properties": {
+          "state": {
+            "enum": [
+              "TASK_STATE_SUBMITTED",
+              "TASK_STATE_COMPLETED",
+              "TASK_STATE_FAILED",
+              "TASK_STATE_REJECTED"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "timestamp"
+        ],
+        "title": "EventTaskStatus",
         "type": "object"
       },
       "EventTriggerCreatedResponse": {
@@ -1958,6 +2086,340 @@
           "items"
         ],
         "title": "InvoiceListResponse",
+        "type": "object"
+      },
+      "LabelingBindingRequest": {
+        "properties": {
+          "definition_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "schedule_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Schedule Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "definition_key",
+          "definition_version"
+        ],
+        "title": "LabelingBindingRequest",
+        "type": "object"
+      },
+      "LabelingBindingResponse": {
+        "properties": {
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "created",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "definition_key",
+          "definition_version",
+          "status"
+        ],
+        "title": "LabelingBindingResponse",
+        "type": "object"
+      },
+      "LabelingDefinitionItem": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "outcome_schema": {
+            "additionalProperties": true,
+            "title": "Outcome Schema",
+            "type": "object"
+          },
+          "prediction_schema": {
+            "additionalProperties": true,
+            "title": "Prediction Schema",
+            "type": "object"
+          },
+          "target_schema": {
+            "additionalProperties": true,
+            "title": "Target Schema",
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition_key",
+          "definition_version",
+          "prediction_schema",
+          "target_schema",
+          "outcome_schema",
+          "active",
+          "created_at"
+        ],
+        "title": "LabelingDefinitionItem",
+        "type": "object"
+      },
+      "LabelingDefinitionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LabelingDefinitionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LabelingDefinitionListResponse",
+        "type": "object"
+      },
+      "LabelingOverrideResponse": {
+        "properties": {
+          "status": {
+            "const": "recorded",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LabelingOverrideResponse",
+        "type": "object"
+      },
+      "LabelingPredictionItem": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parse_error": {
+            "title": "Parse Error",
+            "type": "string"
+          },
+          "payload_sha256": {
+            "title": "Payload Sha256",
+            "type": "string"
+          },
+          "prediction_at": {
+            "title": "Prediction At",
+            "type": "string"
+          },
+          "predictions": {
+            "additionalProperties": true,
+            "title": "Predictions",
+            "type": "object"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source_kind",
+          "source_id",
+          "run_id",
+          "schedule_id",
+          "definition_key",
+          "definition_version",
+          "predictions",
+          "payload_sha256",
+          "prediction_at",
+          "status",
+          "parse_error",
+          "created_at"
+        ],
+        "title": "LabelingPredictionItem",
+        "type": "object"
+      },
+      "LabelingPredictionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LabelingPredictionItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LabelingPredictionListResponse",
+        "type": "object"
+      },
+      "LabelingResultItem": {
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "observation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Id"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "scorer_key": {
+            "title": "Scorer Key",
+            "type": "string"
+          },
+          "scorer_version": {
+            "title": "Scorer Version",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "target_id",
+          "scorer_key",
+          "scorer_version",
+          "observation_id",
+          "actual",
+          "label",
+          "score",
+          "status",
+          "source",
+          "rationale",
+          "created_at"
+        ],
+        "title": "LabelingResultItem",
+        "type": "object"
+      },
+      "LabelingResultListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LabelingResultItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "LabelingResultListResponse",
         "type": "object"
       },
       "LinkWalletRequest": {
@@ -3816,6 +4278,13 @@
             "title": "Publish As Mcp",
             "type": "boolean"
           },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
           "timeout_seconds": {
             "title": "Timeout Seconds",
             "type": "integer"
@@ -3857,6 +4326,7 @@
           "publish_as_mcp",
           "marketplace_description",
           "category",
+          "tags",
           "base_price_usdc",
           "created_at",
           "updated_at"
@@ -4346,8 +4816,42 @@
         "title": "ScheduleDeletedResponse",
         "type": "object"
       },
+      "ScheduleRunNowResponse": {
+        "properties": {
+          "next_run_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Next Run At",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_id",
+          "status",
+          "next_run_at"
+        ],
+        "title": "ScheduleRunNowResponse",
+        "type": "object"
+      },
       "ScheduledRunItem": {
         "properties": {
+          "callback_format": {
+            "default": "json",
+            "enum": [
+              "json",
+              "text"
+            ],
+            "title": "Callback Format",
+            "type": "string"
+          },
           "callback_url": {
             "anyOf": [
               {
@@ -4547,6 +5051,74 @@
           "items"
         ],
         "title": "ScheduledRunResultsResponse",
+        "type": "object"
+      },
+      "ScoreResult": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "label": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "rationale": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "source": {
+            "default": "automatic",
+            "enum": [
+              "automatic",
+              "external",
+              "manual"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "correct",
+              "incorrect",
+              "neutral",
+              "inconclusive",
+              "unavailable",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "status"
+        ],
+        "title": "ScoreResult",
         "type": "object"
       },
       "SetAuthorConfigRequest": {
@@ -4822,6 +5394,13 @@
             "title": "Exhausted",
             "type": "array"
           },
+          "in_flight": {
+            "items": {
+              "$ref": "#/components/schemas/SweepStatusItem"
+            },
+            "title": "In Flight",
+            "type": "array"
+          },
           "pending": {
             "items": {
               "$ref": "#/components/schemas/SweepStatusItem"
@@ -4832,6 +5411,7 @@
         },
         "required": [
           "pending",
+          "in_flight",
           "exhausted"
         ],
         "title": "SweepStatusResponse",
@@ -5453,7 +6033,7 @@
           "prompt": {
             "anyOf": [
               {
-                "maxLength": 8000,
+                "maxLength": 12000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -5683,6 +6263,21 @@
             ],
             "title": "Publish As Mcp"
           },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
           "timeout_seconds": {
             "anyOf": [
               {
@@ -5714,6 +6309,21 @@
       },
       "UpdateScheduledRunRequest": {
         "properties": {
+          "callback_format": {
+            "anyOf": [
+              {
+                "enum": [
+                  "json",
+                  "text"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Format"
+          },
           "callback_url": {
             "anyOf": [
               {
@@ -5765,7 +6375,7 @@
           "prompt": {
             "anyOf": [
               {
-                "maxLength": 8000,
+                "maxLength": 12000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -6103,7 +6713,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -6990,7 +7600,7 @@
     },
     "/admin/marketplace/reset-withdrawal/{withdrawal_id}": {
       "post": {
-        "description": "Admin: reset a failed withdrawal to pending so it can be re-processed.",
+        "description": "Admin: reset a failed or reconciled in-flight withdrawal to pending.",
         "operationId": "admin_reset_withdrawal_admin_marketplace_reset_withdrawal__withdrawal_id__post",
         "parameters": [
           {
@@ -7095,7 +7705,7 @@
     },
     "/admin/marketplace/sweep-retry/{withdrawal_id}": {
       "post": {
-        "description": "Admin: reset a failed or exhausted withdrawal so the next sweep retries it.",
+        "description": "Admin: reset a failed, exhausted, or reconciled in-flight withdrawal.",
         "operationId": "admin_marketplace_sweep_retry_admin_marketplace_sweep_retry__withdrawal_id__post",
         "parameters": [
           {
@@ -8363,6 +8973,62 @@
         ]
       }
     },
+    "/agent/event-triggers/{schedule_id}/runs/{run_id}": {
+      "get": {
+        "operationId": "get_event_trigger_run_agent_event_triggers__schedule_id__runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventTaskResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Event Trigger Run",
+        "tags": [
+          "Agent"
+        ]
+      }
+    },
     "/agent/events/{trigger_token}": {
       "post": {
         "description": "Public inbound webhook. Authenticated by the per-trigger secret header.",
@@ -8753,6 +9419,53 @@
           }
         ],
         "summary": "Update Agent Schedule Endpoint",
+        "tags": [
+          "Agent"
+        ]
+      }
+    },
+    "/agent/schedules/{schedule_id}/run": {
+      "post": {
+        "operationId": "run_agent_schedule_now_agent_schedules__schedule_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunNowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Agent Schedule Now",
         "tags": [
           "Agent"
         ]
@@ -9711,6 +10424,235 @@
         "summary": "Health Check",
         "tags": [
           "System"
+        ]
+      }
+    },
+    "/labeling/bindings": {
+      "post": {
+        "operationId": "bind_labeling_definition_labeling_bindings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelingBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelingBindingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Bind Labeling Definition",
+        "tags": [
+          "Labeling"
+        ]
+      }
+    },
+    "/labeling/definitions": {
+      "get": {
+        "operationId": "get_labeling_definitions_labeling_definitions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelingDefinitionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Labeling Definitions",
+        "tags": [
+          "Labeling"
+        ]
+      }
+    },
+    "/labeling/predictions": {
+      "get": {
+        "operationId": "get_labeling_predictions_labeling_predictions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelingPredictionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Labeling Predictions",
+        "tags": [
+          "Labeling"
+        ]
+      }
+    },
+    "/labeling/results": {
+      "get": {
+        "operationId": "get_labeling_results_labeling_results_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelingResultListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Labeling Results",
+        "tags": [
+          "Labeling"
+        ]
+      }
+    },
+    "/labeling/results/{target_id}/override": {
+      "post": {
+        "operationId": "override_labeling_result_labeling_results__target_id__override_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreResult"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelingOverrideResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Override Labeling Result",
+        "tags": [
+          "Labeling"
         ]
       }
     },

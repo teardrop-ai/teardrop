@@ -49,7 +49,9 @@ Check `GET /billing/balance` after verification to see the granted balance. See 
 
 Organizations can schedule recurring, unattended agent runs with integrated credit-only billing, stored execution history, and real-time status callbacks. Managed via the `/agent/schedules` API (`POST`/`GET`/`PATCH`/`DELETE`, plus `GET /agent/schedules/{id}/runs` for cursor-paginated results).
 
-Due runs are claimed with a row-locking query (`FOR UPDATE SKIP LOCKED`) and execute concurrently with per-run failure isolation, so multiple worker instances can scale horizontally. Results are archived under `scheduled_run_results` and can be dispatched to an HTTPS-only, SSRF-checked callback URL. Configure via `SCHEDULED_RUNS_*` settings (see [docs/configuration.md](docs/configuration.md)).
+Due runs are claimed with a row-locking query (`FOR UPDATE SKIP LOCKED`) and execute concurrently with per-run failure isolation, so multiple worker instances can scale horizontally. Results are archived under `scheduled_run_results` and can be dispatched to an HTTPS-only, SSRF-checked callback URL. Use `callback_format=text` for a plain-text mobile notification; JSON remains the default. Configure via `SCHEDULED_RUNS_*` settings (see [docs/configuration.md](docs/configuration.md)).
+
+Scheduled analysis prompts can call the internal `record_predictions` tool with their exact structured payload and return only the human-readable report. Teardrop labels those predictions asynchronously against future observations through the generalized labeling data plane; callbacks can therefore send clean reports to mobile notifications while structured values remain available for ML evaluation. See [docs/architecture.md](docs/architecture.md) and the `LABELING_*` settings in [docs/configuration.md](docs/configuration.md).
 
 ### Event-Triggered (Reactive) Runs
 

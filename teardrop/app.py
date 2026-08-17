@@ -45,6 +45,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from teardrop._background_tasks import (  # noqa: E402,F401  re-exported for compatibility
+    _labeling_loop,
     _memory_cleanup_loop,
     _prewarm_cache_prefixes,
     _refresh_token_cleanup_loop,

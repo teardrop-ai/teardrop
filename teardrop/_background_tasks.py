@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 
 from agent.cache_prewarm import prewarm_org_prefix
 from billing import cleanup_expired_payment_nonces, process_onboarding_credit_outbox, process_pending_settlements
+from labeling.worker import labeling_tick
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
 from shared.db_pool import PgPool
@@ -119,12 +120,13 @@ async def _retention_sweep_iter() -> None:
     logger.info(
         "Retention sweep completed: total_deleted=%d checkpoint_threads=%d "
         "scheduled_run_results=%d org_tool_execution_events=%d "
-        "telemetry_run_starts=%d expired_siwe_login_sessions=%d",
+        "telemetry_run_starts=%d labeling_predictions=%d expired_siwe_login_sessions=%d",
         result.total_deleted,
         result.checkpoint_threads,
         result.scheduled_run_results,
         result.org_tool_execution_events,
         result.telemetry_run_starts,
+        getattr(result, "labeling_predictions", 0),
         result.expired_siwe_login_sessions,
     )
 
@@ -136,6 +138,16 @@ async def _event_dispatch_recovery_iter() -> None:
     )
     if recovered:
         logger.warning("Event dispatch recovery: finalized %d expired leases", recovered)
+
+
+async def _labeling_iter() -> None:
+    processed = await labeling_tick(
+        limit=settings.labeling_batch_size,
+        max_per_org=settings.labeling_max_per_org,
+        lease_seconds=settings.labeling_lease_seconds,
+    )
+    if processed:
+        logger.info("Labeling worker: processed %d targets", processed)
 
 
 async def _settlement_retry_loop() -> None:
@@ -215,6 +227,16 @@ async def _event_dispatch_recovery_loop() -> None:
         _event_dispatch_recovery_iter,
         settings.event_triggers_recovery_interval_seconds,
         monitor_slug="event-dispatch-recovery",
+    )
+
+
+async def _labeling_loop() -> None:
+    """Periodically process registered prediction labeling targets."""
+    await _run_periodic(
+        "Labeling worker",
+        _labeling_iter,
+        settings.labeling_tick_interval_seconds,
+        monitor_slug="labeling-worker",
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -64,6 +64,68 @@ async def test_execute_scheduled_run_skips_when_credit_unverified(monkeypatch, t
 
     assert result.status == "skipped"
     mark_skipped.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_text_callback_posts_only_human_report(monkeypatch):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = SimpleNamespace(status_code=200)
+    monkeypatch.setattr("scheduling.runner.async_validate_url", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.httpx.AsyncClient", MagicMock(return_value=client))
+
+    from scheduling.runner import _deliver_callback
+
+    await _deliver_callback(
+        "https://notify.example/hook",
+        {"output_text": "## Entry Candidates\n- token-1", "run_id": "run-1"},
+        "schedule-1",
+        "text",
+    )
+
+    kwargs = client.post.await_args.kwargs
+    assert kwargs["content"] == "## Entry Candidates\n- token-1"
+    assert kwargs["headers"]["content-type"] == "text/plain; charset=utf-8"
+    assert "json" not in kwargs
+
+
+@pytest.mark.anyio
+async def test_labeling_ingestion_finishes_before_scheduled_run_returns(monkeypatch, test_settings):
+    test_settings.scheduled_runs_execution_timeout_seconds = 5
+    test_settings.labeling_enabled = True
+    monkeypatch.setattr("scheduling.runner.get_settings", lambda: test_settings)
+    monkeypatch.setattr("scheduling.runner.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.get_current_pricing", AsyncMock(return_value=SimpleNamespace(run_price_usdc=1000)))
+    monkeypatch.setattr(
+        "scheduling.runner.verify_credit",
+        AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
+    )
+    monkeypatch.setattr(
+        "scheduling.runner.run_agent_once",
+        AsyncMock(
+            return_value=AgentRunOnceResult(
+                task_state="completed",
+                response_state="completed",
+                output_text="done",
+                duration_ms=25,
+                usage_event=SimpleNamespace(cost_usdc=123),
+                usage_data={},
+                llm_config=None,
+                marketplace_stats_billable=False,
+            )
+        ),
+    )
+    monkeypatch.setattr("scheduling.runner.record_scheduled_run_result", AsyncMock(return_value=_stored_result()))
+    monkeypatch.setattr("scheduling.runner.mark_scheduled_run_succeeded", AsyncMock(return_value=None))
+    ingest = AsyncMock()
+    monkeypatch.setattr("scheduling.runner._ingest_labeling_prediction", ingest)
+
+    from scheduling.runner import execute_scheduled_run
+
+    result = await execute_scheduled_run(_schedule())
+
+    assert result.status == "completed"
+    ingest.assert_awaited_once()
 
 
 @pytest.mark.anyio

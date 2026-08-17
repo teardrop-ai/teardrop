@@ -253,6 +253,38 @@ class Settings(BaseSettings):
         ge=0,
         description="Days telemetry run-start denominators are retained; 0 keeps them indefinitely.",
     )
+    labeling_enabled: bool = Field(
+        default=False,
+        description="Enable asynchronous prediction labeling work for registered definitions.",
+    )
+    labeling_tick_interval_seconds: int = Field(
+        default=300,
+        gt=0,
+        description="Interval in seconds between labeling worker passes.",
+    )
+    labeling_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum labeling targets claimed in one worker pass.",
+    )
+    labeling_max_per_org: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum concurrently leased labeling targets per organization.",
+    )
+    labeling_lease_seconds: int = Field(
+        default=120,
+        gt=0,
+        le=3600,
+        description="Lease duration for a labeling target before it can be reclaimed.",
+    )
+    labeling_retention_days: int = Field(
+        default=365,
+        ge=0,
+        description="Days labeling predictions and results are retained; 0 keeps them indefinitely.",
+    )
     agent_ui_generator_provider: str = Field(
         default="google",
         description="Provider for UI generation turns when no org-level BYOK config is set.",
