@@ -7,14 +7,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-import asyncpg
-
 from labeling.contracts import Definition, Observation, ScoreResult, TargetDraft, canonical_json
+from shared.db_pool import PgPool, Row
 
-_pool: asyncpg.Pool | None = None
+_pool: PgPool | None = None
 
 
-async def init_labeling_db(pool: asyncpg.Pool) -> None:
+async def init_labeling_db(pool: PgPool) -> None:
     global _pool
     _pool = pool
 
@@ -24,13 +23,13 @@ async def close_labeling_db() -> None:
     _pool = None
 
 
-def _get_pool() -> asyncpg.Pool:
+def _get_pool() -> PgPool:
     if _pool is None:
         raise RuntimeError("Labeling DB not initialised - call init_labeling_db() first")
     return _pool
 
 
-def _definition_from_row(row: asyncpg.Record) -> Definition:
+def _definition_from_row(row: Row) -> Definition:
     return Definition(
         key=str(row["definition_key"]),
         version=int(row["definition_version"]),
@@ -130,7 +129,7 @@ async def create_binding(
     return str(row["id"])
 
 
-async def get_binding_for_schedule(schedule_id: str, org_id: str) -> asyncpg.Record | None:
+async def get_binding_for_schedule(schedule_id: str, org_id: str) -> Row | None:
     return await _get_pool().fetchrow(
         """
         SELECT b.id, b.org_id, b.source_kind, b.source_id, b.definition_key,
@@ -242,7 +241,7 @@ async def insert_prediction(
     return prediction_id, inserted
 
 
-async def claim_due_targets(limit: int, max_per_org: int, lease_seconds: int) -> list[asyncpg.Record]:
+async def claim_due_targets(limit: int, max_per_org: int, lease_seconds: int) -> list[Row]:
     if limit <= 0 or max_per_org <= 0 or lease_seconds <= 0:
         return []
     token = str(uuid.uuid4())
