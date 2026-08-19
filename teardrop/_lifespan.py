@@ -23,6 +23,7 @@ from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_t
 from scripts.generate_keys import generate_keypair
 from shared.db_pool import Row, create_pool
 from teardrop._background_tasks import (
+    _delegation_refund_outbox_loop,
     _event_dispatch_recovery_loop,
     _labeling_loop,
     _memory_cleanup_loop,
@@ -115,6 +116,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         if settings.billing_enabled:
             bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
             bg_tasks.append(asyncio.create_task(_x402_nonce_cleanup_loop()))
+        if settings.billing_enabled and settings.a2a_delegation_billing_enabled:
+            bg_tasks.append(asyncio.create_task(_delegation_refund_outbox_loop()))
         if settings.billing_enabled and settings.onboarding_credit_enabled:
             bg_tasks.append(asyncio.create_task(_onboarding_credit_outbox_loop()))
         if settings.memory_enabled and settings.memory_ttl_days > 0:

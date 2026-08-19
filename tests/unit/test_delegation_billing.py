@@ -30,6 +30,17 @@ _BILLING_MOD = "billing"
 pytestmark = pytest.mark.anyio
 
 
+class _AsyncContext:
+    def __init__(self, value):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+
 # ─── apply_platform_fee ──────────────────────────────────────────────────────
 
 
@@ -234,7 +245,7 @@ class TestDelegationEventTelemetry:
             get_live_pricing_for_model=AsyncMock(),
         )
 
-        await service.record_delegation_event(
+        result = await service.record_delegation_event(
             org_id="org-1",
             run_id="run-1",
             agent_url="https://agent.example.com",
@@ -244,9 +255,100 @@ class TestDelegationEventTelemetry:
             task_type="raw task details must not be stored",
         )
 
+        assert result is True
         args = mock_pool.execute.await_args.args
         assert "task_type" in args[0]
         assert args[-1] == "general"
+
+    async def test_returns_false_when_insert_fails(self):
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        service = BillingDelegationService(
+            get_pool=lambda: mock_pool,
+            get_settings=MagicMock(),
+            get_daily_debit_spend=AsyncMock(),
+            debit_credit=AsyncMock(),
+            get_live_pricing_for_model=AsyncMock(),
+        )
+
+        result = await service.record_delegation_event(
+            org_id="org-1",
+            run_id="run-1",
+            agent_url="https://agent.example.com",
+            agent_name="Agent",
+            task_status="completed",
+            cost_usdc=1_000,
+        )
+
+        assert result is False
+
+
+class TestDelegationRefundOutbox:
+    def _service(self, pool):
+        return BillingDelegationService(
+            get_pool=lambda: pool,
+            get_settings=MagicMock(),
+            get_daily_debit_spend=AsyncMock(),
+            debit_credit=AsyncMock(),
+            get_live_pricing_for_model=AsyncMock(),
+        )
+
+    async def test_complete_refund_writes_credit_and_ledger_atomically(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"run_id": "run-1", "amount_usdc": 5_000},
+                {"balance_usdc": 25_000},
+            ]
+        )
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        result = await self._service(pool).complete_delegation_refund("org-1", "delegation-1")
+
+        assert result is True
+        assert "org_credit_ledger" in conn.execute.call_args_list[0].args[0]
+        assert "a2a_delegation_refund_outbox" in conn.execute.call_args_list[1].args[0]
+
+    async def test_complete_refund_is_idempotent_after_terminal_state(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(return_value=None)
+        conn.fetchval = AsyncMock(return_value="refunded")
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        result = await self._service(pool).complete_delegation_refund("org-1", "delegation-1")
+
+        assert result is True
+        conn.execute.assert_not_awaited()
+
+    async def test_worker_reconciles_completed_and_failed_events(self):
+        pool = MagicMock()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {"id": "completed-id", "org_id": "org-1", "task_status": "completed"},
+                {"id": "failed-id", "org_id": "org-1", "task_status": "failed"},
+            ]
+        )
+        service = self._service(pool)
+        cancel = AsyncMock(return_value=True)
+        request = AsyncMock(return_value=True)
+        complete = AsyncMock(return_value=True)
+        with (
+            patch.object(service, "cancel_delegation_refund", cancel),
+            patch.object(service, "request_delegation_refund", request),
+            patch.object(service, "complete_delegation_refund", complete),
+        ):
+            processed = await service.process_delegation_refund_outbox()
+
+        assert processed == 2
+        cancel.assert_awaited_once_with("org-1", "completed-id")
+        request.assert_awaited_once_with("org-1", "failed-id")
+        complete.assert_awaited_once_with("org-1", "failed-id")
 
 
 # ─── delegate_to_agent with billing ──────────────────────────────────────────
@@ -361,7 +463,9 @@ class TestDelegateToAgentBilling:
         }
 
         mock_fund = AsyncMock(return_value=True)
-        mock_record = AsyncMock()
+        mock_record = AsyncMock(return_value=True)
+        mock_refund = AsyncMock()
+        mock_cancel = AsyncMock(return_value=True)
 
         with (
             patch(f"{_A2A_MOD}.validate_url", return_value=None),
@@ -376,6 +480,8 @@ class TestDelegateToAgentBilling:
             patch(f"{_A2A_MOD}.extract_result_text", return_value="Result text"),
             patch(f"{_BILLING_MOD}.fund_delegation", mock_fund),
             patch(f"{_BILLING_MOD}.record_delegation_event", mock_record),
+            patch(f"{_BILLING_MOD}.refund_delegation", mock_refund),
+            patch(f"{_BILLING_MOD}.cancel_delegation_refund", mock_cancel),
         ):
             result = await delegate_to_agent(
                 "https://agent.example.com",
@@ -388,7 +494,80 @@ class TestDelegateToAgentBilling:
         assert result["cost_usdc"] > 0
         mock_fund.assert_called_once()
         mock_record.assert_called_once()
+        mock_refund.assert_not_awaited()
+        mock_cancel.assert_awaited_once()
         assert mock_record.await_args.kwargs["task_type"] == "research"
+
+    async def test_audit_failure_refunds_pre_debit(self, test_settings, monkeypatch):
+        """A completed task refunds its pre-debit when audit recording fails."""
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        monkeypatch.setenv("A2A_DELEGATION_PLATFORM_FEE_BPS", "0")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "id": "a-1",
+                "agent_url": "https://agent.example.com",
+                "label": "Test",
+                "max_cost_usdc": 50000,
+                "require_x402": False,
+                "created_at": None,
+            }
+        )
+
+        mock_card = A2AAgentCard(name="BilledAgent", description="A billed agent")
+        mock_response = A2ASendMessageResponse(
+            task=A2ATask(
+                id="task-001",
+                status=A2ATaskStatus(state="completed"),
+                artifacts=[],
+            ),
+            raw={},
+        )
+        config = {
+            "configurable": {
+                "org_id": "org-1",
+                "run_id": "run-1",
+                "db_pool": mock_pool,
+            }
+        }
+
+        mock_fund = AsyncMock(return_value=True)
+        mock_record = AsyncMock(return_value=False)
+        mock_refund = AsyncMock()
+
+        with (
+            patch(f"{_A2A_MOD}.validate_url", return_value=None),
+            patch(
+                f"{_BILLING_MOD}._get_pool",
+                return_value=AsyncMock(
+                    fetchrow=AsyncMock(return_value={"balance_usdc": 1_000_000, "spending_limit_usdc": 0, "is_paused": False})
+                ),
+            ),
+            patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
+            patch(f"{_A2A_MOD}.send_message", AsyncMock(return_value=mock_response)),
+            patch(f"{_A2A_MOD}.extract_result_text", return_value="Result text"),
+            patch(f"{_BILLING_MOD}.fund_delegation", mock_fund),
+            patch(f"{_BILLING_MOD}.record_delegation_event", mock_record),
+            patch(f"{_BILLING_MOD}.refund_delegation", mock_refund),
+        ):
+            result = await delegate_to_agent("https://agent.example.com", "do work", config=config)
+
+        assert result["agent_name"] == "BilledAgent"
+        assert result["status"] == "failed"
+        assert result["result"] == ""
+        assert result["error"] == "Delegation audit could not be recorded; pre-debit refunded."
+        assert result["cost_usdc"] == 0
+        mock_fund.assert_awaited_once()
+        mock_record.assert_awaited_once()
+        mock_refund.assert_awaited_once()
+        assert mock_refund.await_args.args[:3] == ("org-1", 50_000, "run-1")
+        assert mock_refund.await_args.args[3] == mock_record.await_args.kwargs["delegation_id"]
 
     async def test_cost_usdc_in_output(self, test_settings, monkeypatch):
         """Output schema includes cost_usdc field even without billing."""
@@ -396,6 +575,7 @@ class TestDelegateToAgentBilling:
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
         monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "false")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
         _config.get_settings.cache_clear()
 
         mock_card = A2AAgentCard(name="FreeAgent", description="No billing")

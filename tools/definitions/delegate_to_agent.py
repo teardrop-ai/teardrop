@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -110,6 +111,15 @@ async def delegate_to_agent(
         db_pool = configurable.get("db_pool")
         jwt_token = configurable.get("jwt_token")
 
+    if settings.a2a_delegation_require_allowlist and not (org_id and db_pool):
+        return {
+            "agent_name": "unknown",
+            "status": "failed",
+            "result": "",
+            "error": "Delegation requires authenticated organisation context and an allowlist entry.",
+            "cost_usdc": 0,
+        }
+
     # ── Allowlist + billing pre-flight ────────────────────────────────────
     billing_enabled = settings.a2a_delegation_billing_enabled and org_id and db_pool
     agent_rule: dict | None = None
@@ -121,7 +131,17 @@ async def delegate_to_agent(
     if org_id and db_pool:
         from teardrop.a2a_client import check_delegation_allowed
 
-        allowed, agent_rule = await check_delegation_allowed(org_id, agent_url, db_pool)
+        try:
+            allowed, agent_rule = await check_delegation_allowed(org_id, agent_url, db_pool)
+        except Exception:
+            logger.exception("delegate_to_agent: allowlist lookup failed org=%s", org_id)
+            return {
+                "agent_name": "unknown",
+                "status": "failed",
+                "result": "",
+                "error": "Unable to verify the delegation allowlist. Try again later.",
+                "cost_usdc": 0,
+            }
         if not allowed and settings.a2a_delegation_require_allowlist:
             return {
                 "agent_name": "unknown",
@@ -200,10 +220,11 @@ async def delegate_to_agent(
     # delegation. The charge is refunded below if dispatch fails or the remote
     # does not complete.
     cost_usdc = 0
+    delegation_id = str(uuid.uuid4()) if billing_enabled else ""
     if billing_enabled:
         from billing import fund_delegation
 
-        funded = await fund_delegation(org_id, estimated_cost, run_id, agent_url)
+        funded = await fund_delegation(org_id, estimated_cost, run_id, agent_url, delegation_id)
         if not funded:
             from billing import record_delegation_event
 
@@ -217,6 +238,7 @@ async def delegate_to_agent(
                 cost_usdc=0,
                 error="Insufficient credit for delegation at debit time.",
                 task_type=task_type,
+                delegation_id=delegation_id,
             )
             return {
                 "agent_name": card.name,
@@ -239,6 +261,8 @@ async def delegate_to_agent(
                 signer=signer,
                 timeout=settings.a2a_delegation_timeout_seconds,
                 auth_header=auth_header_to_forward,
+                max_amount_atomic=estimated_cost,
+                allowed_networks=frozenset({settings.x402_network}),
             )
         else:
             response = await send_message(
@@ -253,8 +277,6 @@ async def delegate_to_agent(
         if billing_enabled:
             from billing import record_delegation_event, refund_delegation
 
-            await refund_delegation(org_id, cost_usdc, run_id)
-            cost_usdc = 0
             await record_delegation_event(
                 org_id=org_id,
                 run_id=run_id,
@@ -264,7 +286,12 @@ async def delegate_to_agent(
                 cost_usdc=0,
                 error=str(exc),
                 task_type=task_type,
+                delegation_id=delegation_id,
             )
+            refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+            cost_usdc = 0
+            if not refund_completed:
+                logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)
         return {
             "agent_name": card.name,
             "status": "failed",
@@ -282,9 +309,9 @@ async def delegate_to_agent(
 
     # ── Post-delegation audit (charge already taken pre-dispatch) ──────────
     if billing_enabled and task_state == "completed":
-        from billing import record_delegation_event
+        from billing import cancel_delegation_refund, record_delegation_event, refund_delegation
 
-        await record_delegation_event(
+        audit_recorded = await record_delegation_event(
             org_id=org_id,
             run_id=run_id,
             agent_url=agent_url,
@@ -293,13 +320,26 @@ async def delegate_to_agent(
             cost_usdc=cost_usdc,
             billing_method="x402" if use_x402 else "credit",
             task_type=task_type,
+            delegation_id=delegation_id,
         )
+        if not audit_recorded:
+            refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+            cost_usdc = 0
+            if not refund_completed:
+                logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)
+            return {
+                "agent_name": card.name,
+                "status": "failed",
+                "result": "",
+                "error": "Delegation audit could not be recorded; pre-debit refunded.",
+                "cost_usdc": 0,
+            }
+        if not await cancel_delegation_refund(org_id, delegation_id):
+            logger.error("delegate_to_agent: completion cancel queued for retry org=%s delegation=%s", org_id, delegation_id)
     elif billing_enabled:
         # Remote agent did not complete — refund the pre-debit.
         from billing import record_delegation_event, refund_delegation
 
-        await refund_delegation(org_id, cost_usdc, run_id)
-        cost_usdc = 0
         await record_delegation_event(
             org_id=org_id,
             run_id=run_id,
@@ -309,7 +349,12 @@ async def delegate_to_agent(
             cost_usdc=0,
             error=f"Remote agent state: {task_state}",
             task_type=task_type,
+            delegation_id=delegation_id,
         )
+        refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+        cost_usdc = 0
+        if not refund_completed:
+            logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)
 
     return {
         "agent_name": card.name,

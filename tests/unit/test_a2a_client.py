@@ -353,7 +353,7 @@ class TestSignX402Payment:
             },
             request=request,
         )
-        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base"}])
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base", "amount": "100"}])
         payload = MagicMock()
         payload.model_dump.return_value = {"payload": {"signed": True}, "x402Version": 2}
         client = MagicMock()
@@ -364,13 +364,133 @@ class TestSignX402Payment:
             patch("x402.x402ClientSync", return_value=client) as client_cls,
             patch("x402.mechanisms.evm.exact.ExactEvmScheme", return_value="exact-scheme") as exact_scheme,
         ):
-            signed = _sign_x402_payment(response, signer=signer)
+            signed = _sign_x402_payment(
+                response,
+                signer=signer,
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
 
         assert signed is not None
         client_cls.assert_called_once_with()
         exact_scheme.assert_called_once_with(signer=signer)
         client.register.assert_called_once_with("base", "exact-scheme")
         client.create_payment_payload.assert_called_once_with(payment_required)
+
+    def test_rejects_requirement_over_delegation_cap(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base", "amount": "101"}])
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync") as client_cls,
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is None
+        client_cls.assert_not_called()
+
+    def test_rejects_requirement_on_unapproved_network(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "polygon", "amount": "50"}])
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync") as client_cls,
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is None
+        client_cls.assert_not_called()
+
+    def test_accepts_legacy_max_amount_required_at_cap(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base", "maxAmountRequired": "100"}])
+        payload = MagicMock()
+        payload.model_dump.return_value = {"payload": {"signed": True}, "x402Version": 2}
+        client = MagicMock()
+        client.create_payment_payload.return_value = payload
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync", return_value=client),
+            patch("x402.mechanisms.evm.exact.ExactEvmScheme", return_value="exact-scheme"),
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is not None
+        client.create_payment_payload.assert_called_once_with(payment_required)
+
+    def test_rejects_unparseable_requirement_amount(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base", "amount": "not-an-int"}])
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync") as client_cls,
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is None
+        client_cls.assert_not_called()
+
+    def test_rejects_zero_amount_requirement(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "exact", "network": "base", "amount": "0"}])
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync") as client_cls,
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is None
+        client_cls.assert_not_called()
 
 
 # ─── Extract Result Text ─────────────────────────────────────────────────────

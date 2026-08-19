@@ -18,5 +18,15 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Mentions delegation spend controls such as per-run limits, caps, or budget checks."
+  },
+  {
+    "id": "a2a.security_controls.001",
+    "messages": [{"role": "user", "content": "What happens when an outbound A2A x402 challenge exceeds the delegation cap or the call has no organisation context?"}],
+    "expected_text_contains": ["cap", "reject", "allowlist"],
+    "expected_text_not_contains": ["signs it anyway", "unlimited"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains that over-cap x402 requirements and missing allowlist context fail closed."
   }
 ]

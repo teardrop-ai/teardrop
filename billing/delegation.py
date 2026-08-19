@@ -31,12 +31,14 @@ class BillingDelegationService:
         get_settings: Callable[[], object],
         get_daily_debit_spend: Callable[[PgConnection | PgPool, str], Awaitable[int]],
         debit_credit: Callable[[str, int, str], Awaitable[tuple[bool, int]]],
+        debit_credit_with_refund_outbox: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
         get_live_pricing_for_model: Callable[..., Awaitable[object | None]],
     ):
         self._get_pool = get_pool
         self._get_settings = get_settings
         self._get_daily_debit_spend = get_daily_debit_spend
         self._debit_credit = debit_credit
+        self._debit_credit_with_refund_outbox = debit_credit_with_refund_outbox
         self._get_live_pricing_for_model = get_live_pricing_for_model
 
     async def check_delegation_budget(self, org_id: str, estimated_cost_usdc: int) -> str | None:
@@ -101,11 +103,174 @@ class BillingDelegationService:
         computed = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
         return max(computed, floor)
 
-    async def fund_delegation(self, org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:
-        """Debit credit for an outbound delegation."""
+    async def fund_delegation(
+        self,
+        org_id: str,
+        cost_usdc: int,
+        run_id: str,
+        agent_url: str,
+        delegation_id: str,
+    ) -> bool:
+        """Debit credit and persist refundable delegation state atomically."""
+        if self._debit_credit_with_refund_outbox is None:
+            logger.error(
+                "Delegation funding callback is not configured; refusing org=%s delegation=%s",
+                org_id,
+                delegation_id,
+            )
+            return False
+
         reason = f"a2a_delegation run={run_id} agent={agent_url}"
-        success, _ = await self._debit_credit(org_id, cost_usdc, reason)
+        success, _ = await self._debit_credit_with_refund_outbox(
+            org_id,
+            cost_usdc,
+            reason,
+            delegation_id,
+            run_id,
+        )
         return success
+
+    async def request_delegation_refund(self, org_id: str, delegation_id: str) -> bool:
+        """Mark a funded delegation for refund; repeated requests are harmless."""
+        try:
+            pool = self._get_pool()
+            row = await pool.fetchrow(
+                """
+                UPDATE a2a_delegation_refund_outbox
+                SET status = 'refund_requested'
+                WHERE id = $1 AND org_id = $2 AND status = 'pending'
+                RETURNING id
+                """,
+                delegation_id,
+                org_id,
+            )
+            if row is not None:
+                return True
+            status = await pool.fetchval(
+                "SELECT status FROM a2a_delegation_refund_outbox WHERE id = $1 AND org_id = $2",
+                delegation_id,
+                org_id,
+            )
+            return status in {"refund_requested", "refunded"}
+        except Exception:
+            logger.exception("Failed to request delegation refund org=%s delegation=%s", org_id, delegation_id)
+            return False
+
+    async def cancel_delegation_refund(self, org_id: str, delegation_id: str) -> bool:
+        """Mark a successful delegation as non-refundable idempotently."""
+        try:
+            pool = self._get_pool()
+            result = await pool.execute(
+                """
+                UPDATE a2a_delegation_refund_outbox
+                SET status = 'cancelled', resolved_at = NOW()
+                WHERE id = $1 AND org_id = $2 AND status = 'pending'
+                """,
+                delegation_id,
+                org_id,
+            )
+            if result == "UPDATE 1":
+                return True
+            status = await pool.fetchval(
+                "SELECT status FROM a2a_delegation_refund_outbox WHERE id = $1 AND org_id = $2",
+                delegation_id,
+                org_id,
+            )
+            return status == "cancelled"
+        except Exception:
+            logger.exception("Failed to cancel delegation refund org=%s delegation=%s", org_id, delegation_id)
+            return False
+
+    async def complete_delegation_refund(self, org_id: str, delegation_id: str) -> bool:
+        """Credit a requested refund and close it in one idempotent transaction."""
+        pool = self._get_pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        """
+                        SELECT run_id, amount_usdc
+                        FROM a2a_delegation_refund_outbox
+                            WHERE id = $1 AND org_id = $2 AND status = 'refund_requested'
+                        FOR UPDATE
+                        """,
+                        delegation_id,
+                        org_id,
+                    )
+                    if row is None:
+                        status = await conn.fetchval(
+                            "SELECT status FROM a2a_delegation_refund_outbox WHERE id = $1 AND org_id = $2",
+                            delegation_id,
+                            org_id,
+                        )
+                        return status == "refunded"
+
+                    amount_usdc = int(row["amount_usdc"])
+                    credit_row = await conn.fetchrow(
+                        """
+                        UPDATE org_credits
+                        SET balance_usdc = balance_usdc + $2, updated_at = NOW()
+                        WHERE org_id = $1
+                        RETURNING balance_usdc
+                        """,
+                        org_id,
+                        amount_usdc,
+                    )
+                    if credit_row is None:
+                        return False
+
+                    await conn.execute(
+                        """
+                        INSERT INTO org_credit_ledger
+                            (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+                        VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                        """,
+                        str(uuid.uuid4()),
+                        org_id,
+                        amount_usdc,
+                        int(credit_row["balance_usdc"]),
+                        f"a2a:refund delegation={delegation_id} run={row['run_id']}",
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE a2a_delegation_refund_outbox
+                        SET status = 'refunded', resolved_at = NOW()
+                        WHERE id = $1 AND org_id = $2 AND status = 'refund_requested'
+                        """,
+                        delegation_id,
+                        org_id,
+                    )
+            return True
+        except Exception:
+            logger.exception("Failed to complete delegation refund org=%s delegation=%s", org_id, delegation_id)
+            return False
+
+    async def process_delegation_refund_outbox(self, limit: int = 50) -> int:
+        """Retry requested refunds and reconcile terminal events after a crash."""
+        pool = self._get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT outbox.id, outbox.org_id, event.task_status
+            FROM a2a_delegation_refund_outbox AS outbox
+                LEFT JOIN a2a_delegation_events AS event
+                    ON event.id = outbox.id AND event.org_id = outbox.org_id
+            WHERE outbox.status = 'refund_requested'
+               OR (outbox.status = 'pending' AND event.id IS NOT NULL)
+            ORDER BY outbox.created_at
+            LIMIT $1
+            """,
+            limit,
+        )
+        processed = 0
+        for row in rows:
+            if row["task_status"] == "completed":
+                resolved = await self.cancel_delegation_refund(row["org_id"], row["id"])
+            else:
+                await self.request_delegation_refund(row["org_id"], row["id"])
+                resolved = await self.complete_delegation_refund(row["org_id"], row["id"])
+            if resolved:
+                processed += 1
+        return processed
 
     async def record_delegation_event(
         self,
@@ -119,18 +284,21 @@ class BillingDelegationService:
         settlement_tx: str = "",
         error: str = "",
         task_type: str = "general",
-    ) -> None:
-        """Write immutable delegation event row (best effort)."""
+        delegation_id: str | None = None,
+    ) -> bool:
+        """Write immutable delegation event row and report whether it succeeded."""
         try:
             pool = self._get_pool()
+            event_id = delegation_id or str(uuid.uuid4())
             await pool.execute(
                 """
                 INSERT INTO a2a_delegation_events
                     (id, org_id, run_id, agent_url, agent_name,
                      task_status, cost_usdc, billing_method, settlement_tx, error, task_type, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+                ON CONFLICT (id) DO NOTHING
                 """,
-                str(uuid.uuid4()),
+                event_id,
                 org_id,
                 run_id,
                 agent_url,
@@ -142,6 +310,7 @@ class BillingDelegationService:
                 error,
                 _normalize_task_type(task_type),
             )
+            return True
         except Exception:
             logger.exception(
                 "Failed to record delegation event org=%s run=%s agent=%s",
@@ -149,6 +318,7 @@ class BillingDelegationService:
                 run_id,
                 agent_url,
             )
+            return False
 
     async def get_delegation_events(
         self,

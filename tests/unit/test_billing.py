@@ -22,6 +22,7 @@ from billing import (
     clear_onboarding_credit_outbox,
     credit_usdc_topup,
     debit_credit,
+    debit_credit_with_delegation_refund,
     get_credit_balance,
     get_org_spending_config,
     grant_onboarding_credit,
@@ -888,6 +889,72 @@ class TestDebitCreditMock:
             result = await debit_credit("org-1", 5_000)
         assert result == (True, 5_000)
         cache.invalidate.assert_awaited_once()
+
+    async def test_delegation_funding_persists_refund_state_with_debit(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+            ]
+        )
+        pool._conn.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit_with_delegation_refund(
+                "org-1",
+                5_000,
+                "a2a_delegation run=run-1 agent=https://agent.example.com",
+                "delegation-1",
+                "run-1",
+            )
+
+        assert result == (True, 5_000)
+        assert any("a2a_delegation_refund_outbox" in call.args[0] for call in pool._conn.execute.call_args_list)
+
+    async def test_delegation_funding_rolls_back_when_refund_state_insert_fails(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+            ]
+        )
+        pool._conn.execute = AsyncMock(side_effect=[None, None, RuntimeError("outbox unavailable")])
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit_with_delegation_refund(
+                "org-1",
+                5_000,
+                "a2a_delegation run=run-1 agent=https://agent.example.com",
+                "delegation-1",
+                "run-1",
+            )
+
+        assert result == (False, 0)
+
+    async def test_delegation_funding_survives_cache_invalidation_failure(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+            ]
+        )
+        pool._conn.execute = AsyncMock()
+        cache = MagicMock()
+        cache.invalidate = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+        with (
+            patch.object(billing_module, "_pool", pool),
+            patch.object(billing_module, "_get_daily_spend_cache", return_value=cache),
+        ):
+            result = await debit_credit_with_delegation_refund(
+                "org-1",
+                5_000,
+                "a2a_delegation run=run-1 agent=https://agent.example.com",
+                "delegation-1",
+                "run-1",
+            )
+
+        assert result == (True, 5_000)
 
 
 @pytest.mark.anyio

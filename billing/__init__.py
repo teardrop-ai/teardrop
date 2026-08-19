@@ -203,6 +203,7 @@ def _get_delegation_service() -> BillingDelegationService:
         get_settings=get_settings,
         get_daily_debit_spend=_get_daily_debit_spend,
         debit_credit=debit_credit,
+        debit_credit_with_refund_outbox=debit_credit_with_delegation_refund,
         get_live_pricing_for_model=get_live_pricing_for_model,
     )
 
@@ -231,6 +232,23 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple
     ``(True, actual_deducted)`` or ``(False, 0)`` when a guard blocks the debit.
     """
     return await _get_credit_service().debit_credit(org_id, amount_usdc, reason)
+
+
+async def debit_credit_with_delegation_refund(
+    org_id: str,
+    amount_usdc: int,
+    reason: str,
+    delegation_id: str,
+    run_id: str,
+) -> tuple[bool, int]:
+    """Debit credit and persist the delegation refund record atomically."""
+    return await _get_credit_service().debit_credit_with_delegation_refund(
+        org_id,
+        amount_usdc,
+        reason,
+        delegation_id,
+        run_id,
+    )
 
 
 async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") -> int:
@@ -316,20 +334,29 @@ async def calculate_byok_orchestration_cost(
     return await _get_delegation_service().calculate_byok_orchestration_cost(tokens_in, tokens_out, provider, model)
 
 
-async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str) -> bool:
+async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str, delegation_id: str) -> bool:
     """Debit credit for an A2A delegation before forwarding the call. Returns success."""
-    return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url)
+    return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url, delegation_id)
 
 
-async def refund_delegation(org_id: str, cost_usdc: int, run_id: str) -> None:
-    """Refund a pre-debited delegation when dispatch fails or the remote did not complete.
-
-    Reuses ``admin_topup_credit`` so the reversal is recorded as an immutable
-    ``topup`` ledger entry; the ``reason`` preserves the delegation audit trail.
-    """
+async def refund_delegation(org_id: str, cost_usdc: int, run_id: str, delegation_id: str) -> bool:
+    """Request and immediately process a durable delegation refund."""
     if cost_usdc <= 0:
-        return
-    await admin_topup_credit(org_id, cost_usdc, reason=f"a2a:refund run={run_id}")
+        return True
+    service = _get_delegation_service()
+    if not await service.request_delegation_refund(org_id, delegation_id):
+        return False
+    return await service.complete_delegation_refund(org_id, delegation_id)
+
+
+async def cancel_delegation_refund(org_id: str, delegation_id: str) -> bool:
+    """Cancel a funded delegation refund after successful completion."""
+    return await _get_delegation_service().cancel_delegation_refund(org_id, delegation_id)
+
+
+async def process_delegation_refund_outbox(limit: int = 50) -> int:
+    """Retry requested delegation refunds and return the number completed."""
+    return await _get_delegation_service().process_delegation_refund_outbox(limit)
 
 
 async def record_delegation_event(
@@ -343,9 +370,10 @@ async def record_delegation_event(
     settlement_tx: str = "",
     error: str = "",
     task_type: str = "general",
-) -> None:
+    delegation_id: str | None = None,
+) -> bool:
     """Append an immutable A2A delegation record (cost, status, settlement) for audit."""
-    await _get_delegation_service().record_delegation_event(
+    return await _get_delegation_service().record_delegation_event(
         org_id,
         run_id,
         agent_url,
@@ -356,6 +384,7 @@ async def record_delegation_event(
         settlement_tx,
         error,
         task_type,
+        delegation_id,
     )
 
 
@@ -680,6 +709,7 @@ __all__ = [
     # credit
     "verify_credit",
     "debit_credit",
+    "debit_credit_with_delegation_refund",
     "admin_topup_credit",
     "grant_onboarding_credit",
     "clear_onboarding_credit_outbox",
@@ -694,6 +724,8 @@ __all__ = [
     "calculate_byok_orchestration_cost",
     "fund_delegation",
     "refund_delegation",
+    "cancel_delegation_refund",
+    "process_delegation_refund_outbox",
     "record_delegation_event",
     "get_delegation_events",
     # spending limits

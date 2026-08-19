@@ -9,7 +9,12 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from agent.cache_prewarm import prewarm_org_prefix
-from billing import cleanup_expired_payment_nonces, process_onboarding_credit_outbox, process_pending_settlements
+from billing import (
+    cleanup_expired_payment_nonces,
+    process_delegation_refund_outbox,
+    process_onboarding_credit_outbox,
+    process_pending_settlements,
+)
 from labeling.worker import labeling_tick
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
@@ -91,6 +96,12 @@ async def _onboarding_credit_outbox_iter() -> None:
         logger.info("Onboarding credit retry: processed %d pending grants", processed)
 
 
+async def _delegation_refund_outbox_iter() -> None:
+    processed = await process_delegation_refund_outbox()
+    if processed:
+        logger.info("Delegation refund retry: processed %d pending refunds", processed)
+
+
 async def _memory_cleanup_iter() -> None:
     deleted = await cleanup_expired_memories()
     if deleted:
@@ -167,6 +178,16 @@ async def _onboarding_credit_outbox_loop() -> None:
         _onboarding_credit_outbox_iter,
         settings.onboarding_credit_retry_interval_seconds,
         monitor_slug="onboarding-credit-retry",
+    )
+
+
+async def _delegation_refund_outbox_loop() -> None:
+    """Periodically retry failed A2A delegation refunds."""
+    await _run_periodic(
+        "Delegation refund retry",
+        _delegation_refund_outbox_iter,
+        settings.settlement_retry_interval_seconds,
+        monitor_slug="delegation-refund-retry",
     )
 
 

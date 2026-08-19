@@ -382,6 +382,8 @@ async def send_message_with_payment(
     signer=None,
     timeout: int = 120,
     auth_header: str | None = None,
+    max_amount_atomic: int,
+    allowed_networks: frozenset[str],
 ) -> A2ASendMessageResponse:
     """Send a task message to a remote A2A agent, handling x402 payment if required.
 
@@ -426,7 +428,12 @@ async def send_message_with_payment(
 
         # ── Handle 402 Payment Required ───────────────────────────────────
         if resp.status_code == 402 and signer is not None:
-            payment_header = _sign_x402_payment(resp, signer)
+            payment_header = _sign_x402_payment(
+                resp,
+                signer,
+                max_amount_atomic=max_amount_atomic,
+                allowed_networks=allowed_networks,
+            )
             if payment_header:
                 resp = await client.post(
                     endpoint,
@@ -440,7 +447,27 @@ async def send_message_with_payment(
     return _parse_send_response(data)
 
 
-def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
+def _payment_requirement_amount(requirement: Any) -> int | None:
+    """Read an x402 atomic amount across current and legacy field names."""
+    raw_amount = _requirement_value(requirement, "amount")
+    if raw_amount is None and isinstance(requirement, dict):
+        raw_amount = requirement.get("maxAmountRequired")
+    if raw_amount is None:
+        raw_amount = _requirement_value(requirement, "max_amount_required")
+    try:
+        amount = int(raw_amount)
+    except (TypeError, ValueError):
+        return None
+    return amount if amount > 0 else None
+
+
+def _sign_x402_payment(
+    resp: httpx.Response,
+    signer,
+    *,
+    max_amount_atomic: int,
+    allowed_networks: frozenset[str],
+) -> str | None:
     """Extract payment requirements from a 402 response and return a signed header.
 
     Returns None if parsing or signing fails.
@@ -471,6 +498,19 @@ def _sign_x402_payment(resp: httpx.Response, signer) -> str | None:
             else:
                 body = resp.json()
                 payment_required = PaymentRequired.model_validate(body)
+
+        accepted_requirements = [
+            requirement
+            for requirement in payment_required.accepts
+            if _requirement_value(requirement, "network") in allowed_networks
+            and (amount := _payment_requirement_amount(requirement)) is not None
+            and amount <= max_amount_atomic
+        ]
+        if not accepted_requirements:
+            logger.warning("_sign_x402_payment: no payment requirement satisfied the delegation cap")
+            return None
+        if len(accepted_requirements) != len(payment_required.accepts):
+            payment_required = payment_required.model_copy(update={"accepts": accepted_requirements})
 
         if not payment_required.accepts:
             logger.warning("_sign_x402_payment: no payment requirements found")

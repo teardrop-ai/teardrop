@@ -50,6 +50,7 @@ In your environment or `.env` file:
 A2A_DELEGATION_ENABLED=true
 A2A_DELEGATION_TIMEOUT_SECONDS=120
 A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
+A2A_DELEGATION_REQUIRE_ALLOWLIST=true # Fail closed without org context or trust entry
 
 # Enable billing for delegations
 A2A_DELEGATION_BILLING_ENABLED=true
@@ -59,6 +60,11 @@ A2A_DELEGATION_MAX_COST_USDC=100000  # Global delegation cost cap ($0.10)
 # For x402 delegations (optional):
 X402_TREASURY_PRIVATE_KEY=0x...      # Treasury wallet private key (hex-encoded)
 ```
+
+Outbound x402 challenges are accepted only on `X402_NETWORK` and only when the
+integer atomic amount is at or below the effective delegation cap (the per-agent
+cap after the platform fee). Missing, malformed, or over-cap requirements are
+rejected before the treasury signs a payment.
 
 ---
 
@@ -92,6 +98,11 @@ Trigger lifecycle, dispatch, secret rejection, and settlement metadata are writt
 
 Organisations must explicitly add remote agents to their allowlist before delegating to them:
 
+The default `A2A_DELEGATION_REQUIRE_ALLOWLIST=true` also requires authenticated
+organisation runtime context. Direct tool invocation without `org_id` and the
+database pool fails closed; setting it to `false` is an explicit operator choice
+for trusted non-billed development flows.
+
 ```powershell
 # Add a trusted agent to the allowlist
 $token = (Invoke-RestMethod -Uri "http://localhost:8000/token" `
@@ -121,6 +132,13 @@ Invoke-RestMethod -Uri "http://localhost:8000/a2a/agents" `
 ## Delegation Events & Audit Trail
 
 Every delegation is recorded in the `a2a_delegation_events` table:
+
+Credit-funded delegations create a durable refund record in
+`a2a_delegation_refund_outbox` in the same transaction as the debit. Successful
+delegations cancel that record. Dispatch failures and non-completed remote tasks
+request a refund; the compensating top-up and immutable credit-ledger row are
+written atomically. A background retry worker reconciles requested refunds and
+pending rows with deterministic delegation event IDs after process failure.
 
 ```powershell
 # List delegation events for your org

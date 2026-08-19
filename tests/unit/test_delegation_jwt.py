@@ -178,3 +178,46 @@ async def test_allowlist_not_enforced(monkeypatch):
         )
 
     assert result["status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_missing_org_context_fails_closed(monkeypatch):
+    """The security-first allowlist default must not be bypassed by direct invocation."""
+    monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "true")
+    config.get_settings.cache_clear()
+
+    from tools.definitions.delegate_to_agent import delegate_to_agent
+
+    with patch("teardrop.a2a_client.validate_url", return_value=None):
+        result = await delegate_to_agent(
+            agent_url="https://agent.example.com",
+            task_description="do something",
+        )
+
+    assert result["status"] == "failed"
+    assert "authenticated organisation context" in result["error"]
+
+
+@pytest.mark.anyio
+async def test_allowlist_lookup_failure_fails_closed():
+    """A database failure while checking trust must not fall through to dispatch."""
+    agent_url = "https://agent.example.com"
+
+    with (
+        patch("teardrop.a2a_client.validate_url", return_value=None),
+        patch(
+            "teardrop.a2a_client.check_delegation_allowed",
+            AsyncMock(side_effect=RuntimeError("database credentials leaked")),
+        ),
+    ):
+        from tools.definitions.delegate_to_agent import delegate_to_agent
+
+        result = await delegate_to_agent(
+            agent_url=agent_url,
+            task_description="do something",
+            config={"configurable": {"org_id": "org-1", "db_pool": MagicMock()}},
+        )
+
+    assert result["status"] == "failed"
+    assert "allowlist" in result["error"].lower()
+    assert "database credentials" not in result["error"]

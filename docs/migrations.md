@@ -104,6 +104,7 @@ python -m migrations.runner
 | `088_withdrawal_in_flight.sql` | Links claimed earnings to withdrawals and adds the manual-reconciliation `in_flight` state |
 | `091_labeling_pipeline.sql` | Generalized prediction labeling definitions, schedule bindings, bounded targets, observations, append-only results, and zero-cost `record_predictions` capture |
 | `092_scheduled_callback_format.sql` | Adds opt-in plain-text callback delivery while retaining JSON as the default |
+| `093_a2a_delegation_refund_outbox.sql` | Durable, idempotent A2A delegation refund/cancel state for credit-funded calls |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

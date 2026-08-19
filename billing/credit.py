@@ -92,6 +92,62 @@ class BillingCreditService:
 
         return self._billing_result_factory(verified=True, billing_method="credit")
 
+    async def _debit_credit_locked(
+        self,
+        conn: PgConnection,
+        org_id: str,
+        amount_usdc: int,
+        reason: str,
+    ) -> tuple[bool, int]:
+        """Debit one org while the caller owns the surrounding transaction."""
+        row = await conn.fetchrow(
+            "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1 FOR UPDATE",
+            org_id,
+        )
+        if row is None:
+            return False, 0
+
+        original_balance = int(row["balance_usdc"])
+        spending_limit = int(row["spending_limit_usdc"])
+        is_paused = bool(row["is_paused"])
+
+        if is_paused:
+            return False, 0
+
+        if spending_limit > 0:
+            daily_spend = await self._get_daily_debit_spend_fn(conn, org_id)
+            if daily_spend + amount_usdc > spending_limit:
+                return False, 0
+
+        # Never partially settle. The row lock closes the concurrent-debit race
+        # between the non-locking preflight and this authoritative mutation.
+        if original_balance < amount_usdc:
+            return False, 0
+
+        new_balance = original_balance - amount_usdc
+        await conn.execute(
+            """
+            UPDATE org_credits
+            SET balance_usdc = $2, updated_at = NOW()
+            WHERE org_id = $1
+            """,
+            org_id,
+            new_balance,
+        )
+        await conn.execute(
+            """
+            INSERT INTO org_credit_ledger
+                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
+            VALUES ($1, $2, 'debit', $3, $4, $5, NOW())
+            """,
+            str(uuid.uuid4()),
+            org_id,
+            amount_usdc,
+            new_balance,
+            reason,
+        )
+        return True, amount_usdc
+
     async def debit_credit(self, org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
         """Debit amount_usdc from org's credit balance atomically."""
         if amount_usdc <= 0:
@@ -102,60 +158,80 @@ class BillingCreditService:
         try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    row = await conn.fetchrow(
-                        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1 FOR UPDATE",
-                        org_id,
-                    )
-                    if row is None:
-                        return False, 0
-                    original_balance = int(row["balance_usdc"])
-                    spending_limit = int(row["spending_limit_usdc"])
-                    is_paused = bool(row["is_paused"])
-
-                    if is_paused:
-                        return False, 0
-
-                    if spending_limit > 0:
-                        daily_spend = await self._get_daily_debit_spend_fn(conn, org_id)
-                        if daily_spend + amount_usdc > spending_limit:
-                            return False, 0
-
-                    # Strict debit: never partially settle. If the balance cannot
-                    # cover the full amount, reject so the caller routes the run to
-                    # the failed-settlement recovery queue instead of recording a
-                    # phantom "settled" event for less than the owed amount. This
-                    # closes the concurrent-debit race where two runs both pass the
-                    # non-locking preflight and the second drains to zero.
-                    if original_balance < amount_usdc:
-                        return False, 0
-
-                    new_balance = original_balance - amount_usdc
-                    actual_deducted = amount_usdc
-                    await conn.execute(
-                        """
-                        UPDATE org_credits
-                        SET balance_usdc = $2, updated_at = NOW()
-                        WHERE org_id = $1
-                        """,
-                        org_id,
-                        new_balance,
-                    )
-                    await conn.execute(
-                        """
-                        INSERT INTO org_credit_ledger
-                            (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-                        VALUES ($1, $2, 'debit', $3, $4, $5, NOW())
-                        """,
-                        str(uuid.uuid4()),
-                        org_id,
-                        actual_deducted,
-                        new_balance,
-                        reason,
-                    )
-                await self._get_daily_spend_cache(org_id).invalidate()
-            return True, actual_deducted
+                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason)
+                if success:
+                    try:
+                        await self._get_daily_spend_cache(org_id).invalidate()
+                    except Exception:
+                        logger.warning("debit_credit: cache invalidation failed org_id=%s", org_id, exc_info=True)
+            return success, actual_deducted
         except Exception as exc:
             logger.exception("debit_credit failed org_id=%s amount=%s", org_id, amount_usdc)
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("org_id", str(org_id))
+                scope.set_tag("amount_usdc_atomic", str(amount_usdc))
+                scope.set_tag("rail", "credit")
+                sentry_sdk.capture_exception(exc)
+            return False, 0
+
+    async def debit_credit_with_delegation_refund(
+        self,
+        org_id: str,
+        amount_usdc: int,
+        reason: str,
+        delegation_id: str,
+        run_id: str,
+    ) -> tuple[bool, int]:
+        """Debit credit and create the delegation refund record in one transaction."""
+        if amount_usdc <= 0:
+            return True, 0
+
+        pool = self._get_pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT status, amount_usdc
+                        FROM a2a_delegation_refund_outbox
+                        WHERE id = $1 AND org_id = $2
+                        FOR UPDATE
+                        """,
+                        delegation_id,
+                        org_id,
+                    )
+                    if existing is not None:
+                        if int(existing["amount_usdc"]) != amount_usdc:
+                            raise ValueError("Delegation funding amount changed for an existing id")
+                        return existing["status"] == "pending", int(existing["amount_usdc"])
+
+                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason)
+                    if not success:
+                        return False, 0
+
+                    await conn.execute(
+                        """
+                        INSERT INTO a2a_delegation_refund_outbox
+                            (id, org_id, run_id, amount_usdc, status, created_at)
+                        VALUES ($1, $2, $3, $4, 'pending', NOW())
+                        """,
+                        delegation_id,
+                        org_id,
+                        run_id,
+                        actual_deducted,
+                    )
+                try:
+                    await self._get_daily_spend_cache(org_id).invalidate()
+                except Exception:
+                    logger.warning(
+                        "delegation funding: cache invalidation failed org_id=%s delegation=%s",
+                        org_id,
+                        delegation_id,
+                        exc_info=True,
+                    )
+            return True, actual_deducted
+        except Exception as exc:
+            logger.exception("delegation credit funding failed org_id=%s amount=%s", org_id, amount_usdc)
             with sentry_sdk.new_scope() as scope:
                 scope.set_tag("org_id", str(org_id))
                 scope.set_tag("amount_usdc_atomic", str(amount_usdc))

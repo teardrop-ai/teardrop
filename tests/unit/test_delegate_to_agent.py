@@ -115,6 +115,7 @@ class TestDelegateToAgent:
         import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
         _config.get_settings.cache_clear()
 
         result = await delegate_to_agent("https://192.168.1.1", "test task")
@@ -126,6 +127,7 @@ class TestDelegateToAgent:
         import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
         _config.get_settings.cache_clear()
 
         with (
@@ -147,6 +149,7 @@ class TestDelegateToAgent:
         import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
         _config.get_settings.cache_clear()
 
         mock_card = A2AAgentCard(name="SpecialistAgent", description="A specialist")
@@ -209,6 +212,7 @@ class TestDelegateToAgent:
         import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
         _config.get_settings.cache_clear()
 
         mock_card = A2AAgentCard(name="TimeoutAgent", description="Will timeout")

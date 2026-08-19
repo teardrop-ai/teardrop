@@ -23,6 +23,7 @@ async def test_end_to_end_delegation(test_settings, monkeypatch):
     import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+    monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
     _config.get_settings.cache_clear()
 
     mock_card = A2AAgentCard(
@@ -64,6 +65,7 @@ async def test_delegation_with_failed_remote_agent(test_settings, monkeypatch):
     import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+    monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
     _config.get_settings.cache_clear()
 
     mock_card = A2AAgentCard(name="Failing Agent", description="Will fail")
@@ -98,6 +100,7 @@ async def test_delegation_network_error(test_settings, monkeypatch):
     import teardrop.config as _config
 
     monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+    monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
     _config.get_settings.cache_clear()
 
     mock_card = A2AAgentCard(name="Unreachable Agent", description="Cannot reach")
