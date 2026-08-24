@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API-layer tests for POST /billing/topup/webhook.
 
 Tests verify HTTP semantics of the endpoint: correct status codes for

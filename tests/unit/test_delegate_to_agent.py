@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for tools/definitions/delegate_to_agent.py.
 
 No real HTTP calls are made; a2a_client functions and config are mocked.

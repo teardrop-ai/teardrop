@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for billing.py — pure functions and mocked DB / x402 calls.
 
 All external interactions (DB pool, x402 server, x402 parser) are mocked so

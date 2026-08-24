@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Integration tests for billing.py — credit system, settlement recording,
 billing history, and revenue summary against a real Postgres database.
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for agent/graph.py routing functions.
 
 Tests the conditional routing logic without building or running the full graph.

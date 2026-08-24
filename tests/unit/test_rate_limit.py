@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for distributed rate limiting.
 
 Tests both in-process fallback and Redis paths, per-user vs per-IP keying,

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Probe DeBank Cloud unit cost for the get_wallet_positions tool.
 
 DeBank bills in "compute units" (1M units / $200 USDC = $0.0002/unit). The

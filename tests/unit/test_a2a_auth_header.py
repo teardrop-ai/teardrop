@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for a2a_client.send_message() auth_header parameter."""
 
 from __future__ import annotations

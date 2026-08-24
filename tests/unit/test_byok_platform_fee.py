@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for BYOK platform fee — get_byok_platform_fee() and billing flow."""
 
 from __future__ import annotations

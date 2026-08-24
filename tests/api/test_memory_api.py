@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for memory endpoints (GET/POST/DELETE /memories, admin endpoints)."""
 
 from __future__ import annotations

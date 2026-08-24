@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Shared pytest fixtures for the Teardrop test suite."""
 
 from __future__ import annotations

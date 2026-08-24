@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for the decision-graph functions in teardrop/memory.py.
 
 Covers store_run_decision, list_run_decisions, backfill_decision_outcome,

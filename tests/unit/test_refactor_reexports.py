@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Compatibility smoke tests for file-level refactor re-exports."""
 
 from __future__ import annotations
@@ -10,6 +11,12 @@ def test_agent_nodes_reexports_still_resolve():
     assert callable(nodes._resolve_planner_llm)
     assert callable(nodes._build_cached_planner_prefix)
     assert callable(nodes._provider_api_key)
+
+
+def test_llm_usage_reexport_still_resolves():
+    from agent.llm import extract_usage
+
+    assert callable(extract_usage)
 
 
 def test_teardrop_app_surface_still_resolves():

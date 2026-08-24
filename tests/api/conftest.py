@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API test fixtures — httpx.AsyncClient with mocked dependencies.
 
 ASGITransport does NOT trigger FastAPI's lifespan (startup/shutdown),

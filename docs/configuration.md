@@ -19,6 +19,8 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `AGENT_UI_GENERATOR_MODEL` | Model for UI generation turns (default: `gemini-3.6-flash`). |
 | `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
 | `AGENT_COMPILER_MODE_ENABLED` | Enables optional staged planner IR (`<plan>{...}</plan>`) execution. Default: `false` (safe rollout). |
+| `AGENT_TOOL_SHORTLIST_ENABLED` | Binds only a relevance-scored subset of tool schemas on planner turns to cut prompt tokens for orgs with many tools. Scoring uses human-message history; empty or unmatched requests use a stable bounded fallback. Default: `false` (safe rollout). Tool listings and executor resolution are unchanged. |
+| `AGENT_TOOL_SHORTLIST_MAX_TOOLS` | Maximum total tools bound to the planner when `AGENT_TOOL_SHORTLIST_ENABLED=true` (default: `12`; minimum: `6`). The minimum is derived from the current always-keep tool set. |
 | `AGENT_CACHE_PREWARM_ENABLED` | Enables one-time startup prompt-cache prewarm for top active org/provider/model prefixes. Default: `true`. |
 | `AGENT_CACHE_PREWARM_TOP_N` | Max number of active prefixes warmed per startup batch. Default: `50`. |
 | `AGENT_LLM_TIMEOUT_SECONDS` | Timeout in seconds for the planner LLM call (default: `180`). |

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Integration test fixtures — spins up a Docker Postgres container.
 
 All integration tests are skipped if Docker is not available or if

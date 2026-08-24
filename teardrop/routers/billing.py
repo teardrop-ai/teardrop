@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -31,29 +30,11 @@ from billing.models import PricingRule
 from teardrop import rate_limit as _rate_limit
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
-from teardrop.usage import UsageSummary, get_usage_by_user
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
-
-
-# ─── Usage endpoints ─────────────────────────────────────────────────────────
-
-
-@router.get("/usage/me", tags=["Usage"], response_model=UsageSummary)
-async def usage_me(
-    payload: dict = Depends(require_auth),
-    start: str | None = None,
-    end: str | None = None,
-) -> JSONResponse:
-    """Return aggregated usage for the authenticated user."""
-
-    start_dt = datetime.fromisoformat(start) if start else None
-    end_dt = datetime.fromisoformat(end) if end else None
-    summary = await get_usage_by_user(payload["sub"], start_dt, end_dt)
-    return JSONResponse(content=summary.model_dump())
 
 
 # ─── Billing endpoints ───────────────────────────────────────────────────────

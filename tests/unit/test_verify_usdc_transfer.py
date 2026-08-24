@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for agent_wallets.verify_usdc_transfer and
 get_settlement_wallet_balance_usdc — all network calls are mocked."""
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for billing.handle_stripe_webhook.
 
 All external interactions (Stripe SDK, DB pool) are mocked so this suite runs

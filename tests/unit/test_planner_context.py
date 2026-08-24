@@ -76,6 +76,8 @@ def _default_settings():
         agent_llm_timeout_seconds=120,
         agent_thread_warning_message_count=1000,
         agent_thread_warning_tool_chars=100000,
+        agent_tool_shortlist_enabled=False,
+        agent_tool_shortlist_max_tools=12,
     )
 
 
@@ -162,6 +164,8 @@ async def test_knowledge_cutoff_falls_back_for_unknown_model():
                     agent_llm_timeout_seconds=60,
                     agent_thread_warning_message_count=1000,
                     agent_thread_warning_tool_chars=100000,
+                    agent_tool_shortlist_enabled=False,
+                    agent_tool_shortlist_max_tools=12,
                 )
                 mock_factory.return_value = mock_llm
                 await planner_node(state)
@@ -193,6 +197,8 @@ async def test_context_injected_when_llm_config_is_none():
                     agent_llm_timeout_seconds=180,
                     agent_thread_warning_message_count=1000,
                     agent_thread_warning_tool_chars=100000,
+                    agent_tool_shortlist_enabled=False,
+                    agent_tool_shortlist_max_tools=12,
                 )
                 mock_factory.return_value = mock_llm
                 await planner_node(state)

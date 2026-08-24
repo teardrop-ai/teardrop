@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API coverage for org-scoped A2A delegation history."""
 
 from __future__ import annotations

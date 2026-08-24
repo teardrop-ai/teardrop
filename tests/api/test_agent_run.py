@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for POST /agent/run — billing gate and authentication.
 
 Tests the billing gate logic that runs before the SSE stream begins:

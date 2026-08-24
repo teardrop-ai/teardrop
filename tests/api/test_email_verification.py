@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for GET /auth/verify-email and POST /auth/resend-verification."""
 
 from __future__ import annotations

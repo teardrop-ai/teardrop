@@ -26,6 +26,7 @@ def register_routers(app: FastAPI) -> None:
         marketplace,
         marketplace_mcp,
         system,
+        usage,
         wallets,
     )
     from teardrop.routers.org import a2a as org_a2a
@@ -41,6 +42,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(agent_schedules.router)
     app.include_router(agent_event_triggers.router)
     app.include_router(a2a_messages.router)
+    app.include_router(usage.router)
     app.include_router(billing.router)
     app.include_router(labeling.router)
     app.include_router(org_tools.router)

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for tools/definitions/get_protocol_tvl.py and get_yield_rates.py.
 
 All HTTP calls are mocked — no live DeFiLlama network requests during tests.

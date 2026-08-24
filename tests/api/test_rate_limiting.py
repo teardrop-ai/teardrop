@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API integration tests for per-org rate limiting on POST /agent/run.
 
 Verifies the org-level 429 guard is independent from the per-user guard,

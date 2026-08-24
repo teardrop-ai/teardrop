@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for agent/nodes.py — planner, tool_executor, ui_generator nodes
 and their helper functions.
 
@@ -26,6 +29,7 @@ from agent.nodes import (
 )
 from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState, TaskStatus
+from teardrop.llm_config import routing as llm_routing
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -53,8 +57,12 @@ def _make_ai_message(content: str = "Hello", tool_calls: list | None = None) -> 
 
 @pytest.fixture(autouse=True)
 def _empty_agent_run_context():
-    with agent_run_context(AgentRunContext([], {})):
-        yield
+    llm_routing._provider_cooldowns.clear()
+    try:
+        with agent_run_context(AgentRunContext([], {})):
+            yield
+    finally:
+        llm_routing._provider_cooldowns.clear()
 
 
 # ─── _extract_a2ui_from_text ──────────────────────────────────────────────────
@@ -248,25 +256,6 @@ class TestSynthesisFastPathPredicates:
         assert _synthesis_fast_path_reason(state) == "stablecoin_basket"
 
 
-class TestToolShortlistHook:
-    def test_apply_tool_shortlist_noop(self):
-        from agent.nodes import _apply_tool_shortlist
-
-        platform_tools = [MagicMock(name="calculate")]
-        org_tools = [MagicMock(name="org_tool")]
-        all_tools = platform_tools + org_tools
-
-        shortlisted_all, shortlisted_platform, shortlisted_org = _apply_tool_shortlist(
-            all_tools=all_tools,
-            platform_tools=platform_tools,
-            org_tools=org_tools,
-        )
-
-        assert shortlisted_all == all_tools
-        assert shortlisted_platform == platform_tools
-        assert shortlisted_org == org_tools
-
-
 # ─── planner_node ─────────────────────────────────────────────────────────────
 
 
@@ -352,40 +341,218 @@ class TestPlannerNode:
         assert "org_blocked" not in bound_names
         assert "calculate" in bound_names
 
-    async def test_planner_calls_tool_shortlist_hook(self, test_settings):
+    async def test_agent_tool_shortlist_flag_binds_subset_and_keeps_platform_listing(self, test_settings, monkeypatch):
         class _Tool:
-            def __init__(self, name: str) -> None:
+            def __init__(self, name: str, description: str) -> None:
                 self.name = name
-                self.description = f"{name} description"
+                self.description = description
 
-        captured: dict[str, list[str]] = {}
+        captured: dict[str, list] = {}
         mock_response = _make_ai_message("No tools needed.", tool_calls=[])
         mock_llm = MagicMock()
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
-        def _shortlist_spy(*, all_tools, platform_tools, org_tools):
-            captured["all"] = [t.name for t in all_tools]
-            captured["platform"] = [t.name for t in platform_tools]
-            captured["org"] = [t.name for t in org_tools]
-            return all_tools, platform_tools, org_tools
+        def _bind_spy(ll, tools, provider):
+            captured["bound"] = [getattr(t, "name", "") for t in tools]
+            return ll
 
-        org_tool = _Tool("org_custom_tool")
-        state = _make_state(metadata={"_usage": {}})
+        async def _invoke_spy(ll, messages, timeout_seconds, *, provider=None, model=None):
+            captured["messages"] = list(messages)
+            return mock_response
+
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        from teardrop.config import get_settings
+
+        get_settings.cache_clear()
+
+        platform_tools = [
+            _Tool("get_yield_rates", "Lending and borrowing yield rates for DeFi protocols"),
+            _Tool("get_wallet_portfolio", "Tokens held in the user's wallet"),
+            _Tool("calculate", "Evaluate a mathematical expression"),
+            _Tool("unrelated_alpha", "Unrelated data"),
+            _Tool("unrelated_beta", "Unrelated data"),
+            _Tool("unrelated_gamma", "Unrelated data"),
+            _Tool("unrelated_delta", "Unrelated data"),
+        ]
+        state = _make_state(
+            messages=[HumanMessage(content="compare aave usdc yield")],
+            metadata={"_usage": {}},
+        )
         with (
-            agent_run_context(AgentRunContext([org_tool], {})),
             patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
-            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
-            patch("agent.nodes._apply_tool_shortlist", side_effect=_shortlist_spy) as shortlist_mock,
-            patch.object(nodes_module, "_cached_tools", [_Tool("calculate")]),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
+            patch.object(nodes_module, "_cached_tools", platform_tools),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
 
         assert result["task_status"] == TaskStatus.GENERATING_UI
-        shortlist_mock.assert_called_once()
-        assert captured["platform"] == ["calculate"]
-        assert captured["org"] == ["org_custom_tool"]
-        assert sorted(captured["all"]) == ["calculate", "org_custom_tool"]
+        # Relevance-scored subset bound, not the full inventory.
+        assert captured["bound"] == ["get_yield_rates", "calculate"]
+        # Cached platform listing stays full even for a dropped tool.
+        system_text = "\n".join(str(m.content) for m in captured["messages"] if getattr(m, "type", "") == "system")
+        assert "- **get_wallet_portfolio**:" in system_text
+
+    async def test_agent_tool_shortlist_filters_org_listing(self, test_settings, monkeypatch):
+        class _Tool:
+            def __init__(self, name: str, description: str) -> None:
+                self.name = name
+                self.description = description
+
+        captured: dict[str, list[str]] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+
+        async def _invoke_spy(ll, messages, timeout, *, provider=None, model=None):
+            captured["messages"] = list(messages)
+            return mock_response
+
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        from teardrop.config import get_settings
+
+        get_settings.cache_clear()
+
+        org_tools = [
+            _Tool("org_token_balance", "Show tokens held in the user's wallet"),
+            _Tool("org_confidentiality", "Adjust contract confidentiality settings"),
+        ]
+        platform_tools = [
+            _Tool("calculate", "Evaluate a mathematical expression"),
+            _Tool("get_yield_rates", "Lending and borrowing yield rates for DeFi protocols"),
+            _Tool("unrelated_alpha", "Unrelated data"),
+            _Tool("unrelated_beta", "Unrelated data"),
+            _Tool("unrelated_gamma", "Unrelated data"),
+        ]
+        state = _make_state(
+            messages=[HumanMessage(content="compare aave usdc yield")],
+            metadata={"_usage": {}},
+        )
+        with (
+            agent_run_context(AgentRunContext(org_tools, {})),
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=lambda llm, tools, provider: llm),
+            patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
+            patch.object(nodes_module, "_cached_tools", platform_tools),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        system_text = "\n".join(str(m.content) for m in captured["messages"] if getattr(m, "type", "") == "system")
+        # Dropped org tool is omitted from the uncached org listing; always-keep
+        # calculate survives via the shortlist intersection.
+        assert "- **org_token_balance**:" not in system_text
+        assert "- **org_confidentiality**:" not in system_text
+        assert "- **calculate**:" in system_text
+
+    async def test_agent_tool_shortlist_retains_tools_for_follow_up_messages(self, test_settings, monkeypatch):
+        class _Tool:
+            def __init__(self, name: str, description: str) -> None:
+                self.name = name
+                self.description = description
+
+        captured: dict[str, list[str]] = {}
+        mock_response = _make_ai_message("No tools needed.", tool_calls=[])
+        mock_llm = MagicMock()
+
+        def _bind_spy(ll, tools, provider):
+            captured["bound"] = [tool.name for tool in tools]
+            return ll
+
+        async def _invoke_spy(ll, messages, timeout_seconds, *, provider=None, model=None):
+            return mock_response
+
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        from teardrop.config import get_settings
+
+        get_settings.cache_clear()
+
+        platform_tools = [
+            _Tool("get_yield_rates", "Lending and borrowing yield rates for DeFi protocols"),
+            _Tool("get_wallet_portfolio", "Tokens held in the user's wallet"),
+            _Tool("calculate", "Evaluate a mathematical expression"),
+            _Tool("unrelated_alpha", "Unrelated data"),
+            _Tool("unrelated_beta", "Unrelated data"),
+            _Tool("unrelated_gamma", "Unrelated data"),
+            _Tool("unrelated_delta", "Unrelated data"),
+        ]
+        state = _make_state(
+            messages=[
+                HumanMessage(content="Compare Aave and Compound USDC yield."),
+                AIMessage(content="I found the yield data."),
+                HumanMessage(content="Now chart that comparison."),
+            ],
+            metadata={"_usage": {}},
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=mock_llm),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
+            patch.object(nodes_module, "_cached_tools", platform_tools),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert captured["bound"] == ["get_yield_rates", "calculate"]
+
+    async def test_agent_tool_shortlist_fallback_rebinds_subset(self, test_settings, monkeypatch):
+        class _Tool:
+            def __init__(self, name: str, description: str) -> None:
+                self.name = name
+                self.description = description
+
+        captured: dict[str, list] = {"bound": []}
+        primary_llm = MagicMock()
+        primary_llm.bind_tools.return_value = primary_llm
+        primary_llm.ainvoke = AsyncMock(side_effect=Exception("429 rate limit"))
+        fallback_llm = MagicMock()
+        fallback_llm.bind_tools.return_value = fallback_llm
+        fallback_llm.ainvoke = AsyncMock(return_value=_make_ai_message("Recovered answer.", tool_calls=[]))
+
+        def _bind_spy(ll, tools, provider):
+            captured["bound"].append([getattr(t, "name", "") for t in tools])
+            return ll
+
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        from teardrop.config import get_settings
+
+        get_settings.cache_clear()
+
+        platform_tools = [
+            _Tool("get_yield_rates", "Lending and borrowing yield rates for DeFi protocols"),
+            _Tool("get_wallet_portfolio", "Tokens held in the user's wallet"),
+            _Tool("calculate", "Evaluate a mathematical expression"),
+            _Tool("unrelated_alpha", "Unrelated data"),
+            _Tool("unrelated_beta", "Unrelated data"),
+            _Tool("unrelated_gamma", "Unrelated data"),
+            _Tool("unrelated_delta", "Unrelated data"),
+        ]
+        state = _make_state(
+            messages=[HumanMessage(content="compare aave usdc yield")],
+            metadata={"_usage": {}},
+        )
+        with (
+            patch("agent.nodes.get_llm_for_request", return_value=primary_llm),
+            patch(
+                "agent.nodes._get_fallback_llm",
+                return_value=(fallback_llm, "anthropic", "claude-sonnet-4-6"),
+            ),
+            patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
+            patch.object(nodes_module, "_cached_tools", platform_tools),
+            patch.object(nodes_module, "_cached_tools_by_name", {}),
+        ):
+            result = await planner_node(state)
+
+        assert result["task_status"] == TaskStatus.GENERATING_UI
+        assert fallback_llm.ainvoke.call_count == 1
+        # Primary bind and rate-limit fallback rebind both carry the subset.
+        assert captured["bound"]
+        assert all(names == ["get_yield_rates", "calculate"] for names in captured["bound"])
 
     async def test_excluded_tools_not_listed_in_system_prompt(self, test_settings):
         class _Tool:

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for marketplace.py — auto-sweep worker (Phase 0.3).
 
 All DB interactions and CDP calls are mocked; no live Postgres required.

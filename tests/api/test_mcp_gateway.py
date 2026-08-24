@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
 """Tests for the MCP gateway — Phase 1: JWKS endpoint + JWT auth gate."""
 
 from __future__ import annotations

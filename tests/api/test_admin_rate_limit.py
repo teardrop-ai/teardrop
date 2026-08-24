@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for per-admin rate limiting on financial mutation endpoints.
 
 A compromised or leaked admin token can hammer state-mutating financial

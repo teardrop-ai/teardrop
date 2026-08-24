@@ -10,16 +10,13 @@ Provides:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import threading
-from collections import OrderedDict
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
 
+from agent._llm_cache import _cache_key, clear_llm_cache, get_llm_for_request  # noqa: F401
+from agent._llm_usage import extract_usage  # noqa: F401
 from teardrop.config import get_settings
 
 # ── Optional provider imports — None when package not installed ───────────────
@@ -121,40 +118,6 @@ def reset_llm() -> None:
     _llm = None
 
 
-# ─── Per-request LLM construction + cache ────────────────────────────────────
-
-_LLM_CACHE_MAX = 64
-_llm_cache: OrderedDict[str, BaseChatModel] = OrderedDict()
-_llm_cache_lock = threading.Lock()
-
-
-def _cache_key(
-    provider: str,
-    model: str,
-    api_key: str,
-    *,
-    api_base: str | None = None,
-    max_tokens: int = 4096,
-    temperature: float = 0.0,
-    reasoning_effort: str | None = None,
-) -> str:
-    """Build a cache key from provider+model+key hash.  Never stores raw keys."""
-    raw = json.dumps(
-        {
-            "provider": provider.lower(),
-            "model": model,
-            "api_key": api_key,
-            "api_base": api_base,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "reasoning_effort": reasoning_effort,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
 def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     """Construct a ``BaseChatModel`` from an explicit config dict.
 
@@ -232,112 +195,3 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
 
     # Should be unreachable due to ALLOWED_PROVIDERS check above.
     raise ValueError(f"Unknown provider '{provider}'.")
-
-
-def get_llm_for_request(llm_config: dict[str, Any] | None = None) -> BaseChatModel:
-    """Resolve an LLM for a single agent run.
-
-    If *llm_config* is ``None``, falls back to the global singleton (backward
-    compatible — existing orgs without config are unaffected).
-
-    Identical configs (same provider+model+key) share a cached instance to
-    avoid re-creating HTTP clients on every request.
-    """
-    if llm_config is None:
-        return get_llm()
-
-    key = _cache_key(
-        llm_config["provider"],
-        llm_config["model"],
-        llm_config.get("api_key", ""),
-        api_base=llm_config.get("api_base"),
-        max_tokens=llm_config.get("max_tokens", 4096),
-        temperature=llm_config.get("temperature", 0.0),
-        reasoning_effort=llm_config.get("reasoning_effort"),
-    )
-
-    with _llm_cache_lock:
-        if key in _llm_cache:
-            _llm_cache.move_to_end(key)
-            return _llm_cache[key]
-
-    # Build outside the lock to avoid blocking other coroutines.
-    llm = create_llm_from_config(llm_config)
-    logger.info(
-        "LLM created for request: provider=%s model=%s",
-        llm_config["provider"],
-        llm_config["model"],
-    )
-
-    with _llm_cache_lock:
-        _llm_cache[key] = llm
-        _llm_cache.move_to_end(key)
-        while len(_llm_cache) > _LLM_CACHE_MAX:
-            _llm_cache.popitem(last=False)
-
-    return llm
-
-
-def clear_llm_cache() -> None:
-    """Purge the per-request LLM cache (used by tests)."""
-    with _llm_cache_lock:
-        _llm_cache.clear()
-
-
-# ─── Usage normalisation ─────────────────────────────────────────────────────
-
-
-def extract_usage(response: AIMessage) -> dict[str, int | str]:
-    """Extract ``tokens_in`` / ``tokens_out`` from an LLM response.
-
-    Different providers use different key names in ``usage_metadata``:
-    - Anthropic: ``input_tokens``, ``output_tokens``
-    - OpenAI:    ``input_tokens``, ``output_tokens`` (LangChain normalises)
-    - Google:    ``input_tokens``, ``output_tokens`` (LangChain normalises)
-
-    LangChain ≥ 0.1.45 normalises most providers to ``input_tokens`` /
-    ``output_tokens``, so this helper is forward-compatible. It also handles
-    the legacy OpenAI ``prompt_tokens`` / ``completion_tokens`` keys as a
-    fallback.
-    """
-    if not hasattr(response, "usage_metadata") or not response.usage_metadata:
-        finish_reason = "stop"
-        response_meta = getattr(response, "response_metadata", None)
-        if isinstance(response_meta, dict):
-            finish_reason = str(response_meta.get("finish_reason") or response_meta.get("stop_reason") or "stop")
-        return {
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "finish_reason": finish_reason,
-        }
-
-    meta = response.usage_metadata
-
-    tokens_in = meta.get("input_tokens") or meta.get("prompt_tokens") or 0
-    tokens_out = meta.get("output_tokens") or meta.get("completion_tokens") or 0
-    cache_read = 0
-    cache_creation = 0
-
-    # Anthropic usage metadata keys.
-    cache_read = int(meta.get("cache_read_input_tokens") or 0)
-    cache_creation = int(meta.get("cache_creation_input_tokens") or 0)
-
-    # OpenAI prompt cache metadata (LangChain/OpenAI normalisation).
-    prompt_details = meta.get("prompt_tokens_details") or {}
-    if isinstance(prompt_details, dict):
-        cache_read = max(cache_read, int(prompt_details.get("cached_tokens") or 0))
-
-    finish_reason = "stop"
-    response_meta = getattr(response, "response_metadata", None)
-    if isinstance(response_meta, dict):
-        finish_reason = str(response_meta.get("finish_reason") or response_meta.get("stop_reason") or "stop")
-
-    return {
-        "tokens_in": int(tokens_in),
-        "tokens_out": int(tokens_out),
-        "cache_read_input_tokens": int(cache_read),
-        "cache_creation_input_tokens": int(cache_creation),
-        "finish_reason": finish_reason,
-    }

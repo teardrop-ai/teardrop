@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Integration tests for A2A delegation — end-to-end with a mock A2A server."""
 
 from __future__ import annotations

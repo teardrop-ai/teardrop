@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for the x402 concurrent-replay nonce guard.
 
 Covers ``billing.x402._claim_payment_nonce`` (atomic INSERT … ON CONFLICT claim)

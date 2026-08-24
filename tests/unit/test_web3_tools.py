@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for Web3 tool definitions.
 
 All RPC calls are mocked via AsyncWeb3 patches so no live Ethereum node is needed.

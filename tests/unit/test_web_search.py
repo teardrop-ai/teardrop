@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for tools/definitions/web_search.py.
 
 No real HTTP calls are made; Tavily client and config are mocked.

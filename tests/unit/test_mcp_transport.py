@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Transport integration-style tests for MCP client tool discovery and invocation.
 
 These tests start a real local MCPServer over Streamable HTTP and validate

@@ -17,7 +17,7 @@ graph TD
     ui_generator --> END
 ```
 
-- **planner** — Sends the conversation history to the configured LLM with all tools bound. If the LLM decides to call tools, the status becomes `EXECUTING`; otherwise, it initiates UI generation.
+- **planner** — Sends the conversation history to the configured LLM with all tools bound. If the LLM decides to call tools, the status becomes `EXECUTING`; otherwise, it initiates UI generation. With `AGENT_TOOL_SHORTLIST_ENABLED=true`, only a relevance-scored subset (≤`AGENT_TOOL_SHORTLIST_MAX_TOOLS`) of tool schemas is bound per planner turn; the setting is validated to retain all always-keep tools, while tool listings and executor resolution remain unchanged.
 - **tool_executor** — Executes all pending tool calls concurrently, appending `ToolMessage` results, and populates a compact `slots` fact store utilized by subsequent planner turns.
 - **ui_generator** — Extracts or generates A2UI component JSON properties from the final assistant message and binds it to the state.
 

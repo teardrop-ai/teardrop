@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for agent_wallets.py — CDP wallet provisioning with mocked DB + CDP SDK."""
 
 from __future__ import annotations

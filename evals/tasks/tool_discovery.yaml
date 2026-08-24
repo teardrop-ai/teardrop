@@ -70,5 +70,30 @@
     "max_cost_usdc": 500000,
     "scorer": "llm_judge",
     "rubric": "The agent should select get_wallet_history for paginated decoded cross-chain activity and explain the returned cursor rather than attempting one-transaction tools."
+  },
+  {
+    "id": "tool_discovery.yield.001",
+    "messages": [{"role": "user", "content": "Find the highest current USDC supply yield across multiple DeFi protocols on Base, including Aave and Compound. Use broad pool discovery rather than a single-protocol snapshot."}],
+    "expected_tool_calls": ["get_yield_rates"],
+    "forbidden_tool_calls": ["get_lending_rates", "get_wallet_portfolio"],
+    "expected_text_contains": ["USDC", "APY"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should use get_yield_rates for broad multi-protocol pool discovery on Base, rather than the single-protocol on-chain lending snapshot or a wallet tool."
+  },
+  {
+    "id": "tool_discovery.wallet_balances.001",
+    "messages": [{"role": "user", "content": "What are the native ETH balance and the USDC balance for wallet 0x0000000000000000000000000000000000000000 on Base? Base mainnet is chain_id 8453 and the USDC contract is 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913."}],
+    "expected_tool_calls": ["get_eth_balance", "get_erc20_balance"],
+    "expected_tool_args": {"get_eth_balance": {"chain_id": 8453}, "get_erc20_balance": {"chain_id": 8453}},
+    "forbidden_tool_calls": ["get_wallet_portfolio"],
+    "expected_text_contains": ["USDC", "ETH", "balance"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should fetch both native ETH and Base USDC balances for the wallet using chain_id 8453 and report each value."
   }
 ]

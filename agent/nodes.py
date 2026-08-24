@@ -96,29 +96,13 @@ from agent.output_contracts import (
 )
 from agent.planner_ir import parse_plan_from_text
 from agent.runtime_context import get_agent_run_context
+from agent.shortlist import select_shortlisted_tools, tool_name
 from agent.state import AgentState, TaskStatus
 from teardrop.config import get_settings
 from teardrop.llm_config import is_provider_cooled_down, record_provider_failure
 from tools import registry
 
 logger = logging.getLogger(__name__)
-
-# ─── Shortlist stub ──────────────────────────────────────────────────────────
-
-
-def _apply_tool_shortlist(
-    *,
-    all_tools: list,
-    platform_tools: list,
-    org_tools: list,
-) -> tuple[list, list, list]:
-    """No-op shortlist stub.
-
-    Replace with a relevance-scored selector to cap token budget when the
-    org has many tools. Return order: (all_tools, platform_tools, org_tools).
-    """
-    return all_tools, platform_tools, org_tools
-
 
 # ─── Tool caches ──────────────────────────────────────────────────────────────
 
@@ -409,16 +393,38 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
         bool(state.metadata.get("_synthesis_forced", False)),
     )
 
-    # Tool shortlist insertion point: can be overridden to cap token budget.
-    all_tools, filtered_platform_tools, filtered_org_tools = _apply_tool_shortlist(
-        all_tools=all_tools,
-        platform_tools=filtered_platform_tools,
-        org_tools=filtered_org_tools,
-    )
+    # Tool shortlist: when enabled, bind only a relevance-scored subset of tool
+    # schemas to cap prompt tokens. Score against the human-message history so
+    # conversational follow-ups retain tools selected for the original request.
+    # Platform listing stays cached/full; only the bound tool set and the
+    # uncached org listing shrink. Executor resolution stays global, so an
+    # unbound-but-real tool call still executes.
+    bound_tools = all_tools
+    if settings.agent_tool_shortlist_enabled:
+        request_text = "\n".join(
+            message_text
+            for message in state.messages
+            if getattr(message, "type", "") in {"human", "user"}
+            for message_text in [_ai_content_to_text(message.content)]
+            if message_text.strip()
+        )
+        bound_tools = select_shortlisted_tools(
+            request_text,
+            all_tools,
+            max_tools=settings.agent_tool_shortlist_max_tools,
+        )
+        if len(bound_tools) != len(all_tools):
+            logger.info(
+                "planner_node: tool shortlist kept=%d dropped=%d",
+                len(bound_tools),
+                len(all_tools) - len(bound_tools),
+            )  # counts only, never request text
+            kept = {tool_name(b) for b in bound_tools}
+            filtered_org_tools = [t for t in filtered_org_tools if tool_name(t) in kept]
 
     llm, _provider, _model, _max_tokens, _timeout, _synthesis_fast_reason = _resolve_planner_llm(
         state,
-        all_tools,
+        bound_tools,
         settings,
         llm_config=llm_config,
         tool_iterations=tool_iterations,
@@ -560,7 +566,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
             fallback_llm, fallback_provider, fallback_model = fallback_result
             logger.warning("planner_node: retrying with fallback LLM after rate limit")
             fallback_bound = (
-                fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, all_tools, fallback_provider)
+                fallback_llm if _synthesis_fast_reason else _bind_tools_for_provider(fallback_llm, bound_tools, fallback_provider)
             )  # type: ignore[arg-type]
             result = await _invoke_planner_llm(
                 fallback_bound,

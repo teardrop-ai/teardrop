@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Integration tests for users.py CRUD against a real Postgres DB."""
 
 from __future__ import annotations

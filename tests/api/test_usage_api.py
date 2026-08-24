@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for GET /usage/me and admin usage endpoints."""
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ _SUMMARY = UsageSummary(
 
 @pytest.mark.anyio
 async def test_usage_me(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.billing.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
+    monkeypatch.setattr("teardrop.routers.usage.get_usage_by_user", AsyncMock(return_value=_SUMMARY))
 
     resp = await api_client.get("/usage/me")
     assert resp.status_code == 200
@@ -104,7 +107,7 @@ async def test_admin_telemetry_completeness_requires_admin(api_client):
 
 @pytest.mark.anyio
 async def test_usage_me_with_date_range(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.billing.get_usage_by_user", AsyncMock(return_value=UsageSummary()))
+    monkeypatch.setattr("teardrop.routers.usage.get_usage_by_user", AsyncMock(return_value=UsageSummary()))
     resp = await api_client.get(
         "/usage/me",
         params={"start": "2024-01-01T00:00:00", "end": "2024-12-31T23:59:59"},

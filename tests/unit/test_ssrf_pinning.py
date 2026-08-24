@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for SSRF connection-pinning helpers in ``tools.definitions.http_fetch``.
 
 These close the DNS-rebinding TOCTOU window: a hostname validated as safe could

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Audit Python dependencies for upgrade drift and published OSV vulnerabilities."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Focused tests for shared non-financial post-run telemetry."""
 
 from __future__ import annotations

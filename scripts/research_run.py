@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Run the repository research pipeline with credentials loaded from .env.
 
 This wrapper loads environment variables from the repository's ``.env`` file

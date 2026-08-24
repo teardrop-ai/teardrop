@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for a2a_client.py — SSRF guard, agent card discovery, message sending."""
 
 from __future__ import annotations

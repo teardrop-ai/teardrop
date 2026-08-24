@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Run GPT-Researcher from the isolated research virtual environment."""
 
 from __future__ import annotations

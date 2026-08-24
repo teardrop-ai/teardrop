@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for marketplace.worker.reputation_rollup_once.
 
 All DB interactions are mocked via the same ``marketplace._pool`` monkeypatch

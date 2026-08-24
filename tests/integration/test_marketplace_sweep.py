@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Integration tests for the marketplace auto-sweep worker (Phase 0.3).
 
 Requires a live Postgres instance (Docker or DATABASE_URL env var).

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """Unit tests for ``_A2UIStreamFilter`` in ``app.py``.
 
 The filter must strip ``\u0060\u0060\u0060a2ui ... \u0060\u0060\u0060`` fences from a streaming

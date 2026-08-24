@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for custom tool endpoints (POST/GET/PATCH/DELETE /tools, GET /admin/tools)."""
 
 from __future__ import annotations

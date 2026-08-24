@@ -5,9 +5,13 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 130
+required-version = ">=0.16.0"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "CPY001"]
+
+[tool.ruff.lint.flake8-copyright]
+notice-rgx = "\\A(?:#![^\\r\\n]*\\r?\\n)?(?:\\r?\\n)?# SPDX-License-Identifier: BUSL-1\\.1\\r?\\n# Copyright \\(c\\) 2026 Teardrop AI\\. All rights reserved\\."
 
 [tool.coverage.run]
 source = ["."]

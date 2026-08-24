@@ -117,6 +117,18 @@ class Settings(BaseSettings):
             "Enable optional structured staged tool-execution planning via <plan>{...}</plan> blocks in planner responses."
         ),
     )
+    agent_tool_shortlist_enabled: bool = Field(
+        default=False,
+        description=("Bind only a relevance-scored subset of tool schemas on planner turns. Default False (safe rollout)."),
+    )
+    agent_tool_shortlist_max_tools: int = Field(
+        default=12,
+        ge=0,
+        description=(
+            "Maximum total tools bound to the planner when tool shortlisting is enabled. "
+            "Must be large enough to retain all current always-keep tools."
+        ),
+    )
     agent_cache_prewarm_enabled: bool = Field(
         default=True,
         description=("Pre-warm provider prompt caches for the most active org/model prefixes at startup."),
@@ -946,6 +958,7 @@ class Settings(BaseSettings):
     def _validate_model_pool(self) -> "Settings":
         """Ensure every entry in default_model_pool has a valid provider."""
         from agent.llm import ALLOWED_PROVIDERS
+        from agent.shortlist import SHORTLIST_MIN_TOOLS
 
         for entry in self.default_model_pool:
             provider = entry.get("provider", "")
@@ -957,6 +970,11 @@ class Settings(BaseSettings):
                 raise ValueError("default_model_pool entry missing 'model' key")
         if self.pg_pool_max_size < self.pg_pool_min_size:
             raise ValueError("pg_pool_max_size must be greater than or equal to pg_pool_min_size")
+        if self.agent_tool_shortlist_max_tools < SHORTLIST_MIN_TOOLS:
+            raise ValueError(
+                "agent_tool_shortlist_max_tools must be greater than or equal to "
+                f"{SHORTLIST_MIN_TOOLS} to retain all always-keep tools"
+            )
         return self
 
 

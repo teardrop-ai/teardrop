@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for the org-admin gate on the A2A allowlist endpoints.
 
 An allowlist entry exposes an arbitrary URL to the agent's delegate_to_agent

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2026 Teardrop AI. All rights reserved.
+
 """API tests for PUT /llm-config — api_base BYOK guard (security).
 
 A custom ``api_base`` with no BYOK key would forward the platform's shared
