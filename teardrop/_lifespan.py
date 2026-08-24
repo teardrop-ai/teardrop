@@ -20,7 +20,6 @@ from marketplace import close_marketplace_db, init_marketplace_db
 from mcp_client import close_mcp_client_db, init_mcp_client_db
 from org_tools import close_org_tools_db, init_org_tools_db
 from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_tick
-from scripts.generate_keys import generate_keypair
 from shared.db_pool import Row, create_pool
 from teardrop._background_tasks import (
     _delegation_refund_outbox_loop,
@@ -40,6 +39,7 @@ from teardrop.agent_wallets import close_agent_wallets_db, init_agent_wallets_db
 from teardrop.benchmarks import close_benchmarks_db, init_benchmarks_db
 from teardrop.cache import close_redis, init_redis
 from teardrop.config import Settings, get_settings
+from teardrop.keys import generate_keypair
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
 from teardrop.retention import close_retention_db, init_retention_db

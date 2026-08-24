@@ -121,6 +121,9 @@ DATABASE_URL=postgresql://teardrop:teardrop@localhost:5432/teardrop
 ```
 
 **5. Generate RSA keys**
+
+The RSA keypair is generated automatically at app startup (into `keys/`).
+To generate it manually first (optional), run:
 ```powershell
 python scripts/generate_keys.py
 ```

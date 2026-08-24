@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ── Stage 1: builder ─────────────────────────────────────────────────────────
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.12.14-slim-trixie AS builder
 
 WORKDIR /build
 
@@ -12,14 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create and activate a venv
 RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --no-compile -r requirements.txt
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12.14-slim-trixie AS runtime
 
 WORKDIR /app
 
@@ -28,13 +29,11 @@ RUN addgroup --system teardrop && adduser --system --ingroup teardrop teardrop
 
 # Copy the venv from the builder stage
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1
 
 # Copy application code
 COPY --chown=teardrop:teardrop . .
-
-# Generate RSA keypair at build time (overrideable by mounting keys/ as a volume)
-RUN python scripts/generate_keys.py || true
 
 USER teardrop
 

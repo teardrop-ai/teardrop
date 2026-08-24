@@ -27,6 +27,8 @@ Copy-Item .env.example .env
 # Fill in DATABASE_URL and ANTHROPIC_API_KEY at minimum
 
 # 5. Generate RSA keys and run migrations
+# The RSA keypair is auto-generated at app startup into keys/; the manual
+# command below is optional and only needed to pre-generate it.
 python scripts/generate_keys.py
 python -m migrations.runner
 

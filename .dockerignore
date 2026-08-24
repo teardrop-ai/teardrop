@@ -23,6 +23,7 @@ keys/
 
 # Development and test data
 data/
+scripts/
 
 # Test suite and CI config
 tests/
@@ -41,6 +42,12 @@ tests/
 # Documentation
 *.md
 docs/
+
+# Non-runtime project content
+notes/
+prompts/
+spec/
+evals/
 
 # Coverage reports
 coverage.xml
