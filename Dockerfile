@@ -35,6 +35,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
 # Copy application code
 COPY --chown=teardrop:teardrop . .
 
+# Pre-create the writable keys directory for the non-root app user. The keys/
+# dir is gitignored (not in the build context), so it must be created here;
+# otherwise lifespan's generate_keypair() fails with PermissionError at startup.
+RUN mkdir -p /app/keys && chown teardrop:teardrop /app/keys
+
 USER teardrop
 
 EXPOSE 8000

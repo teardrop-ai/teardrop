@@ -13,6 +13,11 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
+    # Deploys are gated on CI: auto-deploy is disabled and the deploy is
+    # triggered from .github/workflows/test.yml (deploy job) only after the
+    # unit/API tests and the docker-smoke startup test pass. Set the
+    # RENDER_DEPLOY_HOOK_URL secret to this service's Render deploy hook.
+    autoDeploy: false
     envVars:
       # ── Required ──────────────────────────────────────────────────────────
       - key: APP_ENV

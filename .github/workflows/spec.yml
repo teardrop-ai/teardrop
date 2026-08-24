@@ -29,7 +29,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Generate RSA test keys
-        run: python scripts/generate_keys.py
+        # Run as a module so the repo root is on sys.path (teardrop.keys is
+        # imported by the script); `python scripts/generate_keys.py` would add
+        # only scripts/ to the path and fail with ModuleNotFoundError.
+        run: python -m scripts.generate_keys
 
       - name: Export API spec artifacts
         run: python -m scripts.export_api_spec
