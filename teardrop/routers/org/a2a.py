@@ -175,6 +175,10 @@ class A2ADelegationEvent(BaseModel):
     billing_method: str
     settlement_tx: str | None = None
     error: str | None = None
+    delivery_status: str = "not_attempted"
+    delivery_resolved_at: str | None = Field(default=None, description="ISO 8601 timestamp; null while unresolved.")
+    delivery_settlement_tx: str | None = None
+    delivery_error: str | None = None
     created_at: str | None = Field(default=None, description="ISO 8601 timestamp; null if unavailable.")
 
 
@@ -202,6 +206,10 @@ async def list_delegation_events(
                 "billing_method": e["billing_method"],
                 "settlement_tx": e["settlement_tx"],
                 "error": e["error"],
+                "delivery_status": e.get("delivery_status", "not_attempted"),
+                "delivery_resolved_at": e["delivery_resolved_at"].isoformat() if e.get("delivery_resolved_at") else None,
+                "delivery_settlement_tx": e.get("delivery_settlement_tx") or None,
+                "delivery_error": e.get("delivery_error") or None,
                 "created_at": e["created_at"].isoformat() if e["created_at"] else None,
             }
             for e in events

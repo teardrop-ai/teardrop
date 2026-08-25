@@ -9,7 +9,7 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 
 The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace` and `endpoints.marketplace_catalog` so external A2A clients can discover the paid marketplace catalog without hard-coding Teardrop-specific URLs.
 
-The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. Platform tool entries include cached aggregate reputation when available; the complete active-tool index is published at `/.well-known/reputation.json`. `supportedInterfaces` advertises both the streaming AG-UI surface (`/agent/run`) and the blocking inbound A2A surface (`/message:send`).
+The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. Platform tool entries include cached aggregate reputation when available; the complete active-tool index is published at `/.well-known/reputation.json`. `supportedInterfaces` advertises both the streaming AG-UI surface (`/agent/run`) and the inbound A2A surface (`/message:send`). When enabled, `capabilities.asyncTasks` advertises the opt-in `Prefer: respond-async` flow and its polling endpoint.
 
 The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
 
@@ -50,12 +50,19 @@ In your environment or `.env` file:
 A2A_DELEGATION_ENABLED=true
 A2A_DELEGATION_TIMEOUT_SECONDS=120
 A2A_DELEGATION_MAX_PER_RUN=3         # Max delegations per agent run
+A2A_DELEGATION_MAX_CONCURRENT_PER_RUN=2 # Max simultaneous delegations per agent run
 A2A_DELEGATION_REQUIRE_ALLOWLIST=true # Fail closed without org context or trust entry
 
 # Enable billing for delegations
 A2A_DELEGATION_BILLING_ENABLED=true
 A2A_DELEGATION_PLATFORM_FEE_BPS=500  # Platform fee: 500 bps = 5%
 A2A_DELEGATION_MAX_COST_USDC=100000  # Global delegation cost cap ($0.10)
+
+# Optional asynchronous inbound execution
+A2A_INBOUND_ASYNC_ENABLED=true
+A2A_INBOUND_ASYNC_MAX_CONCURRENCY=8
+A2A_INBOUND_ASYNC_QUEUE_SIZE=100
+A2A_INBOUND_TASK_TTL_DAYS=7
 
 # For x402 delegations (optional):
 X402_TREASURY_PRIVATE_KEY=0x...      # Treasury wallet private key (hex-encoded)
@@ -76,7 +83,10 @@ External agents can call Teardrop directly over `POST /message:send`.
 - Unpaid anonymous probes receive the `402 Payment Required` challenge before request-body validation, which keeps registry validators compatible with empty or malformed probe payloads.
 - The `402` body is a full x402 v2 `PaymentRequired` payload with top-level `resource`, `accepts`, and `extensions`. On `POST /message:send`, `extensions.bazaar` advertises the A2A request and response shape for registries.
 - Authenticated callers may present a Teardrop JWT and reuse the existing credit/x402 billing gate.
-- The current implementation is a single-turn blocking endpoint: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
+- By default, the endpoint remains single-turn and blocking: it accepts an A2A `message` payload (or JSON-RPC envelope) and returns a completed `Task` in a JSON-RPC envelope.
+- Callers that send `Prefer: respond-async` receive `202 Accepted`, an internal task ID, a `Location` header, and `metadata.statusPath`. Poll `GET /message:status/{task_id}` for the submitted, working, or terminal task projection. Authenticated polling is scoped to the JWT organization and user; anonymous polling requires the internal task ID as a capability.
+- Asynchronous execution uses a bounded per-process worker pool. A full queue returns `503 Service Unavailable` with `Retry-After: 1`. x402 verification and credit billing remain in the worker so a queued request does not consume a single-use payment claim before it can execute.
+- Each active task carries a Postgres process lease renewed by its owning instance. A healthy sibling instance leaves that task alone; after the lease expires, the recovery loop terminalizes the task as failed with an unknown billing outcome and never automatically re-executes it. The queue itself remains local rather than a durable distributed broker.
 - Operators may disable the surface with `A2A_INBOUND_ENABLED=false`; the endpoint then returns `404` and the public agent card stops advertising `a2a_message`.
 
 ## A2A Event-Trigger Control Plane
@@ -140,6 +150,23 @@ request a refund; the compensating top-up and immutable credit-ledger row are
 written atomically. A background retry worker reconciles requested refunds and
 pending rows with deterministic delegation event IDs after process failure.
 
+When an x402 payment header has been signed and the paid retry begins but the
+remote outcome cannot be determined, the delegation is recorded as
+`possibly_delivered`. Its pre-debit remains held and the refund worker skips it;
+Teardrop never automatically re-dispatches an ambiguous task. An administrator
+must inspect the remote task or payment record and resolve it explicitly:
+
+- `confirmed` marks delivery complete and cancels the pending refund.
+- `failed` records definitive non-delivery and applies the durable credit refund.
+
+Both resolutions are org-scoped, idempotent, and reject an incompatible
+already-terminal resolution. Use `GET /admin/a2a/delegations/possibly-delivered`
+to list cases and `POST /admin/a2a/delegations/{delegation_id}/resolve` with an
+`org_id` and `outcome` of `confirmed` or `failed` to resolve one. A confirmed
+resolution may include a validated EVM transaction hash in `settlement_tx`.
+The immutable `a2a_delegation_events` row is never updated; org history exposes
+the current `delivery_status` projection separately.
+
 ```powershell
 # List delegation events for your org
 Invoke-RestMethod -Uri "http://localhost:8000/a2a/delegations?limit=50" `
@@ -160,6 +187,10 @@ Response:
     "billing_method": "credit",
     "settlement_tx": "",
     "error": null,
+    "delivery_status": "not_attempted",
+    "delivery_resolved_at": null,
+    "delivery_settlement_tx": null,
+    "delivery_error": null,
     "created_at": "2026-04-16T14:22:00Z"
   }
 ]

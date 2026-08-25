@@ -188,6 +188,8 @@ async def dispatch_settlement(
     succeeded so the caller can record marketplace tool usage stats.
     """
     result["marketplace_stats_billable"] = False
+    result["settlement_amount_usdc"] = 0
+    result["settlement_tx"] = ""
 
     if not billing.verified:
         return
@@ -215,6 +217,7 @@ async def dispatch_settlement(
         success, deducted_amount = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
         if success:
             result["marketplace_stats_billable"] = True
+            result["settlement_amount_usdc"] = deducted_amount
             await record_settlement(usage_event.id, deducted_amount, "", "settled")
             yield _sse_event(
                 _EV_BILLING_SETTLEMENT,
@@ -274,6 +277,8 @@ async def dispatch_settlement(
             )
         if not settlement_timed_out and billing_settled.settled:
             result["marketplace_stats_billable"] = True
+            result["settlement_amount_usdc"] = max(0, billing_settled.amount_usdc)
+            result["settlement_tx"] = billing_settled.tx_hash
             await record_settlement(
                 usage_event.id,
                 billing_settled.amount_usdc,

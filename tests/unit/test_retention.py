@@ -111,6 +111,25 @@ class TestRetentionSweep:
         pool.fetchval.assert_awaited_once()
         assert "siwe_login_sessions" in pool.fetchval.await_args.args[0]
 
+    async def test_sweeps_terminal_a2a_task_projections(self):
+        pool, connection = _checkpoint_pool([])
+        pool.fetchval = AsyncMock(side_effect=[2, 0, 0])
+
+        with patch.object(retention_module, "_pool", pool):
+            result = await retention_module.retention_sweep_once(
+                _settings(
+                    checkpoint_ttl_days=0,
+                    scheduled_run_results_ttl_days=0,
+                    org_tool_execution_events_ttl_days=0,
+                    telemetry_run_starts_ttl_days=0,
+                    a2a_inbound_task_ttl_days=7,
+                )
+            )
+
+        assert result.a2a_inbound_tasks == 2
+        assert result.expired_siwe_login_sessions == 0
+        assert "a2a_inbound_tasks" in pool.fetchval.await_args_list[0].args[0]
+
 
 @pytest.mark.anyio
 class TestCheckpointActivity:

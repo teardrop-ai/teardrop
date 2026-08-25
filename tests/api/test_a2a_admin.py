@@ -129,3 +129,75 @@ async def test_delete_a2a_agent_not_found(admin_api_client):
 async def test_delete_a2a_agent_requires_admin(api_client):
     resp = await api_client.delete("/admin/a2a/agents/agent-123")
     assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_list_possibly_delivered_delegations(admin_api_client, monkeypatch):
+    from datetime import datetime, timezone
+
+    import billing
+
+    rows = [
+        {
+            "id": "delegation-1",
+            "org_id": "org-1",
+            "run_id": "run-1",
+            "amount_usdc": 50_000,
+            "refund_status": "pending",
+            "delivery_status": "possibly_delivered",
+            "agent_url": "https://agent.example.com",
+            "agent_name": "Paid Agent",
+            "task_status": "possibly_delivered",
+            "task_type": "general",
+            "billing_method": "x402",
+            "settlement_tx": "",
+            "delivery_settlement_tx": "",
+            "delivery_error": "timed out",
+            "delivery_started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        }
+    ]
+    listing = AsyncMock(return_value=rows)
+    monkeypatch.setattr(billing, "get_possibly_delivered_delegations", listing)
+
+    response = await admin_api_client.get("/admin/a2a/delegations/possibly-delivered", params={"org_id": "org-1"})
+
+    assert response.status_code == 200
+    assert response.json()[0]["delivery_status"] == "possibly_delivered"
+    listing.assert_awaited_once_with("org-1", limit=200)
+
+
+@pytest.mark.anyio
+async def test_resolve_possibly_delivered_delegation_as_confirmed(admin_api_client, monkeypatch):
+    import billing
+
+    confirmed = AsyncMock(return_value=True)
+    failed = AsyncMock(return_value=False)
+    monkeypatch.setattr(billing, "confirm_delegation_delivery", confirmed)
+    monkeypatch.setattr(billing, "fail_delegation_delivery", failed)
+    monkeypatch.setattr("teardrop.routers.admin.a2a._enforce_rate_limit", AsyncMock())
+
+    response = await admin_api_client.post(
+        "/admin/a2a/delegations/delegation-1/resolve",
+        json={"org_id": "org-1", "outcome": "confirmed", "settlement_tx": "0x" + "a" * 64},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "delegation-1",
+        "org_id": "org-1",
+        "outcome": "confirmed",
+        "refund_status": "cancelled",
+    }
+    confirmed.assert_awaited_once_with("org-1", "delegation-1", "0x" + "a" * 64)
+    failed.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_resolve_possibly_delivered_requires_admin(api_client):
+    response = await api_client.post(
+        "/admin/a2a/delegations/delegation-1/resolve",
+        json={"org_id": "org-1", "outcome": "failed"},
+    )
+
+    assert response.status_code == 403

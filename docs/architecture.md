@@ -35,6 +35,7 @@ Each graph invocation records its thread in `checkpoint_thread_activity` before 
 |---------|------------------|
 | LangGraph checkpoint state | Configurable inactive-thread TTL; 45 days by default |
 | `scheduled_run_results` | Disposable output cache; 30 days by default |
+| `a2a_inbound_tasks` | Transient asynchronous inbound task projections with process leases; terminal rows are retained for 7 days by default |
 | `org_tool_events` with `executed` or `failed` event types | Disposable execution telemetry; 90 days by default |
 | `telemetry_run_starts` | Run-source completeness denominator; 120 days by default |
 | Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |

@@ -36,11 +36,13 @@ pytestmark = pytest.mark.anyio
 class _AsyncContext:
     def __init__(self, value):
         self.value = value
+        self.exit_exception = None
 
     async def __aenter__(self):
         return self.value
 
     async def __aexit__(self, exc_type, exc, traceback):
+        self.exit_exception = exc_type
         return None
 
 
@@ -329,6 +331,30 @@ class TestDelegationRefundOutbox:
         assert result is True
         conn.execute.assert_not_awaited()
 
+    async def test_fail_delivery_aborts_transaction_when_credit_account_is_missing(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "status": "pending",
+                    "delivery_status": "possibly_delivered",
+                    "run_id": "run-1",
+                    "amount_usdc": 5_000,
+                },
+                None,
+            ]
+        )
+        conn.execute = AsyncMock()
+        transaction = _AsyncContext(conn)
+        conn.transaction = MagicMock(return_value=transaction)
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        result = await self._service(pool).fail_delegation_delivery("org-1", "delegation-1", "not delivered")
+
+        assert result is False
+        assert transaction.exit_exception is RuntimeError
+
     async def test_worker_reconciles_completed_and_failed_events(self):
         pool = MagicMock()
         pool.fetch = AsyncMock(
@@ -352,6 +378,95 @@ class TestDelegationRefundOutbox:
         cancel.assert_awaited_once_with("org-1", "completed-id")
         request.assert_awaited_once_with("org-1", "failed-id")
         complete.assert_awaited_once_with("org-1", "failed-id")
+
+    async def test_worker_skips_possibly_delivered_rows(self):
+        pool = MagicMock()
+        pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "id": "ambiguous-id",
+                    "org_id": "org-1",
+                    "task_status": "possibly_delivered",
+                    "delivery_status": "possibly_delivered",
+                }
+            ]
+        )
+        service = self._service(pool)
+        cancel = AsyncMock()
+        request = AsyncMock()
+        complete = AsyncMock()
+        with (
+            patch.object(service, "cancel_delegation_refund", cancel),
+            patch.object(service, "request_delegation_refund", request),
+            patch.object(service, "complete_delegation_refund", complete),
+        ):
+            processed = await service.process_delegation_refund_outbox()
+
+        assert processed == 0
+        cancel.assert_not_awaited()
+        request.assert_not_awaited()
+        complete.assert_not_awaited()
+
+    async def test_confirm_delivery_is_idempotent_and_cancels_refund(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"status": "pending", "delivery_status": "possibly_delivered"},
+                {"status": "cancelled", "delivery_status": "confirmed"},
+            ]
+        )
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        service = self._service(pool)
+        assert await service.confirm_delegation_delivery("org-1", "delegation-1") is True
+        assert await service.confirm_delegation_delivery("org-1", "delegation-1") is True
+
+        assert conn.execute.await_count == 2
+        assert "delivery_status = 'confirmed'" in conn.execute.call_args_list[0].args[0]
+        assert "status = 'cancelled'" in conn.execute.call_args_list[1].args[0]
+
+    async def test_fail_delivery_refunds_once_and_is_idempotent(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            side_effect=[
+                {
+                    "status": "pending",
+                    "delivery_status": "possibly_delivered",
+                    "run_id": "run-1",
+                    "amount_usdc": 5_000,
+                },
+                {"balance_usdc": 25_000},
+                {"status": "refunded", "delivery_status": "failed"},
+            ]
+        )
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        service = self._service(pool)
+        assert await service.fail_delegation_delivery("org-1", "delegation-1", "operator confirmed non-delivery") is True
+        assert await service.fail_delegation_delivery("org-1", "delegation-1", "duplicate") is True
+
+        ledger_writes = [call for call in conn.execute.call_args_list if "org_credit_ledger" in call.args[0]]
+        assert len(ledger_writes) == 1
+
+    async def test_complete_refund_does_not_refund_ambiguous_delivery(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(return_value=None)
+        conn.fetchval = AsyncMock(return_value="pending")
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        result = await self._service(pool).complete_delegation_refund("org-1", "delegation-1")
+
+        assert result is False
+        conn.execute.assert_not_awaited()
 
 
 # ─── delegate_to_agent with billing ──────────────────────────────────────────

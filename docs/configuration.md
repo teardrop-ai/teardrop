@@ -108,6 +108,12 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `EVENT_TRIGGERS_PROMPT_MAX_CHARS` | Maximum rendered event prompt length (default: `12000`) |
 | `A2A_INBOUND_ENABLED` | Enable inbound A2A message handling (default: `true`) |
 | `A2A_INBOUND_TIMEOUT_SECONDS` | Inbound A2A execution timeout (default: `60`) |
+| `A2A_INBOUND_ASYNC_ENABLED` | Enable opt-in inbound A2A execution with `Prefer: respond-async` (default: `true`) |
+| `A2A_INBOUND_ASYNC_MAX_CONCURRENCY` | Maximum concurrent asynchronous inbound A2A executions per process (default: `8`) |
+| `A2A_INBOUND_ASYNC_QUEUE_SIZE` | Maximum queued asynchronous inbound A2A tasks per process (default: `100`) |
+| `A2A_INBOUND_TASK_TTL_DAYS` | Retain terminal asynchronous inbound A2A task projections for this many days (default: `7`; `0` keeps them indefinitely) |
+| `A2A_INBOUND_TASK_LEASE_SECONDS` | Lease duration before an inactive process's asynchronous inbound A2A task may be recovered (default: `60`) |
+| `A2A_INBOUND_TASK_RECOVERY_INTERVAL_SECONDS` | Interval for recovering expired asynchronous inbound A2A task leases (default: `30`) |
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
 | `LABELING_ENABLED` | Enable asynchronous prediction labeling for registered definitions (default: `false`) |

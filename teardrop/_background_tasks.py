@@ -19,6 +19,7 @@ from labeling.worker import labeling_tick
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
 from shared.db_pool import PgPool
+from teardrop.a2a_tasks import A2AInboundTask, recover_orphaned_inbound_tasks
 from teardrop.config import get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import cleanup_expired_memories
@@ -120,6 +121,39 @@ async def _x402_nonce_cleanup_iter() -> None:
         logger.info("x402 nonce cleanup: deleted %d expired payment claims", deleted)
 
 
+async def _record_recovered_a2a_task_audits(tasks: list[A2AInboundTask]) -> None:
+    if not tasks:
+        return
+    from teardrop.routers.a2a_messages import _record_inbound_event
+
+    for task in tasks:
+        await _record_inbound_event(
+            run_id=task.run_id,
+            usage_event_id=task.usage_event_id,
+            caller_org_id=task.caller_org_id,
+            caller_user_id=task.caller_user_id,
+            caller_address="",
+            caller_ip=task.caller_ip,
+            auth_method=task.auth_method,
+            context_id=task.context_id,
+            task_id=task.id,
+            task_state="failed",
+            cost_usdc=task.cost_usdc,
+            settlement_amount_usdc=task.settlement_amount_usdc,
+            settlement_tx=task.settlement_tx,
+            billing_method=task.billing_method,
+            duration_ms=task.duration_ms,
+            error=task.error,
+        )
+
+
+async def _a2a_inbound_task_recovery_iter() -> None:
+    recovered = await recover_orphaned_inbound_tasks()
+    await _record_recovered_a2a_task_audits(recovered)
+    if recovered:
+        logger.warning("A2A task recovery: finalized %d expired task lease(s)", len(recovered))
+
+
 async def _reputation_rollup_iter() -> None:
     upserted = await reputation_rollup_once()
     if upserted:
@@ -131,13 +165,15 @@ async def _retention_sweep_iter() -> None:
     logger.info(
         "Retention sweep completed: total_deleted=%d checkpoint_threads=%d "
         "scheduled_run_results=%d org_tool_execution_events=%d "
-        "telemetry_run_starts=%d labeling_predictions=%d expired_siwe_login_sessions=%d",
+        "telemetry_run_starts=%d labeling_predictions=%d a2a_inbound_tasks=%d "
+        "expired_siwe_login_sessions=%d",
         result.total_deleted,
         result.checkpoint_threads,
         result.scheduled_run_results,
         result.org_tool_execution_events,
         result.telemetry_run_starts,
         getattr(result, "labeling_predictions", 0),
+        getattr(result, "a2a_inbound_tasks", 0),
         result.expired_siwe_login_sessions,
     )
 
@@ -149,6 +185,16 @@ async def _event_dispatch_recovery_iter() -> None:
     )
     if recovered:
         logger.warning("Event dispatch recovery: finalized %d expired leases", recovered)
+
+
+async def _a2a_inbound_task_recovery_loop() -> None:
+    """Reconcile crashed-process A2A tasks without re-executing them."""
+    await _run_periodic(
+        "A2A inbound task recovery",
+        _a2a_inbound_task_recovery_iter,
+        settings.a2a_inbound_task_recovery_interval_seconds,
+        monitor_slug="a2a-inbound-task-recovery",
+    )
 
 
 async def _labeling_iter() -> None:

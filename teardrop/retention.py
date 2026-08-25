@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from shared.db_pool import PgPool
+from teardrop.a2a_tasks import cleanup_terminal_inbound_tasks
 from teardrop.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ class RetentionSweepResult:
     org_tool_execution_events: int = 0
     telemetry_run_starts: int = 0
     labeling_predictions: int = 0
+    a2a_inbound_tasks: int = 0
     expired_siwe_login_sessions: int = 0
 
     @property
@@ -168,6 +170,7 @@ class RetentionSweepResult:
             + self.org_tool_execution_events
             + self.telemetry_run_starts
             + self.labeling_predictions
+            + self.a2a_inbound_tasks
             + self.expired_siwe_login_sessions
         )
 
@@ -328,6 +331,15 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
             batch_size,
         )
 
+    a2a_inbound_tasks = 0
+    a2a_task_retention_days = int(getattr(settings, "a2a_inbound_task_ttl_days", 0))
+    if a2a_task_retention_days > 0:
+        a2a_inbound_tasks = await cleanup_terminal_inbound_tasks(
+            ttl_days=a2a_task_retention_days,
+            batch_size=batch_size,
+            pool=pool,
+        )
+
     expired_siwe_login_sessions = await _delete_expired_siwe_sessions(pool, batch_size)
     return RetentionSweepResult(
         checkpoint_threads=checkpoint_threads,
@@ -336,5 +348,6 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
         org_tool_execution_events=org_tool_execution_events,
         telemetry_run_starts=telemetry_run_starts,
         labeling_predictions=labeling_predictions,
+        a2a_inbound_tasks=a2a_inbound_tasks,
         expired_siwe_login_sessions=expired_siwe_login_sessions,
     )

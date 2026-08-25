@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 import uuid
+import weakref
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -13,6 +17,9 @@ from pydantic import BaseModel, Field
 from tools.registry import ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+_delegation_semaphores: weakref.WeakValueDictionary[tuple[int, str], asyncio.Semaphore] = weakref.WeakValueDictionary()
+_delegation_semaphore_lock = threading.Lock()
 
 DelegationTaskType = Literal[
     "general",
@@ -56,6 +63,34 @@ class DelegateToAgentOutput(BaseModel):
 
 
 # ─── Implementation ──────────────────────────────────────────────────────────
+
+
+def _get_delegation_semaphore(run_id: str, limit: int) -> asyncio.Semaphore | None:
+    """Return the shared delegation limiter for one run and event loop."""
+    if not run_id:
+        return None
+    key = (id(asyncio.get_running_loop()), run_id)
+    with _delegation_semaphore_lock:
+        semaphore = _delegation_semaphores.get(key)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(limit)
+            _delegation_semaphores[key] = semaphore
+    return semaphore
+
+
+async def _send_with_limits(
+    send_call: Callable[[], Awaitable[Any]],
+    *,
+    run_id: str,
+    timeout_seconds: float,
+    max_concurrent: int,
+) -> Any:
+    """Limit same-run fan-out and bound the full remote exchange."""
+    semaphore = _get_delegation_semaphore(run_id, max_concurrent)
+    if semaphore is None:
+        return await asyncio.wait_for(send_call(), timeout=timeout_seconds)
+    async with semaphore:
+        return await asyncio.wait_for(send_call(), timeout=timeout_seconds)
 
 
 async def delegate_to_agent(
@@ -249,13 +284,23 @@ async def delegate_to_agent(
             }
         cost_usdc = estimated_cost
 
-    try:
+    payment_attempted = False
+
+    async def _on_payment_attempt() -> None:
+        nonlocal payment_attempted
+        from billing import mark_delegation_possibly_delivered
+
+        if not await mark_delegation_possibly_delivered(org_id, delegation_id):
+            raise RuntimeError("Could not persist the x402 delivery state before dispatch.")
+        payment_attempted = True
+
+    async def _send_remote_message() -> Any:
         if use_x402:
             from billing import get_treasury_signer
             from teardrop.a2a_client import send_message_with_payment
 
             signer = get_treasury_signer()
-            response = await send_message_with_payment(
+            return await send_message_with_payment(
                 agent_url,
                 task_description,
                 signer=signer,
@@ -263,19 +308,49 @@ async def delegate_to_agent(
                 auth_header=auth_header_to_forward,
                 max_amount_atomic=estimated_cost,
                 allowed_networks=frozenset({settings.x402_network}),
+                payment_attempt_callback=_on_payment_attempt,
             )
-        else:
-            response = await send_message(
-                agent_url,
-                task_description,
-                timeout=settings.a2a_delegation_timeout_seconds,
-                auth_header=auth_header_to_forward,
-            )
+        return await send_message(
+            agent_url,
+            task_description,
+            timeout=settings.a2a_delegation_timeout_seconds,
+            auth_header=auth_header_to_forward,
+        )
+
+    try:
+        response = await _send_with_limits(
+            _send_remote_message,
+            run_id=run_id,
+            timeout_seconds=float(settings.a2a_delegation_timeout_seconds),
+            max_concurrent=settings.a2a_delegation_max_concurrent_per_run,
+        )
     except Exception as exc:
-        logger.warning("delegate_to_agent: message send failed for %s: %s", agent_url, exc)
-        # Refund the pre-debit and record the failed event if billing is enabled.
+        reason = f"timed out after {settings.a2a_delegation_timeout_seconds}s" if isinstance(exc, TimeoutError) else str(exc)
+        logger.warning("delegate_to_agent: message send failed for %s: %s", agent_url, reason)
+        ambiguous_delivery = bool(billing_enabled and use_x402 and payment_attempted)
         if billing_enabled:
             from billing import record_delegation_event, refund_delegation
+
+            if ambiguous_delivery:
+                await record_delegation_event(
+                    org_id=org_id,
+                    run_id=run_id,
+                    agent_url=agent_url,
+                    agent_name=card.name,
+                    task_status="possibly_delivered",
+                    cost_usdc=cost_usdc,
+                    billing_method="x402",
+                    error=reason,
+                    task_type=task_type,
+                    delegation_id=delegation_id,
+                )
+                return {
+                    "agent_name": card.name,
+                    "status": "possibly_delivered",
+                    "result": "",
+                    "error": "x402 delivery outcome is ambiguous; operator reconciliation is required before refunding.",
+                    "cost_usdc": cost_usdc,
+                }
 
             await record_delegation_event(
                 org_id=org_id,
@@ -284,7 +359,7 @@ async def delegate_to_agent(
                 agent_name=card.name,
                 task_status="failed",
                 cost_usdc=0,
-                error=str(exc),
+                error=reason,
                 task_type=task_type,
                 delegation_id=delegation_id,
             )
@@ -296,7 +371,7 @@ async def delegate_to_agent(
             "agent_name": card.name,
             "status": "failed",
             "result": "",
-            "error": f"Failed to send message to {card.name}: {exc}",
+            "error": f"Failed to send message to {card.name}: {reason}",
             "cost_usdc": 0,
         }
 
@@ -306,6 +381,7 @@ async def delegate_to_agent(
         task_state = response.task.status.state
 
     result_text = extract_result_text(response)
+    settlement_tx = getattr(response, "settlement_tx", "")
 
     # ── Post-delegation audit (charge already taken pre-dispatch) ──────────
     if billing_enabled and task_state == "completed":
@@ -319,10 +395,27 @@ async def delegate_to_agent(
             task_status=task_state,
             cost_usdc=cost_usdc,
             billing_method="x402" if use_x402 else "credit",
+            settlement_tx=settlement_tx,
             task_type=task_type,
             delegation_id=delegation_id,
         )
         if not audit_recorded:
+            if use_x402 and payment_attempted:
+                from billing import confirm_delegation_delivery
+
+                if not await confirm_delegation_delivery(org_id, delegation_id, settlement_tx):
+                    logger.error(
+                        "delegate_to_agent: delivery confirmation queued for retry org=%s delegation=%s",
+                        org_id,
+                        delegation_id,
+                    )
+                return {
+                    "agent_name": card.name,
+                    "status": task_state,
+                    "result": result_text,
+                    "error": "Delegation audit could not be recorded; delivery retained for reconciliation.",
+                    "cost_usdc": cost_usdc,
+                }
             refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
             cost_usdc = 0
             if not refund_completed:
@@ -334,7 +427,16 @@ async def delegate_to_agent(
                 "error": "Delegation audit could not be recorded; pre-debit refunded.",
                 "cost_usdc": 0,
             }
-        if not await cancel_delegation_refund(org_id, delegation_id):
+        if use_x402:
+            from billing import confirm_delegation_delivery
+
+            if not await confirm_delegation_delivery(org_id, delegation_id, settlement_tx):
+                logger.error(
+                    "delegate_to_agent: delivery confirmation queued for retry org=%s delegation=%s",
+                    org_id,
+                    delegation_id,
+                )
+        elif not await cancel_delegation_refund(org_id, delegation_id):
             logger.error("delegate_to_agent: completion cancel queued for retry org=%s delegation=%s", org_id, delegation_id)
     elif billing_enabled:
         # Remote agent did not complete — refund the pre-debit.
@@ -347,11 +449,22 @@ async def delegate_to_agent(
             agent_name=card.name,
             task_status=task_state,
             cost_usdc=0,
+            billing_method="x402" if use_x402 else "credit",
+            settlement_tx=settlement_tx,
             error=f"Remote agent state: {task_state}",
             task_type=task_type,
             delegation_id=delegation_id,
         )
-        refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+        if use_x402 and payment_attempted:
+            from billing import fail_delegation_delivery
+
+            refund_completed = await fail_delegation_delivery(
+                org_id,
+                delegation_id,
+                f"Remote agent state: {task_state}",
+            )
+        else:
+            refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
         cost_usdc = 0
         if not refund_completed:
             logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)

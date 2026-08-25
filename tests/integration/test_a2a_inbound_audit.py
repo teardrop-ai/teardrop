@@ -132,6 +132,7 @@ async def test_a2a_inbound_events_check_constraint_rejects_invalid_task_state(au
                 "task-1",
                 "invalid_state",
                 0,
+                0,
                 "",
                 "x402",
                 0,

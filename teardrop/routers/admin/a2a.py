@@ -9,15 +9,19 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from shared.db_pool import PgPool, UniqueViolation
+from teardrop.config import get_settings
 from teardrop.dependencies import require_admin
+from teardrop.rate_limit import _enforce_rate_limit
 
 router = APIRouter()
+settings = get_settings()
 
 
 class CreateA2AAgentRequest(BaseModel):
@@ -136,3 +140,118 @@ async def admin_delete_a2a_agent(
     if result == "DELETE 0":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return JSONResponse(content={"deleted": agent_id})
+
+
+class PossiblyDeliveredDelegationItem(BaseModel):
+    id: str
+    org_id: str
+    run_id: str
+    amount_usdc: int
+    refund_status: str
+    delivery_status: Literal["possibly_delivered"]
+    agent_url: str | None = None
+    agent_name: str | None = None
+    task_status: str | None = None
+    task_type: str | None = None
+    billing_method: str | None = None
+    settlement_tx: str | None = None
+    delivery_settlement_tx: str | None = None
+    delivery_error: str | None = None
+    delivery_started_at: str | None = Field(default=None, description="ISO 8601 timestamp.")
+    created_at: str | None = Field(default=None, description="ISO 8601 timestamp.")
+
+
+@router.get(
+    "/admin/a2a/delegations/possibly-delivered",
+    tags=["Admin", "Admin / A2A"],
+    response_model=list[PossiblyDeliveredDelegationItem],
+)
+async def admin_list_possibly_delivered_delegations(
+    org_id: str | None = Query(default=None),
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """List paid delegations whose delivery outcome needs operator review."""
+    from billing import get_possibly_delivered_delegations
+
+    rows = await get_possibly_delivered_delegations(org_id, limit=200)
+
+    def _iso(value) -> str | None:
+        return value.isoformat() if value else None
+
+    return JSONResponse(
+        content=[
+            {
+                "id": row["id"],
+                "org_id": row["org_id"],
+                "run_id": row["run_id"],
+                "amount_usdc": row["amount_usdc"],
+                "refund_status": row["refund_status"],
+                "delivery_status": row["delivery_status"],
+                "agent_url": row.get("agent_url"),
+                "agent_name": row.get("agent_name"),
+                "task_status": row.get("task_status"),
+                "task_type": row.get("task_type"),
+                "billing_method": row.get("billing_method"),
+                "settlement_tx": row.get("settlement_tx"),
+                "delivery_settlement_tx": row.get("delivery_settlement_tx") or None,
+                "delivery_error": row.get("delivery_error") or None,
+                "delivery_started_at": _iso(row.get("delivery_started_at")),
+                "created_at": _iso(row.get("created_at")),
+            }
+            for row in rows
+        ]
+    )
+
+
+class ResolveA2ADelegationRequest(BaseModel):
+    org_id: str = Field(..., min_length=1, max_length=200)
+    outcome: Literal["confirmed", "failed"]
+    settlement_tx: str | None = Field(default=None, max_length=66, pattern=r"^0x[a-fA-F0-9]{64}$")
+    reason: str = Field(default="", max_length=500)
+
+
+class ResolveA2ADelegationResponse(BaseModel):
+    id: str
+    org_id: str
+    outcome: Literal["confirmed", "failed"]
+    refund_status: Literal["cancelled", "refunded"]
+
+
+@router.post(
+    "/admin/a2a/delegations/{delegation_id}/resolve",
+    tags=["Admin", "Admin / A2A"],
+    response_model=ResolveA2ADelegationResponse,
+)
+async def admin_resolve_a2a_delegation(
+    delegation_id: str,
+    body: ResolveA2ADelegationRequest,
+    _admin: dict = Depends(require_admin),
+) -> JSONResponse:
+    """Resolve one ambiguous delivery without re-dispatching the task."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
+    from billing import confirm_delegation_delivery, fail_delegation_delivery
+
+    if body.outcome == "confirmed":
+        resolved = await confirm_delegation_delivery(body.org_id, delegation_id, body.settlement_tx or "")
+        refund_status = "cancelled"
+    else:
+        resolved = await fail_delegation_delivery(body.org_id, delegation_id, body.reason)
+        refund_status = "refunded"
+
+    if not resolved:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delegation not found, already resolved, or incompatible with this outcome.",
+        )
+    return JSONResponse(
+        content={
+            "id": delegation_id,
+            "org_id": body.org_id,
+            "outcome": body.outcome,
+            "refund_status": refund_status,
+        }
+    )

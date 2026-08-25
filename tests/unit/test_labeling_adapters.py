@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from labeling.adapters import (
     parse_entry_timing,
     parse_eth_protocols,
@@ -54,11 +56,22 @@ def test_entry_scorer_marks_neutral_band():
     assert result.score == 0
 
 
-def test_fee_scorer_uses_discrete_five_percent_threshold():
+@pytest.mark.parametrize(
+    ("change_pct", "predicted_direction"),
+    [
+        (-5.01, "down"),
+        (-5.0, "flat"),
+        (-4.99, "flat"),
+        (4.99, "flat"),
+        (5.0, "flat"),
+        (5.01, "up"),
+    ],
+)
+def test_fee_scorer_uses_inclusive_five_percent_flat_threshold(change_pct, predicted_direction):
     request = ObservationRequest("protocol_fees", "1", {"protocol": "a"}, _NOW)
     result = score_fee_direction(
-        {"prediction": {"next_week_fee_direction": "flat"}},
-        Observation(request, {"fees_7d_change_pct": 4.9}),
+        {"prediction": {"next_week_fee_direction": predicted_direction}},
+        Observation(request, {"fees_7d_change_pct": change_pct}),
         _definition("fees"),
     )
     assert result.status == "correct"

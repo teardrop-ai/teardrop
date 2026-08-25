@@ -119,6 +119,8 @@ class AgentRunOnceResult:
     usage_data: dict[str, Any]
     llm_config: dict[str, Any] | None
     marketplace_stats_billable: bool
+    settlement_amount_usdc: int = 0
+    settlement_tx: str = ""
 
 
 def _usage_metadata_template() -> dict[str, Any]:
@@ -444,6 +446,8 @@ async def run_agent_once(
         usage_data=usage_data,
         llm_config=ctx.llm_config,
         marketplace_stats_billable=marketplace_stats_billable,
+        settlement_amount_usdc=max(0, int(settlement_result.get("settlement_amount_usdc", 0) or 0)),
+        settlement_tx=str(settlement_result.get("settlement_tx", "") or ""),
     )
 
 

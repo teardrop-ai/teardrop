@@ -94,6 +94,16 @@ def test_agent_max_tool_iterations_default():
     assert s.agent_max_tool_iterations == 4
 
 
+def test_a2a_delegation_concurrency_default_and_bounds():
+    s = Settings()
+    assert s.a2a_delegation_max_concurrent_per_run == 2
+
+    with pytest.raises(ValueError):
+        Settings(a2a_delegation_max_concurrent_per_run=0)
+    with pytest.raises(ValueError):
+        Settings(a2a_delegation_max_concurrent_per_run=65)
+
+
 def test_event_trigger_cluster_control_defaults_and_bounds():
     settings = Settings()
     assert settings.event_triggers_max_concurrency == 8

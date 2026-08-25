@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Literal
@@ -26,6 +27,21 @@ from teardrop.llm_config import get_org_llm_config_cached
 from tools.definitions.http_fetch import async_validate_url, make_ssrf_safe_httpx_transport
 
 logger = logging.getLogger(__name__)
+
+
+def _human_callback_text(output_text: object, error: object) -> str:
+    text = str(output_text or error or "")
+    if not isinstance(output_text, str) or not output_text.strip():
+        return text
+
+    stripped = output_text.lstrip()
+    try:
+        value, end = json.JSONDecoder().raw_decode(stripped)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(value, dict) or not isinstance(value.get("task_class"), str):
+        return text
+    return stripped[end:].lstrip()
 
 
 async def _ingest_labeling_prediction(
@@ -72,7 +88,7 @@ async def _deliver_callback(
             follow_redirects=False,
         ) as client:
             if callback_format == "text":
-                content = str(payload.get("output_text") or payload.get("error") or "")
+                content = _human_callback_text(payload.get("output_text"), payload.get("error"))
                 resp = await client.post(
                     callback_url,
                     content=content,

@@ -339,6 +339,21 @@ async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: s
     return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url, delegation_id)
 
 
+async def mark_delegation_possibly_delivered(org_id: str, delegation_id: str) -> bool:
+    """Hold a delegation in the ambiguous delivery state before a paid retry."""
+    return await _get_delegation_service().mark_delegation_possibly_delivered(org_id, delegation_id)
+
+
+async def confirm_delegation_delivery(org_id: str, delegation_id: str, settlement_tx: str = "") -> bool:
+    """Confirm delegation delivery and cancel any pending refund atomically."""
+    return await _get_delegation_service().confirm_delegation_delivery(org_id, delegation_id, settlement_tx)
+
+
+async def fail_delegation_delivery(org_id: str, delegation_id: str, reason: str = "") -> bool:
+    """Resolve definitive non-delivery and refund the delegation exactly once."""
+    return await _get_delegation_service().fail_delegation_delivery(org_id, delegation_id, reason)
+
+
 async def refund_delegation(org_id: str, cost_usdc: int, run_id: str, delegation_id: str) -> bool:
     """Request and immediately process a durable delegation refund."""
     if cost_usdc <= 0:
@@ -395,6 +410,11 @@ async def get_delegation_events(
 ) -> list[dict]:
     """Return cursor-paginated A2A delegation event history for an org."""
     return await _get_delegation_service().get_delegation_events(org_id, limit, cursor)
+
+
+async def get_possibly_delivered_delegations(org_id: str | None = None, limit: int = 50) -> list[dict]:
+    """List delegation deliveries held for explicit operator reconciliation."""
+    return await _get_delegation_service().get_possibly_delivered_delegations(org_id, limit)
 
 
 # Pricing API

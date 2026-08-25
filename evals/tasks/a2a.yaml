@@ -28,5 +28,15 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Explains that over-cap x402 requirements and missing allowlist context fail closed."
+  },
+  {
+    "id": "a2a.runtime_controls.001",
+    "messages": [{"role": "user", "content": "How does Teardrop bound outbound A2A delegation time and concurrency within an agent run?"}],
+    "expected_text_contains": ["timeout", "concurrent", "per run"],
+    "expected_text_not_contains": ["unlimited", "hang forever"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains the configurable outbound timeout and per-run concurrent delegation limit."
   }
 ]

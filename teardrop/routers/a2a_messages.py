@@ -10,6 +10,7 @@ billing rails.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -27,6 +28,16 @@ from billing.context import _get_pool
 from shared.audit import insert_event_row
 from shared.request_ip import client_ip_from_request
 from teardrop.a2a_client import A2AArtifact, A2AMessage, A2APart, A2ATask, A2ATaskStatus
+from teardrop.a2a_tasks import (
+    TERMINAL_INBOUND_TASK_STATES,
+    A2AInboundTask,
+    claim_inbound_task,
+    create_inbound_task,
+    enqueue_inbound_task,
+    finish_inbound_task,
+    get_inbound_task,
+    mark_inbound_task_billing_method,
+)
 from teardrop.agent_runtime import _run_billing_gate, run_agent_once
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
@@ -40,8 +51,9 @@ settings = get_settings()
 _A2A_INBOUND_EVENT_INSERT_SQL = (
     "INSERT INTO a2a_inbound_events"
     " (id, run_id, usage_event_id, caller_org_id, caller_user_id, caller_address, caller_ip,"
-    " auth_method, context_id, task_id, task_state, cost_usdc, settlement_tx, billing_method, duration_ms, error)"
-    " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"
+    " auth_method, context_id, task_id, task_state, cost_usdc, settlement_amount_usdc,"
+    " settlement_tx, billing_method, duration_ms, error)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
 )
 
 router = APIRouter()
@@ -50,8 +62,8 @@ router = APIRouter()
 class A2ASendMessageRequest(BaseModel):
     message: A2AMessage
     metadata: dict[str, Any] = Field(default_factory=dict)
-    context_id: str | None = Field(default=None, alias="contextId")
-    task_id: str | None = Field(default=None, alias="taskId")
+    context_id: str | None = Field(default=None, alias="contextId", max_length=256)
+    task_id: str | None = Field(default=None, alias="taskId", max_length=256)
 
     model_config = {"populate_by_name": True, "extra": "allow"}
 
@@ -155,7 +167,7 @@ def _a2a_402_resource(request: Request) -> dict[str, str]:
     base_url = public_base_url(request, settings)
     return {
         "url": f"{base_url}/message:send",
-        "description": "Blocking public A2A endpoint for external agent callers.",
+        "description": "Public A2A endpoint for external agent callers.",
         "mimeType": "application/json",
     }
 
@@ -318,6 +330,13 @@ def _response_error_text(response: JSONResponse) -> str:
     return ""
 
 
+def _prefers_async(request: Request) -> bool:
+    """Return whether the caller explicitly requested asynchronous execution."""
+    if not settings.a2a_inbound_async_enabled:
+        return False
+    return any(part.strip().split(";", 1)[0].lower() == "respond-async" for part in request.headers.get("prefer", "").split(","))
+
+
 async def _record_inbound_event(
     *,
     run_id: str,
@@ -331,6 +350,7 @@ async def _record_inbound_event(
     task_id: str | None,
     task_state: str,
     cost_usdc: int,
+    settlement_amount_usdc: int = 0,
     settlement_tx: str,
     billing_method: str,
     duration_ms: int,
@@ -353,6 +373,7 @@ async def _record_inbound_event(
                 task_id or "",
                 task_state,
                 cost_usdc,
+                max(0, settlement_amount_usdc),
                 settlement_tx,
                 billing_method,
                 duration_ms,
@@ -370,25 +391,299 @@ def _build_task_response(
     task_state: str,
     output_text: str,
     rpc_id: int | str | None,
+    status_path: str | None = None,
+    status_code: int = status.HTTP_200_OK,
 ) -> JSONResponse:
-    agent_message = A2AMessage(role="agent", parts=[A2APart(kind="text", text=output_text)])
+    agent_message = A2AMessage(role="agent", parts=[A2APart(kind="text", text=output_text)]) if output_text else None
     task = A2ATask(
         id=task_id,
         status=A2ATaskStatus(state=task_state, message=agent_message),
-        artifacts=[A2AArtifact(name="result", parts=[A2APart(kind="text", text=output_text)])],
-        history=[request_body.message, agent_message],
+        artifacts=([A2AArtifact(name="result", parts=[A2APart(kind="text", text=output_text)])] if output_text else []),
+        history=[request_body.message, *([agent_message] if agent_message is not None else [])],
     )
     content: dict[str, Any] = task.model_dump(mode="json", by_alias=True)
+    if status_path:
+        content["metadata"] = {"statusPath": status_path}
     if rpc_id is not None:
         content = {"jsonrpc": "2.0", "id": rpc_id, "result": content}
     else:
         content = {"jsonrpc": "2.0", "result": content}
-    return JSONResponse(content=content)
+    headers = {"Location": status_path} if status_path else None
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
+
+
+def _task_response_state(task_state: str) -> str:
+    return {
+        "submitted": "submitted",
+        "running": "working",
+        "completed": "completed",
+        "failed": "failed",
+        "timeout": "failed",
+        "rejected_payment": "failed",
+        "rejected_auth_credit": "failed",
+    }.get(task_state, "failed")
+
+
+def _task_request_body(task: A2AInboundTask) -> A2ASendMessageRequest:
+    return A2ASendMessageRequest(
+        message=A2AMessage.model_validate(task.message),
+        metadata=task.metadata,
+        contextId=task.context_id or None,
+        taskId=task.client_task_id or None,
+    )
+
+
+def _task_request_matches(task: A2AInboundTask, request_body: A2ASendMessageRequest) -> bool:
+    """Keep a client task ID idempotent without accepting a different request."""
+    try:
+        stored_message = A2AMessage.model_validate(task.message).model_dump(mode="json", by_alias=True, exclude_none=True)
+    except ValidationError:
+        return False
+    incoming_message = request_body.message.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return (
+        stored_message == incoming_message
+        and task.metadata == request_body.metadata
+        and task.context_id == (request_body.context_id or "")
+        and task.client_task_id == (request_body.task_id or "")
+    )
+
+
+def _task_status_path(task_id: str) -> str:
+    return f"/message:status/{task_id}"
+
+
+async def _finish_async_task(
+    *,
+    task: A2AInboundTask,
+    task_state: str,
+    output_text: str = "",
+    error: str = "",
+    billing: BillingResult | None = None,
+    usage_event_id: str | None = None,
+    cost_usdc: int = 0,
+    settlement_amount_usdc: int | None = None,
+    settlement_tx: str | None = None,
+    duration_ms: int = 0,
+) -> None:
+    """Persist a terminal projection and append the corresponding audit row."""
+    billing_result = billing or BillingResult()
+    billing_method = (
+        billing_result.billing_method
+        if billing_result.verified
+        else {"rejected_payment": "x402", "rejected_auth_credit": "credit"}.get(task_state, "")
+    )
+    persisted_settlement_tx = (
+        settlement_tx if settlement_tx is not None else billing_result.tx_hash if billing_result.verified else ""
+    )
+    persisted_settlement_amount = (
+        max(0, settlement_amount_usdc)
+        if settlement_amount_usdc is not None
+        else max(0, billing_result.amount_usdc if billing_result.verified else 0)
+    )
+    finished = await finish_inbound_task(
+        task.id,
+        task_state=task_state,
+        output_text=output_text,
+        error=error,
+        usage_event_id=usage_event_id,
+        cost_usdc=cost_usdc,
+        settlement_tx=persisted_settlement_tx,
+        billing_method=billing_method,
+        settlement_amount_usdc=persisted_settlement_amount,
+        duration_ms=duration_ms,
+    )
+    if finished is None:
+        return
+    await _record_inbound_event(
+        run_id=task.run_id,
+        usage_event_id=usage_event_id,
+        caller_org_id=task.caller_org_id,
+        caller_user_id=task.caller_user_id,
+        caller_address=_payment_caller_address(billing_result),
+        caller_ip=task.caller_ip,
+        auth_method=task.auth_method,
+        context_id=task.context_id,
+        task_id=task.id,
+        task_state=task_state,
+        cost_usdc=max(0, cost_usdc),
+        settlement_amount_usdc=persisted_settlement_amount,
+        settlement_tx=persisted_settlement_tx,
+        billing_method=billing_method,
+        duration_ms=max(0, duration_ms),
+        error=error,
+    )
+
+
+async def _run_async_inbound_task(
+    *,
+    request: Request,
+    task: A2AInboundTask,
+    request_body: A2ASendMessageRequest,
+    payload: dict[str, Any] | None,
+    payment_header: str | None,
+    jwt_token: str | None,
+) -> None:
+    claimed = await claim_inbound_task(task.id)
+    if claimed is None:
+        return
+
+    billing = BillingResult()
+    try:
+        org_id = task.caller_org_id
+        user_id = task.caller_user_id
+        org_llm_cfg = await get_org_llm_config_cached(org_id) if org_id else None
+        is_byok = org_llm_cfg.is_byok if org_llm_cfg else False
+        platform_fee = get_byok_platform_fee(is_byok)
+
+        if payload is None:
+            if settings.billing_enabled:
+                from billing import verify_payment
+
+                billing = await verify_payment(payment_header)
+                if not billing.verified:
+                    await _finish_async_task(
+                        task=claimed,
+                        task_state="rejected_payment",
+                        output_text=billing.error,
+                        error=billing.error,
+                        billing=billing,
+                    )
+                    return
+        else:
+            try:
+                billing, gate_response = await _run_billing_gate(
+                    request,
+                    payload,
+                    org_id,
+                    is_byok=is_byok,
+                    platform_fee=platform_fee,
+                )
+            except HTTPException as exc:
+                if exc.status_code != status.HTTP_402_PAYMENT_REQUIRED:
+                    raise
+                error = str(exc.detail)
+                await _finish_async_task(
+                    task=claimed,
+                    task_state="rejected_auth_credit",
+                    output_text=error,
+                    error=error,
+                    billing=BillingResult(billing_method="credit"),
+                )
+                return
+            if gate_response is not None:
+                error = _response_error_text(gate_response) or "Payment required"
+                await _finish_async_task(
+                    task=claimed,
+                    task_state="rejected_payment",
+                    output_text=error,
+                    error=error,
+                    billing=billing,
+                )
+                return
+
+        if billing.verified:
+            await mark_inbound_task_billing_method(task.id, billing.billing_method)
+
+        run_id = task.run_id
+        usage_user_id, usage_org_id = _usage_identity(
+            payload=payload,
+            billing=billing,
+            user_id=user_id,
+            org_id=org_id,
+            run_id=run_id,
+        )
+        result = await run_agent_once(
+            org_id=org_id,
+            user_id=user_id,
+            usage_user_id=usage_user_id,
+            usage_org_id=usage_org_id,
+            user_message=task.user_message,
+            run_id=run_id,
+            thread_id=f"{user_id or 'anonymous-a2a'}:{task.client_task_id or task.context_id or run_id}",
+            billing=billing,
+            is_byok=is_byok,
+            org_llm_cfg=org_llm_cfg,
+            platform_fee=platform_fee,
+            timeout_seconds=float(settings.a2a_inbound_timeout_seconds),
+            source="a2a",
+            metadata={
+                **request_body.metadata,
+                "a2a_context_id": request_body.context_id,
+                "a2a_task_id": request_body.task_id,
+                "a2a_auth_method": payload.get("auth_method", "") if payload else "",
+            },
+            user_role=payload.get("role", "anonymous") if payload else "anonymous",
+            user_wallet_address=payload.get("address") if payload else None,
+            jwt_token=jwt_token,
+            emit_ui=False,
+        )
+        output_text = "Task failed." if result.task_state == "timeout" else result.output_text
+        error = result.output_text if result.task_state != "completed" else ""
+        await _finish_async_task(
+            task=claimed,
+            task_state=result.task_state,
+            output_text=output_text,
+            error=error,
+            billing=billing,
+            usage_event_id=result.usage_event.id,
+            cost_usdc=result.usage_event.cost_usdc,
+            settlement_amount_usdc=max(0, int(getattr(result, "settlement_amount_usdc", 0) or 0)),
+            settlement_tx=str(getattr(result, "settlement_tx", "") or ""),
+            duration_ms=result.duration_ms,
+        )
+    except asyncio.CancelledError:
+        await _finish_async_task(
+            task=claimed,
+            task_state="failed",
+            output_text="Task cancelled before completion.",
+            error="Task cancelled before completion.",
+            billing=billing,
+        )
+        raise
+    except Exception:
+        logger.exception("Inbound A2A task failed task_id=%s", task.id)
+        await _finish_async_task(
+            task=claimed,
+            task_state="failed",
+            output_text="Task failed.",
+            error="Task failed.",
+            billing=billing,
+        )
+
+
+@router.get("/message:status/{task_id}", tags=["A2A"])
+async def message_status(task_id: str, request: Request) -> JSONResponse:
+    """Return the status and terminal result for an asynchronous inbound task."""
+    if not settings.a2a_inbound_enabled:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "A2A inbound endpoint disabled"},
+        )
+
+    payload = _parse_auth_payload(request)
+    if payload is None:
+        task = await get_inbound_task(task_id, anonymous_only=True)
+    else:
+        org_id = payload.get("org_id", "")
+        user_id = payload.get("sub", "")
+        task = await get_inbound_task(task_id, caller_org_id=org_id, caller_user_id=user_id) if org_id and user_id else None
+    if task is None:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"error": "A2A task not found"})
+
+    output_text = task.output_text or task.error
+    return _build_task_response(
+        request_body=_task_request_body(task),
+        task_id=task.id,
+        task_state=_task_response_state(task.task_state),
+        output_text=output_text,
+        rpc_id=None,
+        status_path=(_task_status_path(task.id) if task.task_state not in TERMINAL_INBOUND_TASK_STATES else None),
+    )
 
 
 @router.post("/message:send", tags=["A2A"])
 async def message_send(request: Request) -> JSONResponse:
-    """Blocking inbound A2A endpoint for external agent callers."""
+    """Inbound A2A endpoint with opt-in asynchronous execution."""
     if not settings.a2a_inbound_enabled:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -447,6 +742,109 @@ async def message_send(request: Request) -> JSONResponse:
     resolved_task_id = body.task_id or run_id
     scoped_thread_id = f"{user_id or 'anonymous-a2a'}:{body.task_id or body.context_id or run_id}"
 
+    if _prefers_async(request):
+        async_task_id = str(uuid.uuid4())
+        task: A2AInboundTask | None = None
+        try:
+            task, created = await create_inbound_task(
+                task_id=async_task_id,
+                run_id=run_id,
+                client_task_id=body.task_id,
+                context_id=body.context_id,
+                message=body.message.model_dump(mode="json", by_alias=True),
+                metadata=body.metadata,
+                user_message=user_message,
+                caller_org_id=caller_org_id,
+                caller_user_id=caller_user_id,
+                caller_ip=caller_ip,
+                auth_method=audit_auth_method,
+            )
+        except Exception:
+            if task is not None:
+                try:
+                    await _finish_async_task(
+                        task=task,
+                        task_state="failed",
+                        output_text="Task queue temporarily unavailable.",
+                        error="Task queue temporarily unavailable.",
+                    )
+                except Exception:
+                    logger.warning("Unable to finalize unqueued inbound A2A task task_id=%s", task.id, exc_info=True)
+            logger.warning("Unable to enqueue inbound A2A task task_id=%s", async_task_id, exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "A2A task queue temporarily unavailable"},
+            )
+        if not created:
+            if not _task_request_matches(task, body):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Client task ID is already associated with a different request",
+                )
+            existing_output = task.output_text or task.error
+            return _build_task_response(
+                request_body=body,
+                task_id=task.id,
+                task_state=_task_response_state(task.task_state),
+                output_text=existing_output,
+                rpc_id=rpc_id,
+                status_path=(_task_status_path(task.id) if task.task_state not in TERMINAL_INBOUND_TASK_STATES else None),
+                status_code=(
+                    status.HTTP_202_ACCEPTED if task.task_state not in TERMINAL_INBOUND_TASK_STATES else status.HTTP_200_OK
+                ),
+            )
+        try:
+            queued = await enqueue_inbound_task(
+                task.id,
+                lambda: _run_async_inbound_task(
+                    request=request,
+                    task=task,
+                    request_body=body,
+                    payload=payload,
+                    payment_header=payment_header,
+                    jwt_token=_extract_bearer_token(request),
+                ),
+            )
+        except Exception:
+            try:
+                await _finish_async_task(
+                    task=task,
+                    task_state="failed",
+                    output_text="Task queue temporarily unavailable.",
+                    error="Task queue temporarily unavailable.",
+                )
+            except Exception:
+                logger.warning("Unable to finalize unqueued inbound A2A task task_id=%s", task.id, exc_info=True)
+            logger.warning("Unable to enqueue inbound A2A task task_id=%s", task.id, exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "A2A task queue temporarily unavailable"},
+            )
+        if not queued:
+            try:
+                await _finish_async_task(
+                    task=task,
+                    task_state="failed",
+                    output_text="Task queue is full.",
+                    error="Task queue is full.",
+                )
+            except Exception:
+                logger.warning("Unable to finalize full inbound A2A task task_id=%s", task.id, exc_info=True)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "A2A task queue is full"},
+                headers={"Retry-After": "1"},
+            )
+        return _build_task_response(
+            request_body=body,
+            task_id=task.id,
+            task_state="submitted",
+            output_text="",
+            rpc_id=rpc_id,
+            status_path=_task_status_path(task.id),
+            status_code=status.HTTP_202_ACCEPTED,
+        )
+
     org_llm_cfg = await get_org_llm_config_cached(org_id) if org_id else None
     is_byok = org_llm_cfg.is_byok if org_llm_cfg else False
     platform_fee = get_byok_platform_fee(is_byok)
@@ -470,6 +868,7 @@ async def message_send(request: Request) -> JSONResponse:
                     task_id=resolved_task_id,
                     task_state="rejected_payment",
                     cost_usdc=0,
+                    settlement_amount_usdc=0,
                     settlement_tx="",
                     billing_method="x402",
                     duration_ms=0,
@@ -510,6 +909,7 @@ async def message_send(request: Request) -> JSONResponse:
                     task_id=resolved_task_id,
                     task_state="rejected_auth_credit",
                     cost_usdc=0,
+                    settlement_amount_usdc=0,
                     settlement_tx="",
                     billing_method="credit",
                     duration_ms=0,
@@ -582,7 +982,8 @@ async def message_send(request: Request) -> JSONResponse:
         task_id=resolved_task_id,
         task_state=result.task_state,
         cost_usdc=result.usage_event.cost_usdc,
-        settlement_tx=billing.tx_hash if billing.verified else "",
+        settlement_amount_usdc=result.settlement_amount_usdc,
+        settlement_tx=result.settlement_tx,
         billing_method=billing.billing_method if billing.verified else "",
         duration_ms=result.duration_ms,
         error=result.output_text if result.task_state != "completed" else "",

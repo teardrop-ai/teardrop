@@ -32,6 +32,24 @@ async def test_root_redirects_to_docs(api_client):
 
 
 @pytest.mark.anyio
+async def test_a2a_async_headers_are_allowed_through_cors(api_client):
+    resp = await api_client.options(
+        "/message:send",
+        headers={
+            "Origin": "https://caller.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Prefer",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "prefer" in resp.headers["access-control-allow-headers"].lower()
+
+    actual = await api_client.get("/health", headers={"Origin": "https://caller.example"})
+    assert "location" in actual.headers["access-control-expose-headers"].lower()
+
+
+@pytest.mark.anyio
 async def test_agent_card_shape(api_client):
     resp = await api_client.get("/.well-known/agent-card.json")
     assert resp.status_code == 200
@@ -47,6 +65,8 @@ async def test_agent_card_shape(api_client):
     assert body["defaultInputModes"] == ["text/plain", "application/json"]
     assert all("id" in skill for skill in body["skills"])
     assert body["endpoints"]["a2a_message"] == "/message:send"
+    assert body["endpoints"]["a2a_message_status"] == "/message:status/{task_id}"
+    assert body["capabilities"]["asyncTasks"]["request_header"] == "Prefer: respond-async"
     assert body["endpoints"]["mcp_tools"] == "/tools/mcp"
     assert body["capabilities"]["billing"]["pricing_endpoint"] == "/billing/pricing"
 

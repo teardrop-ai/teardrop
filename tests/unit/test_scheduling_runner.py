@@ -93,6 +93,30 @@ async def test_text_callback_posts_only_human_report(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_text_callback_strips_leading_prediction_json(monkeypatch):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.post.return_value = SimpleNamespace(status_code=200)
+    monkeypatch.setattr("scheduling.runner.async_validate_url", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.httpx.AsyncClient", MagicMock(return_value=client))
+
+    from scheduling.runner import _deliver_callback
+
+    await _deliver_callback(
+        "https://notify.example/hook",
+        {
+            "output_text": '{"task_class":"entry_timing","schema_version":1}\n## Entry Candidates\n- token-1',
+            "run_id": "run-1",
+        },
+        "schedule-1",
+        "text",
+    )
+
+    kwargs = client.post.await_args.kwargs
+    assert kwargs["content"] == "## Entry Candidates\n- token-1"
+
+
+@pytest.mark.anyio
 async def test_labeling_ingestion_finishes_before_scheduled_run_returns(monkeypatch, test_settings):
     test_settings.scheduled_runs_execution_timeout_seconds = 5
     test_settings.labeling_enabled = True

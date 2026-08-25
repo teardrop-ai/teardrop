@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -17,6 +19,7 @@ from teardrop.a2a_client import (
     A2ATask,
     A2ATaskStatus,
     _agent_card_cache,
+    _extract_payment_response_transaction,
     _is_ip_blocked,
     _sign_x402_payment,
     async_validate_url,
@@ -24,6 +27,7 @@ from teardrop.a2a_client import (
     discover_agent_card,
     extract_result_text,
     send_message,
+    send_message_with_payment,
     validate_url,
 )
 
@@ -248,6 +252,43 @@ class TestDiscoverAgentCard:
             result = await discover_agent_card("https://cached.example.com")
             assert result.name == "Cached"
 
+    async def test_redis_cache_hit(self):
+        card = A2AAgentCard(name="RedisCached", description="cached agent")
+        redis = AsyncMock()
+        redis.get.return_value = card.model_dump_json()
+
+        with patch("teardrop.a2a_client.get_redis", return_value=redis):
+            result = await discover_agent_card("https://redis.example.com")
+
+        assert result.name == "RedisCached"
+        redis.get.assert_awaited_once()
+        assert redis.get.await_args.args[0].startswith("teardrop:a2a:agent-card:")
+
+    async def test_discovery_writes_redis_cache(self):
+        card_data = {"name": "RedisTarget", "description": "an agent", "url": "https://redis.example.com"}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = card_data
+        mock_resp.raise_for_status = MagicMock()
+        redis = AsyncMock()
+        redis.get.return_value = None
+
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.get_redis", return_value=redis),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_resp
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await discover_agent_card("https://redis.example.com", cache_ttl=45)
+
+        assert result.name == "RedisTarget"
+        redis.setex.assert_awaited_once()
+        assert redis.setex.await_args.args[1] == 45
+
     async def test_ssrf_blocked(self):
         with pytest.raises(ValueError, match="SSRF"):
             await discover_agent_card("https://192.168.1.1")
@@ -342,6 +383,90 @@ class TestSendMessage:
     async def test_ssrf_blocked(self):
         with pytest.raises(ValueError, match="SSRF"):
             await send_message("https://10.0.0.1", "Task")
+
+    async def test_total_timeout_covers_remote_exchange(self):
+        async def slow_post(*args, **kwargs):
+            await asyncio.sleep(0.05)
+
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = slow_post
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(TimeoutError):
+                await send_message("https://slow.example.com", "Task", timeout=0.001)
+
+
+class TestSendMessageWithPayment:
+    async def test_callback_runs_before_paid_retry_and_transaction_is_bounded(self):
+        first_response = MagicMock(status_code=402, headers={})
+        paid_response = MagicMock(
+            status_code=200,
+            headers={"PAYMENT-RESPONSE": "encoded-settlement"},
+        )
+        paid_response.raise_for_status = MagicMock()
+        paid_response.json.return_value = {
+            "id": "task-paid",
+            "status": {"state": "completed"},
+            "artifacts": [],
+        }
+        events: list[str] = []
+
+        async def payment_attempt_callback():
+            events.append("callback")
+
+        async def post(*args, **kwargs):
+            if len(events) == 0:
+                return first_response
+            events.append("paid-post")
+            return paid_response
+
+        with (
+            patch("teardrop.a2a_client.validate_url", return_value=None),
+            patch("teardrop.a2a_client._sign_x402_payment", return_value="signed-payment"),
+            patch(
+                "x402.http.decode_payment_response_header",
+                return_value=SimpleNamespace(transaction="0x" + "a" * 64),
+            ),
+            patch("teardrop.a2a_client.httpx.AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = post
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            response = await send_message_with_payment(
+                "https://agent.example.com",
+                "Task",
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+                payment_attempt_callback=payment_attempt_callback,
+            )
+
+        assert events == ["callback", "paid-post"]
+        assert response.task is not None
+        assert response.settlement_tx == "0x" + "a" * 64
+
+    def test_invalid_payment_transaction_is_discarded(self):
+        response = httpx.Response(
+            200,
+            headers={"PAYMENT-RESPONSE": "encoded-settlement"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        with (
+            patch(
+                "x402.http.decode_payment_response_header",
+                return_value=SimpleNamespace(transaction="not-a-transaction-hash"),
+            ),
+        ):
+            assert _extract_payment_response_transaction(response) == ""
 
 
 class TestSignX402Payment:

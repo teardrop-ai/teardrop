@@ -22,18 +22,27 @@ from org_tools import close_org_tools_db, init_org_tools_db
 from scheduling import close_scheduling_db, init_scheduling_db, scheduled_runs_tick
 from shared.db_pool import Row, create_pool
 from teardrop._background_tasks import (
+    _a2a_inbound_task_recovery_loop,
     _delegation_refund_outbox_loop,
     _event_dispatch_recovery_loop,
     _labeling_loop,
     _memory_cleanup_loop,
     _onboarding_credit_outbox_loop,
     _prewarm_cache_prefixes,
+    _record_recovered_a2a_task_audits,
     _refresh_token_cleanup_loop,
     _reputation_rollup_loop,
     _retention_sweep_loop,
     _run_periodic,
     _settlement_retry_loop,
     _x402_nonce_cleanup_loop,
+)
+from teardrop.a2a_tasks import (
+    close_a2a_tasks_db,
+    init_a2a_tasks_db,
+    recover_orphaned_inbound_tasks,
+    start_inbound_task_workers,
+    stop_inbound_task_workers,
 )
 from teardrop.agent_wallets import close_agent_wallets_db, init_agent_wallets_db
 from teardrop.benchmarks import close_benchmarks_db, init_benchmarks_db
@@ -88,6 +97,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         app.state.pool = pool
         await apply_pending(pool)
         await init_redis(settings.redis_url)
+        init_a2a_tasks_db(pool, lease_seconds=settings.a2a_inbound_task_lease_seconds)
         await init_checkpointer()
         await get_graph()
         await init_user_db(pool)
@@ -106,6 +116,16 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await init_tool_exclusions_db(pool)
         await init_labeling_db(pool)
 
+        orphaned_tasks = await recover_orphaned_inbound_tasks()
+        await _record_recovered_a2a_task_audits(orphaned_tasks)
+        if orphaned_tasks:
+            logger.warning("Marked %d orphaned inbound A2A task(s) as failed after restart", len(orphaned_tasks))
+
+        await start_inbound_task_workers(
+            max_concurrency=settings.a2a_inbound_async_max_concurrency,
+            queue_size=settings.a2a_inbound_async_queue_size,
+        )
+
         init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
         init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
         init_chain_semaphore(8453, settings.agent_rpc_chain_semaphore_limit)
@@ -113,6 +133,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         init_chain_rate_limiter(8453, settings.agent_rpc_chain_rps_limit)
 
         bg_tasks: list[asyncio.Task] = []
+        if settings.a2a_inbound_enabled and settings.a2a_inbound_async_enabled:
+            bg_tasks.append(asyncio.create_task(_a2a_inbound_task_recovery_loop()))
         if settings.billing_enabled:
             bg_tasks.append(asyncio.create_task(_settlement_retry_loop()))
             bg_tasks.append(asyncio.create_task(_x402_nonce_cleanup_loop()))
@@ -159,6 +181,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             except asyncio.CancelledError:
                 pass
 
+        await stop_inbound_task_workers()
+        close_a2a_tasks_db()
         await close_agent_wallets_db()
         await close_benchmarks_db()
         await close_llm_config_db()

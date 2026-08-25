@@ -662,10 +662,49 @@ class Settings(BaseSettings):
         default=60,
         description="Timeout for inbound A2A /message:send agent execution (seconds)",
     )
+    a2a_inbound_async_enabled: bool = Field(
+        default=True,
+        description="Enable opt-in asynchronous inbound A2A execution via Prefer: respond-async.",
+    )
+    a2a_inbound_async_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=256,
+        description="Maximum concurrent asynchronous inbound A2A executions per process.",
+    )
+    a2a_inbound_async_queue_size: int = Field(
+        default=100,
+        ge=1,
+        le=10_000,
+        description="Maximum queued asynchronous inbound A2A tasks per process.",
+    )
+    a2a_inbound_task_ttl_days: int = Field(
+        default=7,
+        ge=0,
+        description="Days terminal asynchronous inbound A2A task projections are retained; 0 keeps them indefinitely.",
+    )
+    a2a_inbound_task_lease_seconds: int = Field(
+        default=60,
+        gt=0,
+        le=3600,
+        description="Lease duration for an asynchronous inbound A2A task before stale recovery may finalize it.",
+    )
+    a2a_inbound_task_recovery_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description="Interval for reconciling expired asynchronous inbound A2A task leases.",
+    )
     a2a_delegation_timeout_seconds: int = Field(
         default=120, description="HTTP timeout for outbound A2A /message:send calls (seconds)"
     )
     a2a_delegation_max_per_run: int = Field(default=3, description="Maximum delegate_to_agent calls allowed per agent run")
+    a2a_delegation_max_concurrent_per_run: int = Field(
+        default=2,
+        ge=1,
+        le=64,
+        description="Maximum simultaneous outbound A2A delegations per agent run.",
+    )
     a2a_delegation_require_allowlist: bool = Field(
         default=True,
         description="When true, delegation fails if the target agent is not on the org's allowlist. Security-first default.",

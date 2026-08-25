@@ -83,6 +83,32 @@ def _hanging_ctx() -> SimpleNamespace:
     )
 
 
+def _async_task(**overrides) -> SimpleNamespace:
+    value = {
+        "id": "internal-task-id",
+        "run_id": "run-async",
+        "client_task_id": "client-task-id",
+        "context_id": "ctx-async",
+        "message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]},
+        "metadata": {},
+        "user_message": "hello",
+        "caller_org_id": "",
+        "caller_user_id": "",
+        "caller_ip": "198.51.100.7",
+        "auth_method": "anonymous",
+        "task_state": "submitted",
+        "output_text": "",
+        "error": "",
+        "usage_event_id": None,
+        "cost_usdc": 0,
+        "settlement_tx": "",
+        "billing_method": "",
+        "duration_ms": 0,
+    }
+    value.update(overrides)
+    return SimpleNamespace(**value)
+
+
 async def _noop_dispatch_settlement(*_args, **kwargs):
     kwargs["result"]["marketplace_stats_billable"] = False
     if False:
@@ -488,3 +514,329 @@ async def test_message_send_billing_disabled_allows_anonymous(anon_client, test_
 
     assert resp.status_code == 200
     assert resp.json()["result"]["status"]["state"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_message_send_async_returns_submitted_task_and_location(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    stored_task = _async_task()
+    create_mock = AsyncMock(return_value=(stored_task, True))
+    enqueue_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "message/send",
+            "params": {
+                "message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]},
+                "contextId": "ctx-async",
+                "taskId": "client-task-id",
+            },
+        },
+    )
+
+    assert resp.status_code == 202
+    assert resp.headers["location"] == "/message:status/internal-task-id"
+    body = resp.json()
+    assert body["id"] == 9
+    assert body["result"]["id"] == "internal-task-id"
+    assert body["result"]["status"]["state"] == "submitted"
+    assert body["result"]["history"][0]["role"] == "user"
+    assert body["result"]["history"][0]["parts"][0]["text"] == "hello"
+    assert body["result"]["metadata"]["statusPath"] == "/message:status/internal-task-id"
+    assert create_mock.await_args.kwargs["client_task_id"] == "client-task-id"
+    assert enqueue_mock.await_args.args[0] == "internal-task-id"
+
+
+@pytest.mark.anyio
+async def test_message_send_async_queue_full_returns_retryable_503(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    stored_task = _async_task()
+    finish_mock = AsyncMock(return_value=_async_task(task_state="failed", error="Task queue is full."))
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.create_inbound_task",
+        AsyncMock(return_value=(stored_task, True)),
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", AsyncMock(return_value=None))
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 503
+    assert resp.headers["retry-after"] == "1"
+    assert resp.json()["error"] == "A2A task queue is full"
+    assert finish_mock.await_args.kwargs["task_state"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_message_send_async_enqueue_error_returns_503(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    stored_task = _async_task()
+    finish_mock = AsyncMock(return_value=_async_task(task_state="failed"))
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.create_inbound_task",
+        AsyncMock(return_value=(stored_task, True)),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.enqueue_inbound_task",
+        AsyncMock(side_effect=RuntimeError("queue unavailable")),
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", AsyncMock(return_value=None))
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "A2A task queue temporarily unavailable"
+    assert finish_mock.await_args.kwargs["task_state"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_message_send_async_database_error_returns_503(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    create_mock = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    enqueue_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "A2A task queue temporarily unavailable"
+    enqueue_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_async_worker_verifies_payment_only_after_claim(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    stored_task = _async_task()
+    create_mock = AsyncMock(return_value=(stored_task, True))
+    enqueue_mock = AsyncMock(return_value=True)
+    claim_mock = AsyncMock(return_value=_async_task(task_state="running"))
+    finish_mock = AsyncMock(return_value=_async_task(task_state="completed", output_text="A2A result"))
+    audit_mock = AsyncMock(return_value=None)
+    verify_mock = AsyncMock(return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc")))
+    mark_billing_mock = AsyncMock()
+    run_mock = AsyncMock(
+        return_value=SimpleNamespace(
+            task_state="completed",
+            output_text="A2A result",
+            duration_ms=12,
+            usage_event=SimpleNamespace(id="usage-1", cost_usdc=123),
+            settlement_amount_usdc=123,
+            settlement_tx="0xsettled",
+        )
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.claim_inbound_task", claim_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.mark_inbound_task_billing_method", mark_billing_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr("billing.verify_payment", verify_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.run_agent_once", run_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async", "X-PAYMENT": "signed-payment"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 202
+    verify_mock.assert_not_awaited()
+    runner = enqueue_mock.await_args.args[1]
+
+    await runner()
+
+    verify_mock.assert_awaited_once_with("signed-payment")
+    run_mock.assert_awaited_once()
+    assert finish_mock.await_args.kwargs["task_state"] == "completed"
+    assert finish_mock.await_args.kwargs["usage_event_id"] == "usage-1"
+    assert finish_mock.await_args.kwargs["settlement_amount_usdc"] == 123
+    assert finish_mock.await_args.kwargs["settlement_tx"] == "0xsettled"
+    mark_billing_mock.assert_awaited_once_with("internal-task-id", "x402")
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args.kwargs["settlement_amount_usdc"] == 123
+    assert audit_mock.await_args.kwargs["settlement_tx"] == "0xsettled"
+
+
+@pytest.mark.anyio
+async def test_async_worker_rejected_payment_records_x402_rail(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    stored_task = _async_task()
+    create_mock = AsyncMock(return_value=(stored_task, True))
+    enqueue_mock = AsyncMock(return_value=True)
+    claim_mock = AsyncMock(return_value=_async_task(task_state="running"))
+    finish_mock = AsyncMock(return_value=_async_task(task_state="rejected_payment", error="bad payment"))
+    audit_mock = AsyncMock(return_value=None)
+    verify_mock = AsyncMock(return_value=BillingResult(verified=False, error="bad payment"))
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.claim_inbound_task", claim_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr("billing.verify_payment", verify_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async", "X-PAYMENT": "bad-payment"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    await enqueue_mock.await_args.args[1]()
+
+    assert resp.status_code == 202
+    assert finish_mock.await_args.kwargs["task_state"] == "rejected_payment"
+    assert finish_mock.await_args.kwargs["billing_method"] == "x402"
+    assert audit_mock.await_args.kwargs["billing_method"] == "x402"
+
+
+@pytest.mark.anyio
+async def test_async_worker_rejected_credit_records_credit_rail(auth_header, anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    stored_task = _async_task(caller_org_id="test-org-id", caller_user_id="test-user-id", auth_method="email")
+    create_mock = AsyncMock(return_value=(stored_task, True))
+    enqueue_mock = AsyncMock(return_value=True)
+    claim_mock = AsyncMock(return_value=_async_task(task_state="running"))
+    finish_mock = AsyncMock(return_value=_async_task(task_state="rejected_auth_credit", error="Insufficient credits"))
+    audit_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.claim_inbound_task", claim_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages._run_billing_gate",
+        AsyncMock(side_effect=HTTPException(status_code=402, detail="Insufficient credits")),
+    )
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async", **auth_header},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    await enqueue_mock.await_args.args[1]()
+
+    assert resp.status_code == 202
+    assert finish_mock.await_args.kwargs["task_state"] == "rejected_auth_credit"
+    assert finish_mock.await_args.kwargs["billing_method"] == "credit"
+    assert audit_mock.await_args.kwargs["billing_method"] == "credit"
+
+
+@pytest.mark.anyio
+async def test_message_send_async_retry_reuses_existing_task(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    stored_task = _async_task(task_state="running")
+    create_mock = AsyncMock(return_value=(stored_task, False))
+    enqueue_mock = AsyncMock(return_value=True)
+    verify_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+    monkeypatch.setattr("billing.verify_payment", verify_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async", "X-PAYMENT": "same-payment"},
+        json={
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]},
+            "contextId": "ctx-async",
+            "taskId": "client-task-id",
+        },
+    )
+
+    assert resp.status_code == 202
+    assert resp.json()["result"]["id"] == "internal-task-id"
+    assert resp.json()["result"]["status"]["state"] == "working"
+    enqueue_mock.assert_not_awaited()
+    verify_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_message_send_async_retry_rejects_mismatched_request(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    create_mock = AsyncMock(return_value=(_async_task(), False))
+    enqueue_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", create_mock)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async"},
+        json={
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "different"}]},
+            "taskId": "client-task-id",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Client task ID is already associated with a different request"
+    enqueue_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_message_status_scopes_authenticated_lookup(auth_header, anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    task = _async_task(
+        caller_org_id="test-org-id",
+        caller_user_id="test-user-id",
+        auth_method="email",
+        task_state="completed",
+        output_text="A2A result",
+    )
+    lookup_mock = AsyncMock(return_value=task)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.get_inbound_task", lookup_mock)
+
+    resp = await anon_client.get("/message:status/internal-task-id", headers=auth_header)
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["status"]["state"] == "completed"
+    assert resp.json()["result"]["artifacts"][0]["parts"][0]["text"] == "A2A result"
+    lookup_mock.assert_awaited_once_with(
+        "internal-task-id",
+        caller_org_id="test-org-id",
+        caller_user_id="test-user-id",
+    )
+
+
+@pytest.mark.anyio
+async def test_message_status_uses_anonymous_task_id_as_capability(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    lookup_mock = AsyncMock(return_value=_async_task(task_state="completed", output_text="A2A result"))
+    monkeypatch.setattr("teardrop.routers.a2a_messages.get_inbound_task", lookup_mock)
+
+    resp = await anon_client.get("/message:status/internal-task-id")
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["status"]["state"] == "completed"
+    lookup_mock.assert_awaited_once_with("internal-task-id", anonymous_only=True)
+
+
+@pytest.mark.anyio
+async def test_message_status_returns_404_for_unknown_task(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=False)
+    lookup_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.get_inbound_task", lookup_mock)
+
+    resp = await anon_client.get("/message:status/missing-task")
+
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "A2A task not found"

@@ -286,8 +286,16 @@ app.add_middleware(
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "PATCH", "PUT", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-RateLimit-Scope", "Retry-After"],
+    allow_headers=["Authorization", "Content-Type", "Payment-Signature", "X-Payment", "Prefer"],
+    expose_headers=[
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-RateLimit-Scope",
+        "Retry-After",
+        "Location",
+        "WWW-Authenticate",
+    ],
 )
 
 

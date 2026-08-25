@@ -13,7 +13,8 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/llms.txt` | — | Root LLM-friendly discovery index for public Teardrop surfaces |
 | `GET` | `/robots.txt` | — | Public crawler directives with `llms.txt` pointer |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
-| `POST` | `/message:send` | Bearer or x402 | Blocking inbound A2A endpoint for external agents (when enabled) |
+| `POST` | `/message:send` | Bearer or x402 | Inbound A2A endpoint; blocking by default, or `202` with `Prefer: respond-async` (when enabled) |
+| `GET` | `/message:status/{task_id}` | Bearer or capability | Poll an asynchronous inbound A2A task (when enabled) |
 | `GET` | `/agent/tools` | Bearer | Tool inventory for current org (platform, org, and subscribed marketplace tools) |
 | `GET` | `/agent/tool-exclusions` | Bearer | List the org's persisted tool exclusions |
 | `POST` | `/agent/tool-exclusions` | Bearer | Persist a tool exclusion (merged with per-request `tool_policy.exclude_names` on every run) |

@@ -176,7 +176,7 @@ def score_entry_return(target: dict[str, Any], observation: Observation | None, 
 
 
 def _fee_direction(value: float) -> str:
-    if abs(value) < 5:
+    if abs(value) <= 5:
         return "flat"
     return "up" if value > 0 else "down"
 

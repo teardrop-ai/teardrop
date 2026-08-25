@@ -170,6 +170,15 @@ def _build_agent_card_content(
                 "protocolVersion": "1.0",
             }
         )
+        if card_settings.a2a_inbound_async_enabled:
+            capabilities["asyncTasks"] = {
+                "enabled": True,
+                "request_header": "Prefer: respond-async",
+                "status_endpoint": "/message:status/{task_id}",
+                "max_concurrency": card_settings.a2a_inbound_async_max_concurrency,
+                "queue_size": card_settings.a2a_inbound_async_queue_size,
+            }
+            endpoints["a2a_message_status"] = "/message:status/{task_id}"
         protocols.insert(1, "a2a")
     if card_settings.marketplace_enabled:
         capabilities["marketplace"] = {

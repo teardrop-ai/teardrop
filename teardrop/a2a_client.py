@@ -10,15 +10,20 @@ Implements the HTTP+JSON/REST binding of the A2A v1.0 specification:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import logging
+import re
 import socket
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, Field
+
+from teardrop.cache import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -160,13 +165,21 @@ class A2ASendMessageResponse(BaseModel):
 
     task: A2ATask | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
+    settlement_tx: str = ""
 
     model_config = {"extra": "allow"}
 
 
-# ─── In-process agent-card cache ─────────────────────────────────────────────
+# ─── Agent-card cache ─────────────────────────────────────────────────────────
 
 _agent_card_cache: dict[str, tuple[A2AAgentCard, float]] = {}
+_AGENT_CARD_CACHE_MAX_ENTRIES = 10_000
+_AGENT_CARD_REDIS_PREFIX = "teardrop:a2a:agent-card:"
+
+
+def _redis_cache_key(url: str) -> str:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return f"{_AGENT_CARD_REDIS_PREFIX}{digest}"
 
 
 def _cache_get(url: str, ttl: int) -> A2AAgentCard | None:
@@ -181,7 +194,36 @@ def _cache_get(url: str, ttl: int) -> A2AAgentCard | None:
 
 
 def _cache_set(url: str, card: A2AAgentCard) -> None:
+    if url not in _agent_card_cache and len(_agent_card_cache) >= _AGENT_CARD_CACHE_MAX_ENTRIES:
+        oldest_url = min(_agent_card_cache, key=lambda cached_url: _agent_card_cache[cached_url][1])
+        _agent_card_cache.pop(oldest_url, None)
     _agent_card_cache[url] = (card, time.monotonic())
+
+
+async def _redis_cache_get(url: str) -> A2AAgentCard | None:
+    redis = get_redis()
+    if redis is None:
+        return None
+    try:
+        raw = await redis.get(_redis_cache_key(url))
+        if raw is None:
+            return None
+        return A2AAgentCard.model_validate_json(raw)
+    except Exception as exc:
+        logger.warning("Redis agent-card cache read failed; falling back: %s", exc)
+        return None
+
+
+async def _redis_cache_set(url: str, card: A2AAgentCard, ttl: int) -> None:
+    if ttl <= 0:
+        return
+    redis = get_redis()
+    if redis is None:
+        return
+    try:
+        await redis.setex(_redis_cache_key(url), ttl, card.model_dump_json())
+    except Exception as exc:
+        logger.warning("Redis agent-card cache write failed (non-fatal): %s", exc)
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -216,6 +258,12 @@ async def discover_agent_card(
         logger.debug("discover_agent_card: cache hit for %s", base_url)
         return cached
 
+    cached = await _redis_cache_get(base_url)
+    if cached is not None:
+        _cache_set(base_url, cached)
+        logger.debug("discover_agent_card: Redis cache hit for %s", base_url)
+        return cached
+
     # SSRF check
     ssrf_err = await async_validate_url(base_url)
     if ssrf_err:
@@ -237,6 +285,7 @@ async def discover_agent_card(
 
     card = A2AAgentCard.model_validate(resp.json())
     _cache_set(base_url, card)
+    await _redis_cache_set(base_url, card, cache_ttl)
     return card
 
 
@@ -287,20 +336,21 @@ async def send_message(
 
     from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
 
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        headers=headers,
-        follow_redirects=False,
-        transport=make_ssrf_safe_httpx_transport(),
-    ) as client:
-        resp = await client.post(endpoint, json=payload)
-        resp.raise_for_status()
+    async with asyncio.timeout(timeout):
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            headers=headers,
+            follow_redirects=False,
+            transport=make_ssrf_safe_httpx_transport(),
+        ) as client:
+            resp = await client.post(endpoint, json=payload)
+            resp.raise_for_status()
 
-    data = resp.json()
+        data = resp.json()
     return _parse_send_response(data)
 
 
-def _parse_send_response(data: dict[str, Any]) -> A2ASendMessageResponse:
+def _parse_send_response(data: dict[str, Any], *, settlement_tx: str = "") -> A2ASendMessageResponse:
     """Normalise a /message:send response — handles both raw Task and envelope."""
     # JSON-RPC envelope: {"jsonrpc": "2.0", "result": { ...task... }}
     task_data = data.get("result", data)
@@ -309,9 +359,9 @@ def _parse_send_response(data: dict[str, Any]) -> A2ASendMessageResponse:
         task = A2ATask.model_validate(task_data)
     except Exception:
         logger.warning("send_message: could not parse task from response, returning raw")
-        return A2ASendMessageResponse(raw=data)
+        return A2ASendMessageResponse(raw=data, settlement_tx=settlement_tx)
 
-    return A2ASendMessageResponse(task=task, raw=data)
+    return A2ASendMessageResponse(task=task, raw=data, settlement_tx=settlement_tx)
 
 
 def _requirement_value(requirement: Any, key: str, default: Any = None) -> Any:
@@ -384,6 +434,7 @@ async def send_message_with_payment(
     auth_header: str | None = None,
     max_amount_atomic: int,
     allowed_networks: frozenset[str],
+    payment_attempt_callback: Callable[[], Awaitable[None]] | None = None,
 ) -> A2ASendMessageResponse:
     """Send a task message to a remote A2A agent, handling x402 payment if required.
 
@@ -418,33 +469,58 @@ async def send_message_with_payment(
 
     from tools.definitions.http_fetch import make_ssrf_safe_httpx_transport
 
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        headers=headers,
-        follow_redirects=False,
-        transport=make_ssrf_safe_httpx_transport(),
-    ) as client:
-        resp = await client.post(endpoint, json=payload)
+    async with asyncio.timeout(timeout):
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            headers=headers,
+            follow_redirects=False,
+            transport=make_ssrf_safe_httpx_transport(),
+        ) as client:
+            resp = await client.post(endpoint, json=payload)
 
-        # ── Handle 402 Payment Required ───────────────────────────────────
-        if resp.status_code == 402 and signer is not None:
-            payment_header = _sign_x402_payment(
-                resp,
-                signer,
-                max_amount_atomic=max_amount_atomic,
-                allowed_networks=allowed_networks,
-            )
-            if payment_header:
-                resp = await client.post(
-                    endpoint,
-                    json=payload,
-                    headers={"X-PAYMENT": payment_header},
+            # ── Handle 402 Payment Required ───────────────────────────────
+            if resp.status_code == 402 and signer is not None:
+                payment_header = _sign_x402_payment(
+                    resp,
+                    signer,
+                    max_amount_atomic=max_amount_atomic,
+                    allowed_networks=allowed_networks,
                 )
+                if payment_header:
+                    if payment_attempt_callback is not None:
+                        await payment_attempt_callback()
+                    resp = await client.post(
+                        endpoint,
+                        json=payload,
+                        headers={"X-PAYMENT": payment_header},
+                    )
 
-        resp.raise_for_status()
+            resp.raise_for_status()
+            settlement_tx = _extract_payment_response_transaction(resp)
 
-    data = resp.json()
-    return _parse_send_response(data)
+        data = resp.json()
+    return _parse_send_response(data, settlement_tx=settlement_tx)
+
+
+_PAYMENT_TRANSACTION_PATTERN = re.compile(r"^0x[a-fA-F0-9]{64}$")
+
+
+def _extract_payment_response_transaction(resp: httpx.Response) -> str:
+    """Return a bounded x402 transaction hash without exposing header contents."""
+    for header_name in ("PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"):
+        header_value = resp.headers.get(header_name)
+        if not isinstance(header_value, str) or not header_value:
+            continue
+        try:
+            from x402.http import decode_payment_response_header
+
+            settlement = decode_payment_response_header(header_value)
+            transaction = getattr(settlement, "transaction", "")
+            if isinstance(transaction, str) and _PAYMENT_TRANSACTION_PATTERN.fullmatch(transaction):
+                return transaction
+        except Exception:
+            logger.debug("send_message_with_payment: invalid payment response metadata", exc_info=True)
+    return ""
 
 
 def _payment_requirement_amount(requirement: Any) -> int | None:
