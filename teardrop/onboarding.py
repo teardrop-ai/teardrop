@@ -31,6 +31,7 @@ from web3 import Web3
 import billing
 from teardrop.auth import create_access_token
 from teardrop.config import get_settings
+from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.users import get_org_by_id
 from teardrop.wallets import (
     get_provisioning_state_by_payment_ref,
@@ -91,7 +92,6 @@ async def get_bootstrap_payment_requirements() -> tuple[int, list]:
 
 async def bootstrap_org_from_payment(payment_header: str, request: Request) -> dict:
     """Verify an x402 payment and provision a fresh machine org for its payer."""
-    del request
     amount_usdc, requirements = await get_bootstrap_payment_requirements()
     nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
     payment_ref = f"x402:{nonce_hash}"
@@ -170,6 +170,20 @@ async def bootstrap_org_from_payment(payment_header: str, request: Request) -> d
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This wallet is already registered. Sign in via SIWE instead.",
             )
+
+    if existing_wallet is None:
+        # First-time org creation is free of an economic top-up history, so
+        # throttle it by verified payer address. Repeat top-ups into an
+        # existing machine org are already economically gated and skip this.
+        try:
+            await _enforce_rate_limit(
+                f"provision:addr:{address.lower()}",
+                settings.rate_limit_org_provision_rpm,
+                detail="Too many new org provisioning attempts for this wallet. Please try again later.",
+            )
+        except HTTPException:
+            await _release_unsettled_claim(payment_header)
+            raise
 
     try:
         provisioned = await provision_org_for_wallet(

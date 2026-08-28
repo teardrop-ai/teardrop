@@ -259,6 +259,11 @@ async def admin_update_spending(
     _admin: dict = Depends(require_admin),
 ) -> JSONResponse:
     """Update spending limit or pause/unpause an org (admin only)."""
+    await _enforce_rate_limit(
+        f"admin:{_admin.get('sub', 'unknown')}",
+        settings.rate_limit_topup_rpm,
+        detail="Rate limit exceeded for admin operations.",
+    )
     result = await update_org_spending_config(
         org_id,
         spending_limit_usdc=body.spending_limit_usdc,

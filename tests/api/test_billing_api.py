@@ -212,6 +212,107 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
     assert end_arg is not None
 
 
+# ─── /admin/orgs/{org_id}/spending ──────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_admin_get_spending_returns_config(admin_api_client, monkeypatch):
+    config = {
+        "org_id": "org-abc",
+        "balance_usdc": 500_000,
+        "spending_limit_usdc": 5_000_000,
+        "is_paused": False,
+        "daily_spend_usdc": 125_000,
+    }
+    mock_fn = AsyncMock(return_value=config)
+    monkeypatch.setattr("teardrop.routers.admin.billing.get_org_spending_config", mock_fn)
+
+    resp = await admin_api_client.get("/admin/orgs/org-abc/spending")
+
+    assert resp.status_code == 200
+    assert resp.json() == config
+    mock_fn.assert_awaited_once_with("org-abc")
+
+
+@pytest.mark.anyio
+async def test_admin_update_spending_returns_updated_config(admin_api_client, monkeypatch):
+    config = {
+        "org_id": "org-abc",
+        "balance_usdc": 500_000,
+        "spending_limit_usdc": 2_000_000,
+        "is_paused": True,
+        "daily_spend_usdc": 125_000,
+    }
+    mock_fn = AsyncMock(return_value=config)
+    monkeypatch.setattr("teardrop.routers.admin.billing.update_org_spending_config", mock_fn)
+
+    resp = await admin_api_client.patch(
+        "/admin/orgs/org-abc/spending",
+        json={"spending_limit_usdc": 2_000_000, "is_paused": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == config
+    mock_fn.assert_awaited_once_with(
+        "org-abc",
+        spending_limit_usdc=2_000_000,
+        is_paused=True,
+    )
+
+
+@pytest.mark.anyio
+async def test_admin_update_spending_not_found_returns_404(admin_api_client, monkeypatch):
+    monkeypatch.setattr(
+        "teardrop.routers.admin.billing.update_org_spending_config",
+        AsyncMock(return_value=None),
+    )
+
+    resp = await admin_api_client.patch(
+        "/admin/orgs/missing-org/spending",
+        json={"spending_limit_usdc": 2_000_000},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Org not found in credit system"
+
+
+@pytest.mark.anyio
+async def test_admin_update_spending_rejects_negative_limit(admin_api_client):
+    resp = await admin_api_client.patch(
+        "/admin/orgs/org-abc/spending",
+        json={"spending_limit_usdc": -1},
+    )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_get_spending_requires_admin(api_client):
+    resp = await api_client.get("/admin/orgs/org-abc/spending")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_update_spending_requires_admin(api_client):
+    resp = await api_client.patch(
+        "/admin/orgs/org-abc/spending",
+        json={"spending_limit_usdc": 2_000_000},
+    )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_update_spending_requires_auth(anon_client):
+    resp = await anon_client.patch(
+        "/admin/orgs/org-abc/spending",
+        json={"spending_limit_usdc": 2_000_000},
+    )
+
+    assert resp.status_code == 401
+
+
 # ─── /billing/balance ────────────────────────────────────────────────────────
 
 

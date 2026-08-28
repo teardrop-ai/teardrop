@@ -20,6 +20,8 @@ trafilatura>=1.6.0
 
 # ─── Web3 / SIWE ───────────────────────────────────────────────────────────────
 siwe>=4.4.0
+# abnf 2.9.0 rejects the core-rule redefinitions bundled by siwe 4.4.0 at import time.
+abnf>=2.2,<2.9.0
 web3>=7.0.0
 
 # ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────

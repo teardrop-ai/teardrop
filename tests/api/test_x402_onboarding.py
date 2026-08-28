@@ -78,8 +78,10 @@ def _verified(requirement, address: str = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA
 
 
 @pytest.mark.anyio
-async def test_x402_bootstrap_without_header_returns_payment_requirements(anon_client, bootstrap_context):
+async def test_x402_bootstrap_without_header_returns_payment_requirements(anon_client, bootstrap_context, monkeypatch):
     _, requirements_mock = bootstrap_context
+    rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth._enforce_rate_limit", rate_limit_mock)
 
     response = await anon_client.post("/token", json={"grant_type": "x402"})
 
@@ -89,6 +91,28 @@ async def test_x402_bootstrap_without_header_returns_payment_requirements(anon_c
     assert body["resource"]["url"] == "http://test/token"
     assert "payment-required" in response.headers
     requirements_mock.assert_awaited_once()
+    rate_limit_mock.assert_awaited_once()
+    assert rate_limit_mock.call_args.args[0].startswith("auth:")
+
+
+@pytest.mark.anyio
+async def test_x402_bootstrap_rate_limits_verified_payer_and_releases_claim(bootstrap_context, monkeypatch, test_settings):
+    address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    monkeypatch.setattr(billing, "verify_payment", AsyncMock(return_value=_verified(bootstrap_context[0], address)))
+    # New wallet (no existing wallet) so the limiter branch is reached.
+    monkeypatch.setattr("teardrop.onboarding.get_wallet_by_address_any_chain", AsyncMock(return_value=None))
+    rate_limit_mock = AsyncMock(side_effect=HTTPException(status_code=429, detail="rate limited"))
+    release_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.onboarding._enforce_rate_limit", rate_limit_mock)
+    monkeypatch.setattr(billing, "release_payment_nonce", release_mock)
+
+    with pytest.raises(HTTPException) as error:
+        await bootstrap_org_from_payment("payment", None)
+
+    assert error.value.status_code == 429
+    assert rate_limit_mock.call_args.args[0] == f"provision:addr:{address.lower()}"
+    assert rate_limit_mock.call_args.args[1] == test_settings.rate_limit_org_provision_rpm
+    release_mock.assert_awaited_once_with("payment")
 
 
 @pytest.mark.anyio
@@ -247,6 +271,10 @@ async def test_x402_bootstrap_new_payment_uses_existing_machine_org(anon_client,
         "record_onboarding_settlement",
         AsyncMock(return_value=(credential, None)),
     )
+    # Repeat top-ups into an existing machine org are economically gated and
+    # must NOT consume the new-org provisioning bucket.
+    address_rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.onboarding._enforce_rate_limit", address_rate_limit_mock)
 
     response = await anon_client.post("/token", json={"grant_type": "x402"}, headers={"X-Payment": "new-payment"})
 
@@ -254,6 +282,7 @@ async def test_x402_bootstrap_new_payment_uses_existing_machine_org(anon_client,
     assert response.json()["org_id"] == provisioned.org.id
     assert response.json()["client_id"] == credential.client_id
     assert "client_secret" not in response.json()
+    address_rate_limit_mock.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -380,6 +409,10 @@ async def test_x402_bootstrap_happy_path_returns_one_time_client_credential(anon
     monkeypatch.setattr("teardrop.onboarding.get_wallet_by_address_any_chain", AsyncMock(return_value=None))
     monkeypatch.setattr("teardrop.onboarding.provision_org_for_wallet", AsyncMock(return_value=provisioned))
     monkeypatch.setattr("teardrop.onboarding._record_settlement_event", audit_mock)
+    auth_rate_limit_mock = AsyncMock()
+    address_rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.auth._enforce_rate_limit", auth_rate_limit_mock)
+    monkeypatch.setattr("teardrop.onboarding._enforce_rate_limit", address_rate_limit_mock)
 
     response = await anon_client.post("/token", json={"grant_type": "x402"}, headers={"X-Payment": "payment"})
 
@@ -390,6 +423,10 @@ async def test_x402_bootstrap_happy_path_returns_one_time_client_credential(anon
     assert body["org_id"] == "org-x402"
     assert body["client_id"] == "client-x402"
     assert body["client_secret"] == "one-time-client-secret"
+    auth_rate_limit_mock.assert_awaited_once()
+    assert auth_rate_limit_mock.call_args.args[0].startswith("auth:")
+    address_rate_limit_mock.assert_awaited_once()
+    assert address_rate_limit_mock.call_args.args[0] == f"provision:addr:{address.lower()}"
     from teardrop.auth import decode_access_token
 
     claims = decode_access_token(body["access_token"])

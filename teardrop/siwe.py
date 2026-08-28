@@ -101,9 +101,14 @@ async def _handle_siwe_login(siwe_message: str, siwe_signature: str, request: Re
         if existing_any_chain is None and request is not None:
             client_ip = request.client.host if request.client else "unknown"
             await _enforce_rate_limit(
-                f"provision:{client_ip}",
+                f"provision:ip:{client_ip}",
                 settings.rate_limit_org_provision_rpm,
                 detail="Too many new wallet registrations. Please try again later.",
+            )
+            await _enforce_rate_limit(
+                f"provision:addr:{address.lower()}",
+                settings.rate_limit_org_provision_rpm,
+                detail="Too many new wallet registrations for this wallet. Please try again later.",
             )
         result = await provision_org_for_wallet(address, chain_id, acquisition_source="siwe")
         wallet = result.wallet

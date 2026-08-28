@@ -35,6 +35,7 @@ from billing import (
     record_onboarding_settlement,
     reset_exhausted_settlement,
     settle_payment,
+    update_org_spending_config,
     verify_and_settle_usdc_topup,
     verify_credit,
     verify_payment,
@@ -313,6 +314,81 @@ class TestGetOrgSpendingConfig:
         assert config["daily_spend_usdc"] == 1_111
         pool.fetchrow.assert_awaited_once()
         cache.get.assert_awaited_once()
+
+
+@pytest.mark.anyio
+class TestUpdateOrgSpendingConfig:
+    async def test_updates_requested_fields_with_parameterized_sql(self):
+        pool = _pool_mock()
+        pool.execute = AsyncMock(return_value="UPDATE 1")
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 500_000,
+                "spending_limit_usdc": 2_000_000,
+                "is_paused": True,
+                "acquisition_source": None,
+            }
+        )
+        cache = MagicMock()
+        cache.get = AsyncMock(return_value=125_000)
+
+        with (
+            patch.object(billing_module, "_pool", pool),
+            patch.object(billing_module, "_get_daily_spend_cache", return_value=cache),
+        ):
+            result = await update_org_spending_config("org-1", 2_000_000, True)
+
+        query, *params = pool.execute.call_args.args
+        assert query == ("UPDATE org_credits SET spending_limit_usdc = $2, is_paused = $3, updated_at = NOW() WHERE org_id = $1")
+        assert params == ["org-1", 2_000_000, True]
+        assert result == {
+            "org_id": "org-1",
+            "balance_usdc": 500_000,
+            "spending_limit_usdc": 2_000_000,
+            "is_paused": True,
+            "daily_spend_usdc": 125_000,
+        }
+
+    async def test_no_fields_returns_current_config_without_update(self):
+        pool = _pool_mock()
+        pool.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 500_000,
+                "spending_limit_usdc": 2_000_000,
+                "is_paused": False,
+                "acquisition_source": None,
+            }
+        )
+        cache = MagicMock()
+        cache.get = AsyncMock(return_value=0)
+
+        with (
+            patch.object(billing_module, "_pool", pool),
+            patch.object(billing_module, "_get_daily_spend_cache", return_value=cache),
+        ):
+            result = await update_org_spending_config("org-1")
+
+        pool.execute.assert_not_awaited()
+        assert result["spending_limit_usdc"] == 2_000_000
+
+    async def test_rejects_negative_limit_before_update(self):
+        pool = _pool_mock()
+
+        with patch.object(billing_module, "_pool", pool):
+            with pytest.raises(ValueError, match="must not be negative"):
+                await update_org_spending_config("org-1", -1)
+
+        pool.execute.assert_not_awaited()
+
+    async def test_returns_none_when_org_credit_row_is_missing(self):
+        pool = _pool_mock()
+        pool.execute = AsyncMock(return_value="UPDATE 0")
+
+        with patch.object(billing_module, "_pool", pool):
+            result = await update_org_spending_config("missing-org", 2_000_000)
+
+        assert result is None
+        pool.fetchrow.assert_not_awaited()
 
 
 # ─── get_credit_balance ───────────────────────────────────────────────────────

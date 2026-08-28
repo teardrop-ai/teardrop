@@ -58,6 +58,8 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     monkeypatch.setattr("teardrop.siwe.get_wallet_by_address", AsyncMock(return_value=mock_wallet))
     monkeypatch.setattr("teardrop.siwe.create_refresh_token", AsyncMock(return_value="siwe-rt"))
     monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
+    rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.siwe._enforce_rate_limit", rate_limit_mock)
 
     resp = await anon_client.post(
         "/token",
@@ -70,6 +72,7 @@ async def test_siwe_login_happy_path(anon_client, monkeypatch, test_settings):
     assert resp.status_code == 200
     body = resp.json()
     assert "access_token" in body
+    rate_limit_mock.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -375,6 +378,8 @@ async def test_siwe_login_new_wallet_provisions_via_cas(anon_client, monkeypatch
     provision_mock = AsyncMock(return_value=provisioned)
     monkeypatch.setattr("teardrop.siwe.provision_org_for_wallet", provision_mock)
     monkeypatch.setattr("teardrop.siwe.create_refresh_token", AsyncMock(return_value="rt"))
+    rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.siwe._enforce_rate_limit", rate_limit_mock)
 
     resp = await anon_client.post(
         "/token",
@@ -385,6 +390,10 @@ async def test_siwe_login_new_wallet_provisions_via_cas(anon_client, monkeypatch
     # Provisioning was called with the FULL attacker address and siwe source.
     assert provision_mock.call_args[0][0] == attacker_addr
     assert provision_mock.call_args[1]["acquisition_source"] == "siwe"
+    assert rate_limit_mock.await_count == 2
+    assert rate_limit_mock.await_args_list[0].args[0].startswith("provision:ip:")
+    assert rate_limit_mock.await_args_list[1].args[0] == f"provision:addr:{attacker_addr.lower()}"
+    assert all(call.args[1] == test_settings.rate_limit_org_provision_rpm for call in rate_limit_mock.await_args_list)
     # JWT subject is the attacker's own user — never a prefix-collision victim's.
     import jwt as pyjwt
 

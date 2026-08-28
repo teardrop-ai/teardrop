@@ -81,3 +81,12 @@ async def test_admin_pricing_override_rate_limited(admin_api_client, _deny_rate_
         json={"tool_name": "acme/weather", "cost_usdc": 1_000_000},
     )
     assert resp.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_admin_spending_config_update_rate_limited(admin_api_client, _deny_rate_limit):
+    resp = await admin_api_client.patch(
+        "/admin/orgs/org-abc/spending",
+        json={"spending_limit_usdc": 1_000_000},
+    )
+    assert resp.status_code == 429

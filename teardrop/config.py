@@ -476,7 +476,10 @@ class Settings(BaseSettings):
     rate_limit_org_provision_rpm: int = Field(
         default=3,
         ge=1,
-        description="Per-IP rate limit for new machine org provisioning via /token (requests per minute).",
+        description=(
+            "Per-wallet rate limit for machine-org provisioning via SIWE and x402; "
+            "new SIWE wallets also receive the same per-client-IP limit (requests per minute)."
+        ),
     )
     x402_facilitator_url: str = Field(
         default="https://x402.org/facilitator",

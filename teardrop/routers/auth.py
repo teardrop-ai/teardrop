@@ -251,12 +251,6 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="x402 onboarding is not available on this deployment.",
             )
-        client_ip = request.client.host if request.client else "unknown"
-        await _enforce_rate_limit(
-            f"provision:{client_ip}",
-            settings.rate_limit_org_provision_rpm,
-            detail="Too many new org provisioning attempts. Please try again later.",
-        )
         payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
         if not payment_header:
             _, requirements = await get_bootstrap_payment_requirements()
