@@ -84,6 +84,7 @@ async def admin_api_client(test_settings):
     Both require_auth and require_admin are overridden.
     """
     from teardrop.auth import require_auth
+    from teardrop.dependencies import require_settlement_wallet_auth
     from teardrop.main import app, require_admin
 
     admin_payload = {
@@ -101,11 +102,13 @@ async def admin_api_client(test_settings):
 
     app.dependency_overrides[require_auth] = _mock_auth
     app.dependency_overrides[require_admin] = _mock_admin
+    app.dependency_overrides[require_settlement_wallet_auth] = _mock_admin
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.pop(require_auth, None)
     app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(require_settlement_wallet_auth, None)
 
 
 @pytest.fixture

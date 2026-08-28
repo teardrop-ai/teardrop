@@ -259,6 +259,7 @@ async def test_auth_me_email_user(api_client, monkeypatch):
     assert body["org_id"] == "test-org-id"
     assert body["role"] == "user"
     assert body["org_name"] == "Test Org"
+    assert body["org_slug"] == "test-org"
     # No wallet fields for non-SIWE sessions
     assert "address" not in body
     assert "chain_id" not in body
@@ -305,8 +306,30 @@ async def test_auth_me_siwe_user(test_settings, monkeypatch):
     assert body["auth_method"] == "siwe"
     assert body["address"] == "0xA03772Fbd16dbf3760B59f1c5921BCeB8A6b2920"
     assert body["org_name"] == "SIWE Test Org"
+    assert body["org_slug"] == "siwe-org"
     assert body["chain_id"] == 1
     assert body["email"] == "0xa03772fbd16dbf3760b59f1c5921bceb8a6b2920@wallet"
+
+
+@pytest.mark.anyio
+async def test_auth_me_without_org_omits_org_slug(api_client):
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    async def _mock_auth_without_org():
+        return {
+            "sub": "config-client",
+            "org_id": "",
+            "role": "user",
+            "auth_method": "client_credentials",
+        }
+
+    app.dependency_overrides[require_auth] = _mock_auth_without_org
+
+    resp = await api_client.get("/auth/me")
+
+    assert resp.status_code == 200
+    assert "org_slug" not in resp.json()
 
 
 @pytest.mark.anyio

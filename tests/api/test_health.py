@@ -201,6 +201,12 @@ async def test_agent_card_marketplace_discovery(api_client, test_settings):
         "enabled": True,
         "catalog_endpoint": "/marketplace/catalog",
         "mcp_gateway_endpoint": "/tools/mcp",
+        "registration": {
+            "author_config_endpoint": "/marketplace/author-config",
+            "tool_registration_endpoint": "/tools",
+            "auth": "siwe_or_admin",
+            "wallet_binding": "siwe_self",
+        },
     }
     assert body["endpoints"]["marketplace_catalog"] == "/marketplace/catalog"
 

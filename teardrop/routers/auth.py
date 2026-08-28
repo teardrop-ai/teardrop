@@ -295,6 +295,7 @@ class AuthMeResponse(BaseModel):
     auth_method: str
     email: str
     org_name: str | None = Field(default=None, description="Present when org_id is set.")
+    org_slug: str | None = Field(default=None, description="Present when org_id is set.")
     address: str | None = Field(default=None, description="Wallet address; present only for SIWE sessions.")
     chain_id: int | None = Field(default=None, description="Present only for SIWE sessions.")
 
@@ -320,6 +321,7 @@ async def auth_me(payload: dict = Depends(require_auth)) -> JSONResponse:
     if org_id:
         _org = await get_org_by_id(org_id)
         body["org_name"] = _org.name if _org else ""
+        body["org_slug"] = _org.slug if _org else ""
     # Include wallet-specific fields only for SIWE sessions.
     if payload.get("auth_method") == "siwe":
         body["address"] = payload.get("address", "")

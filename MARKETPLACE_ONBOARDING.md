@@ -37,7 +37,10 @@ TOKEN="<your-JWT>"
 
 ## Step 2 — Register a Settlement Wallet
 
-You must register a wallet before any tool can be published.
+You must register a wallet before any tool can be published. Organization
+admins may configure any valid settlement wallet. For a machine-provisioned
+organization, the owning SIWE wallet may configure the settlement wallet, but
+the destination must match the authenticated wallet address.
 
 ```bash
 curl -X POST https://api.teardrop.ai/marketplace/author-config \
@@ -56,8 +59,10 @@ curl -X POST https://api.teardrop.ai/marketplace/author-config \
 }
 ```
 
-The wallet can be updated at any time with the same endpoint.  Pending
-earnings are always settled to the wallet recorded **at withdrawal time**.
+The wallet can be updated at any time with the same endpoint. Pending earnings
+are always settled to the wallet recorded **at withdrawal time**. A SIWE
+session cannot redirect earnings to another address; use an organization admin
+session for an independently managed treasury wallet.
 The response echoes the canonical EIP-55 checksummed form, even if you pasted
 the address in lowercase.
 
@@ -139,7 +144,10 @@ curl -X POST https://api.teardrop.ai/marketplace/import/publish \
   }'
 ```
 
-Imported tools are published immediately as ordinary marketplace listings. Buyers
+Imported tools are published immediately as ordinary marketplace listings. This
+MCP import publish operation remains organization-admin-only. Agents can
+register their own webhook-backed tools with `POST /tools` after configuring
+their SIWE-owned settlement wallet. Buyers
 subscribe to them exactly the same way they subscribe to webhook-backed community
 tools; the backing transport is transparent to the buyer.
 

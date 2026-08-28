@@ -29,6 +29,8 @@ For the complete list of tools, detailed descriptions, and their per-call prices
 
 Enable with `MARKETPLACE_ENABLED=true`. When enabled, tools appear in `GET /marketplace/catalog` with `qualified_name = "platform/{tool_name}"` and `tool_type = "platform"`. Catalog discovery supports `category` filtering, `sort=popularity`, single-tool detail pages, author profiles, and LLM-friendly discovery at `GET /marketplace/llms.txt`. Aggregate quality metrics are available at `GET /.well-known/reputation.json`. Marketplace authors can register external MCP servers and publish discovered tools as listings via `POST /marketplace/import/preview` and admin-only `POST /marketplace/import/publish`.
 
+Agent-owned webhook tools can be registered through `POST /tools`. Machine-provisioned organizations configure marketplace payouts through `POST /marketplace/author-config` with their owning SIWE wallet; the wallet is pinned to that identity unless an organization admin configures a treasury wallet.
+
 Platform tools are always available during agent runs, are not subscribable via `POST /marketplace/subscriptions`, and incur their marketplace prices (in addition to token costs). Per-org pricing overrides are supported via `POST /admin/pricing/tools`; for agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
 ### Marketplace Settlement & USDC Sweeping

@@ -148,6 +148,18 @@ class TestSetAuthorConfig:
         assert config.settlement_wallet == "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
         assert mock_pool.execute.await_args.args[2] == "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
 
+    @pytest.mark.anyio
+    async def test_repeated_updates_use_idempotent_org_upsert(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock()
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await set_author_config("org-1", settlement_wallet=_VALID_ADDR)
+        await set_author_config("org-1", settlement_wallet=_VALID_ADDR)
+
+        assert mock_pool.execute.await_count == 2
+        assert "ON CONFLICT (org_id) DO UPDATE" in mock_pool.execute.await_args.args[0]
+
 
 # ─── record_tool_call_earnings ────────────────────────────────────────────────
 

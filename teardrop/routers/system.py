@@ -204,6 +204,12 @@ def _build_agent_card_content(
             "enabled": True,
             "catalog_endpoint": "/marketplace/catalog",
             "mcp_gateway_endpoint": endpoints["mcp_tools"],
+            "registration": {
+                "author_config_endpoint": "/marketplace/author-config",
+                "tool_registration_endpoint": "/tools",
+                "auth": "siwe_or_admin",
+                "wallet_binding": "siwe_self",
+            },
         }
         endpoints["marketplace_catalog"] = "/marketplace/catalog"
 

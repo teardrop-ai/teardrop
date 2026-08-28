@@ -47,7 +47,12 @@ from marketplace.models import MarketplaceCategory
 from mcp_client import discover_mcp_tools, get_org_mcp_server
 from org_tools import create_org_tool, list_org_tools, validate_safe_schema_subset
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_auth, require_org_admin
+from teardrop.dependencies import (
+    _require_org_id,
+    require_auth,
+    require_org_admin,
+    require_settlement_wallet_auth,
+)
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.shared import normalize_to_safe_schema_subset
@@ -311,19 +316,32 @@ def _preview_import_tool(
 @router.post("/marketplace/author-config", tags=["Marketplace"], response_model=MarketplaceAuthorConfigResponse)
 async def set_marketplace_author_config(
     body: SetAuthorConfigRequest,
-    payload: dict = Depends(require_org_admin),
+    payload: dict = Depends(require_settlement_wallet_auth),
 ) -> JSONResponse:
     """Configure or update the marketplace author settings for the org.
 
-    Admin-only: the settlement wallet is the destination for all marketplace
-    payouts, so changing it is a financial control and must not be available to
-    ordinary members.
+    Admins or the owning SIWE wallet may configure the payout destination.
     """
     s = get_settings()
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
 
     org_id = _require_org_id(payload)
+
+    if payload.get("role") != "admin":
+        from marketplace.models import normalize_eip55_address
+
+        requested_wallet, wallet_error = normalize_eip55_address(body.settlement_wallet)
+        authenticated_address = payload.get("address")
+        if isinstance(authenticated_address, str):
+            authenticated_wallet, authenticated_error = normalize_eip55_address(authenticated_address)
+        else:
+            authenticated_wallet, authenticated_error = None, "Missing authenticated wallet"
+        if wallet_error is not None or authenticated_error is not None or requested_wallet != authenticated_wallet:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Settlement wallet must match the authenticated wallet.",
+            )
 
     try:
         config = await set_author_config(

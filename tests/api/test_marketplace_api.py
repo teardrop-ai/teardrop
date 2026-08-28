@@ -64,6 +64,105 @@ async def test_set_author_config_forbidden_for_member(api_client, monkeypatch):
         "/marketplace/author-config",
         json={"settlement_wallet": _VALID_ADDR},
     )
+
+    assert resp.status_code == 403
+    set_mock.assert_not_awaited()
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_set_author_config_success_for_siwe_owner(api_client, monkeypatch):
+    from types import SimpleNamespace
+
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    siwe_address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+
+    async def _mock_siwe_auth():
+        return {
+            "sub": "siwe-user-id",
+            "org_id": "test-org-id",
+            "role": "user",
+            "auth_method": "siwe",
+            "address": siwe_address,
+            "chain_id": 1,
+        }
+
+    app.dependency_overrides[require_auth] = _mock_siwe_auth
+    monkeypatch.setattr(
+        "teardrop.users.get_org_by_id",
+        AsyncMock(return_value=SimpleNamespace(acquisition_source="siwe")),
+    )
+    monkeypatch.setattr(
+        "teardrop.wallets.get_wallet_by_address",
+        AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", user_id="siwe-user-id")),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.set_author_config", AsyncMock(return_value=_AUTHOR_CONFIG))
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={"settlement_wallet": siwe_address.lower()},
+    )
+
+    assert resp.status_code == 200
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_set_author_config_rejects_foreign_wallet_for_siwe_owner(api_client, monkeypatch):
+    from types import SimpleNamespace
+
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    siwe_address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    set_mock = AsyncMock(return_value=_AUTHOR_CONFIG)
+
+    async def _mock_siwe_auth():
+        return {
+            "sub": "siwe-user-id",
+            "org_id": "test-org-id",
+            "role": "user",
+            "auth_method": "siwe",
+            "address": siwe_address,
+            "chain_id": 1,
+        }
+
+    app.dependency_overrides[require_auth] = _mock_siwe_auth
+    monkeypatch.setattr(
+        "teardrop.users.get_org_by_id",
+        AsyncMock(return_value=SimpleNamespace(acquisition_source="siwe")),
+    )
+    monkeypatch.setattr(
+        "teardrop.wallets.get_wallet_by_address",
+        AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", user_id="siwe-user-id")),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace.set_author_config", set_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={"settlement_wallet": "0x" + "2" * 40},
+    )
+
+    assert resp.status_code == 403
+    set_mock.assert_not_awaited()
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/marketplace/author-config",
+        json={"settlement_wallet": _VALID_ADDR},
+    )
     assert resp.status_code == 403
     set_mock.assert_not_awaited()
 
