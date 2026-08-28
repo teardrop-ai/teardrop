@@ -10,6 +10,7 @@ this suite runs without a live Postgres instance or a real blockchain node.
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ from billing import (
     grant_onboarding_credit,
     is_promotional_credit,
     process_onboarding_credit_outbox,
+    record_onboarding_settlement,
     reset_exhausted_settlement,
     settle_payment,
     verify_and_settle_usdc_topup,
@@ -176,6 +178,30 @@ class TestVerifyCredit:
         assert "Insufficient credit" in result.error
         assert "5000" in result.error
 
+    async def test_machine_org_insufficient_balance_advertises_agent_topup(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "balance_usdc": 5_000,
+                "spending_limit_usdc": 5_000_000,
+                "is_paused": False,
+                "acquisition_source": "x402",
+            }
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is False
+        assert "GET /billing/topup/usdc/requirements" in result.error
+        assert "POST /billing/topup/usdc" in result.error
+        assert "grant_type=x402" in result.error
+
+    async def test_human_org_insufficient_balance_keeps_admin_topup_guidance(self):
+        mock_pool = _mock_pool_for_verify(balance=5_000)
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert "POST /admin/credits/topup" in result.error
+        assert "/billing/topup/usdc" not in result.error
+
     async def test_exact_balance_passes(self):
         mock_pool = _mock_pool_for_verify(balance=10_000)
         with patch.object(billing_module, "_pool", mock_pool):
@@ -220,6 +246,26 @@ class TestVerifyCredit:
         )
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
+        assert result.verified is True
+
+    async def test_machine_org_explicit_spend_limit_is_respected(self, test_settings):
+        test_settings.machine_org_daily_spend_limit_usdc = 50_000
+        mock_pool = _mock_pool_for_verify(
+            balance=100_000,
+            spending_limit=500_000,
+            daily_spend=45_000,
+        )
+        mock_pool.fetchrow.side_effect = [
+            {
+                "balance_usdc": 100_000,
+                "spending_limit_usdc": 500_000,
+                "is_paused": False,
+                "acquisition_source": "x402",
+            },
+            {"daily_spend": 45_000},
+        ]
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("machine-org", 10_000)
         assert result.verified is True
 
     async def test_verify_credit_bypasses_display_cache(self):
@@ -664,6 +710,79 @@ class TestAdminTopupCredit:
         pool._conn.execute.assert_called_once()
         call_sql = pool._conn.execute.call_args.args[0]
         assert "org_credit_ledger" in call_sql
+
+    async def test_onboarding_settlement_credits_and_audits_atomically(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(side_effect=[None, None, None, {"balance_usdc": 50_000}])
+        with patch.object(billing_module, "_pool", pool):
+            credential, client_secret = await record_onboarding_settlement(
+                "org-1",
+                50_000,
+                "x402:nonce",
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                84532,
+                "0xsettlement",
+            )
+        assert credential.org_id == "org-1"
+        assert credential.client_id
+        assert client_secret
+        assert pool._conn.fetchrow.await_count == 4
+        assert pool._conn.execute.await_count == 3
+        sql_calls = [call.args[0] for call in pool._conn.execute.call_args_list]
+        assert any("org_credit_ledger" in sql for sql in sql_calls)
+        assert any("org_provisioning_events" in sql for sql in sql_calls)
+
+    async def test_onboarding_settlement_reuses_existing_credential_without_secret(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                None,
+                {
+                    "client_id": "client-existing",
+                    "org_id": "org-1",
+                    "hashed_secret": "hash",
+                    "salt": "salt",
+                    "created_at": datetime.now(timezone.utc),
+                },
+                {"balance_usdc": 50_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            credential, client_secret = await record_onboarding_settlement(
+                "org-1",
+                50_000,
+                "x402:existing-payment",
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                84532,
+                "0xsettlement",
+            )
+        assert credential.client_id == "client-existing"
+        assert client_secret is None
+        assert pool._conn.execute.await_count == 2
+        assert all("org_client_credentials" not in call.args[0] for call in pool._conn.execute.call_args_list)
+
+    async def test_onboarding_settlement_recovery_mints_missing_credential(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                None,
+                {"org_id": "org-1", "amount_usdc": 50_000},
+                None,
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            credential, client_secret = await record_onboarding_settlement(
+                "org-1",
+                50_000,
+                "x402:recovery-payment",
+                "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+                84532,
+                "0xsettlement",
+            )
+        assert credential.org_id == "org-1"
+        assert client_secret
+        assert pool._conn.execute.await_count == 1
 
 
 @pytest.mark.anyio

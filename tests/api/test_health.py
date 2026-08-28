@@ -69,6 +69,37 @@ async def test_agent_card_shape(api_client):
     assert body["capabilities"]["asyncTasks"]["request_header"] == "Prefer: respond-async"
     assert body["endpoints"]["mcp_tools"] == "/tools/mcp"
     assert body["capabilities"]["billing"]["pricing_endpoint"] == "/billing/pricing"
+    assert body["capabilities"]["onboarding"] == {
+        "enabled": True,
+        "methods": ["siwe"],
+        "token_endpoint": "/token",
+        "nonce_endpoint": "/auth/siwe/nonce",
+        "topup_requirements_endpoint": "/billing/topup/usdc/requirements",
+        "topup_endpoint": "/billing/topup/usdc",
+        "credential_recovery": "siwe + POST /org/credentials/regenerate",
+        "x402_grant_type": "x402",
+    }
+
+
+@pytest.mark.anyio
+async def test_agent_card_advertises_x402_onboarding_when_enabled(api_client, test_settings):
+    test_settings.billing_enabled = True
+    test_settings.x402_onboarding_enabled = True
+
+    response = await api_client.get("/.well-known/agent-card.json")
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["onboarding"]["methods"] == ["siwe", "x402"]
+
+
+@pytest.mark.anyio
+async def test_agent_card_hides_onboarding_methods_when_disabled(api_client, test_settings):
+    test_settings.machine_provisioning_enabled = False
+
+    response = await api_client.get("/.well-known/agent-card.json")
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["onboarding"]["methods"] == []
 
 
 @pytest.mark.anyio

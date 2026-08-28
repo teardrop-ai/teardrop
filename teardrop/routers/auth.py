@@ -14,14 +14,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from billing import clear_onboarding_credit_outbox, grant_onboarding_credit
+from billing import build_402_headers, build_402_response_body, clear_onboarding_credit_outbox, grant_onboarding_credit
 from shared.captcha import verify_turnstile
 from shared.db_pool import UniqueViolation
 from shared.email import send_invite_email, send_verification_email
 from teardrop import rate_limit as _rate_limit
 from teardrop.auth import create_access_token, require_auth
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_org_admin
+from teardrop.dependencies import _require_org_id, require_credential_recovery
+from teardrop.public_url import public_base_url
 from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.siwe import _handle_siwe_login
 from teardrop.users import (
@@ -63,6 +64,8 @@ class TokenRequest(BaseModel):
     # SIWE flow (wallet users)
     siwe_message: str | None = None
     siwe_signature: str | None = None
+    # x402 payment-first bootstrap (zero-human onboarding)
+    grant_type: Literal["x402"] | None = None
 
 
 class TokenResponse(BaseModel):
@@ -70,6 +73,20 @@ class TokenResponse(BaseModel):
     token_type: Literal["bearer"]
     expires_in: int = Field(..., description="Access token lifetime in seconds.")
     refresh_token: str | None = Field(default=None, description="Present for email/SIWE flows; omitted for client_credentials.")
+
+
+class X402BootstrapResponse(BaseModel):
+    """Bootstrap response; the secret is present only when the org has no credential."""
+
+    access_token: str
+    token_type: Literal["bearer"]
+    expires_in: int
+    org_id: str
+    client_id: str
+    client_secret: str | None = Field(
+        default=None,
+        description="One-time secret on first bootstrap; omitted when the existing credential is reused.",
+    )
 
 
 async def _issue_email_token_pair(user: User) -> dict:
@@ -102,7 +119,15 @@ async def _issue_email_token_pair(user: User) -> dict:
     }
 
 
-@router.post("/token", tags=["Auth"], response_model=TokenResponse)
+@router.post(
+    "/token",
+    tags=["Auth"],
+    response_model=TokenResponse | X402BootstrapResponse,
+    responses={
+        402: {"description": "Payment required or payment settlement failed."},
+        409: {"description": "The payer wallet is already registered."},
+    },
+)
 async def token(body: TokenRequest, request: Request) -> JSONResponse:
     """Tri-mode token endpoint.
 
@@ -110,7 +135,8 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
       1. email+secret (user credentials)
       2. client_id+client_secret (machine-to-machine)
       3. siwe_message+siwe_signature (Sign-In with Ethereum)
-    Returns a signed RS256 JWT.
+            4. grant_type=x402 + payment header (payment-first org bootstrap)
+        Returns a signed RS256 JWT, and for x402 bootstrap also a one-time client credential.
     """
     client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(
@@ -118,6 +144,22 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
         settings.rate_limit_auth_rpm,
         detail="Rate limit exceeded. Please slow down.",
     )
+
+    if body.grant_type == "x402" and any(
+        value is not None
+        for value in (
+            body.client_id,
+            body.client_secret,
+            body.email,
+            body.secret,
+            body.siwe_message,
+            body.siwe_signature,
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="grant_type=x402 cannot be combined with other credentials.",
+        )
 
     # ── User-credentials flow ──────────────────────────────────────────────
     if body.email and body.secret:
@@ -198,7 +240,53 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
 
     # ── SIWE flow (Sign-In with Ethereum) ──────────────────────────────────
     if body.siwe_message and body.siwe_signature:
-        return JSONResponse(content=await _handle_siwe_login(body.siwe_message, body.siwe_signature))
+        return JSONResponse(content=await _handle_siwe_login(body.siwe_message, body.siwe_signature, request))
+
+    # ── x402 payment-first bootstrap (zero-human onboarding) ───────────────
+    if body.grant_type == "x402":
+        from teardrop.onboarding import bootstrap_org_from_payment, get_bootstrap_payment_requirements
+
+        if not (settings.billing_enabled and settings.machine_provisioning_enabled and settings.x402_onboarding_enabled):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="x402 onboarding is not available on this deployment.",
+            )
+        client_ip = request.client.host if request.client else "unknown"
+        await _enforce_rate_limit(
+            f"provision:{client_ip}",
+            settings.rate_limit_org_provision_rpm,
+            detail="Too many new org provisioning attempts. Please try again later.",
+        )
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        if not payment_header:
+            _, requirements = await get_bootstrap_payment_requirements()
+            resource = {
+                "url": f"{public_base_url(request, settings)}/token",
+                "description": "Teardrop org bootstrap via x402 payment.",
+                "mimeType": "application/json",
+            }
+            return JSONResponse(
+                status_code=402,
+                content=build_402_response_body(resource=resource, requirements=requirements),
+                headers=build_402_headers(resource=resource, requirements=requirements),
+            )
+        try:
+            result = await bootstrap_org_from_payment(payment_header, request)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_402_PAYMENT_REQUIRED:
+                raise
+            _, requirements = await get_bootstrap_payment_requirements()
+            resource = {
+                "url": f"{public_base_url(request, settings)}/token",
+                "description": "Teardrop org bootstrap via x402 payment.",
+                "mimeType": "application/json",
+            }
+            return JSONResponse(
+                status_code=402,
+                content=build_402_response_body(error=str(exc.detail), resource=resource, requirements=requirements),
+                headers=build_402_headers(error=str(exc.detail), resource=resource, requirements=requirements),
+            )
+        return JSONResponse(content=result)
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -264,6 +352,8 @@ async def siwe_nonce(request: Request) -> JSONResponse:
 # without rejecting valid edge cases. Full RFC 5322 validation is handled by the mail server.
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 _ACQUISITION_SOURCE_RE = re.compile(r"^[a-z0-9_-]{0,64}$")
+# Values that only server-side provisioning may set (SIWE / x402 bootstrap).
+_MACHINE_ACQUISITION_SOURCES = {"siwe", "x402"}
 
 
 class RegisterRequest(BaseModel):
@@ -294,6 +384,8 @@ class RegisterRequest(BaseModel):
         normalized = v.strip().lower()
         if not _ACQUISITION_SOURCE_RE.fullmatch(normalized):
             raise ValueError("acquisition_source must use lowercase letters, digits, underscores, or hyphens")
+        if normalized in _MACHINE_ACQUISITION_SOURCES:
+            raise ValueError("acquisition_source value is reserved for server-side provisioning")
         return normalized
 
 
@@ -589,7 +681,7 @@ async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JS
     )
 
 
-# ─── Org credentials endpoints (member-accessible) ──────────────────────────
+# ─── Org credentials endpoints ───────────────────────────────────────────────
 
 
 class OrgCredentialItem(BaseModel):
@@ -624,14 +716,13 @@ async def get_org_credentials(
     status_code=status.HTTP_201_CREATED,
 )
 async def regenerate_org_credentials(
-    payload: dict = Depends(require_org_admin),
+    payload: dict = Depends(require_credential_recovery),
 ) -> JSONResponse:
-    """Rotate org M2M credentials: delete all existing and issue a new pair.
+    """Rotate org M2M credentials for an admin or machine-org SIWE owner.
 
-    Admin-only: this destroys every existing machine credential for the org and
-    reveals the replacement secret, so it must not be available to ordinary
-    members. The new client_secret is returned exactly once — store it
-    immediately.
+    The operation destroys every existing machine credential and reveals the
+    replacement secret exactly once, so ordinary members and client credentials
+    cannot invoke it.
     """
     org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     await delete_org_client_credentials(org_id)

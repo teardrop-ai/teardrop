@@ -230,7 +230,7 @@ async def admin_billing_retry(
 
 
 class SpendingConfigUpdate(BaseModel):
-    spending_limit_usdc: int | None = None
+    spending_limit_usdc: int | None = Field(default=None, ge=0)
     is_paused: bool | None = None
 
 

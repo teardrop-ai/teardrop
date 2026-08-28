@@ -168,7 +168,7 @@ For the comprehensive list of environment variables, security credentials, datab
 
 ## Authentication
 
-Teardrop issues RS256 JWTs. All endpoints (except `/health`, `/docs`, `/billing/pricing`, `/.well-known/agent-card.json`, and the public payment-gated `POST /message:send` A2A endpoint when `A2A_INBOUND_ENABLED=true`) require a `Bearer` token.
+Teardrop issues RS256 JWTs. Protected business endpoints require a `Bearer` token. Public auth, registration, billing-pricing, health, documentation, agent-card, and the payment-gated `POST /message:send` A2A surfaces remain unauthenticated as described below.
 
 ### 1. Client credentials (machine-to-machine)
 
@@ -203,11 +203,21 @@ SIWE lets Ethereum wallet holders authenticate without a password. The JWT issue
    → { "access_token": "..." }
 ```
 
-SIWE tokens are the only auth method that can use x402 on-chain payments. New wallet addresses are auto-registered on first login.
+SIWE tokens authenticate wallet identity, and new wallet addresses are auto-registered on first login. Machine-provisioned SIWE orgs use prepaid credit for agent runs; fund that credit through the agent funding loop below.
+
+### 4. x402 payment-first bootstrap
+
+An external agent can bootstrap an account without email, a human signup, or a prior JWT. Discover the flow from `/.well-known/agent-card.json`, then send `POST /token` with `{"grant_type":"x402"}`. The first response is a `402 Payment Required` containing the x402 requirements for enough prepaid credit to pass the client-credential run reserve. Retry with the signed `Payment-Signature` (or legacy `X-Payment`) header.
+
+On successful first settlement, Teardrop returns a short-lived access token plus a one-time `client_id` and `client_secret`. Store the secret immediately; it cannot be retrieved later. Use those credentials with the existing client-credentials `/token` flow for subsequent billable runs. Machine-provisioned orgs receive no promotional credit and start with the configured `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC` rolling cap (default: $5.00 per 24 hours). An explicit operator-set org limit is preserved for trusted orgs; a zero stored limit resolves to the configured default.
+
+#### Agent funding loop
+
+Bootstrap once, then use the returned client credential to call `GET /billing/topup/usdc/requirements?amount_usdc=...` and sign the returned x402 requirements. Submit the signed header to `POST /billing/topup/usdc` before the prepaid balance is exhausted. Repeat `grant_type=x402` payments are also accepted for an existing machine org; they reuse its client ID and omit `client_secret`. If the original secret is lost, authenticate with SIWE and use `POST /org/credentials/regenerate`.
 
 ### Token expiry and refresh tokens
 
-All three auth methods issue access tokens with a **30-minute expiry** (`expires_in: 1800` seconds in the token response). For applications that need sessions longer than 30 minutes, use refresh tokens:
+The email, client-credentials, and SIWE auth methods issue access tokens with a **30-minute expiry** (`expires_in: 1800` seconds in the token response). The x402 bootstrap also returns a 30-minute access token, but does not issue a refresh token. For applications that need sessions longer than 30 minutes, use refresh tokens from the email or SIWE flows:
 
 - **Refresh tokens** expire after **30 days** and can be exchanged for a new access token + rotated refresh token.
 - **Refresh token rotation** is atomic with idempotency replay protection — if the same refresh token is submitted twice within the replay window, you'll receive the same new token pair instead of creating duplicates.
@@ -334,9 +344,11 @@ An unpaid `POST /agent/run` returns a `402 Payment Required` with the x402 v2 `P
 
 | Auth method | Payment mechanism |
 |-------------|-------------------|
-| `siwe` | x402 on-chain (USDC, `exact` or `upto` scheme, per-request) |
+| `siwe` | Human-owned orgs: x402 on-chain (USDC, `exact` or `upto` scheme, per-request); machine-provisioned orgs: prepaid credit only, subject to the hard daily cap |
 | `client_credentials` | Org prepaid credit balance (off-chain debit) |
 | `email` | Org prepaid credit balance (off-chain debit) |
+
+The x402 payment-first bootstrap charges a reserve-sized x402 payment, settles it before issuing credentials, and credits the resulting atomic-USDC amount to the new org. It does not use the verified-email promotional grant. Authenticated machine credentials can use the larger, less frequent `/billing/topup/usdc` balance top-up path instead of paying per run.
 
 ### x402 payment schemes
 

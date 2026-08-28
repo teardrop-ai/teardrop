@@ -57,6 +57,9 @@ class BillingResult(BaseModel):
     # Distinguishes exact vs upto within x402. Controls whether settle_payment()
     # passes actual_cost_usdc to the facilitator.
     scheme: str = "exact"
+    # EIP-55 payer address recovered from a verified payment payload. Empty when
+    # the facilitator does not report one (callers must fail closed on identity).
+    payer: str = ""
 
 
 def atomic_usdc_to_price_str(atomic: int) -> str:
@@ -64,8 +67,10 @@ def atomic_usdc_to_price_str(atomic: int) -> str:
 
     Examples:  10000 -> "$0.01",  1000000 -> "$1.00",  500000 -> "$0.50"
     """
-    full = f"{atomic / 1_000_000:.6f}"  # e.g. "0.010000"
-    integer_part, frac_part = full.split(".")
+    if atomic < 0:
+        raise ValueError("atomic USDC amount must not be negative")
+    integer_part, fractional = divmod(atomic, 1_000_000)
+    frac_part = f"{fractional:06d}"
     stripped = frac_part.rstrip("0")
     # Keep at least 2 decimal places for readability
     if len(stripped) < 2:

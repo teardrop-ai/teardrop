@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from shared.db_pool import PgPool
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
+from teardrop.users.base import _generate_org_slug, _hash_secret
+from teardrop.users.models import Org, User
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,21 @@ class Wallet(BaseModel):
     org_id: str
     is_primary: bool
     created_at: datetime
+
+
+class WalletProvisioningResult(BaseModel):
+    """Outcome of ``provision_org_for_wallet``.
+
+    ``created`` is False when the (address, chain_id) pair was already
+    provisioned — either by a concurrent request that won the wallets UNIQUE
+    race or by a prior login. Callers must treat the returned org/user as
+    authoritative in both cases.
+    """
+
+    org: Org
+    user: User
+    wallet: Wallet
+    created: bool
 
 
 # ─── Database initialisation ─────────────────────────────────────────────────
@@ -86,6 +103,70 @@ def _get_pool() -> PgPool:
     return _pool
 
 
+def _wallet_from_row(row) -> Wallet:
+    return Wallet(
+        id=row["id"],
+        address=row["address"],
+        chain_id=row["chain_id"],
+        user_id=row["user_id"],
+        org_id=row["org_id"],
+        is_primary=row["is_primary"],
+        created_at=row["created_at"],
+    )
+
+
+async def _fetch_wallet_by_address(conn, address: str, chain_id: int | None = None) -> Wallet | None:
+    if chain_id is None:
+        row = await conn.fetchrow(
+            "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at"
+            " FROM wallets WHERE LOWER(address) = LOWER($1) ORDER BY created_at LIMIT 1",
+            address,
+        )
+    else:
+        row = await conn.fetchrow(
+            "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at"
+            " FROM wallets WHERE LOWER(address) = LOWER($1) AND chain_id = $2",
+            address,
+            chain_id,
+        )
+    return _wallet_from_row(row) if row is not None else None
+
+
+async def _load_wallet_owner(conn, wallet: Wallet) -> WalletProvisioningResult:
+    org_row = await conn.fetchrow(
+        "SELECT id, name, slug, acquisition_source, created_at FROM orgs WHERE id = $1",
+        wallet.org_id,
+    )
+    user_row = await conn.fetchrow(
+        "SELECT id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at FROM users WHERE id = $1",
+        wallet.user_id,
+    )
+    if org_row is None or user_row is None:
+        raise RuntimeError("Wallet owner records are missing")
+    return WalletProvisioningResult(
+        org=Org(
+            id=org_row["id"],
+            name=org_row["name"],
+            slug=org_row["slug"],
+            acquisition_source=org_row["acquisition_source"],
+            created_at=org_row["created_at"],
+        ),
+        user=User(
+            id=user_row["id"],
+            email=user_row["email"],
+            org_id=user_row["org_id"],
+            hashed_secret=user_row["hashed_secret"],
+            salt=user_row["salt"],
+            role=user_row["role"],
+            is_active=user_row["is_active"],
+            is_verified=user_row["is_verified"],
+            created_at=user_row["created_at"],
+        ),
+        wallet=wallet,
+        created=False,
+    )
+
+
 # ─── Wallet CRUD ──────────────────────────────────────────────────────────────
 
 
@@ -124,22 +205,38 @@ async def create_wallet(
 async def get_wallet_by_address(address: str, chain_id: int = 1) -> Wallet | None:
     """Look up a wallet by EIP-55 address and chain ID."""
     pool = _get_pool()
-    row = await pool.fetchrow(
-        "SELECT id, address, chain_id, user_id, org_id, is_primary, created_at FROM wallets WHERE address = $1 AND chain_id = $2",
-        address,
-        chain_id,
+    return await _fetch_wallet_by_address(pool, address, chain_id)
+
+
+async def get_wallet_by_address_any_chain(address: str) -> Wallet | None:
+    """Look up the first wallet for an EIP-55 address across all chains."""
+    pool = _get_pool()
+    return await _fetch_wallet_by_address(pool, address)
+
+
+async def get_provisioning_state_by_payment_ref(payment_ref: str) -> dict | None:
+    """Return the immutable provisioning event and latest settlement outcome."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT id, org_id, method, payer_address, chain_id, settlement_tx,
+               payment_ref, amount_usdc, event_type, settlement_status, settlement_error, created_at
+        FROM org_provisioning_events
+        WHERE payment_ref = $1
+        ORDER BY created_at ASC, id ASC
+        """,
+        payment_ref,
     )
-    if row is None:
+    if not rows:
         return None
-    return Wallet(
-        id=row["id"],
-        address=row["address"],
-        chain_id=row["chain_id"],
-        user_id=row["user_id"],
-        org_id=row["org_id"],
-        is_primary=row["is_primary"],
-        created_at=row["created_at"],
-    )
+    provisioned = next((row for row in rows if row["event_type"] == "provisioned"), None)
+    settlements = [row for row in rows if row["event_type"] == "settlement"]
+    if provisioned is None:
+        return None
+    return {
+        "provisioned": dict(provisioned),
+        "latest_settlement": dict(settlements[-1]) if settlements else None,
+    }
 
 
 async def get_wallets_by_user(user_id: str) -> list[Wallet]:
@@ -250,3 +347,250 @@ async def consume_nonce(nonce: str, ttl_seconds: int = 300, *, expected_address:
         expected_address,
     )
     return row is not None
+
+
+async def provision_org_for_wallet(
+    address: str,
+    chain_id: int,
+    acquisition_source: str = "siwe",
+    *,
+    payment_ref: str | None = None,
+    amount_usdc: int = 0,
+) -> WalletProvisioningResult:
+    """Transactionally provision (or idempotently resolve) an org for a wallet.
+
+    Security contract:
+      * The org name embeds the FULL EIP-55 address. Short prefixes are
+        grindable; two distinct addresses must never map to one org.
+      * Idempotency is decided by the ``wallets(address, chain_id)`` UNIQUE
+        constraint inside the same transaction as org/user creation — never by
+        a name lookup, which is the race/takeover vector this replaces.
+      * A machine-provisioned org gets an ``org_credits`` row with a hard
+        daily spend cap so credit-rail runs can never exceed it.
+    """
+    if acquisition_source not in {"siwe", "x402"}:
+        raise ValueError("Unsupported wallet provisioning source")
+    if chain_id <= 0:
+        raise ValueError("chain_id must be positive")
+    if amount_usdc < 0:
+        raise ValueError("amount_usdc must not be negative")
+    if acquisition_source == "x402" and not payment_ref:
+        raise ValueError("x402 provisioning requires a payment reference")
+
+    pool = _get_pool()
+    settings = get_settings()
+    address = address.strip()
+    address_lower = address.lower()
+    email = f"{address_lower}@wallet"
+    now = datetime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                address_lower,
+            )
+
+            existing_wallet = await _fetch_wallet_by_address(conn, address, chain_id)
+            if existing_wallet is not None:
+                if acquisition_source == "x402" and payment_ref:
+                    await conn.execute(
+                        """
+                        INSERT INTO org_provisioning_events
+                            (id, org_id, method, payer_address, chain_id, payment_ref,
+                             amount_usdc, event_type, settlement_status)
+                        VALUES ($1, $2, 'x402', $3, $4, $5, $6, 'provisioned', 'pending')
+                        ON CONFLICT DO NOTHING
+                        """,
+                        str(uuid.uuid4()),
+                        existing_wallet.org_id,
+                        address,
+                        chain_id,
+                        payment_ref,
+                        amount_usdc,
+                    )
+                return await _load_wallet_owner(conn, existing_wallet)
+
+            existing_any_chain = await _fetch_wallet_by_address(conn, address)
+            if existing_any_chain is not None:
+                org_row = await conn.fetchrow(
+                    "SELECT id, name, slug, acquisition_source, created_at FROM orgs WHERE id = $1",
+                    existing_any_chain.org_id,
+                )
+                user_row = await conn.fetchrow(
+                    "SELECT id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at"
+                    " FROM users WHERE id = $1",
+                    existing_any_chain.user_id,
+                )
+                if org_row is None or user_row is None:
+                    raise RuntimeError("Wallet owner records are missing")
+            else:
+                org_name = f"wallet-{address_lower}"
+                org_slug = _generate_org_slug(org_name)
+                org_row = await conn.fetchrow(
+                    "SELECT id, name, slug, acquisition_source, created_at FROM orgs WHERE name = $1",
+                    org_name,
+                )
+
+                if org_row is None:
+                    org_row = await conn.fetchrow(
+                        "INSERT INTO orgs (id, name, slug, acquisition_source, created_at)"
+                        " VALUES ($1, $2, $3, $4, $5)"
+                        " ON CONFLICT DO NOTHING"
+                        " RETURNING id, name, slug, acquisition_source, created_at",
+                        str(uuid.uuid4()),
+                        org_name,
+                        org_slug,
+                        acquisition_source,
+                        now,
+                    )
+
+                if org_row is None:
+                    org_row = await conn.fetchrow(
+                        "SELECT id, name, slug, acquisition_source, created_at FROM orgs WHERE name = $1",
+                        org_name,
+                    )
+
+                if org_row is None or org_row["acquisition_source"] not in {"siwe", "x402"}:
+                    if org_row is not None:
+                        org_row = None
+                    for _ in range(3):
+                        org_name = f"wallet-{uuid.uuid4().hex[:12]}-{address_lower}"
+                        org_slug = _generate_org_slug(org_name)
+                        org_row = await conn.fetchrow(
+                            "INSERT INTO orgs (id, name, slug, acquisition_source, created_at)"
+                            " VALUES ($1, $2, $3, $4, $5)"
+                            " ON CONFLICT DO NOTHING"
+                            " RETURNING id, name, slug, acquisition_source, created_at",
+                            str(uuid.uuid4()),
+                            org_name,
+                            org_slug,
+                            acquisition_source,
+                            now,
+                        )
+                        if org_row is not None:
+                            break
+
+                if org_row is None:
+                    raise RuntimeError("Unable to provision wallet organisation")
+
+            org_id = org_row["id"]
+            org_source = org_row["acquisition_source"]
+            if existing_any_chain is None:
+                user_row = await conn.fetchrow(
+                    "SELECT id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at"
+                    " FROM users WHERE org_id = $1 AND is_active = TRUE LIMIT 1",
+                    org_id,
+                )
+
+            if user_row is None:
+                user_id = str(uuid.uuid4())
+                secret = secrets.token_urlsafe(32)
+                hashed, salt_hex = _hash_secret(secret)
+                await conn.execute(
+                    "INSERT INTO users"
+                    " (id, email, org_id, hashed_secret, salt, role, is_active, is_verified, created_at)"
+                    " VALUES ($1, $2, $3, $4, $5, 'user', TRUE, TRUE, $6)",
+                    user_id,
+                    email,
+                    org_id,
+                    hashed,
+                    salt_hex,
+                    now,
+                )
+                user_row = {
+                    "id": user_id,
+                    "email": email,
+                    "org_id": org_id,
+                    "hashed_secret": hashed,
+                    "salt": salt_hex,
+                    "role": "user",
+                    "is_active": True,
+                    "is_verified": True,
+                    "created_at": now,
+                }
+
+            if org_source in {"siwe", "x402"}:
+                await conn.execute(
+                    """
+                    INSERT INTO org_credits (org_id, balance_usdc, spending_limit_usdc, updated_at)
+                    VALUES ($1, 0, $2, NOW())
+                    ON CONFLICT (org_id) DO NOTHING
+                    """,
+                    org_id,
+                    settings.machine_org_daily_spend_limit_usdc,
+                )
+            else:
+                await conn.execute(
+                    "INSERT INTO org_credits (org_id, balance_usdc, updated_at)"
+                    " VALUES ($1, 0, NOW()) ON CONFLICT (org_id) DO NOTHING",
+                    org_id,
+                )
+
+            wallet_id = str(uuid.uuid4())
+            inserted = await conn.fetchrow(
+                "INSERT INTO wallets (id, address, chain_id, user_id, org_id, is_primary, created_at)"
+                " VALUES ($1, $2, $3, $4, $5, TRUE, $6)"
+                " ON CONFLICT (address, chain_id) DO NOTHING"
+                " RETURNING id",
+                wallet_id,
+                address,
+                chain_id,
+                user_row["id"],
+                org_id,
+                now,
+            )
+            if inserted is None:
+                existing_wallet = await _fetch_wallet_by_address(conn, address, chain_id)
+                if existing_wallet is None:
+                    raise RuntimeError("Wallet provisioning race could not be resolved")
+                return await _load_wallet_owner(conn, existing_wallet)
+
+            await conn.execute(
+                """
+                INSERT INTO org_provisioning_events
+                    (id, org_id, method, payer_address, chain_id, settlement_tx,
+                     payment_ref, amount_usdc, event_type, settlement_status)
+                VALUES ($1, $2, $3, $4, $5, '', $6, $7, 'provisioned',
+                        CASE WHEN $3 = 'x402' THEN 'pending' ELSE 'not_applicable' END)
+                """,
+                str(uuid.uuid4()),
+                org_id,
+                acquisition_source,
+                address,
+                chain_id,
+                payment_ref,
+                amount_usdc,
+            )
+
+            wallet = Wallet(
+                id=wallet_id,
+                address=address,
+                chain_id=chain_id,
+                user_id=user_row["id"],
+                org_id=org_id,
+                is_primary=existing_any_chain is None,
+                created_at=now,
+            )
+            return WalletProvisioningResult(
+                org=Org(
+                    id=org_row["id"],
+                    name=org_row["name"],
+                    slug=org_row["slug"],
+                    acquisition_source=org_row["acquisition_source"],
+                    created_at=org_row["created_at"],
+                ),
+                user=User(
+                    id=user_row["id"],
+                    email=user_row["email"],
+                    org_id=user_row["org_id"],
+                    hashed_secret=user_row["hashed_secret"],
+                    salt=user_row["salt"],
+                    role=user_row["role"],
+                    is_active=user_row["is_active"],
+                    is_verified=user_row["is_verified"],
+                    created_at=user_row["created_at"],
+                ),
+                wallet=wallet,
+                created=True,
+            )

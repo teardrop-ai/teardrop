@@ -251,12 +251,38 @@ async def debit_credit_with_delegation_refund(
     )
 
 
-async def admin_topup_credit(org_id: str, amount_usdc: int, reason: str = "") -> int:
+async def admin_topup_credit(
+    org_id: str,
+    amount_usdc: int,
+    reason: str = "",
+    external_ref: str | None = None,
+) -> int:
     """Add atomic USDC to the org credit balance (upsert) and return the new balance.
 
     Records an append-only ``topup`` ledger row. Used by ``POST /admin/credits/topup``.
+    When ``external_ref`` is set, a duplicate ref is an idempotent no-op that
+    returns the org's current balance instead of double-crediting.
     """
-    return await _get_credit_service().admin_topup_credit(org_id, amount_usdc, reason)
+    return await _get_credit_service().admin_topup_credit(org_id, amount_usdc, reason, external_ref)
+
+
+async def record_onboarding_settlement(
+    org_id: str,
+    amount_usdc: int,
+    external_ref: str,
+    payer_address: str,
+    chain_id: int,
+    settlement_tx: str,
+) -> tuple[Any, str | None]:
+    """Atomically credit a settled x402 bootstrap payment, credential, and audit it."""
+    return await _get_credit_service().record_onboarding_settlement(
+        org_id,
+        amount_usdc,
+        external_ref,
+        payer_address,
+        chain_id,
+        settlement_tx,
+    )
 
 
 async def grant_onboarding_credit(org_id: str, amount_usdc: int) -> int:
@@ -493,6 +519,7 @@ def build_402_response_body(
     error: str | None = "Payment required",
     resource: dict[str, Any] | None = None,
     extensions: dict[str, Any] | None = None,
+    requirements: list | None = None,
 ) -> dict:
     """Build the HTTP 402 body for the billing gate."""
     return _call_sync(
@@ -500,6 +527,7 @@ def build_402_response_body(
         error=error,
         resource=resource,
         extensions=extensions,
+        requirements=requirements,
     )
 
 
@@ -507,6 +535,7 @@ def build_402_headers(
     error: str | None = "Payment required",
     resource: dict[str, Any] | None = None,
     extensions: dict[str, Any] | None = None,
+    requirements: list | None = None,
 ) -> dict[str, str]:
     """Build the x402 response headers for the billing gate."""
     return _call_sync(
@@ -514,15 +543,18 @@ def build_402_headers(
         error=error,
         resource=resource,
         extensions=extensions,
+        requirements=requirements,
     )
 
 
-async def verify_payment(payment_header: str) -> BillingResult:
+async def verify_payment(payment_header: str, requirements: list | None = None) -> BillingResult:
     """Verify a signed x402 payment header (EIP-3009) without settling on-chain.
 
     Sets ``BillingResult.billing_method = "x402"`` so settlement routes on-chain.
     """
-    return await _call_async(_VERIFY_PAYMENT_ORIG, payment_header)
+    if requirements is None:
+        return await _call_async(_VERIFY_PAYMENT_ORIG, payment_header)
+    return await _call_async(_VERIFY_PAYMENT_ORIG, payment_header, requirements=requirements)
 
 
 async def settle_payment(
@@ -539,6 +571,11 @@ async def settle_payment(
 async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
     """Delete x402 payment-nonce replay claims older than ``retention_hours``."""
     return await _call_async(_CLEANUP_EXPIRED_PAYMENT_NONCES_ORIG, retention_hours)
+
+
+async def release_payment_nonce(payment_header: str) -> None:
+    """Release a claimed x402 header when a pre-settlement flow aborts."""
+    return await _call_async(_x402.release_payment_nonce, payment_header)
 
 
 def build_usdc_topup_requirements(amount_usdc: int) -> list:
@@ -692,6 +729,7 @@ __all__ = [
     "verify_payment",
     "settle_payment",
     "cleanup_expired_payment_nonces",
+    "release_payment_nonce",
     "build_402_headers",
     "build_402_response_body",
     "build_usdc_topup_requirements",
@@ -731,6 +769,7 @@ __all__ = [
     "debit_credit",
     "debit_credit_with_delegation_refund",
     "admin_topup_credit",
+    "record_onboarding_settlement",
     "grant_onboarding_credit",
     "clear_onboarding_credit_outbox",
     "process_onboarding_credit_outbox",

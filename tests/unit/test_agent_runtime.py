@@ -112,6 +112,36 @@ class TestPrepareRunContext:
 
 
 @pytest.mark.anyio
+async def test_client_credentials_billing_gate_uses_credit_rail(test_settings, monkeypatch):
+    from teardrop import agent_runtime
+
+    test_settings.billing_enabled = True
+    test_settings.billable_auth_methods = ["client_credentials"]
+    test_settings.credit_min_run_reserve_usdc = 50_000
+    monkeypatch.setattr(agent_runtime, "settings", test_settings)
+    monkeypatch.setattr(
+        agent_runtime,
+        "get_current_pricing",
+        AsyncMock(return_value=MagicMock(run_price_usdc=10_000)),
+    )
+    verify_credit_mock = AsyncMock(return_value=BillingResult(verified=True, billing_method="credit"))
+    monkeypatch.setattr(agent_runtime, "verify_credit", verify_credit_mock)
+
+    billing_result, gate_response = await agent_runtime._run_billing_gate(
+        MagicMock(),
+        {"auth_method": "client_credentials", "org_id": "machine-org"},
+        "machine-org",
+        is_byok=False,
+        platform_fee=0,
+    )
+
+    assert gate_response is None
+    assert billing_result.verified is True
+    assert billing_result.billing_method == "credit"
+    verify_credit_mock.assert_awaited_once_with("machine-org", 50_000)
+
+
+@pytest.mark.anyio
 class TestPromotionalCreditExclusions:
     """Verified-email onboarding credit must not create marketplace author earnings."""
 

@@ -57,6 +57,7 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     monkeypatch.setattr("teardrop.agent_runtime.settings", mock_settings)
     # SIWE with zero balance falls through to x402 path → no header → 402
     monkeypatch.setattr("teardrop.agent_runtime.get_credit_balance", AsyncMock(return_value=0))
+    monkeypatch.setattr("teardrop.agent_runtime.get_org_by_id", AsyncMock(return_value=None))
     # Mock build_* so the 402 response body can be constructed without a
     # live billing server (_requirements_cache would be None otherwise)
     monkeypatch.setattr(
@@ -83,6 +84,64 @@ async def test_agent_run_siwe_no_payment_header_returns_402(test_settings, monke
     assert resp.status_code == 402
     assert resp.headers["payment-required"] == "abc"
     assert resp.json()["resource"]["url"] == "http://test/agent/run"
+
+
+@pytest.mark.anyio
+async def test_machine_org_siwe_cannot_bypass_credit_cap(test_settings, monkeypatch):
+    from datetime import datetime, timezone
+
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+    from teardrop.users import Org
+
+    async def machine_siwe_auth():
+        return {
+            "sub": "machine-user-id",
+            "email": "0xabc@wallet",
+            "role": "user",
+            "org_id": "machine-org-id",
+            "auth_method": "siwe",
+        }
+
+    mock_settings = MagicMock()
+    mock_settings.billing_enabled = True
+    mock_settings.billable_auth_methods = ["siwe"]
+    mock_settings.rate_limit_requests_per_minute = 1_000
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_auth_rpm = 1_000
+    mock_settings.rate_limit_org_agent_rpm = 1_000
+    mock_settings.credit_min_run_reserve_usdc = 10_000
+    mock_settings.app_env = "test"
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
+    monkeypatch.setattr("teardrop.agent_runtime.settings", mock_settings)
+    monkeypatch.setattr(
+        "teardrop.agent_runtime.get_org_by_id",
+        AsyncMock(
+            return_value=Org(
+                id="machine-org-id",
+                name="machine",
+                acquisition_source="x402",
+                created_at=datetime.now(timezone.utc),
+            )
+        ),
+    )
+    monkeypatch.setattr("teardrop.agent_runtime.get_credit_balance", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        "teardrop.agent_runtime.get_current_pricing",
+        AsyncMock(return_value=MagicMock(run_price_usdc=10_000)),
+    )
+    verify_credit_mock = AsyncMock(return_value=MagicMock(verified=False, error="daily cap reached"))
+    monkeypatch.setattr("teardrop.agent_runtime.verify_credit", verify_credit_mock)
+
+    app.dependency_overrides[require_auth] = machine_siwe_auth
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/agent/run", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.pop(require_auth, None)
+
+    assert response.status_code == 402
+    verify_credit_mock.assert_awaited_once()
 
 
 # ─── Billing gate — credit ────────────────────────────────────────────────────

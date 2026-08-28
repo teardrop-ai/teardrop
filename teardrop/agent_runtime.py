@@ -698,9 +698,13 @@ async def _run_billing_gate(
         return BillingResult(), None
 
     if auth_method == "siwe":
+        machine_org = False
+        if org_id:
+            org = await get_org_by_id(org_id)
+            machine_org = bool(org and org.acquisition_source in {"siwe", "x402"})
         # Prefer credit billing when the org has a prepaid balance.
         siwe_credit_balance = await get_credit_balance(org_id)
-        if siwe_credit_balance > 0:
+        if siwe_credit_balance > 0 or machine_org:
             pricing = await get_current_pricing()
             default_min = pricing.run_price_usdc if pricing is not None else 0
             min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)

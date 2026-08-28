@@ -33,6 +33,12 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `DATABASE_URL` | Neon Postgres connection string |
 | `PG_POOL_OPEN_TIMEOUT_SECONDS` | Maximum startup wait for the initial Postgres pool connections (default: `60`) |
 | `BILLING_ENABLED` | `true` to activate x402 payments |
+| `CREDIT_MIN_RUN_RESERVE_USDC` | Minimum prepaid balance required before a credit-billed run (default: `50000` = $0.05); x402 bootstrap charges at least this amount |
+| `BILLABLE_AUTH_METHODS` | Auth methods requiring payment; default: `siwe,client_credentials,email` |
+| `MACHINE_PROVISIONING_ENABLED` | `true` to allow first-time SIWE wallet provisioning (default: `true`) |
+| `X402_ONBOARDING_ENABLED` | `true` to allow `POST /token` with `grant_type=x402` (default: `true`; requires `BILLING_ENABLED=true`) |
+| `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC` | Default 24-hour rolling prepaid-credit limit for machine-provisioned orgs (default: `5000000` = $5.00; must be positive; explicit org limits may be raised by an operator) |
+| `RATE_LIMIT_ORG_PROVISION_RPM` | Per-IP rate limit for new machine-org provisioning (default: `3`) |
 | `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
 | `ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS` | Poll interval for retrying failed onboarding-credit grants (default: `60`) |

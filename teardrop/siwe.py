@@ -11,23 +11,22 @@ tightly coupled to ``_verify_siwe``.
 from __future__ import annotations
 
 import logging
-import secrets
 
 import siwe as siwe_errors
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, status
 from siwe import SiweMessage
 from web3 import Web3
 
 from teardrop.auth import create_access_token
 from teardrop.config import get_settings
-from teardrop.users import (
-    create_org,
-    create_refresh_token,
-    create_user,
-    get_org_by_name,
-    get_user_by_org_id,
+from teardrop.rate_limit import _enforce_rate_limit
+from teardrop.users import create_refresh_token
+from teardrop.wallets import (
+    consume_nonce,
+    get_wallet_by_address,
+    get_wallet_by_address_any_chain,
+    provision_org_for_wallet,
 )
-from teardrop.wallets import consume_nonce, create_wallet, get_wallet_by_address
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -87,42 +86,33 @@ async def _verify_siwe(siwe_message: str, siwe_signature: str) -> tuple[str, int
     return address, chain_id
 
 
-async def _handle_siwe_login(siwe_message: str, siwe_signature: str) -> dict:
+async def _handle_siwe_login(siwe_message: str, siwe_signature: str, request: Request | None = None) -> dict:
     """Verify a SIWE message, auto-register if needed, and return a JWT."""
     address, chain_id = await _verify_siwe(siwe_message, siwe_signature)
 
-    # Look up existing wallet
     wallet = await get_wallet_by_address(address, chain_id)
-
+    existing_any_chain = None if wallet is not None else await get_wallet_by_address_any_chain(address)
     if wallet is None:
-        # Org may already exist from a previous partial registration
-        org_name = f"wallet-{address[:10].lower()}"
-        existing_org = await get_org_by_name(org_name)
-        if existing_org:
-            org = existing_org
-            existing_user = await get_user_by_org_id(org.id)
-            user = existing_user or await create_user(
-                email=f"{address.lower()}@wallet",
-                secret=secrets.token_urlsafe(32),
-                org_id=org.id,
-                role="user",
+        if existing_any_chain is None and not settings.machine_provisioning_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Wallet registration is disabled on this deployment.",
             )
-        else:
-            org = await create_org(org_name, acquisition_source="siwe")
-            user = await create_user(
-                email=f"{address.lower()}@wallet",
-                secret=secrets.token_urlsafe(32),
-                org_id=org.id,
-                role="user",
+        if existing_any_chain is None and request is not None:
+            client_ip = request.client.host if request.client else "unknown"
+            await _enforce_rate_limit(
+                f"provision:{client_ip}",
+                settings.rate_limit_org_provision_rpm,
+                detail="Too many new wallet registrations. Please try again later.",
             )
-        wallet = await create_wallet(
-            address=address,
-            chain_id=chain_id,
-            user_id=user.id,
-            org_id=org.id,
-            is_primary=True,
+        result = await provision_org_for_wallet(address, chain_id, acquisition_source="siwe")
+        wallet = result.wallet
+        logger.info(
+            "SIWE auto-registered user=%s address=%s created=%s",
+            result.user.id,
+            address,
+            result.created,
         )
-        logger.info("SIWE auto-registered user=%s address=%s", user.id, address)
 
     siwe_claims = {
         "org_id": wallet.org_id,

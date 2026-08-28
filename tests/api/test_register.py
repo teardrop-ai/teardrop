@@ -210,6 +210,22 @@ async def test_register_rejects_invalid_acquisition_source(anon_client):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("reserved_source", ["siwe", "x402", " SIWE "])
+async def test_register_rejects_machine_acquisition_sources(anon_client, reserved_source):
+    resp = await anon_client.post(
+        "/register",
+        json={
+            "org_name": "Org",
+            "email": "alice@example.com",
+            "password": "strongpass1",
+            "acquisition_source": reserved_source,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_register_password_missing_digit_422(anon_client):
     resp = await anon_client.post(
         "/register",

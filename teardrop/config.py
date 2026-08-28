@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Literal
@@ -456,6 +457,27 @@ class Settings(BaseSettings):
             "failed immediately after email verification (durable outbox retry)."
         ),
     )
+    machine_provisioning_enabled: bool = Field(
+        default=True,
+        description="Allow wallet-based flows to auto-provision a new org + user with no human signup.",
+    )
+    x402_onboarding_enabled: bool = Field(
+        default=True,
+        description="Accept grant_type=x402 at POST /token to bootstrap an org from an x402 payment.",
+    )
+    machine_org_daily_spend_limit_usdc: int = Field(
+        default=5_000_000,
+        gt=0,
+        description=(
+            "24h rolling spend cap applied to machine-provisioned orgs' credit rail, in atomic USDC. "
+            "Applied when the org's org_credits row is first created."
+        ),
+    )
+    rate_limit_org_provision_rpm: int = Field(
+        default=3,
+        ge=1,
+        description="Per-IP rate limit for new machine org provisioning via /token (requests per minute).",
+    )
     x402_facilitator_url: str = Field(
         default="https://x402.org/facilitator",
         description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",
@@ -489,8 +511,11 @@ class Settings(BaseSettings):
         """
         s = self.x402_upto_max_amount.strip().lstrip("$").strip()
         try:
-            return int(round(float(s) * 1_000_000))
-        except (ValueError, TypeError):
+            amount = Decimal(s) * Decimal(1_000_000)
+            if amount != amount.to_integral_value() or amount < 0:
+                return 0
+            return int(amount)
+        except (InvalidOperation, ValueError, TypeError):
             return 0
 
     pricing_cache_ttl_seconds: int = Field(

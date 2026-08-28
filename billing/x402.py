@@ -194,6 +194,7 @@ def _build_payment_required(
     error: str | None = "Payment required",
     resource: Mapping[str, Any] | None = None,
     extensions: dict[str, Any] | None = None,
+    requirements: list | None = None,
 ):
     from x402.schemas.payments import PaymentRequired, PaymentRequirements, ResourceInfo
 
@@ -204,9 +205,10 @@ def _build_payment_required(
             resource_payload["mimeType"] = resource_payload.pop("mime_type")
         resource_info = ResourceInfo.model_validate(resource_payload)
 
+    source_requirements = get_payment_requirements() if requirements is None else requirements
     requirements = [
         req if isinstance(req, PaymentRequirements) else PaymentRequirements.model_validate(_serialize_requirement(req))
-        for req in get_payment_requirements()
+        for req in source_requirements
     ]
 
     return PaymentRequired(
@@ -221,12 +223,14 @@ def build_402_response_body(
     error: str | None = "Payment required",
     resource: Mapping[str, Any] | None = None,
     extensions: dict[str, Any] | None = None,
+    requirements: list | None = None,
 ) -> dict[str, Any]:
     """Build the JSON body for a 402 Payment Required response."""
     return _build_payment_required(
         error=error,
         resource=resource,
         extensions=extensions,
+        requirements=requirements,
     ).model_dump(by_alias=True, exclude_none=True)
 
 
@@ -234,6 +238,7 @@ def build_402_headers(
     error: str | None = "Payment required",
     resource: Mapping[str, Any] | None = None,
     extensions: dict[str, Any] | None = None,
+    requirements: list | None = None,
 ) -> dict[str, str]:
     """Build response headers for a 402 Payment Required response."""
     import base64
@@ -244,6 +249,7 @@ def build_402_headers(
         error=error,
         resource=resource,
         extensions=extensions,
+        requirements=requirements,
     )
     legacy_serialised = json.dumps(
         [req.model_dump(by_alias=True, exclude_none=True) for req in payment_required.accepts],
@@ -341,6 +347,17 @@ async def _claim_payment_nonce(payment_header: str) -> bool:
     return claimed is not None
 
 
+async def release_payment_nonce(payment_header: str) -> None:
+    """Release a local replay claim when verification never reaches settlement."""
+    if not _has_pool():
+        return
+    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    await _get_pool().execute(
+        "DELETE FROM x402_payment_nonces WHERE nonce_hash = $1",
+        nonce_hash,
+    )
+
+
 async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
     """Delete payment-nonce claims older than ``retention_hours``.
 
@@ -361,14 +378,14 @@ async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
         return 0
 
 
-async def verify_payment(payment_header: str) -> BillingResult:
+async def verify_payment(payment_header: str, requirements: list | None = None) -> BillingResult:
     """Verify a payment header against cached requirements."""
     await _rebuild_requirements_if_stale()
 
     from x402 import parse_payment_payload
 
     server = _get_server()
-    reqs = get_payment_requirements()
+    reqs = get_payment_requirements() if requirements is None else requirements
 
     if not reqs:
         return BillingResult(error="No payment requirements configured")
@@ -398,11 +415,13 @@ async def verify_payment(payment_header: str) -> BillingResult:
             if not await _claim_payment_nonce(payment_header):
                 logger.warning("x402 payment header already claimed (concurrent replay rejected)")
                 return BillingResult(error="Payment already used. Sign a new payment authorization.")
+            payer = result.payer if isinstance(result.payer, str) else ""
             return BillingResult(
                 verified=True,
                 payment_payload=payload,
                 payment_requirements=requirement,
                 scheme=detected_scheme,
+                payer=payer,
             )
 
         reason = result.invalid_reason or result.invalid_message or "invalid signature or amount"

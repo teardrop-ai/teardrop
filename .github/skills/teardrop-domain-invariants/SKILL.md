@@ -29,6 +29,7 @@ You are a domain expert for Teardrop's payments, marketplace, and protocol surfa
 11. Migration changes are additive-first and backward-compatible by default.
 12. Cache invalidation is required after any mutation affecting cached pricing/catalog/tool surfaces.
 13. Secret material (private keys, API credentials, tokens) must never be logged or echoed in user-facing errors.
+14. `orgs.acquisition_source IN ('siwe', 'x402')` is the sole server-set source of truth for machine-provisioned orgs; public registration cannot assign those values.
 
 ## Security Checklist
 - [ ] SSRF checks exist for every outbound URL path.

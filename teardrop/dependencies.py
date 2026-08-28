@@ -13,7 +13,7 @@ from fastapi import Depends, HTTPException, status
 
 from teardrop.auth import require_auth
 
-__all__ = ["require_auth", "require_admin", "require_org_admin", "_require_org_id"]
+__all__ = ["require_auth", "require_admin", "require_org_admin", "require_credential_recovery", "_require_org_id"]
 
 
 async def require_admin(
@@ -57,6 +57,58 @@ async def require_org_admin(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No org_id in token.",
+        )
+    return payload
+
+
+async def require_credential_recovery(
+    payload: dict = Depends(require_auth),
+) -> dict:
+    """Allow admins or the owning SIWE wallet to rotate machine credentials."""
+    if payload.get("role") == "admin":
+        if not payload.get("org_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No org_id in token.",
+            )
+        return payload
+
+    if payload.get("auth_method") != "siwe":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential recovery requires an admin or the owning SIWE wallet.",
+        )
+
+    org_id = payload.get("org_id")
+    address = payload.get("address")
+    chain_id = payload.get("chain_id")
+    subject = payload.get("sub")
+    if not isinstance(org_id, str) or not org_id or not isinstance(address, str) or not address:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential recovery requires an owning SIWE wallet.",
+        )
+    if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential recovery requires an owning SIWE wallet.",
+        )
+
+    from teardrop.users import get_org_by_id
+    from teardrop.wallets import get_wallet_by_address
+
+    org = await get_org_by_id(org_id)
+    wallet = await get_wallet_by_address(address, chain_id)
+    if (
+        org is None
+        or org.acquisition_source not in {"siwe", "x402"}
+        or wallet is None
+        or wallet.org_id != org_id
+        or wallet.user_id != subject
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential recovery requires an owning SIWE wallet.",
         )
     return payload
 

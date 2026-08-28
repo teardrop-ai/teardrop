@@ -311,3 +311,118 @@ async def test_auth_me_unauthenticated(anon_client):
     """Unauthenticated request returns 401."""
     resp = await anon_client.get("/auth/me")
     assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_siwe_login_new_wallet_provisions_via_cas(anon_client, monkeypatch, test_settings):
+    """Regression (P0): a NEW wallet must provision through the wallets UNIQUE
+    CAS path — never via an org-name lookup. Two addresses sharing a prefix
+    must land in distinct orgs with distinct JWT subjects."""
+    from datetime import datetime, timezone
+
+    from teardrop.users import User
+    from teardrop.wallets import Wallet, WalletProvisioningResult
+
+    # Same first 8 hex chars as victim — the old prefix-collision takeover vector.
+    attacker_addr = "0xD8DA6bF26964aF9d7eED9E03E53415d37AA96Bad"
+
+    def _msg(addr):
+        m = MagicMock()
+        m.address = addr
+        m.chain_id = "1"
+        m.nonce = "n"
+        m.domain = test_settings.effective_siwe_domain
+        m.verify = MagicMock()
+        return m
+
+    mock_siwe_cls = MagicMock()
+    mock_siwe_cls.from_message = MagicMock(side_effect=lambda _: _msg(attacker_addr))
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
+    monkeypatch.setattr("teardrop.siwe.get_wallet_by_address", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.siwe.get_wallet_by_address_any_chain", AsyncMock(return_value=None))
+
+    provisioned = WalletProvisioningResult(
+        org=Org(
+            id="org-attacker-own",
+            name=f"wallet-{attacker_addr.lower()}",
+            slug="wallet-x",
+            acquisition_source="siwe",
+            created_at=datetime.now(timezone.utc),
+        ),
+        user=User(
+            id="user-attacker-own",
+            email="a@wallet",
+            org_id="org-attacker-own",
+            hashed_secret="h",
+            salt="s",
+            role="user",
+            is_active=True,
+            is_verified=True,
+            created_at=datetime.now(timezone.utc),
+        ),
+        wallet=Wallet(
+            id="w1",
+            address=attacker_addr,
+            chain_id=1,
+            user_id="user-attacker-own",
+            org_id="org-attacker-own",
+            is_primary=True,
+            created_at=datetime.now(timezone.utc),
+        ),
+        created=True,
+    )
+    provision_mock = AsyncMock(return_value=provisioned)
+    monkeypatch.setattr("teardrop.siwe.provision_org_for_wallet", provision_mock)
+    monkeypatch.setattr("teardrop.siwe.create_refresh_token", AsyncMock(return_value="rt"))
+
+    resp = await anon_client.post(
+        "/token",
+        json={"siwe_message": "m", "siwe_signature": "0xsig"},
+    )
+
+    assert resp.status_code == 200
+    # Provisioning was called with the FULL attacker address and siwe source.
+    assert provision_mock.call_args[0][0] == attacker_addr
+    assert provision_mock.call_args[1]["acquisition_source"] == "siwe"
+    # JWT subject is the attacker's own user — never a prefix-collision victim's.
+    import jwt as pyjwt
+
+    claims = pyjwt.decode(
+        resp.json()["access_token"],
+        options={"verify_signature": False},
+    )
+    assert claims["sub"] == "user-attacker-own"
+    assert claims["org_id"] == "org-attacker-own"
+
+
+@pytest.mark.anyio
+async def test_siwe_login_provisioning_disabled_403(anon_client, monkeypatch, test_settings):
+    """machine_provisioning_enabled=False blocks new-wallet registration."""
+    from types import SimpleNamespace
+
+    mock_msg = MagicMock()
+    mock_msg.address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    mock_msg.chain_id = "1"
+    mock_msg.nonce = "n"
+    mock_msg.domain = test_settings.effective_siwe_domain
+    mock_msg.verify = MagicMock()
+
+    mock_siwe_cls = MagicMock()
+    mock_siwe_cls.from_message = MagicMock(return_value=mock_msg)
+
+    monkeypatch.setattr("teardrop.siwe.consume_nonce", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.siwe.SiweMessage", mock_siwe_cls)
+    monkeypatch.setattr("teardrop.siwe.get_wallet_by_address", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.siwe.get_wallet_by_address_any_chain", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "teardrop.siwe.settings",
+        SimpleNamespace(
+            machine_provisioning_enabled=False,
+            effective_siwe_domain=test_settings.effective_siwe_domain,
+            siwe_nonce_ttl_seconds=300,
+        ),
+    )
+
+    resp = await anon_client.post("/token", json={"siwe_message": "m", "siwe_signature": "0xsig"})
+    assert resp.status_code == 403, resp.text

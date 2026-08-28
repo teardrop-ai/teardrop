@@ -12,6 +12,32 @@ from teardrop.users.base import _get_pool, _hash_secret
 from teardrop.users.models import OrgClientCredential
 
 
+async def create_client_credential_in_transaction(conn, org_id: str) -> tuple[OrgClientCredential, str]:
+    """Create an org credential using a caller-owned database transaction."""
+    client_id = str(uuid.uuid4())
+    plaintext_secret = secrets.token_urlsafe(32)
+    hashed, salt_hex = _hash_secret(plaintext_secret)
+    now = datetime.now(timezone.utc)
+    await conn.execute(
+        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at) VALUES ($1, $2, $3, $4, $5)",
+        client_id,
+        org_id,
+        hashed,
+        salt_hex,
+        now,
+    )
+    return (
+        OrgClientCredential(
+            client_id=client_id,
+            org_id=org_id,
+            hashed_secret=hashed,
+            salt=salt_hex,
+            created_at=now,
+        ),
+        plaintext_secret,
+    )
+
+
 async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", str]:
     """Create a new M2M client credential for an org.
 

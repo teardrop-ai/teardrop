@@ -11,8 +11,11 @@ from typing import Any, Awaitable, Callable
 
 import sentry_sdk
 
-from shared.db_pool import PgConnection, PgPool
+from shared.db_pool import PgConnection, PgPool, UniqueViolation
 from teardrop.cache import TTLCache
+from teardrop.config import get_settings
+from teardrop.users.credentials import create_client_credential_in_transaction
+from teardrop.users.models import OrgClientCredential
 
 logger = logging.getLogger(__name__)
 
@@ -63,17 +66,35 @@ class BillingCreditService:
         pool = self._get_pool()
 
         row = await pool.fetchrow(
-            "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
+            """
+            SELECT c.balance_usdc, c.spending_limit_usdc, c.is_paused,
+                   o.acquisition_source
+            FROM org_credits AS c
+            JOIN orgs AS o ON o.id = c.org_id
+            WHERE c.org_id = $1
+            """,
             org_id,
         )
         balance = int(row["balance_usdc"]) if row else 0
         spending_limit = int(row["spending_limit_usdc"]) if row else 0
         is_paused = bool(row["is_paused"]) if row else False
+        machine_org = bool(row and row.get("acquisition_source") in {"siwe", "x402"})
+        if machine_org and spending_limit <= 0:
+            machine_cap = get_settings().machine_org_daily_spend_limit_usdc
+            spending_limit = machine_cap
 
         if is_paused:
             return self._billing_result_factory(error="Org billing is paused by admin. Contact your administrator.")
 
         if balance < min_balance_usdc:
+            if machine_org:
+                return self._billing_result_factory(
+                    error=(
+                        f"Insufficient credit: balance {balance} atomic USDC, required {min_balance_usdc}. "
+                        "Fund via GET /billing/topup/usdc/requirements then POST /billing/topup/usdc, "
+                        "or POST /token with grant_type=x402."
+                    )
+                )
             return self._billing_result_factory(
                 error=(
                     f"Insufficient credit: balance {balance} atomic USDC, "
@@ -101,7 +122,14 @@ class BillingCreditService:
     ) -> tuple[bool, int]:
         """Debit one org while the caller owns the surrounding transaction."""
         row = await conn.fetchrow(
-            "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1 FOR UPDATE",
+            """
+            SELECT c.balance_usdc, c.spending_limit_usdc, c.is_paused,
+                   o.acquisition_source
+            FROM org_credits AS c
+            JOIN orgs AS o ON o.id = c.org_id
+            WHERE c.org_id = $1
+            FOR UPDATE OF c
+            """,
             org_id,
         )
         if row is None:
@@ -110,6 +138,9 @@ class BillingCreditService:
         original_balance = int(row["balance_usdc"])
         spending_limit = int(row["spending_limit_usdc"])
         is_paused = bool(row["is_paused"])
+        if row.get("acquisition_source") in {"siwe", "x402"} and spending_limit <= 0:
+            machine_cap = get_settings().machine_org_daily_spend_limit_usdc
+            spending_limit = machine_cap
 
         if is_paused:
             return False, 0
@@ -239,11 +270,125 @@ class BillingCreditService:
                 sentry_sdk.capture_exception(exc)
             return False, 0
 
-    async def admin_topup_credit(self, org_id: str, amount_usdc: int, reason: str = "") -> int:
-        """Add amount_usdc to org's credit balance (upsert)."""
+    async def admin_topup_credit(
+        self,
+        org_id: str,
+        amount_usdc: int,
+        reason: str = "",
+        external_ref: str | None = None,
+    ) -> int:
+        """Add amount_usdc to org's credit balance (upsert).
+
+        When ``external_ref`` is set, the topup is idempotent: a duplicate ref
+        (e.g. a replayed x402 onboarding payment) is a no-op returning the
+        current balance, enforced by the partial unique index from migration 097.
+        """
+        pool = self._get_pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO org_credits (org_id, balance_usdc, updated_at)
+                        VALUES ($1, $2, NOW())
+                        ON CONFLICT (org_id) DO UPDATE
+                            SET balance_usdc = org_credits.balance_usdc + EXCLUDED.balance_usdc,
+                                updated_at = NOW()
+                        RETURNING balance_usdc
+                        """,
+                        org_id,
+                        amount_usdc,
+                    )
+                    new_balance = int(row["balance_usdc"])
+                    await conn.execute(
+                        """
+                        INSERT INTO org_credit_ledger
+                            (id, org_id, operation, amount_usdc, balance_usdc_after, reason, external_ref, created_at)
+                        VALUES ($1, $2, 'topup', $3, $4, $5, $6, NOW())
+                        """,
+                        str(uuid.uuid4()),
+                        org_id,
+                        amount_usdc,
+                        new_balance,
+                        reason,
+                        external_ref,
+                    )
+            return new_balance
+        except UniqueViolation:
+            if external_ref is None:
+                raise
+            existing = await pool.fetchrow(
+                "SELECT org_id, amount_usdc FROM org_credit_ledger WHERE external_ref = $1",
+                external_ref,
+            )
+            if existing is None or existing["org_id"] != org_id or int(existing["amount_usdc"]) != amount_usdc:
+                raise
+            current = await pool.fetchrow(
+                "SELECT balance_usdc FROM org_credits WHERE org_id = $1",
+                org_id,
+            )
+            return int(current["balance_usdc"]) if current is not None else 0
+
+    async def record_onboarding_settlement(
+        self,
+        org_id: str,
+        amount_usdc: int,
+        external_ref: str,
+        payer_address: str,
+        chain_id: int,
+        settlement_tx: str,
+    ) -> tuple[OrgClientCredential, str | None]:
+        """Credit a settled bootstrap payment, credential, and audit atomically."""
+        if amount_usdc <= 0:
+            raise ValueError("onboarding settlement amount must be positive")
+        if not external_ref or not settlement_tx:
+            raise ValueError("onboarding settlement requires payment and transaction references")
+
         pool = self._get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                await conn.fetchrow("SELECT id FROM orgs WHERE id = $1 FOR UPDATE", org_id)
+                existing = await conn.fetchrow(
+                    "SELECT org_id, amount_usdc FROM org_credit_ledger WHERE external_ref = $1 FOR UPDATE",
+                    external_ref,
+                )
+                if existing is not None:
+                    if existing["org_id"] != org_id or int(existing["amount_usdc"]) != amount_usdc:
+                        raise ValueError("Onboarding payment reference is bound to a different settlement")
+                    credential = await conn.fetchrow(
+                        "SELECT client_id, org_id, hashed_secret, salt, created_at "
+                        "FROM org_client_credentials WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1",
+                        org_id,
+                    )
+                    if credential is not None:
+                        return (
+                            OrgClientCredential(
+                                client_id=credential["client_id"],
+                                org_id=credential["org_id"],
+                                hashed_secret=credential["hashed_secret"],
+                                salt=credential["salt"],
+                                created_at=credential["created_at"],
+                            ),
+                            None,
+                        )
+                    return await create_client_credential_in_transaction(conn, org_id)
+
+                existing_credential = await conn.fetchrow(
+                    "SELECT client_id, org_id, hashed_secret, salt, created_at "
+                    "FROM org_client_credentials WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1",
+                    org_id,
+                )
+                if existing_credential is not None:
+                    credential = OrgClientCredential(
+                        client_id=existing_credential["client_id"],
+                        org_id=existing_credential["org_id"],
+                        hashed_secret=existing_credential["hashed_secret"],
+                        salt=existing_credential["salt"],
+                        created_at=existing_credential["created_at"],
+                    )
+                    client_secret = None
+                else:
+                    credential, client_secret = await create_client_credential_in_transaction(conn, org_id)
                 row = await conn.fetchrow(
                     """
                     INSERT INTO org_credits (org_id, balance_usdc, updated_at)
@@ -260,16 +405,31 @@ class BillingCreditService:
                 await conn.execute(
                     """
                     INSERT INTO org_credit_ledger
-                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-                    VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                        (id, org_id, operation, amount_usdc, balance_usdc_after, reason, external_ref, created_at)
+                    VALUES ($1, $2, 'topup', $3, $4, 'x402_onboarding', $5, NOW())
                     """,
                     str(uuid.uuid4()),
                     org_id,
                     amount_usdc,
                     new_balance,
-                    reason,
+                    external_ref,
                 )
-        return new_balance
+                await conn.execute(
+                    """
+                    INSERT INTO org_provisioning_events
+                        (id, org_id, method, payer_address, chain_id, settlement_tx,
+                         payment_ref, amount_usdc, event_type, settlement_status)
+                    VALUES ($1, $2, 'x402', $3, $4, $5, $6, $7, 'settlement', 'settled')
+                    """,
+                    str(uuid.uuid4()),
+                    org_id,
+                    payer_address,
+                    chain_id,
+                    settlement_tx,
+                    external_ref,
+                    amount_usdc,
+                )
+            return credential, client_secret
 
     async def grant_onboarding_credit(self, org_id: str, amount_usdc: int) -> int:
         """Grant one idempotent verified-email credit balance in one transaction.

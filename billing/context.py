@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from shared.db_pool import PgConnection, PgPool, bind_pool, require_pool, unbind_pool
 from teardrop.cache import TTLCache
+from teardrop.config import get_settings
 
 _POOL_SCOPE = "billing"
 _pool: PgPool | None = None
@@ -74,12 +75,21 @@ async def get_org_spending_config(org_id: str) -> dict:
     """Return spending config for an org (balance, limit, pause state, daily spend)."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT balance_usdc, spending_limit_usdc, is_paused FROM org_credits WHERE org_id = $1",
+        """
+        SELECT c.balance_usdc, c.spending_limit_usdc, c.is_paused,
+               o.acquisition_source
+        FROM org_credits AS c
+        JOIN orgs AS o ON o.id = c.org_id
+        WHERE c.org_id = $1
+        """,
         org_id,
     )
     balance = int(row["balance_usdc"]) if row else 0
     spending_limit = int(row["spending_limit_usdc"]) if row else 0
     is_paused = bool(row["is_paused"]) if row else False
+    if row and row.get("acquisition_source") in {"siwe", "x402"} and spending_limit <= 0:
+        machine_cap = get_settings().machine_org_daily_spend_limit_usdc
+        spending_limit = machine_cap
 
     # 24-hour rolling window daily spend cached for dashboard-style reads.
     daily_spend = (await _get_daily_spend_cache(org_id).get()) or 0
@@ -107,6 +117,8 @@ async def update_org_spending_config(
     params: list = [org_id]
 
     if spending_limit_usdc is not None:
+        if spending_limit_usdc < 0:
+            raise ValueError("spending_limit_usdc must not be negative")
         params.append(spending_limit_usdc)
         updates.append(f"spending_limit_usdc = ${len(params)}")
     if is_paused is not None:

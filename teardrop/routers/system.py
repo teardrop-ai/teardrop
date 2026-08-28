@@ -146,6 +146,25 @@ def _build_agent_card_content(
                 else {}
             ),
         },
+        "onboarding": {
+            "enabled": card_settings.machine_provisioning_enabled,
+            "methods": [
+                *(["siwe"] if card_settings.machine_provisioning_enabled else []),
+                *(
+                    ["x402"]
+                    if card_settings.machine_provisioning_enabled
+                    and card_settings.billing_enabled
+                    and card_settings.x402_onboarding_enabled
+                    else []
+                ),
+            ],
+            "token_endpoint": "/token",
+            "nonce_endpoint": "/auth/siwe/nonce",
+            "topup_requirements_endpoint": "/billing/topup/usdc/requirements",
+            "topup_endpoint": "/billing/topup/usdc",
+            "credential_recovery": "siwe + POST /org/credentials/regenerate",
+            "x402_grant_type": "x402",
+        },
     }
     endpoints = {
         "agent_run": "/agent/run",

@@ -48,7 +48,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE); returns `access_token` + `refresh_token` |
+| `POST` | `/token` | — | Issue JWT (client-creds, email, or SIWE), or use `grant_type=x402` for payment-first org bootstrap |
 | `GET` | `/auth/me` | Bearer | Return the authenticated user's identity |
 | `GET` | `/auth/siwe/nonce` | — | Generate single-use SIWE nonce |
 | `POST` | `/register` | — | Self-serve org + user registration (optional normalized `acquisition_source`, invite-only + CAPTCHA gates) |
@@ -59,7 +59,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `POST` | `/org/invite` | Bearer | Create org invite link (any authenticated member) |
 | `POST` | `/register/invite` | — | Accept invite token + create user account |
 | `GET` | `/org/credentials` | Bearer | List org M2M client credentials |
-| `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin-only) |
+| `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin or owning SIWE wallet for machine orgs) |
 
 ### Billing
 
@@ -76,7 +76,11 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/billing/topup/usdc/requirements` | Bearer | Get on-chain USDC top-up payment requirements |
 | `POST` | `/billing/topup/usdc` | Bearer | Submit and verify an on-chain USDC top-up |
 
-`GET /billing/balance` returns atomic USDC fields. A `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`).
+`GET /billing/balance` returns atomic USDC fields. For human orgs, a `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`). For machine-provisioned orgs, zero resolves to `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC`; an explicit org limit is preserved.
+
+### Payment-first bootstrap
+
+Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it returns `402` with the x402 `PaymentRequired` body and headers. Retry with a signed `Payment-Signature` or `X-Payment` header. The first successful response contains `access_token`, `org_id`, `client_id`, and a one-time `client_secret`; repeated payments for the same machine org reuse `client_id` and omit `client_secret`. No refresh token is issued. Use `GET /billing/topup/usdc/requirements?amount_usdc=...` followed by `POST /billing/topup/usdc` for larger balance-first top-ups. Human-owned wallets receive `409` and must use SIWE. The bootstrap payment is sized to the larger of the live run price and `CREDIT_MIN_RUN_RESERVE_USDC`, and becomes prepaid org credit after settlement. Lost credentials can be replaced through SIWE plus `POST /org/credentials/regenerate`.
 
 ### Marketplace
 

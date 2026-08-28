@@ -6,7 +6,7 @@ Endpoints
 ---------
 GET  /                       – redirect to /docs
 GET  /health                 – health check
-POST /token                  – tri-mode auth (client-creds, email+secret, SIWE)
+POST /token                  – auth plus x402 payment-first org bootstrap
 POST /register               – self-serve org + user registration
 GET  /auth/verify-email      – verify email address via one-time token
 POST /auth/resend-verification – resend verification email
