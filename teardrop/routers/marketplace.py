@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -29,7 +30,9 @@ from pydantic import BaseModel, Field
 from billing import (
     get_current_pricing,
     get_invoice_by_run,
+    get_live_pricing,
     get_tool_pricing_overrides,
+    resolve_tool_cost,
 )
 from marketplace import (
     get_author_balance,
@@ -861,6 +864,14 @@ class MarketplaceCatalogDetailResponse(BaseModel):
     tool: MarketplaceToolSummary
 
 
+class MarketplaceQuoteResponse(BaseModel):
+    qualified_name: str
+    price_usdc: int = Field(..., ge=0, le=100_000_000, description="Current price in atomic USDC.")
+    currency: Literal["USDC"] = "USDC"
+    source: Literal["override", "marketplace"]
+    expires_at: str = Field(..., description="ISO 8601 advisory expiry matching the active pricing-cache TTL.")
+
+
 class MarketplaceAuthorSummary(BaseModel):
     org_slug: str
     org_name: str
@@ -993,6 +1004,56 @@ async def get_marketplace_catalog_endpoint(
         content={
             "tools": [_serialize_marketplace_tool(t) for t in catalog],
             "next_cursor": next_cursor,
+        },
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
+@router.get("/marketplace/quote", tags=["Marketplace"], response_model=MarketplaceQuoteResponse)
+async def get_marketplace_quote(
+    request: Request,
+    tool: str = Query(..., min_length=3, max_length=128),
+) -> JSONResponse:
+    """Public: quote the current effective price for one published marketplace tool."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    if tool.count("/") != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Tool must use the qualified '{org_slug}/{tool_name}' form.",
+        )
+    org_slug, tool_name = tool.split("/", 1)
+    if not org_slug or not tool_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Tool must use the qualified '{org_slug}/{tool_name}' form.",
+        )
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    overrides = await get_tool_pricing_overrides()
+    pricing = await get_live_pricing()
+    default_cost = pricing.tool_call_cost if pricing else 0
+    catalog_tool = await get_marketplace_catalog_tool(tool_name, org_slug, overrides, default_cost)
+    if catalog_tool is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace tool not found.")
+
+    resolver_name = tool_name if org_slug == "platform" else tool
+    price_usdc = await resolve_tool_cost(resolver_name, overrides, default_cost, marketplace_enabled=True)
+    override_name = resolver_name if resolver_name in overrides else tool_name if tool_name in overrides else None
+    source = "override" if override_name is not None else "marketplace"
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=s.pricing_cache_ttl_seconds)
+
+    return JSONResponse(
+        content={
+            "qualified_name": tool,
+            "price_usdc": price_usdc,
+            "currency": "USDC",
+            "source": source,
+            "expires_at": expires_at.isoformat(),
         },
         headers={"Cache-Control": "public, max-age=60"},
     )
@@ -1235,6 +1296,7 @@ async def marketplace_llms_txt(request: Request) -> Response:
         for tool in catalog:
             seen += 1
             detail_url = f"{base_url}/marketplace/catalog/{tool.author_org_slug}/{tool.name}"
+            quote_url = f"{base_url}/marketplace/quote?tool={tool.qualified_name}"
             description = tool.marketplace_description or tool.description
             lines.append(
                 f"## {_escape_llms_text(tool.qualified_name)}\n"
@@ -1245,6 +1307,7 @@ async def marketplace_llms_txt(request: Request) -> Response:
                 f"- Calls: {tool.total_calls}\n"
                 f"- Price: {_format_atomic_usdc(tool.cost_usdc)}\n"
                 f"- [Detail]({detail_url})\n"
+                f"- [Quote]({quote_url})\n"
                 f"- [Reputation]({base_url}/.well-known/reputation.json)\n"
             )
         if len(catalog) < 200 or seen >= 10_000:

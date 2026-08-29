@@ -93,6 +93,7 @@ Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it ret
 |--------|------|------|-------------|
 | `GET` | `/marketplace/catalog` | — | Public catalog with optional `org_slug`, `category`, `sort`, `limit`, and `cursor` query params |
 | `GET` | `/marketplace/catalog/{org_slug}/{tool_name}` | — | Public detail for one published catalog tool |
+| `GET` | `/marketplace/quote?tool={org_slug}/{tool_name}` | — | Current effective atomic-USDC price for one published tool; advisory expiry follows the active pricing-cache TTL |
 | `GET` | `/marketplace/authors` | — | Public author index with active-tool counts and aggregate calls; supports `q`, `limit`, and `cursor` |
 | `GET` | `/marketplace/authors/{org_slug}` | — | Public author profile with aggregate calls and paginated tools |
 | `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and agent-discovery surfaces; per-tool entries include description, price, health, and reputation link |

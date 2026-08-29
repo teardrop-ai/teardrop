@@ -201,6 +201,9 @@ async def test_agent_card_marketplace_discovery(api_client, test_settings):
         "enabled": True,
         "catalog_endpoint": "/marketplace/catalog",
         "authors_endpoint": "/marketplace/authors",
+        "quote_endpoint": "/marketplace/quote?tool={qualified_name}",
+        "author_catalog_endpoint": "/marketplace/catalog?org_slug={org_slug}",
+        "self_inventory_endpoint": "/agent/tools",
         "mcp_gateway_endpoint": "/tools/mcp",
         "registration": {
             "author_config_endpoint": "/marketplace/author-config",
@@ -211,6 +214,7 @@ async def test_agent_card_marketplace_discovery(api_client, test_settings):
     }
     assert body["endpoints"]["marketplace_catalog"] == "/marketplace/catalog"
     assert body["endpoints"]["marketplace_authors"] == "/marketplace/authors"
+    assert body["endpoints"]["marketplace_quote"] == "/marketplace/quote"
 
 
 @pytest.mark.anyio

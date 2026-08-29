@@ -77,6 +77,12 @@ Teardrop maintains two kinds of tools in the marketplace catalog:
 
 When a caller retrieves the catalog via `GET /marketplace/catalog`, they can optionally filter by author using the `org_slug` query parameter to see only your tools or only platform tools. Tools can also be tagged with one public catalog category: `defi`, `search`, `data`, `communication`, or `utility`.
 
+Agents can retrieve the current effective price for a published tool with
+`GET /marketplace/quote?tool=<org-slug>/<tool-name>`. The response uses atomic
+USDC and includes an advisory expiry bounded by the active pricing-cache TTL;
+payment is authorized only when the tool call is executed. Authenticated agents
+can retrieve their current org inventory from `GET /agent/tools`.
+
 ---
 
 ## Step 3A — Fast Path: Import from an MCP Server
@@ -328,6 +334,9 @@ curl "https://api.teardrop.ai/marketplace/authors?q=data"
 # Fetch one tool detail or one public author profile
 curl "https://api.teardrop.ai/marketplace/catalog/<your-org-slug>/weather_lookup"
 curl "https://api.teardrop.ai/marketplace/authors/<your-org-slug>"
+
+# Fetch the current effective price before invoking a published tool
+curl "https://api.teardrop.ai/marketplace/quote?tool=<your-org-slug>/weather_lookup"
 
 # Plain-text marketplace index for LLM/SEO discovery
 curl https://api.teardrop.ai/marketplace/llms.txt

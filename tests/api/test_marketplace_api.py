@@ -403,6 +403,103 @@ async def test_catalog_success(anon_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_marketplace_quote_uses_billing_resolver(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="my_tool",
+        qualified_name="acme/my_tool",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=2500,
+        author_org_name="Acme",
+        author_org_slug="acme",
+    )
+    catalog_mock = AsyncMock(return_value=tool)
+    resolver_mock = AsyncMock(return_value=2500)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog_tool", catalog_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_live_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace.resolve_tool_cost", resolver_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/quote?tool=acme/my_tool")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["qualified_name"] == "acme/my_tool"
+    assert body["price_usdc"] == 2500
+    assert body["currency"] == "USDC"
+    assert body["source"] == "marketplace"
+    assert body["expires_at"].endswith("+00:00")
+    expires_at = datetime.fromisoformat(body["expires_at"])
+    assert expires_at.tzinfo is not None
+    assert (expires_at - datetime.now(timezone.utc)).total_seconds() <= config.get_settings().pricing_cache_ttl_seconds
+    assert resp.headers["cache-control"] == "public, max-age=60"
+    catalog_mock.assert_awaited_once_with("my_tool", "acme", {}, 0)
+    resolver_mock.assert_awaited_once_with("acme/my_tool", {}, 0, marketplace_enabled=True)
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_marketplace_quote_normalizes_platform_name(anon_client, monkeypatch):
+    tool = MarketplaceTool(
+        name="get_eth_balance",
+        qualified_name="platform/get_eth_balance",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1000,
+        author_org_name="Teardrop",
+        author_org_slug="platform",
+        tool_type="platform",
+    )
+    resolver_mock = AsyncMock(return_value=1000)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog_tool", AsyncMock(return_value=tool))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_live_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace.resolve_tool_cost", resolver_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/quote?tool=platform/get_eth_balance")
+
+    assert resp.status_code == 200
+    assert resp.json()["price_usdc"] == 1000
+    resolver_mock.assert_awaited_once_with("get_eth_balance", {}, 0, marketplace_enabled=True)
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_marketplace_quote_rejects_invalid_or_unknown_tool(anon_client, monkeypatch):
+    catalog_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.routers.marketplace.get_marketplace_catalog_tool", catalog_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    invalid = await anon_client.get("/marketplace/quote?tool=my_tool")
+    assert invalid.status_code == 422
+    catalog_mock.assert_not_awaited()
+
+    unknown = await anon_client.get("/marketplace/quote?tool=acme/missing")
+    assert unknown.status_code == 404
+    catalog_mock.assert_awaited_once_with("missing", "acme", {}, 0)
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
 async def test_catalog_category_and_popularity_params(anon_client, monkeypatch):
     tool = MarketplaceTool(
         name="price_feed",
@@ -679,6 +776,7 @@ async def test_marketplace_llms_txt(anon_client, monkeypatch):
     assert "marketplace desc" in resp.text
     assert "Description:" in resp.text
     assert "[Detail](http://test/marketplace/catalog/acme/my_tool)" in resp.text
+    assert "[Quote](http://test/marketplace/quote?tool=acme/my_tool)" in resp.text
     assert "[Reputation](http://test/.well-known/reputation.json)" in resp.text
     assert "$1.234567" in resp.text
 
