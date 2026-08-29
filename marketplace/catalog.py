@@ -14,7 +14,12 @@ from marketplace._catalog_pricing import (
     get_platform_tool_price as get_platform_tool_price,
 )
 from marketplace.context import _get_pool
-from marketplace.models import AuthorConfig, MarketplaceCategory, MarketplaceTool, normalize_eip55_address
+from marketplace.models import (
+    AuthorConfig,
+    MarketplaceCategory,
+    MarketplaceTool,
+    normalize_eip55_address,
+)
 
 _CATALOG_SORT_COLUMNS = {
     "name": "qualified_name ASC",
@@ -330,6 +335,102 @@ async def get_marketplace_catalog(
     return catalog
 
 
+async def list_marketplace_authors(
+    *,
+    q: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return public marketplace authors with active published tools.
+
+    The result is derived from catalog rows and uses the same platform sentinel
+    as ``get_marketplace_catalog``. The cursor is an opaque slug-only keyset
+    cursor so author pagination remains stable without adding marketplace state.
+    """
+    limit = min(max(1, limit), 200)
+    params: list[Any] = []
+
+    def _add_param(value: Any) -> str:
+        params.append(value)
+        return f"${len(params)}"
+
+    where_clauses: list[str] = []
+    cursor_slug: str | None = None
+    if cursor:
+        import base64 as _b64
+        import json as _json
+
+        try:
+            cursor_data = _json.loads(_b64.b64decode(cursor).decode())
+            candidate = cursor_data.get("org_slug")
+            if isinstance(candidate, str) and candidate:
+                cursor_slug = candidate
+        except Exception:
+            pass
+    if cursor_slug is not None:
+        where_clauses.append(f"org_slug > {_add_param(cursor_slug)}")
+
+    if q is not None:
+        q = q.strip()
+        if q:
+            escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            search_ref = _add_param(f"%{escaped_q}%")
+            where_clauses.append(f"(org_name ILIKE {search_ref} ESCAPE '\\' OR org_slug ILIKE {search_ref} ESCAPE '\\')")
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    limit_ref = _add_param(limit)
+    pool = _get_pool()
+    rows = await pool.fetch(
+        f"""
+        WITH author_rows AS (
+            SELECT
+                o.slug AS org_slug,
+                o.name AS org_name,
+                COUNT(t.id)::INT AS tool_count,
+                COALESCE(SUM(s.total_calls), 0)::BIGINT AS total_calls
+            FROM orgs o
+            JOIN org_tools t
+                ON t.org_id = o.id
+               AND t.publish_as_mcp = TRUE
+               AND t.is_active = TRUE
+            LEFT JOIN marketplace_tool_call_stats s
+                ON s.qualified_tool_name = (o.slug || '/' || t.name)
+            WHERE o.slug <> '{PLATFORM_SLUG}'
+            GROUP BY o.id, o.name, o.slug
+
+            UNION ALL
+
+            SELECT
+                '{PLATFORM_SLUG}' AS org_slug,
+                'Teardrop' AS org_name,
+                COUNT(p.tool_name)::INT AS tool_count,
+                COALESCE(SUM(s.total_calls), 0)::BIGINT AS total_calls
+            FROM marketplace_platform_tools p
+            LEFT JOIN marketplace_tool_call_stats s
+                ON s.qualified_tool_name = ('{PLATFORM_SLUG}/' || p.tool_name)
+            WHERE p.is_active = TRUE
+            HAVING COUNT(p.tool_name) > 0
+        )
+        SELECT org_slug, org_name, tool_count, total_calls
+        FROM author_rows
+        {where_sql}
+        ORDER BY org_slug ASC
+        LIMIT {limit_ref}
+        """,
+        *params,
+    )
+
+    return [
+        {
+            "org_slug": str(row["org_slug"]),
+            "org_name": str(row["org_name"]),
+            "tool_count": int(_row_get(row, "tool_count", 0) or 0),
+            "total_calls": int(_row_get(row, "total_calls", 0) or 0),
+        }
+        for row in rows
+    ]
+
+
 def _row_get(row: Any, key: str, default: Any = None) -> Any:
     try:
         return row[key]
@@ -442,6 +543,14 @@ def _build_catalog_cursor(tool: MarketplaceTool, sort: str) -> str:
     else:
         data = {"sort_key": tool.qualified_name, "name": tool.qualified_name}
     return _b64.b64encode(_json.dumps(data).encode()).decode()
+
+
+def _build_author_cursor(author: dict[str, Any]) -> str:
+    """Build an opaque keyset cursor for the author slug ordering."""
+    import base64 as _b64
+    import json as _json
+
+    return _b64.b64encode(_json.dumps({"org_slug": author["org_slug"]}).encode()).decode()
 
 
 async def get_marketplace_tool_by_name(

@@ -43,6 +43,7 @@ from marketplace import (
     request_withdrawal,
     set_author_config,
 )
+from marketplace import list_marketplace_authors as list_marketplace_authors_data
 from marketplace.models import MarketplaceCategory
 from mcp_client import discover_mcp_tools, get_org_mcp_server
 from org_tools import create_org_tool, list_org_tools, validate_safe_schema_subset
@@ -860,6 +861,18 @@ class MarketplaceCatalogDetailResponse(BaseModel):
     tool: MarketplaceToolSummary
 
 
+class MarketplaceAuthorSummary(BaseModel):
+    org_slug: str
+    org_name: str
+    tool_count: int
+    total_calls: int
+
+
+class MarketplaceAuthorIndexResponse(BaseModel):
+    authors: list[MarketplaceAuthorSummary]
+    next_cursor: str | None = None
+
+
 def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
     result = {
         "name": tool.qualified_name,
@@ -979,6 +992,37 @@ async def get_marketplace_catalog_endpoint(
     return JSONResponse(
         content={
             "tools": [_serialize_marketplace_tool(t) for t in catalog],
+            "next_cursor": next_cursor,
+        },
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
+@router.get("/marketplace/authors", tags=["Marketplace"], response_model=MarketplaceAuthorIndexResponse)
+async def list_marketplace_authors_endpoint(
+    request: Request,
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=100, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=512),
+) -> JSONResponse:
+    """Public: list marketplace authors grouped above their published tools."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    authors = await list_marketplace_authors_data(q=q, limit=limit, cursor=cursor)
+    next_cursor: str | None = None
+    if len(authors) == limit:
+        from marketplace import _build_author_cursor
+
+        next_cursor = _build_author_cursor(authors[-1])
+
+    return JSONResponse(
+        content={
+            "authors": [MarketplaceAuthorSummary(**author).model_dump() for author in authors],
             "next_cursor": next_cursor,
         },
         headers={"Cache-Control": "public, max-age=60"},

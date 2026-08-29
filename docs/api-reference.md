@@ -88,6 +88,7 @@ Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it ret
 |--------|------|------|-------------|
 | `GET` | `/marketplace/catalog` | — | Public catalog with optional `org_slug`, `category`, `sort`, `limit`, and `cursor` query params |
 | `GET` | `/marketplace/catalog/{org_slug}/{tool_name}` | — | Public detail for one published catalog tool |
+| `GET` | `/marketplace/authors` | — | Public author index with active-tool counts and aggregate calls; supports `q`, `limit`, and `cursor` |
 | `GET` | `/marketplace/authors/{org_slug}` | — | Public author profile with aggregate calls and paginated tools |
 | `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and agent-discovery surfaces; per-tool entries include description, price, health, and reputation link |
 | `POST` | `/marketplace/author-config` | Bearer | Create or update author settlement wallet; admins may set any valid wallet, while the owning SIWE wallet is restricted to itself |
@@ -104,6 +105,8 @@ Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it ret
 | `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unsubscribe from a marketplace tool |
 
 `GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats. `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
+
+`GET /marketplace/authors` returns active published authors, including the `platform` pseudo-author when platform tools are active. Each entry contains `org_slug`, `org_name`, `tool_count`, and aggregate `total_calls`; `q` searches the public organization name or slug, and `cursor` is an opaque slug keyset token. Follow an author entry with `GET /marketplace/authors/{org_slug}` to retrieve its paginated tools. The author index is catalog metadata only and does not provide a remote A2A URL.
 
 Reputation uses a 14-day recency decay, a Beta(4,1) prior, and a 30-day freshness adjustment. Therefore `success_rate` is a posterior quality estimate, not raw successes divided by calls. Author-org self-calls, inactive tools, unpublished tools, and internal tools are excluded.
 

@@ -319,6 +319,12 @@ curl "https://api.teardrop.ai/marketplace/catalog?sort=popularity"
 # Filter by public category
 curl "https://api.teardrop.ai/marketplace/catalog?category=data"
 
+# List active marketplace authors (including the platform pseudo-author)
+curl "https://api.teardrop.ai/marketplace/authors?limit=50"
+
+# Search authors by public organization name or slug
+curl "https://api.teardrop.ai/marketplace/authors?q=data"
+
 # Fetch one tool detail or one public author profile
 curl "https://api.teardrop.ai/marketplace/catalog/<your-org-slug>/weather_lookup"
 curl "https://api.teardrop.ai/marketplace/authors/<your-org-slug>"
@@ -328,6 +334,7 @@ curl https://api.teardrop.ai/marketplace/llms.txt
 
 # Paginate results (default limit 100, max 200)
 curl "https://api.teardrop.ai/marketplace/catalog?limit=50&cursor=<next_cursor>"
+curl "https://api.teardrop.ai/marketplace/authors?limit=50&cursor=<next_cursor>"
 ```
 
 Query parameters:
@@ -338,6 +345,8 @@ Query parameters:
 - `cursor`: Opaque pagination token from previous response's `next_cursor`
 
 Catalog tool objects include `qualified_name`, `tool_name`, `display_name`, `description`, `short_description`, `input_schema`, `cost_usdc`, `tool_type`, `category`, `total_calls`, `health_status`, `is_healthy`, `author`, and `author_slug`. `total_calls` is a public aggregate recorded after successful paid executions; earnings and settlement still use the immutable financial ledger.
+
+Author index objects contain `org_slug`, `org_name`, `tool_count`, and `total_calls`. The index is read-only catalog metadata and does not expose a remote A2A endpoint. Use the existing author profile endpoint to retrieve the author's published tools.
 
 ---
 

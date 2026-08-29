@@ -203,6 +203,7 @@ def _build_agent_card_content(
         capabilities["marketplace"] = {
             "enabled": True,
             "catalog_endpoint": "/marketplace/catalog",
+            "authors_endpoint": "/marketplace/authors",
             "mcp_gateway_endpoint": endpoints["mcp_tools"],
             "registration": {
                 "author_config_endpoint": "/marketplace/author-config",
@@ -212,6 +213,7 @@ def _build_agent_card_content(
             },
         }
         endpoints["marketplace_catalog"] = "/marketplace/catalog"
+        endpoints["marketplace_authors"] = "/marketplace/authors"
 
     skills = [
         {

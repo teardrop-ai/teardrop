@@ -24,6 +24,7 @@ from marketplace import (
     complete_withdrawal,
     get_author_balance,
     get_author_earnings_by_tool,
+    list_marketplace_authors,
     list_pending_withdrawals,
     process_withdrawal,
     record_marketplace_tool_call,
@@ -564,6 +565,56 @@ class TestListPendingWithdrawals:
         # org_id should be passed as binding param
         call_args = mock_pool.fetch.call_args
         assert "org-1" in call_args.args
+
+
+# ─── list_marketplace_authors ────────────────────────────────────────────────
+
+
+class TestListMarketplaceAuthors:
+    @pytest.mark.anyio
+    async def test_returns_platform_and_active_published_authors(self, monkeypatch):
+        rows = [
+            {"org_slug": "acme", "org_name": "Acme", "tool_count": 2, "total_calls": 7},
+            {"org_slug": "platform", "org_name": "Teardrop", "tool_count": 12, "total_calls": 30},
+        ]
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=rows)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        result = await list_marketplace_authors()
+
+        assert result == rows
+        query = mock_pool.fetch.call_args.args[0]
+        assert "publish_as_mcp = TRUE" in query
+        assert "is_active = TRUE" in query
+        assert "UNION ALL" in query
+        assert "base_price_usdc" not in query
+
+    @pytest.mark.anyio
+    async def test_search_and_cursor_are_parameterized(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await list_marketplace_authors(q="Acme_%", limit=10, cursor="eyJvcmdfc2x1ZyI6ICJhY21lIn0=")
+
+        args = mock_pool.fetch.call_args.args
+        assert args[-3:] == ("acme", "%Acme\\_\\%%", 10)
+        assert "org_slug > $1" in args[0]
+        assert "ILIKE $2" in args[0]
+        assert "LIMIT $3" in args[0]
+
+    @pytest.mark.anyio
+    async def test_invalid_cursor_starts_from_first_page(self, monkeypatch):
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await list_marketplace_authors(cursor="not-a-cursor")
+
+        args = mock_pool.fetch.call_args.args
+        assert len(args) == 2
+        assert "org_slug >" not in args[0]
 
 
 # ─── MarketplaceTool model ───────────────────────────────────────────────────

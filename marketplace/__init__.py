@@ -46,9 +46,11 @@ _GET_POOL_ORIG = _ctx._get_pool
 _SET_AUTHOR_CONFIG_ORIG = _catalog.set_author_config
 _GET_AUTHOR_CONFIG_ORIG = _catalog.get_author_config
 _GET_MARKETPLACE_CATALOG_ORIG = _catalog.get_marketplace_catalog
+_LIST_MARKETPLACE_AUTHORS_ORIG = _catalog.list_marketplace_authors
 _GET_MARKETPLACE_CATALOG_TOOL_ORIG = _catalog.get_marketplace_catalog_tool
 _GET_MARKETPLACE_AUTHOR_SUMMARY_ORIG = _catalog.get_marketplace_author_summary
 _BUILD_CATALOG_CURSOR_ORIG = _catalog._build_catalog_cursor
+_BUILD_AUTHOR_CURSOR_ORIG = _catalog._build_author_cursor
 _GET_MARKETPLACE_TOOL_BY_NAME_ORIG = _catalog.get_marketplace_tool_by_name
 _GET_PLATFORM_TOOL_CACHE_ORIG = _catalog_pricing._get_platform_tool_cache
 _GET_ORG_TOOL_PRICE_CACHE_ORIG = _catalog_pricing._get_org_tool_price_cache
@@ -225,6 +227,16 @@ async def get_marketplace_catalog_tool(
     )
 
 
+async def list_marketplace_authors(
+    *,
+    q: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return public marketplace authors with active published tools."""
+    return await _call_async(_LIST_MARKETPLACE_AUTHORS_ORIG, q=q, limit=limit, cursor=cursor)
+
+
 async def get_marketplace_author_summary(org_slug: str) -> dict[str, Any] | None:
     """Return a public author profile (org name, tool count, aggregate call stats) by slug."""
     return await _call_async(_GET_MARKETPLACE_AUTHOR_SUMMARY_ORIG, org_slug)
@@ -232,6 +244,10 @@ async def get_marketplace_author_summary(org_slug: str) -> dict[str, Any] | None
 
 def _build_catalog_cursor(tool: MarketplaceTool, sort: str) -> str:
     return _call_sync(_BUILD_CATALOG_CURSOR_ORIG, tool, sort)
+
+
+def _build_author_cursor(author: dict[str, Any]) -> str:
+    return _call_sync(_BUILD_AUTHOR_CURSOR_ORIG, author)
 
 
 async def get_marketplace_tool_by_name(tool_name: str, org_slug: str) -> dict[str, Any] | None:
@@ -520,8 +536,10 @@ __all__ = [
     "get_author_config",
     "get_marketplace_catalog",
     "get_marketplace_catalog_tool",
+    "list_marketplace_authors",
     "get_marketplace_author_summary",
     "_build_catalog_cursor",
+    "_build_author_cursor",
     "get_marketplace_tool_by_name",
     "_get_platform_tool_cache",
     "_get_org_tool_price_cache",

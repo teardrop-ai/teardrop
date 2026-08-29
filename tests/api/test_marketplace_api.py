@@ -480,6 +480,81 @@ async def test_catalog_q_and_org_slug_params(anon_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_author_index_success(anon_client, monkeypatch):
+    authors = [
+        {"org_slug": "acme", "org_name": "Acme", "tool_count": 2, "total_calls": 7},
+        {"org_slug": "platform", "org_name": "Teardrop", "tool_count": 12, "total_calls": 30},
+    ]
+    authors_mock = AsyncMock(return_value=authors)
+    rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.list_marketplace_authors_data", authors_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/authors")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"authors": authors, "next_cursor": None}
+    assert resp.headers["cache-control"] == "public, max-age=60"
+    authors_mock.assert_awaited_once_with(q=None, limit=100, cursor=None)
+    rate_limit_mock.assert_awaited_once_with("catalog:127.0.0.1", config.get_settings().rate_limit_auth_rpm)
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_author_index_forwards_search_and_cursor(anon_client, monkeypatch):
+    authors_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("teardrop.routers.marketplace.list_marketplace_authors_data", authors_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/authors?q=acme&limit=10&cursor=next")
+
+    assert resp.status_code == 200
+    authors_mock.assert_awaited_once_with(q="acme", limit=10, cursor="next")
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_author_index_emits_cursor_for_full_page(anon_client, monkeypatch):
+    author = {"org_slug": "acme", "org_name": "Acme", "tool_count": 2, "total_calls": 7}
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace.list_marketplace_authors_data",
+        AsyncMock(return_value=[author]),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/authors?limit=1")
+
+    assert resp.status_code == 200
+    assert resp.json()["next_cursor"] == "eyJvcmdfc2x1ZyI6ICJhY21lIn0="
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_author_index_rejects_q_too_long(anon_client):
+    resp = await anon_client.get(f"/marketplace/authors?q={'a' * 201}")
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_catalog_rejects_q_too_long(anon_client):
     resp = await anon_client.get(f"/marketplace/catalog?q={'a' * 201}")
 

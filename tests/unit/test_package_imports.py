@@ -67,6 +67,8 @@ MARKETPLACE_IMPORT_SURFACE = [
     "get_marketplace_catalog",
     "get_marketplace_catalog_tool",
     "get_marketplace_tool_by_name",
+    "list_marketplace_authors",
+    "_build_author_cursor",
     "get_org_subscriptions",
     "get_subscribed_tools_catalog",
     "init_marketplace_db",
