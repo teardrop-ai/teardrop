@@ -7,7 +7,12 @@ from __future__ import annotations
 import logging
 import uuid
 
-from billing.context import _get_daily_debit_spend, _get_daily_spend_cache, _get_pool
+from billing.context import (
+    _get_daily_debit_spend,
+    _get_daily_principal_debit_spend,
+    _get_daily_spend_cache,
+    _get_pool,
+)
 from billing.credit import BillingCreditService
 from billing.history import record_settlement
 from billing.models import BillingResult
@@ -21,6 +26,7 @@ def _get_credit_service() -> BillingCreditService:
         get_pool=_get_pool,
         get_daily_spend_cache=_get_daily_spend_cache,
         get_daily_debit_spend_fn=_get_daily_debit_spend,
+        get_daily_principal_debit_spend_fn=_get_daily_principal_debit_spend,
         billing_result_factory=BillingResult,
     )
 
@@ -32,6 +38,7 @@ async def enqueue_failed_settlement(
     billing_method: str,
     amount_usdc: int,
     payment_payload: str | None = None,
+    principal_id: str | None = None,
 ) -> None:
     """Insert a failed settlement into the retry queue."""
     if amount_usdc <= 0:
@@ -50,8 +57,8 @@ async def enqueue_failed_settlement(
             """
             INSERT INTO pending_settlements
                 (id, usage_event_id, org_id, run_id, billing_method,
-                 amount_usdc, payment_payload, max_retries, next_retry_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '2 seconds')
+                  amount_usdc, payment_payload, principal_id, max_retries, next_retry_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW() + INTERVAL '2 seconds')
             """,
             str(uuid.uuid4()),
             usage_event_id,
@@ -60,6 +67,7 @@ async def enqueue_failed_settlement(
             billing_method,
             amount_usdc,
             payment_payload,
+            principal_id,
             settings.settlement_max_retries,
         )
         logger.info(
@@ -80,7 +88,7 @@ async def process_pending_settlements() -> int:
         rows = await pool.fetch(
             """
             SELECT id, usage_event_id, org_id, run_id, billing_method,
-                   amount_usdc, payment_payload, retry_count, max_retries
+                     amount_usdc, payment_payload, principal_id, retry_count, max_retries
             FROM pending_settlements
             WHERE status IN ('pending', 'retrying')
               AND next_retry_at <= NOW()
@@ -108,6 +116,7 @@ async def process_pending_settlements() -> int:
                     row["org_id"],
                     row["amount_usdc"],
                     reason=f"run:{row['run_id']}",
+                    principal_id=row.get("principal_id"),
                 )
                 if not success:
                     error_msg = "debit_credit returned False"

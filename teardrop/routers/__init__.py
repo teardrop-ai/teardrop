@@ -33,6 +33,7 @@ def register_routers(app: FastAPI) -> None:
     from teardrop.routers.org import llm_config as org_llm_config
     from teardrop.routers.org import mcp as org_mcp
     from teardrop.routers.org import memory as org_memory
+    from teardrop.routers.org import principals as org_principals
     from teardrop.routers.org import tools as org_tools
 
     app.include_router(system.router)
@@ -50,6 +51,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(org_a2a.router)
     app.include_router(org_memory.router)
     app.include_router(org_llm_config.router)
+    app.include_router(org_principals.router)
     app.include_router(admin.router)
     app.include_router(marketplace_mcp.router)
     app.include_router(marketplace.router)

@@ -249,6 +249,33 @@ class TestVerifyCredit:
             result = await verify_credit("org-1", 10_000)
         assert result.verified is True
 
+    async def test_principal_pause_blocks_credit(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 50_000, "is_paused": True},
+            ]
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000, principal_id="principal-1")
+        assert result.verified is False
+        assert "principal billing is paused" in result.error.lower()
+
+    async def test_principal_daily_limit_blocks_credit(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 50_000, "is_paused": False},
+                {"daily_spend": 45_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000, principal_id="principal-1")
+        assert result.verified is False
+        assert "principal daily spending limit" in result.error.lower()
+
     async def test_machine_org_explicit_spend_limit_is_respected(self, test_settings):
         test_settings.machine_org_daily_spend_limit_usdc = 50_000
         mock_pool = _mock_pool_for_verify(
@@ -1067,6 +1094,59 @@ class TestDebitCreditMock:
             result = await debit_credit("org-1", 2_000)
         assert result == (False, 0)
         pool._conn.execute.assert_not_called()
+
+    async def test_debit_returns_false_when_principal_is_paused(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 10_000, "is_paused": True},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 2_000, principal_id="principal-1")
+        assert result == (False, 0)
+        pool._conn.execute.assert_not_called()
+
+    async def test_debit_returns_false_when_principal_limit_exceeded(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 10_000, "is_paused": False},
+                {"daily_spend": 9_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 2_000, principal_id="principal-1")
+        assert result == (False, 0)
+        pool._conn.execute.assert_not_called()
+
+    async def test_debit_records_principal_in_ledger(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 10_000, "is_paused": False},
+                {"daily_spend": 1_000},
+            ]
+        )
+        pool._conn.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 2_000, "run:abc", principal_id="principal-1")
+        assert result == (True, 2_000)
+        ledger_call = pool._conn.execute.call_args_list[1]
+        assert "principal_id" in ledger_call.args[0]
+        assert ledger_call.args[6] == "principal-1"
+
+    async def test_debit_without_principal_does_not_query_principal_limits(self):
+        pool = _pool_mock()
+        pool._conn.fetchrow = AsyncMock(return_value={"balance_usdc": 20_000, "spending_limit_usdc": 0, "is_paused": False})
+        pool._conn.execute = AsyncMock()
+        with patch.object(billing_module, "_pool", pool):
+            result = await debit_credit("org-1", 2_000)
+        assert result == (True, 2_000)
+        pool._conn.fetchrow.assert_awaited_once()
 
     async def test_debit_invalidates_daily_spend_cache(self):
         pool = _pool_mock()

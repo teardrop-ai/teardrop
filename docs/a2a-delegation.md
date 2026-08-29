@@ -5,7 +5,7 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 - **Network effect**: Agents discover and call each other via published Agent Cards.
 - **Specialisation**: Route complex tasks to domain-expert agents.
 - **Revenue sharing**: Collect payments from delegations and distribute to specialist agent operators.
-- **Budget control**: Per-agent cost caps, global delegation spending limits, and org-level pause/daily spend checks.
+- **Budget control**: Destination cost caps, global delegation limits, org controls, and optional caller-principal pause/24-hour spend limits.
 
 The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace`, `endpoints.marketplace_catalog`, and `endpoints.marketplace_authors` so external clients can discover the paid marketplace catalog and its active author index without hard-coding Teardrop-specific URLs. The author index is a catalog metadata surface, not a directory of remote A2A URLs; `delegate_to_agent` still requires an explicit URL and the normal SSRF, allowlist, and budget controls. Its additive `capabilities.marketplace.registration` metadata identifies `/tools` for agent-owned tool registration and `/marketplace/author-config` for payout setup; SIWE sessions are restricted to their own wallet, while organization admins retain treasury-wallet control. MCP import publishing remains admin-only.
 

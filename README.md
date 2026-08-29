@@ -15,7 +15,7 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using yo
 
 ### Agent-to-Agent (A2A) Delegation
 
-Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features include allowlist control, JWT forwarding, per-run quotas, and optional credit billing with per-agent cost caps plus org pause and 24h spend-limit enforcement.
+Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features include allowlist control, JWT forwarding, per-run quotas, destination cost caps, and optional credit billing with org-level and caller-principal pause/24-hour spend-limit enforcement.
 
 For the full protocol specification, environment variables, allowlists, and billing event payloads, see [docs/a2a-delegation.md](docs/a2a-delegation.md).
 

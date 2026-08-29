@@ -419,6 +419,7 @@ async def run_agent_once(
         cost_usdc=cost_usdc,
         delegation_spend=delegation_spend,
         org_id=org_id,
+        principal_id=user_id,
         run_id=run_id,
         result=settlement_result,
     ):
@@ -708,7 +709,11 @@ async def _run_billing_gate(
             pricing = await get_current_pricing()
             default_min = pricing.run_price_usdc if pricing is not None else 0
             min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)
-            billing = await verify_credit(org_id, min_required)
+            billing = await verify_credit(
+                org_id,
+                min_required,
+                principal_id=payload.get("sub") or None,
+            )
             if not billing.verified:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -740,7 +745,11 @@ async def _run_billing_gate(
     pricing = await get_current_pricing()
     default_min = pricing.run_price_usdc if pricing is not None else 0
     min_required = platform_fee if is_byok else max(default_min, settings.credit_min_run_reserve_usdc)
-    billing = await verify_credit(org_id, min_required)
+    billing = await verify_credit(
+        org_id,
+        min_required,
+        principal_id=payload.get("sub") or None,
+    )
     if not billing.verified:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,

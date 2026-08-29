@@ -177,7 +177,7 @@ async def test_billing_debits_on_success(billing_client, test_jwt_token):
 
     # MCPServer processes the request (may fail at tool level, but billing fires).
     if resp.status_code == 200:
-        mock_debit.assert_called_once_with("test-org-id", 500, reason="mcp:web_search")
+        mock_debit.assert_called_once_with("test-org-id", 500, reason="mcp:web_search", principal_id="test-user-id")
 
 
 @pytest.mark.asyncio

@@ -136,12 +136,14 @@ async def delegate_to_agent(
 
     # ── Extract org context from RunnableConfig ───────────────────────────
     org_id: str = ""
+    principal_id: str = ""
     run_id: str = ""
     db_pool = None
     jwt_token: str | None = None
     if config:
         configurable = config.get("configurable", {})
         org_id = configurable.get("org_id", "")
+        principal_id = configurable.get("principal_id", "")
         run_id = configurable.get("run_id", "")
         db_pool = configurable.get("db_pool")
         jwt_token = configurable.get("jwt_token")
@@ -219,7 +221,11 @@ async def delegate_to_agent(
         estimated_cost = apply_platform_fee(estimated_cost)
         use_x402 = bool(agent_rule and agent_rule.get("require_x402"))
 
-        budget_err = await check_delegation_budget(org_id, estimated_cost)
+        budget_err = await check_delegation_budget(
+            org_id,
+            estimated_cost,
+            principal_id=principal_id or None,
+        )
         if budget_err:
             return {
                 "agent_name": "unknown",
@@ -259,7 +265,14 @@ async def delegate_to_agent(
     if billing_enabled:
         from billing import fund_delegation
 
-        funded = await fund_delegation(org_id, estimated_cost, run_id, agent_url, delegation_id)
+        funded = await fund_delegation(
+            org_id,
+            estimated_cost,
+            run_id,
+            agent_url,
+            delegation_id,
+            principal_id=principal_id or None,
+        )
         if not funded:
             from billing import record_delegation_event
 

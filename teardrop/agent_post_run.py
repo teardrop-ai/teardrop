@@ -179,6 +179,7 @@ async def dispatch_settlement(
     cost_usdc: int,
     delegation_spend: int,
     org_id: Any,
+    principal_id: str,
     run_id: str,
     result: dict[str, Any],
 ):
@@ -214,7 +215,12 @@ async def dispatch_settlement(
 
     if billing.billing_method == "credit":
         # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
-        success, deducted_amount = await debit_credit(org_id, debit_amount, reason=f"run:{run_id}")
+        success, deducted_amount = await debit_credit(
+            org_id,
+            debit_amount,
+            reason=f"run:{run_id}",
+            principal_id=principal_id or None,
+        )
         if success:
             result["marketplace_stats_billable"] = True
             result["settlement_amount_usdc"] = deducted_amount
@@ -238,6 +244,7 @@ async def dispatch_settlement(
                 run_id,
                 "credit",
                 debit_amount,
+                principal_id=principal_id or None,
             )
             logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
     else:

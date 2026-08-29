@@ -31,11 +31,13 @@ class BillingCreditService:
         get_pool: Callable[[], PgPool],
         get_daily_spend_cache: Callable[[str], TTLCache[int]],
         get_daily_debit_spend_fn: Callable[[PgConnection | PgPool, str], Awaitable[int]],
+        get_daily_principal_debit_spend_fn: Callable[[PgConnection | PgPool, str, str], Awaitable[int]],
         billing_result_factory: Callable[..., Any],
     ):
         self._get_pool = get_pool
         self._get_daily_spend_cache = get_daily_spend_cache
         self._get_daily_debit_spend_fn = get_daily_debit_spend_fn
+        self._get_daily_principal_debit_spend_fn = get_daily_principal_debit_spend_fn
         self._billing_result_factory = billing_result_factory
 
     async def get_credit_balance(self, org_id: str) -> int:
@@ -61,7 +63,13 @@ class BillingCreditService:
         )
         return int(daily_row["daily_spend"]) if daily_row else 0
 
-    async def verify_credit(self, org_id: str, min_balance_usdc: int) -> Any:
+    async def verify_credit(
+        self,
+        org_id: str,
+        min_balance_usdc: int,
+        *,
+        principal_id: str | None = None,
+    ) -> Any:
         """Check that org has sufficient credit and is within spending limits."""
         pool = self._get_pool()
 
@@ -111,6 +119,29 @@ class BillingCreditService:
                     )
                 )
 
+        if principal_id:
+            principal_limit = await pool.fetchrow(
+                """
+                SELECT daily_limit_usdc, is_paused
+                FROM org_principal_spend_limits
+                WHERE org_id = $1 AND principal_id = $2
+                """,
+                org_id,
+                principal_id,
+            )
+            if principal_limit is not None:
+                if bool(principal_limit["is_paused"]):
+                    return self._billing_result_factory(error="Principal billing is paused by an administrator.")
+                daily_principal_spend = await self._get_daily_principal_debit_spend_fn(pool, org_id, principal_id)
+                principal_cap = int(principal_limit["daily_limit_usdc"])
+                if daily_principal_spend + min_balance_usdc > principal_cap:
+                    return self._billing_result_factory(
+                        error=(
+                            f"Principal daily spending limit reached: {daily_principal_spend} of "
+                            f"{principal_cap} atomic USDC used in the last 24 hours."
+                        )
+                    )
+
         return self._billing_result_factory(verified=True, billing_method="credit")
 
     async def _debit_credit_locked(
@@ -119,6 +150,7 @@ class BillingCreditService:
         org_id: str,
         amount_usdc: int,
         reason: str,
+        principal_id: str | None = None,
     ) -> tuple[bool, int]:
         """Debit one org while the caller owns the surrounding transaction."""
         row = await conn.fetchrow(
@@ -150,6 +182,24 @@ class BillingCreditService:
             if daily_spend + amount_usdc > spending_limit:
                 return False, 0
 
+        if principal_id:
+            principal_limit = await conn.fetchrow(
+                """
+                SELECT daily_limit_usdc, is_paused
+                FROM org_principal_spend_limits
+                WHERE org_id = $1 AND principal_id = $2
+                FOR UPDATE
+                """,
+                org_id,
+                principal_id,
+            )
+            if principal_limit is not None:
+                if bool(principal_limit["is_paused"]):
+                    return False, 0
+                daily_principal_spend = await self._get_daily_principal_debit_spend_fn(conn, org_id, principal_id)
+                if daily_principal_spend + amount_usdc > int(principal_limit["daily_limit_usdc"]):
+                    return False, 0
+
         # Never partially settle. The row lock closes the concurrent-debit race
         # between the non-locking preflight and this authoritative mutation.
         if original_balance < amount_usdc:
@@ -168,18 +218,26 @@ class BillingCreditService:
         await conn.execute(
             """
             INSERT INTO org_credit_ledger
-                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-            VALUES ($1, $2, 'debit', $3, $4, $5, NOW())
+                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, principal_id, created_at)
+            VALUES ($1, $2, 'debit', $3, $4, $5, $6, NOW())
             """,
             str(uuid.uuid4()),
             org_id,
             amount_usdc,
             new_balance,
             reason,
+            principal_id,
         )
         return True, amount_usdc
 
-    async def debit_credit(self, org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
+    async def debit_credit(
+        self,
+        org_id: str,
+        amount_usdc: int,
+        reason: str = "",
+        *,
+        principal_id: str | None = None,
+    ) -> tuple[bool, int]:
         """Debit amount_usdc from org's credit balance atomically."""
         if amount_usdc <= 0:
             logger.debug("debit_credit: skipping non-positive amount org_id=%s amount=%s", org_id, amount_usdc)
@@ -189,7 +247,7 @@ class BillingCreditService:
         try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason)
+                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason, principal_id)
                 if success:
                     try:
                         await self._get_daily_spend_cache(org_id).invalidate()
@@ -212,6 +270,8 @@ class BillingCreditService:
         reason: str,
         delegation_id: str,
         run_id: str,
+        *,
+        principal_id: str | None = None,
     ) -> tuple[bool, int]:
         """Debit credit and create the delegation refund record in one transaction."""
         if amount_usdc <= 0:
@@ -236,7 +296,7 @@ class BillingCreditService:
                             raise ValueError("Delegation funding amount changed for an existing id")
                         return existing["status"] == "pending", int(existing["amount_usdc"])
 
-                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason)
+                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason, principal_id)
                     if not success:
                         return False, 0
 

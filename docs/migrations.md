@@ -109,6 +109,9 @@ python -m migrations.runner
 | `095_a2a_inbound_task_leases.sql` | Adds process leases and explicit settlement amounts to inbound A2A task and audit projections |
 | `096_a2a_delegation_delivery_state.sql` | Adds a mutable delivery projection so ambiguous x402 retries wait for explicit reconciliation before refund |
 | `097_machine_org_provisioning.sql` | Machine-org provenance, runtime-applied hard credit caps for new provisioning, idempotent external topup references, and append-only provisioning/settlement audit events; does not rewrite existing credit limits |
+| `098_credit_ledger_principal.sql` | Optional authenticated-principal attribution on immutable credit-ledger entries |
+| `099_org_principal_spend_limits.sql` | Sparse, org-scoped 24-hour spend limits and pause controls for authenticated principals |
+| `100_pending_settlement_principal.sql` | Preserves principal attribution across asynchronous credit-settlement retries |
 *** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
 -- Migration 077: retention index for telemetry completeness denominators
 -- telemetry_run_starts is non-financial and retained only for the configured

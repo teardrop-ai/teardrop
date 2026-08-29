@@ -378,7 +378,7 @@ async def mcp_jsonrpc_handler(
         # ── Billing gate (credit-only for MCP calls) ──────────────────
         billing = BillingResult()
         if s.billing_enabled:
-            billing = await verify_credit(org_id, tool_cost)
+            billing = await verify_credit(org_id, tool_cost, principal_id=payload.get("sub") or None)
             if not billing.verified:
                 return JSONResponse(
                     content=_jsonrpc_error(
@@ -419,7 +419,12 @@ async def mcp_jsonrpc_handler(
         execution_failed = isinstance(result, dict) and "error" in result
         debited = False
         if billing.verified and billing.billing_method == "credit" and not execution_failed:
-            debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            debited, _ = await debit_credit(
+                org_id,
+                tool_cost,
+                reason=f"mcp:{tool_name}",
+                principal_id=payload.get("sub") or None,
+            )
             if not debited and tool_cost > 0:
                 # Tool already executed but the credit debit failed (e.g. a
                 # concurrent debit drained the balance below the preflight
@@ -432,7 +437,14 @@ async def mcp_jsonrpc_handler(
                     from billing.settlement import enqueue_failed_settlement
 
                     call_id = str(uuid.uuid4())
-                    await enqueue_failed_settlement(call_id, org_id or "", call_id, "credit", tool_cost)
+                    await enqueue_failed_settlement(
+                        call_id,
+                        org_id or "",
+                        call_id,
+                        "credit",
+                        tool_cost,
+                        principal_id=payload.get("sub") or None,
+                    )
                 except Exception:
                     logger.exception("Failed to enqueue MCP settlement recovery org=%s", org_id)
 

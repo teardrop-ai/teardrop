@@ -244,6 +244,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
             request.state.mcp_org_id = payload.get("org_id", "")
             request.state.mcp_auth_method = payload.get("auth_method", "")
+            request.state.mcp_principal_id = payload.get("sub", "")
             return None
 
         if settings.mcp_auth_enabled:
@@ -436,7 +437,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     ),
                 )
 
-        billing = await verify_credit(org_id, tool_cost)
+        billing = await verify_credit(
+            org_id,
+            tool_cost,
+            principal_id=getattr(request.state, "mcp_principal_id", "") or None,
+        )
         if not billing.verified:
             return JSONResponse(
                 status_code=402,
@@ -446,7 +451,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         return (org_id, tool_cost, tool_name, req_id)
 
     @staticmethod
-    async def _enqueue_mcp_recovery(org_id, tool_cost: int, billing_method: str, billing) -> None:
+    async def _enqueue_mcp_recovery(
+        org_id,
+        tool_cost: int,
+        billing_method: str,
+        billing,
+        principal_id: str | None = None,
+    ) -> None:
         """Enqueue a failed MCP settlement for asynchronous retry.
 
         The MCP gateway has no usage_event row, so a synthetic UUID anchors both
@@ -467,6 +478,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 billing_method,
                 tool_cost,
                 payment_payload=payment_payload,
+                principal_id=principal_id,
             )
         except Exception:
             logger.exception("Failed to enqueue MCP settlement recovery org=%s method=%s", org_id, billing_method)
@@ -517,10 +529,21 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             # Phase 2: credit debit.
             from billing import debit_credit
 
-            debited, _ = await debit_credit(org_id, tool_cost, reason=f"mcp:{tool_name}")
+            debited, _ = await debit_credit(
+                org_id,
+                tool_cost,
+                reason=f"mcp:{tool_name}",
+                principal_id=getattr(request.state, "mcp_principal_id", "") or None,
+            )
             if not debited:
                 logger.warning("MCP debit failed org=%s tool=%s", org_id, tool_name)
-                await self._enqueue_mcp_recovery(org_id, tool_cost, "credit", None)
+                await self._enqueue_mcp_recovery(
+                    org_id,
+                    tool_cost,
+                    "credit",
+                    None,
+                    principal_id=getattr(request.state, "mcp_principal_id", "") or None,
+                )
                 return response
 
         # Record marketplace earnings (fire-and-forget).

@@ -75,8 +75,13 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/billing/topup/stripe/status` | Bearer | Check Stripe checkout session status |
 | `GET` | `/billing/topup/usdc/requirements` | Bearer | Get on-chain USDC top-up payment requirements |
 | `POST` | `/billing/topup/usdc` | Bearer | Submit and verify an on-chain USDC top-up |
+| `GET` | `/org/principals/spend-limits` | Admin Bearer | List per-principal credit spend limits for the authenticated org |
+| `PUT` | `/org/principals/{principal_id}/spend-limit` | Admin Bearer | Idempotently set a principal's 24-hour credit limit and pause state |
+| `DELETE` | `/org/principals/{principal_id}/spend-limit` | Admin Bearer | Idempotently remove a principal-specific limit |
 
 `GET /billing/balance` returns atomic USDC fields. For human orgs, a `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`). For machine-provisioned orgs, zero resolves to `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC`; an explicit org limit is preserved.
+
+Principal limits are optional and additive to org controls. The authenticated JWT `sub` identifies the principal; absent configuration leaves org-level behavior unchanged. Every credit debit records that principal when available, including retried settlements.
 
 ### Payment-first bootstrap
 

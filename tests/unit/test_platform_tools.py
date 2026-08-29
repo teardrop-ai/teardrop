@@ -384,7 +384,7 @@ class TestMCPBillingGatePlatformTools:
 
         if resp.status_code == 200:
             assert mock_debit.call_count == 1, resp.text
-            mock_debit.assert_called_once_with("test-org-id", 2000, reason="mcp:get_token_price")
+            mock_debit.assert_called_once_with("test-org-id", 2000, reason="mcp:get_token_price", principal_id="test-user-id")
 
     @pytest.mark.asyncio
     async def test_zero_cost_tool_uses_override(self, billing_client, test_jwt_token):
@@ -422,7 +422,7 @@ class TestMCPBillingGatePlatformTools:
 
         if resp.status_code == 200:
             assert mock_debit.call_count == 1, resp.text
-            mock_debit.assert_called_once_with("test-org-id", 0, reason="mcp:calculate")
+            mock_debit.assert_called_once_with("test-org-id", 0, reason="mcp:calculate", principal_id="test-user-id")
 
 
 # ─── Migration 046: web3 primitive tools ────────────────────────────────────
@@ -719,7 +719,7 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                 )
 
         assert resp.status_code == 200
-        mock_verify.assert_awaited_once_with("test-org-id", 5000)
+        mock_verify.assert_awaited_once_with("test-org-id", 5000, principal_id="test-user-id")
         mock_debit.assert_not_awaited()
         assert resp.json()["result"]["isError"] is True
 
@@ -760,7 +760,7 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                     },
                 )
 
-        mock_verify.assert_called_once_with("test-org-id", 9000)
+        mock_verify.assert_called_once_with("test-org-id", 9000, principal_id="test-user-id")
 
     # ── is_active soft-delete ─────────────────────────────────────────────
 

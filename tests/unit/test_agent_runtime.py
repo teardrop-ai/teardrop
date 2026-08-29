@@ -129,7 +129,7 @@ async def test_client_credentials_billing_gate_uses_credit_rail(test_settings, m
 
     billing_result, gate_response = await agent_runtime._run_billing_gate(
         MagicMock(),
-        {"auth_method": "client_credentials", "org_id": "machine-org"},
+        {"sub": "machine-client", "auth_method": "client_credentials", "org_id": "machine-org"},
         "machine-org",
         is_byok=False,
         platform_fee=0,
@@ -138,7 +138,7 @@ async def test_client_credentials_billing_gate_uses_credit_rail(test_settings, m
     assert gate_response is None
     assert billing_result.verified is True
     assert billing_result.billing_method == "credit"
-    verify_credit_mock.assert_awaited_once_with("machine-org", 50_000)
+    verify_credit_mock.assert_awaited_once_with("machine-org", 50_000, principal_id="machine-client")
 
 
 @pytest.mark.anyio

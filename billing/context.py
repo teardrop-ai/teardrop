@@ -50,6 +50,27 @@ async def _get_daily_debit_spend(executor: PgConnection | PgPool, org_id: str) -
     return int(daily_row["daily_spend"]) if daily_row else 0
 
 
+async def _get_daily_principal_debit_spend(
+    executor: PgConnection | PgPool,
+    org_id: str,
+    principal_id: str,
+) -> int:
+    """Return 24h rolling debit spend for one principal within an org."""
+    daily_row = await executor.fetchrow(
+        """
+        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
+        FROM org_credit_ledger
+        WHERE org_id = $1
+          AND principal_id = $2
+          AND operation = 'debit'
+          AND created_at >= NOW() - INTERVAL '24 hours'
+        """,
+        org_id,
+        principal_id,
+    )
+    return int(daily_row["daily_spend"]) if daily_row else 0
+
+
 def _get_daily_spend_cache(org_id: str) -> TTLCache[int]:
     """Return per-org cache for 24h debit spend used by display endpoints."""
     if org_id not in _daily_spend_caches:

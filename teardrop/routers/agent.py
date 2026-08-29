@@ -342,6 +342,7 @@ async def agent_run(
             cost_usdc=cost_usdc,
             delegation_spend=delegation_spend,
             org_id=org_id,
+            principal_id=user_id,
             run_id=run_id,
             result=_settlement_result,
         ):

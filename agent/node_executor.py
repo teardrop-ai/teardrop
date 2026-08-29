@@ -104,6 +104,7 @@ async def _execute_single_tool(
         config = {
             "configurable": {
                 "org_id": metadata.get("org_id", "") if metadata else "",
+                "principal_id": metadata.get("user_id", "") if metadata else "",
                 "run_id": metadata.get("run_id", "") if metadata else "",
                 "db_pool": _get_billing_pool(),
                 "jwt_token": metadata.get("_jwt_token") if metadata else None,

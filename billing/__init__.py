@@ -39,6 +39,7 @@ T = TypeVar("T")
 # Keep original function refs so wrappers can safely monkeypatch module globals.
 _GET_POOL_ORIG = _ctx._get_pool
 _GET_DAILY_DEBIT_SPEND_ORIG = _ctx._get_daily_debit_spend
+_GET_DAILY_PRINCIPAL_DEBIT_SPEND_ORIG = _ctx._get_daily_principal_debit_spend
 _GET_DAILY_SPEND_CACHE_ORIG = _ctx._get_daily_spend_cache
 _GET_ORG_SPENDING_CONFIG_ORIG = _ctx.get_org_spending_config
 _UPDATE_ORG_SPENDING_CONFIG_ORIG = _ctx.update_org_spending_config
@@ -190,6 +191,10 @@ async def _get_daily_debit_spend(executor: PgConnection | PgPool, org_id: str) -
     return await _call_async(_GET_DAILY_DEBIT_SPEND_ORIG, executor, org_id)
 
 
+async def _get_daily_principal_debit_spend(executor: PgConnection | PgPool, org_id: str, principal_id: str) -> int:
+    return await _call_async(_GET_DAILY_PRINCIPAL_DEBIT_SPEND_ORIG, executor, org_id, principal_id)
+
+
 def _get_daily_spend_cache(org_id: str):
     return _call_sync(_GET_DAILY_SPEND_CACHE_ORIG, org_id)
 
@@ -207,6 +212,7 @@ def _get_credit_service() -> BillingCreditService:
         get_pool=_get_pool,
         get_daily_spend_cache=_get_daily_spend_cache,
         get_daily_debit_spend_fn=_get_daily_debit_spend,
+        get_daily_principal_debit_spend_fn=_get_daily_principal_debit_spend,
         billing_result_factory=BillingResult,
     )
 
@@ -216,6 +222,7 @@ def _get_delegation_service() -> BillingDelegationService:
         get_pool=_get_pool,
         get_settings=get_settings,
         get_daily_debit_spend=_get_daily_debit_spend,
+        get_daily_principal_debit_spend=_get_daily_principal_debit_spend,
         debit_credit=debit_credit,
         debit_credit_with_refund_outbox=debit_credit_with_delegation_refund,
         get_live_pricing_for_model=get_live_pricing_for_model,
@@ -228,16 +235,27 @@ async def get_credit_balance(org_id: str) -> int:
     return await _get_credit_service().get_credit_balance(org_id)
 
 
-async def verify_credit(org_id: str, min_balance_usdc: int) -> BillingResult:
+async def verify_credit(
+    org_id: str,
+    min_balance_usdc: int,
+    *,
+    principal_id: str | None = None,
+) -> BillingResult:
     """Check the org has at least ``min_balance_usdc`` credit before a run.
 
     Sets ``BillingResult.billing_method = "credit"`` so settlement routes to the
     off-chain credit ledger rather than on-chain x402.
     """
-    return await _get_credit_service().verify_credit(org_id, min_balance_usdc)
+    return await _get_credit_service().verify_credit(org_id, min_balance_usdc, principal_id=principal_id)
 
 
-async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple[bool, int]:
+async def debit_credit(
+    org_id: str,
+    amount_usdc: int,
+    reason: str = "",
+    *,
+    principal_id: str | None = None,
+) -> tuple[bool, int]:
     """Atomically debit atomic USDC from the org credit ledger.
 
     Uses ``SELECT FOR UPDATE`` to row-lock ``org_credits`` and enforces both the
@@ -245,7 +263,12 @@ async def debit_credit(org_id: str, amount_usdc: int, reason: str = "") -> tuple
     Writes an append-only ``org_credit_ledger`` debit row. Returns
     ``(True, actual_deducted)`` or ``(False, 0)`` when a guard blocks the debit.
     """
-    return await _get_credit_service().debit_credit(org_id, amount_usdc, reason)
+    return await _get_credit_service().debit_credit(
+        org_id,
+        amount_usdc,
+        reason,
+        principal_id=principal_id,
+    )
 
 
 async def debit_credit_with_delegation_refund(
@@ -254,6 +277,8 @@ async def debit_credit_with_delegation_refund(
     reason: str,
     delegation_id: str,
     run_id: str,
+    *,
+    principal_id: str | None = None,
 ) -> tuple[bool, int]:
     """Debit credit and persist the delegation refund record atomically."""
     return await _get_credit_service().debit_credit_with_delegation_refund(
@@ -262,6 +287,7 @@ async def debit_credit_with_delegation_refund(
         reason,
         delegation_id,
         run_id,
+        principal_id=principal_id,
     )
 
 
@@ -345,13 +371,18 @@ async def update_org_spending_config(
 
 
 # Delegation API
-async def check_delegation_budget(org_id: str, estimated_cost_usdc: int) -> str | None:
+async def check_delegation_budget(
+    org_id: str,
+    estimated_cost_usdc: int,
+    *,
+    principal_id: str | None = None,
+) -> str | None:
     """Validate an A2A delegation against org pause, 24h spend limit, and global cost cap.
 
     Returns ``None`` when the delegation is allowed, or a human-readable reason string
     when it is blocked.
     """
-    return await _get_delegation_service().check_delegation_budget(org_id, estimated_cost_usdc)
+    return await _get_delegation_service().check_delegation_budget(org_id, estimated_cost_usdc, principal_id=principal_id)
 
 
 def apply_platform_fee(cost_usdc: int) -> int:
@@ -374,9 +405,24 @@ async def calculate_byok_orchestration_cost(
     return await _get_delegation_service().calculate_byok_orchestration_cost(tokens_in, tokens_out, provider, model)
 
 
-async def fund_delegation(org_id: str, cost_usdc: int, run_id: str, agent_url: str, delegation_id: str) -> bool:
+async def fund_delegation(
+    org_id: str,
+    cost_usdc: int,
+    run_id: str,
+    agent_url: str,
+    delegation_id: str,
+    *,
+    principal_id: str | None = None,
+) -> bool:
     """Debit credit for an A2A delegation before forwarding the call. Returns success."""
-    return await _get_delegation_service().fund_delegation(org_id, cost_usdc, run_id, agent_url, delegation_id)
+    return await _get_delegation_service().fund_delegation(
+        org_id,
+        cost_usdc,
+        run_id,
+        agent_url,
+        delegation_id,
+        principal_id=principal_id,
+    )
 
 
 async def mark_delegation_possibly_delivered(org_id: str, delegation_id: str) -> bool:

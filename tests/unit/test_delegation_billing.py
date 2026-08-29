@@ -174,6 +174,43 @@ class TestCheckDelegationBudget:
             assert result is None
         assert mock_pool.fetchrow.await_count == 1
 
+    async def test_principal_pause_blocks_delegation(self, test_settings, monkeypatch):
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 50_000, "is_paused": True},
+            ]
+        )
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
+            result = await check_delegation_budget("org-1", 10_000, principal_id="principal-1")
+        assert result == "Principal billing is paused by an administrator."
+
+    async def test_principal_limit_blocks_delegation(self, test_settings, monkeypatch):
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"daily_limit_usdc": 50_000, "is_paused": False},
+                {"daily_spend": 45_000},
+            ]
+        )
+        with patch(f"{_BILLING_MOD}._get_pool", return_value=mock_pool):
+            result = await check_delegation_budget("org-1", 10_000, principal_id="principal-1")
+        assert result == "Principal daily spending limit reached."
+
     async def test_budget_check_bypasses_display_cache(self, test_settings, monkeypatch):
         import teardrop.config as _config
 

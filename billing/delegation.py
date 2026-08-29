@@ -40,15 +40,23 @@ class BillingDelegationService:
         debit_credit: Callable[[str, int, str], Awaitable[tuple[bool, int]]],
         debit_credit_with_refund_outbox: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
         get_live_pricing_for_model: Callable[..., Awaitable[object | None]],
+        get_daily_principal_debit_spend: Callable[[PgConnection | PgPool, str, str], Awaitable[int]] | None = None,
     ):
         self._get_pool = get_pool
         self._get_settings = get_settings
         self._get_daily_debit_spend = get_daily_debit_spend
+        self._get_daily_principal_debit_spend = get_daily_principal_debit_spend
         self._debit_credit = debit_credit
         self._debit_credit_with_refund_outbox = debit_credit_with_refund_outbox
         self._get_live_pricing_for_model = get_live_pricing_for_model
 
-    async def check_delegation_budget(self, org_id: str, estimated_cost_usdc: int) -> str | None:
+    async def check_delegation_budget(
+        self,
+        org_id: str,
+        estimated_cost_usdc: int,
+        *,
+        principal_id: str | None = None,
+    ) -> str | None:
         """Return None when delegation is affordable, otherwise an error message."""
         settings = self._get_settings()
         if not settings.a2a_delegation_billing_enabled:
@@ -77,6 +85,22 @@ class BillingDelegationService:
             daily_spend = await self._get_daily_debit_spend(pool, org_id)
             if daily_spend + estimated_cost_usdc > spending_limit:
                 return f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
+
+        if principal_id:
+            principal_limit = await pool.fetchrow(
+                "SELECT daily_limit_usdc, is_paused FROM org_principal_spend_limits WHERE org_id = $1 AND principal_id = $2",
+                org_id,
+                principal_id,
+            )
+            if principal_limit is not None:
+                if bool(principal_limit["is_paused"]):
+                    return "Principal billing is paused by an administrator."
+                if self._get_daily_principal_debit_spend is None:
+                    return "Principal spending limit could not be verified."
+                daily_spend = await self._get_daily_principal_debit_spend(pool, org_id, principal_id)
+                principal_cap = int(principal_limit["daily_limit_usdc"])
+                if daily_spend + estimated_cost_usdc > principal_cap:
+                    return "Principal daily spending limit reached."
 
         return None
 
@@ -117,6 +141,8 @@ class BillingDelegationService:
         run_id: str,
         agent_url: str,
         delegation_id: str,
+        *,
+        principal_id: str | None = None,
     ) -> bool:
         """Debit credit and persist refundable delegation state atomically."""
         if self._debit_credit_with_refund_outbox is None:
@@ -134,6 +160,7 @@ class BillingDelegationService:
             reason,
             delegation_id,
             run_id,
+            principal_id=principal_id,
         )
         return success
 

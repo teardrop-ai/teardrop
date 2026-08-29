@@ -10,7 +10,12 @@ from typing import Any
 
 import sentry_sdk
 
-from billing.context import _get_daily_debit_spend, _get_daily_spend_cache, _get_pool
+from billing.context import (
+    _get_daily_debit_spend,
+    _get_daily_principal_debit_spend,
+    _get_daily_spend_cache,
+    _get_pool,
+)
 from billing.credit import BillingCreditService
 from billing.models import BillingResult, atomic_usdc_to_price_str
 from teardrop.config import get_settings
@@ -23,6 +28,7 @@ def _get_credit_service() -> BillingCreditService:
         get_pool=_get_pool,
         get_daily_spend_cache=_get_daily_spend_cache,
         get_daily_debit_spend_fn=_get_daily_debit_spend,
+        get_daily_principal_debit_spend_fn=_get_daily_principal_debit_spend,
         billing_result_factory=BillingResult,
     )
 
