@@ -60,6 +60,7 @@ class BillingResult(BaseModel):
     # EIP-55 payer address recovered from a verified payment payload. Empty when
     # the facilitator does not report one (callers must fail closed on identity).
     payer: str = ""
+    facilitator_index: int = Field(default=0, ge=0, exclude=True)
 
 
 def atomic_usdc_to_price_str(atomic: int) -> str:

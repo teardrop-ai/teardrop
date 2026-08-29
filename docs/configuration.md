@@ -43,7 +43,10 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
 | `ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS` | Poll interval for retrying failed onboarding-credit grants (default: `60`) |
-| `X402_PAY_TO_ADDRESS` | Treasury wallet (USDC recipient) |
+| `X402_FACILITATOR_URL` | Primary x402 facilitator URL (default: `https://x402.org/facilitator`) |
+| `X402_FACILITATOR_URLS` | Ordered JSON array of credential-free HTTPS facilitator URLs; verification fails over on transport errors. Empty uses `X402_FACILITATOR_URL`. |
+| `X402_PAY_TO_ADDRESS` | Primary treasury wallet (USDC recipient) |
+| `X402_TREASURY_ADDRESSES` | JSON array of EVM treasury addresses advertised in payment requirements. Empty uses `X402_PAY_TO_ADDRESS`. |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
 | `X402_SCHEME` | Payment scheme: `exact` (default) or `upto` (usage-based via Permit2) |
 | `X402_UPTO_MAX_AMOUNT` | Max ceiling per run for upto scheme (default: `$0.50`) |

@@ -8,9 +8,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 import sentry_sdk
 
@@ -18,6 +20,7 @@ from billing.context import _bind_pool, _clear_pool, _get_pool, _has_pool, _rese
 from billing.models import BillingResult, atomic_usdc_to_price_str
 from billing.pricing import get_current_pricing, get_live_pricing, reset_pricing_caches
 from shared.db_pool import PgPool
+from teardrop.a2a_client import async_validate_url
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -25,10 +28,14 @@ logger = logging.getLogger(__name__)
 
 # Lazy x402 imports (only when billing is enabled)
 _server = None  # x402ResourceServer instance
+_servers: list = []
+_facilitator_failures: list[int] = []
+_facilitator_unhealthy_until: list[float] = []
 _requirements_cache: list | None = None
 _exact_requirements_cache: list | None = None
 _upto_requirements_cache: list | None = None
 _last_requirements_price_usdc: int = -1
+_last_requirements_topology: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 def _get_server():
@@ -38,9 +45,62 @@ def _get_server():
     return _server
 
 
+def _get_servers() -> list:
+    return _servers or [_get_server()]
+
+
+def _ensure_facilitator_health_state(server_count: int) -> None:
+    if len(_facilitator_failures) != server_count:
+        _facilitator_failures[:] = [0] * server_count
+    if len(_facilitator_unhealthy_until) != server_count:
+        _facilitator_unhealthy_until[:] = [0.0] * server_count
+
+
+def _effective_facilitator_urls(settings) -> list[str]:
+    configured = getattr(settings, "x402_facilitator_urls", None)
+    return configured if isinstance(configured, list) and configured else [settings.x402_facilitator_url]
+
+
+def _effective_treasury_addresses(settings) -> list[str]:
+    configured = getattr(settings, "x402_treasury_addresses", None)
+    if isinstance(configured, list) and configured:
+        return configured
+    return [settings.x402_pay_to_address] if settings.x402_pay_to_address else []
+
+
+def _facilitator_host(url: str) -> str:
+    return urlsplit(url).hostname or "unknown"
+
+
+def _build_requirements(server, settings, treasuries: list[str], price: str) -> tuple[list, list | None, list]:
+    from x402 import ResourceConfig
+
+    exact = []
+    upto = []
+    for treasury in treasuries:
+        exact.extend(
+            server.build_payment_requirements(
+                ResourceConfig(scheme="exact", network=settings.x402_network, pay_to=treasury, price=price)
+            )
+        )
+        if settings.x402_scheme == "upto":
+            upto.extend(
+                server.build_payment_requirements(
+                    ResourceConfig(
+                        scheme="upto",
+                        network=settings.x402_network,
+                        pay_to=treasury,
+                        price=settings.x402_upto_max_amount,
+                    )
+                )
+            )
+    return exact, upto or None, [*upto, *exact]
+
+
 async def init_billing(pool: PgPool) -> None:
     """Initialise x402 resource server and cache payment requirements."""
-    global _server, _requirements_cache, _last_requirements_price_usdc
+    global _server, _servers, _facilitator_failures, _facilitator_unhealthy_until
+    global _requirements_cache, _last_requirements_price_usdc, _last_requirements_topology
     global _exact_requirements_cache, _upto_requirements_cache
 
     settings = get_settings()
@@ -52,33 +112,53 @@ async def init_billing(pool: PgPool) -> None:
         logger.info("Billing disabled — skipping x402 initialisation")
         return
 
-    if not settings.x402_pay_to_address:
-        raise RuntimeError("billing_enabled=True but x402_pay_to_address is empty")
+    facilitator_urls = _effective_facilitator_urls(settings)
+    treasuries = _effective_treasury_addresses(settings)
+    if not treasuries:
+        raise RuntimeError("billing_enabled=True but no x402 treasury address is configured")
 
-    from x402 import ResourceConfig, x402ResourceServer
+    from x402 import x402ResourceServer
     from x402.http import HTTPFacilitatorClient
     from x402.http.facilitator_client_base import FacilitatorConfig
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
 
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=settings.x402_facilitator_url))
-    server = x402ResourceServer(facilitator)
-    server.register(settings.x402_network, ExactEvmServerScheme())
-
-    # Register upto scheme alongside exact when the operator has opted in.
+    upto_scheme = None
     if settings.x402_scheme == "upto":
         try:
-            from x402.mechanisms.evm.upto import (  # type: ignore[import]
-                UptoEvmServerScheme,
-            )
+            from x402.mechanisms.evm.upto import UptoEvmServerScheme  # type: ignore[import]
         except ImportError as exc:
             raise RuntimeError(
                 "x402 upto scheme is not available in the installed package. Upgrade: pip install 'x402[fastapi,evm]>=2.8.0'"
             ) from exc
+        upto_scheme = UptoEvmServerScheme
 
-        server.register(settings.x402_network, UptoEvmServerScheme())
+    initialized_servers = []
+    for facilitator_url in facilitator_urls:
+        if await async_validate_url(facilitator_url) is not None:
+            logger.warning("x402 facilitator blocked by URL policy host=%s", _facilitator_host(facilitator_url))
+            continue
+        try:
+            facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=facilitator_url))
+            server = x402ResourceServer(facilitator)
+            server.register(settings.x402_network, ExactEvmServerScheme())
+            if upto_scheme is not None:
+                server.register(settings.x402_network, upto_scheme())
+            server.initialize()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "x402 facilitator initialization failed host=%s error_type=%s",
+                _facilitator_host(facilitator_url),
+                type(exc).__name__,
+            )
+            continue
+        initialized_servers.append(server)
 
-    server.initialize()
-    _server = server
+    if not initialized_servers:
+        raise RuntimeError("No x402 facilitator could be initialized")
+    _servers = initialized_servers
+    _server = initialized_servers[0]
+    _facilitator_failures = [0] * len(_servers)
+    _facilitator_unhealthy_until = [0.0] * len(_servers)
 
     # Resolve price from live pricing_rules; fall back to config value.
     # Use get_current_pricing() directly (bypassing the TTL cache) so that a
@@ -110,33 +190,16 @@ async def init_billing(pool: PgPool) -> None:
             price_str,
         )
 
-    # Always build exact requirements.
-    exact_config = ResourceConfig(
-        scheme="exact",
-        network=settings.x402_network,
-        pay_to=settings.x402_pay_to_address,
-        price=price_str,
+    _exact_requirements_cache, _upto_requirements_cache, _requirements_cache = _build_requirements(
+        _server, settings, treasuries, price_str
     )
-    _exact_requirements_cache = server.build_payment_requirements(exact_config)
-
-    if settings.x402_scheme == "upto":
-        upto_config = ResourceConfig(
-            scheme="upto",
-            network=settings.x402_network,
-            pay_to=settings.x402_pay_to_address,
-            price=settings.x402_upto_max_amount,
-        )
-        _upto_requirements_cache = server.build_payment_requirements(upto_config)
-        _requirements_cache = [*_upto_requirements_cache, *_exact_requirements_cache]
-    else:
-        _upto_requirements_cache = None
-        _requirements_cache = list(_exact_requirements_cache)
+    _last_requirements_topology = (tuple(treasuries), tuple(facilitator_urls))
 
     advertised_price = settings.x402_upto_max_amount if settings.x402_scheme == "upto" else price_str
     logger.info(
         "Billing initialised: network=%s pay_to=%s price=%s scheme=%s",
         settings.x402_network,
-        settings.x402_pay_to_address,
+        ",".join(treasuries),
         advertised_price,
         settings.x402_scheme,
     )
@@ -158,14 +221,19 @@ async def init_billing(pool: PgPool) -> None:
 
 async def close_billing() -> None:
     """Release billing resources."""
-    global _server, _requirements_cache, _last_requirements_price_usdc
+    global _server, _servers, _facilitator_failures, _facilitator_unhealthy_until
+    global _requirements_cache, _last_requirements_price_usdc, _last_requirements_topology
     global _exact_requirements_cache, _upto_requirements_cache
 
     _server = None
+    _servers = []
+    _facilitator_failures = []
+    _facilitator_unhealthy_until = []
     _requirements_cache = None
     _exact_requirements_cache = None
     _upto_requirements_cache = None
     _last_requirements_price_usdc = -1
+    _last_requirements_topology = None
 
     reset_pricing_caches()
     _reset_daily_spend_caches()
@@ -264,7 +332,7 @@ def build_402_headers(
 
 async def _rebuild_requirements_if_stale() -> None:
     """Rebuild x402 payment requirements when the DB pricing rule has changed."""
-    global _requirements_cache, _last_requirements_price_usdc
+    global _requirements_cache, _last_requirements_price_usdc, _last_requirements_topology
     global _exact_requirements_cache, _upto_requirements_cache
 
     if _server is None:
@@ -274,36 +342,23 @@ async def _rebuild_requirements_if_stale() -> None:
     if rule is None:
         return
 
-    if rule.run_price_usdc == _last_requirements_price_usdc:
-        return
-
     settings = get_settings()
-    from x402 import ResourceConfig
+    treasuries = _effective_treasury_addresses(settings)
+    topology = (tuple(treasuries), tuple(_effective_facilitator_urls(settings)))
+    if rule.run_price_usdc == _last_requirements_price_usdc and topology == _last_requirements_topology:
+        return
+    if not treasuries:
+        logger.error("Payment requirements cannot be rebuilt without a treasury address")
+        return
 
     new_price_str = atomic_usdc_to_price_str(rule.run_price_usdc)
 
-    exact_config = ResourceConfig(
-        scheme="exact",
-        network=settings.x402_network,
-        pay_to=settings.x402_pay_to_address,
-        price=new_price_str,
+    _exact_requirements_cache, _upto_requirements_cache, _requirements_cache = _build_requirements(
+        _server, settings, treasuries, new_price_str
     )
-    _exact_requirements_cache = _server.build_payment_requirements(exact_config)
-
-    if settings.x402_scheme == "upto":
-        upto_config = ResourceConfig(
-            scheme="upto",
-            network=settings.x402_network,
-            pay_to=settings.x402_pay_to_address,
-            price=settings.x402_upto_max_amount,
-        )
-        _upto_requirements_cache = _server.build_payment_requirements(upto_config)
-        _requirements_cache = [*_upto_requirements_cache, *_exact_requirements_cache]
-    else:
-        _upto_requirements_cache = None
-        _requirements_cache = list(_exact_requirements_cache)
 
     _last_requirements_price_usdc = rule.run_price_usdc
+    _last_requirements_topology = topology
     logger.info(
         "Payment requirements updated: run_price_usdc=%d price=%s",
         rule.run_price_usdc,
@@ -384,7 +439,8 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
 
     from x402 import parse_payment_payload
 
-    server = _get_server()
+    servers = _get_servers()
+    _ensure_facilitator_health_state(len(servers))
     reqs = get_payment_requirements() if requirements is None else requirements
 
     if not reqs:
@@ -395,16 +451,37 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
 
         payload = parse_payment_payload(_base64.b64decode(payment_header))
     except Exception as exc:
-        logger.warning("Failed to parse payment header: %s", exc)
-        return BillingResult(error=f"Malformed payment header: {exc}")
+        logger.warning("Failed to parse payment header error_type=%s", type(exc).__name__)
+        return BillingResult(error="Malformed payment header")
 
     last_error = "No payment requirements matched"
     for requirement in reqs:
-        try:
-            result = await server.verify_payment(payload, requirement)
-        except Exception as exc:
-            logger.debug("Verification attempt failed for scheme=%s: %s", getattr(requirement, "scheme", "?"), exc)
-            last_error = f"Verification failed: {exc}"
+        result = None
+        facilitator_index = 0
+        now = time.monotonic()
+        available = [index for index in range(len(servers)) if _facilitator_unhealthy_until[index] <= now]
+        if not available:
+            available = [min(range(len(servers)), key=_facilitator_unhealthy_until.__getitem__)]
+        for index in available:
+            try:
+                result = await servers[index].verify_payment(payload, requirement)
+            except Exception as exc:  # noqa: BLE001
+                _facilitator_failures[index] += 1
+                cooldown = min(2 ** (_facilitator_failures[index] - 1) * 5, 300)
+                _facilitator_unhealthy_until[index] = time.monotonic() + cooldown
+                logger.warning(
+                    "x402 facilitator verification unavailable index=%d error_type=%s cooldown_seconds=%d",
+                    index,
+                    type(exc).__name__,
+                    cooldown,
+                )
+                last_error = "Payment verification service unavailable"
+                continue
+            _facilitator_failures[index] = 0
+            _facilitator_unhealthy_until[index] = 0.0
+            facilitator_index = index
+            break
+        if result is None:
             continue
 
         if result.is_valid:
@@ -422,6 +499,7 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
                 payment_requirements=requirement,
                 scheme=detected_scheme,
                 payer=payer,
+                facilitator_index=facilitator_index,
             )
 
         reason = result.invalid_reason or result.invalid_message or "invalid signature or amount"
@@ -443,7 +521,11 @@ async def settle_payment(
         billing_result.error = "Cannot settle unverified payment"
         return billing_result
 
-    server = _get_server()
+    servers = _get_servers()
+    if billing_result.facilitator_index >= len(servers):
+        billing_result.error = "Payment settlement route is unavailable"
+        return billing_result
+    server = servers[billing_result.facilitator_index]
 
     try:
         if billing_result.scheme == "upto" and actual_cost_usdc is not None:
@@ -460,11 +542,12 @@ async def settle_payment(
                 billing_result.payment_requirements,
             )
     except Exception as exc:
-        logger.error("Payment settlement error: %s", exc, exc_info=True)
+        logger.error("Payment settlement unavailable error_type=%s", type(exc).__name__)
         with sentry_sdk.new_scope() as scope:
             scope.set_tag("rail", "x402")
-            sentry_sdk.capture_exception(exc)
-        billing_result.error = f"Settlement failed: {exc}"
+            scope.set_tag("error_type", type(exc).__name__)
+            sentry_sdk.capture_message("x402 payment settlement unavailable", level="error")
+        billing_result.error = "Payment settlement service unavailable"
         return billing_result
 
     if not result.success:
@@ -494,13 +577,16 @@ def build_usdc_topup_requirements(amount_usdc: int) -> list:
 
     settings = get_settings()
     server = _get_server()
-    config = ResourceConfig(
-        scheme=settings.x402_scheme,
-        network=settings.x402_network,
-        pay_to=settings.x402_pay_to_address,
-        price=atomic_usdc_to_price_str(amount_usdc),
-    )
-    return server.build_payment_requirements(config)
+    requirements = []
+    for treasury in _effective_treasury_addresses(settings):
+        config = ResourceConfig(
+            scheme=settings.x402_scheme,
+            network=settings.x402_network,
+            pay_to=treasury,
+            price=atomic_usdc_to_price_str(amount_usdc),
+        )
+        requirements.extend(server.build_payment_requirements(config))
+    return requirements
 
 
 async def verify_and_settle_usdc_topup(
@@ -521,16 +607,16 @@ async def verify_and_settle_usdc_topup(
     try:
         payload = parse_payment_payload(_base64.b64decode(payment_header))
     except Exception as exc:
-        logger.warning("usdc_topup: failed to parse payment header: %s", exc)
-        return BillingResult(error=f"Malformed payment header: {exc}")
+        logger.warning("usdc_topup: failed to parse payment header error_type=%s", type(exc).__name__)
+        return BillingResult(error="Malformed payment header")
 
     requirement = requirements[0]
 
     try:
         verify_result = await server.verify_payment(payload, requirement)
     except Exception as exc:
-        logger.error("usdc_topup: verification error: %s", exc, exc_info=True)
-        return BillingResult(error=f"Verification failed: {exc}")
+        logger.error("usdc_topup: verification unavailable error_type=%s", type(exc).__name__)
+        return BillingResult(error="Payment verification service unavailable")
 
     if not verify_result.is_valid:
         reason = verify_result.invalid_reason or verify_result.invalid_message or "invalid signature or amount"
@@ -540,8 +626,8 @@ async def verify_and_settle_usdc_topup(
     try:
         settle_result = await server.settle_payment(payload, requirement)
     except Exception as exc:
-        logger.error("usdc_topup: settlement error: %s", exc, exc_info=True)
-        return BillingResult(error=f"Settlement failed: {exc}")
+        logger.error("usdc_topup: settlement unavailable error_type=%s", type(exc).__name__)
+        return BillingResult(error="Payment settlement service unavailable")
 
     if not settle_result.success:
         logger.error("usdc_topup: facilitator rejected settlement")

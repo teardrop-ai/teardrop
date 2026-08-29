@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -485,7 +487,15 @@ class Settings(BaseSettings):
         default="https://x402.org/facilitator",
         description="x402 facilitator URL (testnet default; use Coinbase for mainnet)",
     )
+    x402_facilitator_urls: list[str] = Field(
+        default_factory=list,
+        description="Ordered x402 facilitator URLs; empty uses x402_facilitator_url.",
+    )
     x402_pay_to_address: str = Field(default="", description="Treasury wallet address that receives USDC payments")
+    x402_treasury_addresses: list[str] = Field(
+        default_factory=list,
+        description="Treasury addresses advertised for x402 payments; empty uses x402_pay_to_address.",
+    )
     x402_network: str = Field(
         default="eip155:84532",
         description="x402 network identifier (Base Sepolia for dev, eip155:8453 for prod)",
@@ -520,6 +530,14 @@ class Settings(BaseSettings):
             return int(amount)
         except (InvalidOperation, ValueError, TypeError):
             return 0
+
+    @property
+    def effective_x402_facilitator_urls(self) -> list[str]:
+        return self.x402_facilitator_urls or [self.x402_facilitator_url]
+
+    @property
+    def effective_x402_treasury_addresses(self) -> list[str]:
+        return self.x402_treasury_addresses or ([self.x402_pay_to_address] if self.x402_pay_to_address else [])
 
     pricing_cache_ttl_seconds: int = Field(
         default=300,
@@ -1042,6 +1060,16 @@ class Settings(BaseSettings):
                 "agent_tool_shortlist_max_tools must be greater than or equal to "
                 f"{SHORTLIST_MIN_TOOLS} to retain all always-keep tools"
             )
+        if len(set(self.x402_facilitator_urls)) != len(self.x402_facilitator_urls):
+            raise ValueError("x402_facilitator_urls must not contain duplicates")
+        for url in self.x402_facilitator_urls:
+            parsed = urlsplit(url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("x402_facilitator_urls entries must be credential-free HTTPS URLs")
+        if len({address.lower() for address in self.x402_treasury_addresses}) != len(self.x402_treasury_addresses):
+            raise ValueError("x402_treasury_addresses must not contain duplicates")
+        if any(not re.fullmatch(r"0x[0-9a-fA-F]{40}", address) for address in self.x402_treasury_addresses):
+            raise ValueError("x402_treasury_addresses entries must be 20-byte EVM addresses")
         return self
 
 

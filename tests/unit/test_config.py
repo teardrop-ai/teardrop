@@ -217,6 +217,45 @@ def test_x402_upto_max_amount_atomic_unparseable_returns_zero():
     assert s.x402_upto_max_amount_atomic == 0
 
 
+def test_x402_failover_lists_fall_back_to_singular_settings():
+    settings = Settings(x402_facilitator_url="https://facilitator.example", x402_pay_to_address="0x" + "a" * 40)
+
+    assert settings.effective_x402_facilitator_urls == ["https://facilitator.example"]
+    assert settings.effective_x402_treasury_addresses == ["0x" + "a" * 40]
+
+
+def test_x402_failover_lists_override_singular_settings():
+    settings = Settings(
+        x402_facilitator_urls=["https://one.example", "https://two.example"],
+        x402_treasury_addresses=["0x" + "a" * 40, "0x" + "b" * 40],
+    )
+
+    assert settings.effective_x402_facilitator_urls == ["https://one.example", "https://two.example"]
+    assert settings.effective_x402_treasury_addresses == ["0x" + "a" * 40, "0x" + "b" * 40]
+
+
+@pytest.mark.parametrize(
+    "urls",
+    [
+        ["http://facilitator.example"],
+        ["https://user:secret@facilitator.example"],
+        ["https://facilitator.example", "https://facilitator.example"],
+    ],
+)
+def test_x402_facilitator_lists_reject_unsafe_or_duplicate_urls(urls):
+    with pytest.raises(ValueError, match="x402_facilitator_urls"):
+        Settings(x402_facilitator_urls=urls)
+
+
+@pytest.mark.parametrize(
+    "addresses",
+    [["not-an-address"], ["0x" + "a" * 40, "0x" + "A" * 40]],
+)
+def test_x402_treasury_lists_reject_invalid_or_duplicate_addresses(addresses):
+    with pytest.raises(ValueError, match="x402_treasury_addresses"):
+        Settings(x402_treasury_addresses=addresses)
+
+
 def test_pg_pool_size_defaults():
     s = Settings()
     assert s.pg_pool_open_timeout_seconds == 60.0

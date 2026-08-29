@@ -503,7 +503,7 @@ class TestVerifyPayment:
         ):
             result = await verify_payment(base64.b64encode(b"valid").decode())
         assert result.verified is False
-        assert "connection refused" in result.error
+        assert result.error == "Payment verification service unavailable"
 
 
 # ─── settle_payment ───────────────────────────────────────────────────────────
@@ -554,7 +554,7 @@ class TestSettlePayment:
         with patch.object(billing_module, "_server", mock_server):
             result = await settle_payment(verified)
         assert result.settled is False
-        assert "network error" in result.error
+        assert result.error == "Payment settlement service unavailable"
 
 
 # ─── DB-layer functions (pool mocked) ────────────────────────────────────────
@@ -1843,6 +1843,37 @@ class TestVerifyAndSettleUsdcTopup:
             result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
         assert not result.settled
         assert "rejected" in result.error.lower()
+
+    async def test_verify_transport_error_is_sanitized(self):
+        mock_server = self._make_server()
+        mock_server.verify_payment = AsyncMock(side_effect=OSError("secret upstream detail"))
+        mock_x402 = MagicMock()
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
+        assert result.error == "Payment verification service unavailable"
+        mock_server.settle_payment.assert_not_called()
+
+    async def test_settle_transport_error_is_sanitized(self):
+        mock_server = self._make_server()
+        mock_server.settle_payment = AsyncMock(side_effect=OSError("secret upstream detail"))
+        mock_x402 = MagicMock()
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch(
+                "billing.get_settings",
+                return_value=MagicMock(x402_scheme="exact", x402_network="eip155:84532", x402_pay_to_address="0xT"),
+            ),
+            patch.dict("sys.modules", {"x402": mock_x402}),
+        ):
+            result = await verify_and_settle_usdc_topup(base64.b64encode(b"dummy").decode(), 1_000_000)
+        assert result.error == "Payment settlement service unavailable"
 
     async def test_success_returns_tx_hash_and_amount(self):
         mock_server = self._make_server(transaction="0xdeadbeef")

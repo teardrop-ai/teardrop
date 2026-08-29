@@ -90,10 +90,14 @@ _pool: PgPool | None = _ctx._pool
 _daily_spend_caches = _ctx._daily_spend_caches
 
 _server = _x402._server
+_servers = _x402._servers
+_facilitator_failures = _x402._facilitator_failures
+_facilitator_unhealthy_until = _x402._facilitator_unhealthy_until
 _requirements_cache = _x402._requirements_cache
 _exact_requirements_cache = _x402._exact_requirements_cache
 _upto_requirements_cache = _x402._upto_requirements_cache
 _last_requirements_price_usdc = _x402._last_requirements_price_usdc
+_last_requirements_topology = _x402._last_requirements_topology
 
 _live_pricing_cache = _pricing._live_pricing_cache
 _tool_overrides_cache_obj = _pricing._tool_overrides_cache_obj
@@ -119,10 +123,14 @@ def _sync_to_modules() -> None:
     _pricing.get_tool_pricing_overrides = get_tool_pricing_overrides
 
     _x402._server = _server
+    _x402._servers = _servers
+    _x402._facilitator_failures = _facilitator_failures
+    _x402._facilitator_unhealthy_until = _facilitator_unhealthy_until
     _x402._requirements_cache = _requirements_cache
     _x402._exact_requirements_cache = _exact_requirements_cache
     _x402._upto_requirements_cache = _upto_requirements_cache
     _x402._last_requirements_price_usdc = _last_requirements_price_usdc
+    _x402._last_requirements_topology = _last_requirements_topology
     _x402.get_settings = get_settings
     _x402.get_live_pricing = get_live_pricing
     _x402._rebuild_requirements_if_stale = _rebuild_requirements_if_stale
@@ -135,17 +143,23 @@ def _sync_to_modules() -> None:
 def _sync_from_modules() -> None:
     """Pull mutated submodule state back to root compatibility symbols."""
     global _pool, _daily_spend_caches
-    global _server, _requirements_cache, _exact_requirements_cache, _upto_requirements_cache, _last_requirements_price_usdc
+    global _server, _servers, _facilitator_failures, _facilitator_unhealthy_until
+    global _requirements_cache, _exact_requirements_cache, _upto_requirements_cache, _last_requirements_price_usdc
+    global _last_requirements_topology
     global _live_pricing_cache, _tool_overrides_cache_obj, _model_pricing_cache
 
     _pool = _ctx._pool
     _daily_spend_caches = _ctx._daily_spend_caches
 
     _server = _x402._server
+    _servers = _x402._servers
+    _facilitator_failures = _x402._facilitator_failures
+    _facilitator_unhealthy_until = _x402._facilitator_unhealthy_until
     _requirements_cache = _x402._requirements_cache
     _exact_requirements_cache = _x402._exact_requirements_cache
     _upto_requirements_cache = _x402._upto_requirements_cache
     _last_requirements_price_usdc = _x402._last_requirements_price_usdc
+    _last_requirements_topology = _x402._last_requirements_topology
 
     _live_pricing_cache = _pricing._live_pricing_cache
     _tool_overrides_cache_obj = _pricing._tool_overrides_cache_obj
