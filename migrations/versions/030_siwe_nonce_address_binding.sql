@@ -1,4 +1,4 @@
--- 030_siwe_nonce_address_binding.sql
+-- Migration 030: SIWE nonce address binding
 -- Domain: auth
 -- Invariant: SIWE nonce bound to the verified wallet address at consumption (defense-in-depth)
 -- Defense-in-depth: bind SIWE nonces to the verified wallet address at

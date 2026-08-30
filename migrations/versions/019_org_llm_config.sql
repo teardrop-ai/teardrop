@@ -1,4 +1,4 @@
--- Per-org LLM configuration for multi-model gateway + BYOK support.
+-- Migration 019: per-org LLM configuration for multi-model gateway + BYOK support
 -- Domain: auth
 -- Invariant: BYOK API keys are org-scoped and must never be logged
 

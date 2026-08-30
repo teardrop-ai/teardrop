@@ -110,6 +110,13 @@ async def delegate_to_agent(
     from teardrop.config import get_settings
 
     settings = get_settings()
+    agent_url = agent_url.rstrip("/")
+    from teardrop.a2a_client import _canonicalize_agent_url
+
+    try:
+        recorded_agent_url = _canonicalize_agent_url(agent_url)
+    except ValueError:
+        recorded_agent_url = agent_url
 
     # ── Feature flag ──────────────────────────────────────────────────────
     if not settings.a2a_delegation_enabled:
@@ -280,13 +287,14 @@ async def delegate_to_agent(
             await record_delegation_event(
                 org_id=org_id,
                 run_id=run_id,
-                agent_url=agent_url,
+                agent_url=recorded_agent_url,
                 agent_name=card.name,
                 task_status="failed",
                 cost_usdc=0,
                 error="Insufficient credit for delegation at debit time.",
                 task_type=task_type,
                 delegation_id=delegation_id,
+                failure_origin="local",
             )
             return {
                 "agent_name": card.name,
@@ -348,7 +356,7 @@ async def delegate_to_agent(
                 await record_delegation_event(
                     org_id=org_id,
                     run_id=run_id,
-                    agent_url=agent_url,
+                    agent_url=recorded_agent_url,
                     agent_name=card.name,
                     task_status="possibly_delivered",
                     cost_usdc=cost_usdc,
@@ -356,6 +364,7 @@ async def delegate_to_agent(
                     error=reason,
                     task_type=task_type,
                     delegation_id=delegation_id,
+                    failure_origin="remote",
                 )
                 return {
                     "agent_name": card.name,
@@ -368,13 +377,14 @@ async def delegate_to_agent(
             await record_delegation_event(
                 org_id=org_id,
                 run_id=run_id,
-                agent_url=agent_url,
+                agent_url=recorded_agent_url,
                 agent_name=card.name,
                 task_status="failed",
                 cost_usdc=0,
                 error=reason,
                 task_type=task_type,
                 delegation_id=delegation_id,
+                failure_origin="remote",
             )
             refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
             cost_usdc = 0
@@ -403,7 +413,7 @@ async def delegate_to_agent(
         audit_recorded = await record_delegation_event(
             org_id=org_id,
             run_id=run_id,
-            agent_url=agent_url,
+            agent_url=recorded_agent_url,
             agent_name=card.name,
             task_status=task_state,
             cost_usdc=cost_usdc,
@@ -411,6 +421,7 @@ async def delegate_to_agent(
             settlement_tx=settlement_tx,
             task_type=task_type,
             delegation_id=delegation_id,
+            failure_origin="remote",
         )
         if not audit_recorded:
             if use_x402 and payment_attempted:
@@ -458,7 +469,7 @@ async def delegate_to_agent(
         await record_delegation_event(
             org_id=org_id,
             run_id=run_id,
-            agent_url=agent_url,
+            agent_url=recorded_agent_url,
             agent_name=card.name,
             task_status=task_state,
             cost_usdc=0,
@@ -467,6 +478,7 @@ async def delegate_to_agent(
             error=f"Remote agent state: {task_state}",
             task_type=task_type,
             delegation_id=delegation_id,
+            failure_origin="remote",
         )
         if use_x402 and payment_attempted:
             from billing import fail_delegation_delivery

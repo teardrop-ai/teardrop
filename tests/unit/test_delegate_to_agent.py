@@ -370,13 +370,14 @@ class TestDelegateToAgent:
             patch(f"{_BILLING_MOD}.mark_delegation_possibly_delivered", mark),
             patch(f"{_BILLING_MOD}.get_treasury_signer", return_value=object()),
         ):
-            result = await delegate_to_agent("https://agent.example.com", "do paid work", config=config)
+            result = await delegate_to_agent("HTTPS://AGENT.EXAMPLE.COM:443///", "do paid work", config=config)
 
         assert result["status"] == "failed"
         assert result["cost_usdc"] == 0
         mark.assert_not_awaited()
         refund.assert_awaited_once()
         assert record.await_args.kwargs["task_status"] == "failed"
+        assert record.await_args.kwargs["agent_url"] == "https://agent.example.com"
 
     async def test_x402_timeout_after_payment_attempt_is_possibly_delivered(self, test_settings, monkeypatch):
         import teardrop.config as _config

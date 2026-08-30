@@ -1,4 +1,6 @@
 -- Migration 075: recency-aware marketplace reputation diagnostics
+-- Domain: marketplace / reputation
+-- Invariant: Derived telemetry only; never affects settlement, author earnings, tool pricing, or financial ledgers
 -- Derived telemetry only: this has no effect on settlement, author earnings,
 -- tool pricing, or the immutable financial ledgers.
 

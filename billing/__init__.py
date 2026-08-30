@@ -472,6 +472,7 @@ async def record_delegation_event(
     error: str = "",
     task_type: str = "general",
     delegation_id: str | None = None,
+    failure_origin: str = "unknown",
 ) -> bool:
     """Append an immutable A2A delegation record (cost, status, settlement) for audit."""
     return await _get_delegation_service().record_delegation_event(
@@ -486,6 +487,7 @@ async def record_delegation_event(
         error,
         task_type,
         delegation_id,
+        failure_origin,
     )
 
 

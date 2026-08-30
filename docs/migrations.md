@@ -112,10 +112,4 @@ python -m migrations.runner
 | `098_credit_ledger_principal.sql` | Optional authenticated-principal attribution on immutable credit-ledger entries |
 | `099_org_principal_spend_limits.sql` | Sparse, org-scoped 24-hour spend limits and pause controls for authenticated principals |
 | `100_pending_settlement_principal.sql` | Preserves principal attribution across asynchronous credit-settlement retries |
-*** Add File: c:\Users\19788\Documents\Local Repositiories\teardrop\migrations\versions\077_telemetry_run_starts_retention.sql
--- Migration 077: retention index for telemetry completeness denominators
--- telemetry_run_starts is non-financial and retained only for the configured
--- completeness-reporting window. This index supports ordered, batched cleanup.
-
-CREATE INDEX IF NOT EXISTS idx_telemetry_run_starts_started_at
-	ON telemetry_run_starts (started_at);
+| `101_a2a_agent_registry.sql` | Opt-in organization A2A endpoint registry, normalized failure-origin telemetry, and agent-directory lookup index |

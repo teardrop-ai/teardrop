@@ -1,4 +1,4 @@
--- Separate attempt metrics from billable/failure metrics in usage accounting.
+-- Migration 050: separate attempt metrics from billable/failure metrics in usage accounting
 -- Domain: billing
 -- Invariant: Distinguishes billable from attempt/failure metrics; monetary amounts remain BIGINT atomic USDC
 ALTER TABLE usage_events

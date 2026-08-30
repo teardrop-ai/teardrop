@@ -96,9 +96,13 @@ Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it ret
 | `GET` | `/marketplace/quote?tool={org_slug}/{tool_name}` | — | Current effective atomic-USDC price for one published tool; advisory expiry follows the active pricing-cache TTL |
 | `GET` | `/marketplace/authors` | — | Public author index with active-tool counts and aggregate calls; supports `q`, `limit`, and `cursor` |
 | `GET` | `/marketplace/authors/{org_slug}` | — | Public author profile with aggregate calls and paginated tools |
+| `GET` | `/marketplace/agents` | — | Public opt-in A2A endpoint directory with privacy-thresholded reputation; supports `q`, `limit`, and `cursor` |
 | `GET` | `/marketplace/llms.txt` | — | Plain-text catalog index for LLM crawlers and agent-discovery surfaces; per-tool entries include description, price, health, and reputation link |
 | `POST` | `/marketplace/author-config` | Bearer | Create or update author settlement wallet; admins may set any valid wallet, while the owning SIWE wallet is restricted to itself |
 | `GET` | `/marketplace/author-config` | Bearer | Get author settlement wallet config |
+| `PUT` | `/marketplace/agent-registration` | Admin Bearer | Validate and publish one HTTPS A2A endpoint for the authenticated organization |
+| `GET` | `/marketplace/agent-registration` | Bearer | Get the authenticated organization's A2A endpoint registration |
+| `DELETE` | `/marketplace/agent-registration` | Admin Bearer | Remove the authenticated organization's public A2A endpoint registration |
 | `POST` | `/marketplace/import/preview` | Bearer | Preview importable MCP tools, normalized schemas, and publish blockers |
 | `POST` | `/marketplace/import/publish` | Bearer | Admin-only publish of MCP-backed marketplace tools |
 | `GET` | `/marketplace/balance` | Bearer | Author earnings balance |
@@ -113,6 +117,10 @@ Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it ret
 `GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats. `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
 
 `GET /marketplace/authors` returns active published authors, including the `platform` pseudo-author when platform tools are active. Each entry contains `org_slug`, `org_name`, `tool_count`, and aggregate `total_calls`; `q` searches the public organization name or slug, and `cursor` is an opaque slug keyset token. Follow an author entry with `GET /marketplace/authors/{org_slug}` to retrieve its paginated tools. The author index is catalog metadata only and does not provide a remote A2A URL.
+
+The A2A Agent Endpoint Registry is independent of the delegation allowlist. An organization admin publishes an HTTPS base URL with `PUT /marketplace/agent-registration`; Teardrop SSRF-checks the URL, discovers its agent card, and requires the `/message:send` endpoint used by the outbound client. Registration does not authorize outbound delegation and does not provide cryptographic ownership verification. `GET /marketplace/agent-registration` is organization-scoped for any authenticated member; `DELETE` is admin-only. The public `GET /marketplace/agents` directory includes only registered endpoints and uses an opaque `org_slug` keyset cursor. Invalid non-empty cursors return `422` rather than silently restarting pagination.
+
+Agent-directory reputation is derived from A2A delegation events, not marketplace earnings. It uses 14-day recency decay, a Beta(4,1) prior, and a 30-day freshness adjustment. Metrics remain null until at least five distinct calling organizations are present; self-traffic, local failures, and `possibly_delivered` outcomes are excluded. Legacy events with `failure_origin=unknown` remain included because their origin cannot be reconstructed safely.
 
 Reputation uses a 14-day recency decay, a Beta(4,1) prior, and a 30-day freshness adjustment. Therefore `success_rate` is a posterior quality estimate, not raw successes divided by calls. Author-org self-calls, inactive tools, unpublished tools, and internal tools are excluded.
 

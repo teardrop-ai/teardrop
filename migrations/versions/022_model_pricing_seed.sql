@@ -1,4 +1,4 @@
--- Seed model-specific pricing rules (Teardrop shared-key rates with ~25% margin).
+-- Migration 022: seed model-specific pricing rules (Teardrop shared-key rates with ~25% margin)
 -- Domain: billing
 -- Invariant: Rates in BIGINT atomic USDC (6 decimals)
 -- Rates in atomic USDC (6 decimals). E.g. 313 = $0.000313 per 1k tokens.

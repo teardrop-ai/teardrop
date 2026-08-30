@@ -15,12 +15,18 @@ from shared.db_pool import PgConnection, PgPool
 logger = logging.getLogger(__name__)
 
 _DELEGATION_TASK_TYPES = frozenset({"general", "research", "analysis", "data_retrieval", "coding", "transaction", "automation"})
+_DELEGATION_FAILURE_ORIGINS = frozenset({"unknown", "local", "remote"})
 _DELIVERY_TRANSACTION_PATTERN = re.compile(r"^0x[a-fA-F0-9]{64}$")
 
 
 def _normalize_task_type(task_type: str) -> str:
     normalized = str(task_type).strip().lower()
     return normalized if normalized in _DELEGATION_TASK_TYPES else "general"
+
+
+def _normalize_failure_origin(failure_origin: str) -> str:
+    normalized = str(failure_origin).strip().lower()
+    return normalized if normalized in _DELEGATION_FAILURE_ORIGINS else "unknown"
 
 
 def _normalize_delivery_transaction(transaction: str | None) -> str:
@@ -500,6 +506,7 @@ class BillingDelegationService:
         error: str = "",
         task_type: str = "general",
         delegation_id: str | None = None,
+        failure_origin: str = "unknown",
     ) -> bool:
         """Write immutable delegation event row and report whether it succeeded."""
         try:
@@ -509,8 +516,8 @@ class BillingDelegationService:
                 """
                 INSERT INTO a2a_delegation_events
                     (id, org_id, run_id, agent_url, agent_name,
-                     task_status, cost_usdc, billing_method, settlement_tx, error, task_type, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+                     task_status, cost_usdc, billing_method, settlement_tx, error, failure_origin, task_type, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
                 ON CONFLICT (id) DO NOTHING
                 """,
                 event_id,
@@ -523,6 +530,7 @@ class BillingDelegationService:
                 billing_method,
                 settlement_tx,
                 error,
+                _normalize_failure_origin(failure_origin),
                 _normalize_task_type(task_type),
             )
             return True

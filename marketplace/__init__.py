@@ -17,6 +17,7 @@ import asyncio
 from typing import Any, Awaitable, Callable, TypeVar
 
 import marketplace._catalog_pricing as _catalog_pricing
+import marketplace.agents as _agents
 import marketplace.catalog as _catalog
 import marketplace.context as _ctx
 import marketplace.earnings as _earnings
@@ -58,6 +59,14 @@ _INVALIDATE_PLATFORM_TOOL_CACHE_ORIG = _catalog_pricing._invalidate_platform_too
 _INVALIDATE_ALL_ORG_TOOL_PRICE_CACHE_ORIG = _catalog_pricing._invalidate_all_org_tool_price_cache
 _GET_PLATFORM_TOOL_PRICE_ORIG = _catalog_pricing.get_platform_tool_price
 _GET_ORG_TOOL_PRICE_BY_QUALIFIED_NAME_ORIG = _catalog_pricing.get_org_tool_price_by_qualified_name
+
+_SET_AGENT_REGISTRATION_ORIG = _agents.set_agent_registration
+_GET_AGENT_REGISTRATION_ORIG = _agents.get_agent_registration
+_DELETE_AGENT_REGISTRATION_ORIG = _agents.delete_agent_registration
+_GET_AGENT_DIRECTORY_ORIG = _agents.get_agent_directory
+_INVALIDATE_AGENT_DIRECTORY_CACHE_ORIG = _agents.invalidate_agent_directory_cache
+_BUILD_AGENT_CURSOR_ORIG = _agents._build_agent_cursor
+_DECODE_AGENT_CURSOR_ORIG = _agents._decode_agent_cursor
 
 _RECORD_TOOL_CALL_EARNINGS_ORIG = _earnings.record_tool_call_earnings
 _GET_AUTHOR_BALANCE_ORIG = _earnings.get_author_balance
@@ -107,6 +116,7 @@ SelfSubscribeError = _subscriptions.SelfSubscribeError
 def _sync_to_modules() -> None:
     """Push root compatibility state and monkeypatch hooks into submodules."""
     _ctx._pool = _pool
+    _agents._get_pool = _get_pool
     _catalog._get_pool = _get_pool
     _earnings._get_pool = _get_pool
     _stats._get_pool = _get_pool
@@ -118,6 +128,7 @@ def _sync_to_modules() -> None:
     _subscriptions.get_settings = get_settings
     _withdrawals.get_settings = get_settings
     _worker.get_settings = get_settings
+    _agents.get_settings = get_settings
     _worker.asyncio = asyncio
 
     _subscriptions.get_marketplace_tool_by_name = get_marketplace_tool_by_name
@@ -178,6 +189,38 @@ async def set_author_config(org_id: str, *, settlement_wallet: str) -> AuthorCon
 async def get_author_config(org_id: str) -> AuthorConfig | None:
     """Return the author's payout config (settlement wallet), or None if unconfigured."""
     return await _call_async(_GET_AUTHOR_CONFIG_ORIG, org_id)
+
+
+async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Validate and publish an org's A2A endpoint."""
+    return await _call_async(_SET_AGENT_REGISTRATION_ORIG, org_id, agent_url)
+
+
+async def get_agent_registration(org_id: str) -> dict[str, Any] | None:
+    """Return the authenticated org's A2A endpoint registration, if present."""
+    return await _call_async(_GET_AGENT_REGISTRATION_ORIG, org_id)
+
+
+async def delete_agent_registration(org_id: str) -> None:
+    """Remove an org's A2A endpoint registration."""
+    await _call_async(_DELETE_AGENT_REGISTRATION_ORIG, org_id)
+
+
+async def get_agent_directory() -> dict[str, Any]:
+    """Return the cached public A2A agent directory snapshot."""
+    return await _call_async(_GET_AGENT_DIRECTORY_ORIG)
+
+
+async def invalidate_agent_directory_cache() -> None:
+    await _call_async(_INVALIDATE_AGENT_DIRECTORY_CACHE_ORIG)
+
+
+def _build_agent_cursor(agent: dict[str, Any]) -> str:
+    return _call_sync(_BUILD_AGENT_CURSOR_ORIG, agent)
+
+
+def _decode_agent_cursor(cursor: str | None) -> str | None:
+    return _call_sync(_DECODE_AGENT_CURSOR_ORIG, cursor)
 
 
 async def get_marketplace_catalog(

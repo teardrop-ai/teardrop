@@ -1,4 +1,4 @@
--- Track which provider/model was used for each agent run.
+-- Migration 020: track which provider/model was used for each agent run
 -- Domain: billing
 -- Invariant: Records provider/model per run for accurate per-model pricing
 

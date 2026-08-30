@@ -18,7 +18,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -84,6 +84,39 @@ async def async_validate_url(url: str) -> str | None:
     sibling tasks (e.g. LLM token streaming) — stay responsive.
     """
     return await asyncio.to_thread(validate_url, url)
+
+
+def _canonicalize_agent_url(agent_url: str, *, require_https: bool = False) -> str:
+    """Return a canonical URL form without performing SSRF validation."""
+    value = str(agent_url).strip()
+    message = "Agent endpoint must be a valid HTTPS URL." if require_https else "Agent endpoint must be a valid HTTP(S) URL."
+    if not value or any(character.isspace() for character in value):
+        raise ValueError(message)
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise ValueError(message) from None
+
+    scheme = parsed.scheme.casefold()
+    hostname = parsed.hostname
+    if (
+        scheme not in {"http", "https"}
+        or (require_https and scheme != "https")
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(message)
+
+    host = hostname.casefold()
+    if ":" in host:
+        host = f"[{host}]"
+    default_port = 443 if scheme == "https" else 80
+    port_suffix = f":{port}" if port is not None and port != default_port else ""
+    return urlunsplit((scheme, f"{host}{port_suffix}", parsed.path.rstrip("/"), "", ""))
 
 
 # ─── A2A Data Models (subset of v1.0 spec) ───────────────────────────────────

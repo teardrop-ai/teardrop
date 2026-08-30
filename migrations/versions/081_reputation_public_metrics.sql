@@ -1,4 +1,6 @@
 -- Migration 081: public marketplace reputation metrics
+-- Domain: marketplace / reputation
+-- Invariant: Derived telemetry only; CHECK constraints bound public metrics; financial ledgers unchanged
 -- Derived telemetry only; financial ledgers and settlement paths are unchanged.
 
 ALTER TABLE marketplace_tool_call_stats

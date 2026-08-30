@@ -1,4 +1,4 @@
--- 023_siwe_login_sessions.sql
+-- Migration 023: SIWE QR login sessions
 -- Domain: auth
 -- Invariant: Nonce is single-use; access/refresh tokens populated only when status='complete'
 -- SIWE QR login sessions for the CLI → browser → wallet sign flow.

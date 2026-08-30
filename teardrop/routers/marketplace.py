@@ -35,6 +35,11 @@ from billing import (
     resolve_tool_cost,
 )
 from marketplace import (
+    _build_agent_cursor,
+    _decode_agent_cursor,
+    delete_agent_registration,
+    get_agent_directory,
+    get_agent_registration,
     get_author_balance,
     get_author_config,
     get_author_earnings_by_tool,
@@ -44,6 +49,7 @@ from marketplace import (
     get_marketplace_catalog_tool,
     record_run_feedback,
     request_withdrawal,
+    set_agent_registration,
     set_author_config,
 )
 from marketplace import list_marketplace_authors as list_marketplace_authors_data
@@ -882,6 +888,165 @@ class MarketplaceAuthorSummary(BaseModel):
 class MarketplaceAuthorIndexResponse(BaseModel):
     authors: list[MarketplaceAuthorSummary]
     next_cursor: str | None = None
+
+
+class MarketplaceAgentRegistrationRequest(BaseModel):
+    agent_url: str = Field(..., min_length=1, max_length=2048)
+
+
+class MarketplaceAgentRegistrationResponse(BaseModel):
+    org_id: str
+    agent_url: str
+    created_at: str
+    updated_at: str
+
+
+class MarketplaceAgentSummary(BaseModel):
+    org_slug: str
+    org_name: str
+    agent_url: str
+    agent_card_url: str
+    message_endpoint: str
+    catalog_endpoint: str
+    tool_count: int
+    reputation_score: float | None = None
+    success_rate: float | None = None
+    sample_size: float | None = None
+    confidence: float | None = None
+    unique_caller_count: int | None = None
+
+
+class MarketplaceAgentDirectoryResponse(BaseModel):
+    agents: list[MarketplaceAgentSummary]
+    next_cursor: str | None = None
+
+
+@router.put(
+    "/marketplace/agent-registration",
+    tags=["Marketplace"],
+    response_model=MarketplaceAgentRegistrationResponse,
+)
+async def set_marketplace_agent_registration(
+    body: MarketplaceAgentRegistrationRequest,
+    payload: dict = Depends(require_org_admin),
+) -> JSONResponse:
+    """Publish the authenticated organization's A2A endpoint."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id = _require_org_id(payload)
+    await _enforce_rate_limit(
+        f"a2a_registration:{org_id}",
+        s.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for A2A agent registration.",
+    )
+    try:
+        registration = await set_agent_registration(org_id, body.agent_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+
+    return JSONResponse(
+        content={
+            "org_id": registration["org_id"],
+            "agent_url": registration["agent_url"],
+            "created_at": registration["created_at"].isoformat(),
+            "updated_at": registration["updated_at"].isoformat(),
+        }
+    )
+
+
+@router.get(
+    "/marketplace/agent-registration",
+    tags=["Marketplace"],
+    response_model=MarketplaceAgentRegistrationResponse,
+)
+async def get_marketplace_agent_registration(payload: dict = Depends(require_auth)) -> JSONResponse:
+    """Return the authenticated organization's A2A endpoint registration."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    registration = await get_agent_registration(_require_org_id(payload))
+    if registration is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent registration not found.")
+    return JSONResponse(
+        content={
+            "org_id": registration["org_id"],
+            "agent_url": registration["agent_url"],
+            "created_at": registration["created_at"].isoformat(),
+            "updated_at": registration["updated_at"].isoformat(),
+        }
+    )
+
+
+@router.delete("/marketplace/agent-registration", tags=["Marketplace"], status_code=status.HTTP_204_NO_CONTENT)
+async def delete_marketplace_agent_registration(payload: dict = Depends(require_org_admin)) -> Response:
+    """Unpublish the authenticated organization's A2A endpoint."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id = _require_org_id(payload)
+    await _enforce_rate_limit(
+        f"a2a_registration:{org_id}",
+        s.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for A2A agent registration.",
+    )
+    await delete_agent_registration(org_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/marketplace/agents",
+    tags=["Marketplace"],
+    response_model=MarketplaceAgentDirectoryResponse,
+)
+async def list_marketplace_agents_endpoint(
+    request: Request,
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=100, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=512),
+) -> JSONResponse:
+    """Publicly list opt-in A2A endpoints and derived trust metrics."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    cursor_slug = _decode_agent_cursor(cursor)
+    if cursor and cursor_slug is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid agent directory cursor.")
+    search = q.strip().casefold() if q else ""
+    snapshot = await get_agent_directory()
+    candidates: list[dict[str, Any]] = []
+    for agent in snapshot.get("agents", []):
+        if not isinstance(agent, dict):
+            continue
+        org_slug = str(agent.get("org_slug", ""))
+        org_name = str(agent.get("org_name", ""))
+        if cursor_slug is not None and org_slug <= cursor_slug:
+            continue
+        if search and search not in org_slug.casefold() and search not in org_name.casefold():
+            continue
+        agent_url = str(agent["agent_url"])
+        candidates.append(
+            {
+                **agent,
+                "agent_card_url": f"{agent_url}/.well-known/agent-card.json",
+                "message_endpoint": f"{agent_url}/message:send",
+                "catalog_endpoint": f"/marketplace/catalog?org_slug={org_slug}",
+            }
+        )
+
+    page = candidates[:limit]
+    next_cursor = _build_agent_cursor(page[-1]) if len(page) == limit else None
+    return JSONResponse(
+        content={"agents": page, "next_cursor": next_cursor},
+        headers={"Cache-Control": "public, max-age=60"},
+    )
 
 
 def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:

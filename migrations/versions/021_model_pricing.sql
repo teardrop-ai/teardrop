@@ -1,4 +1,4 @@
--- Extend pricing_rules with provider/model columns for per-model pricing.
+-- Migration 021: extend pricing_rules with provider/model columns for per-model pricing
 -- Domain: billing
 -- Invariant: Per-model rates stored in BIGINT atomic USDC
 

@@ -1,4 +1,6 @@
 -- Migration 074: deployment provenance for canonical agent-run records
+-- Domain: telemetry / deployment provenance
+-- Invariant: Additive column; historical rows keep the empty default; never referenced by billing or settlement
 -- Historical rows remain explicitly unknown (empty value); new events are
 -- stamped by teardrop.usage from the dependency-free APP_VERSION constant.
 

@@ -204,9 +204,11 @@ def _build_agent_card_content(
             "enabled": True,
             "catalog_endpoint": "/marketplace/catalog",
             "authors_endpoint": "/marketplace/authors",
+            "agents_endpoint": "/marketplace/agents",
             "quote_endpoint": "/marketplace/quote?tool={qualified_name}",
             "author_catalog_endpoint": "/marketplace/catalog?org_slug={org_slug}",
             "self_inventory_endpoint": "/agent/tools",
+            "agent_registration_endpoint": "/marketplace/agent-registration",
             "mcp_gateway_endpoint": endpoints["mcp_tools"],
             "registration": {
                 "author_config_endpoint": "/marketplace/author-config",

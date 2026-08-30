@@ -1,6 +1,6 @@
--- Add persisted output schema contract for webhook tools.
+-- Migration 049: persisted output schema contract for webhook tools
 -- Domain: tools
--- Invariant: Output schema is org-scoped per webhook tool
+-- Invariant: Output schema is org-scoped per webhook tool; additive columns only
 ALTER TABLE org_tools
 ADD COLUMN IF NOT EXISTS output_schema JSONB;
 
