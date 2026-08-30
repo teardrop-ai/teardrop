@@ -215,11 +215,11 @@ async def invalidate_agent_directory_cache() -> None:
     await _call_async(_INVALIDATE_AGENT_DIRECTORY_CACHE_ORIG)
 
 
-def _build_agent_cursor(agent: dict[str, Any]) -> str:
-    return _call_sync(_BUILD_AGENT_CURSOR_ORIG, agent)
+def _build_agent_cursor(agent: dict[str, Any], sort: str = "name", stale_filter: str = "all") -> str:
+    return _call_sync(_BUILD_AGENT_CURSOR_ORIG, agent, sort, stale_filter)
 
 
-def _decode_agent_cursor(cursor: str | None) -> str | None:
+def _decode_agent_cursor(cursor: str | None) -> tuple[str, Any, str, str] | None:
     return _call_sync(_DECODE_AGENT_CURSOR_ORIG, cursor)
 
 

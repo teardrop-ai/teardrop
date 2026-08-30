@@ -19,6 +19,7 @@ The MCP JSON-RPC gateway (POST /mcp/v1) lives in ``teardrop.routers.marketplace_
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -838,6 +839,8 @@ async def get_marketplace_withdrawals(
 
 
 _CATALOG_VALID_SORTS = frozenset({"name", "price_asc", "price_desc", "popularity", "reputation"})
+_AGENT_DIRECTORY_VALID_SORTS = frozenset({"name", "reputation"})
+_AGENT_DIRECTORY_VALID_STALE_FILTERS = frozenset({"all", "active", "stale"})
 
 
 class MarketplaceToolSummary(BaseModel):
@@ -914,6 +917,8 @@ class MarketplaceAgentSummary(BaseModel):
     sample_size: float | None = None
     confidence: float | None = None
     unique_caller_count: int | None = None
+    last_event_at: str | None = None
+    is_stale: bool | None = None
 
 
 class MarketplaceAgentDirectoryResponse(BaseModel):
@@ -1005,20 +1010,54 @@ async def delete_marketplace_agent_registration(payload: dict = Depends(require_
 async def list_marketplace_agents_endpoint(
     request: Request,
     q: str | None = Query(default=None, max_length=200),
+    sort: str = "name",
+    stale: str = "all",
     limit: int = Query(default=100, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=512),
 ) -> JSONResponse:
-    """Publicly list opt-in A2A endpoints and derived trust metrics."""
+    """Publicly list opt-in A2A endpoints and derived trust metrics.
+
+    ``sort`` accepts ``name`` or ``reputation``; ``stale`` accepts ``all``,
+    ``active``, or ``stale``. Privacy-suppressed or untested agents have
+    ``is_stale=None`` and are returned only by ``stale=all``. Cursors are
+    scoped to both query modes.
+    """
     s = get_settings()
     if not s.marketplace_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
 
+    if sort not in _AGENT_DIRECTORY_VALID_SORTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid agent directory sort. Allowed: name, reputation.",
+        )
+    if stale not in _AGENT_DIRECTORY_VALID_STALE_FILTERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid agent directory stale filter. Allowed: active, all, stale.",
+        )
+
     client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
 
-    cursor_slug = _decode_agent_cursor(cursor)
-    if cursor and cursor_slug is None:
+    cursor_data = _decode_agent_cursor(cursor)
+    if cursor and cursor_data is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid agent directory cursor.")
+    if cursor_data is not None and cursor_data[0] != sort:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Agent directory cursor does not match the requested sort.",
+        )
+    if cursor_data is not None and cursor_data[3] != stale:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Agent directory cursor does not match the requested stale filter.",
+        )
+    cursor_key: Any = None
+    cursor_slug: str | None = None
+    if cursor_data is not None:
+        _, cursor_key, cursor_slug, _ = cursor_data
+
     search = q.strip().casefold() if q else ""
     snapshot = await get_agent_directory()
     candidates: list[dict[str, Any]] = []
@@ -1027,7 +1066,8 @@ async def list_marketplace_agents_endpoint(
             continue
         org_slug = str(agent.get("org_slug", ""))
         org_name = str(agent.get("org_name", ""))
-        if cursor_slug is not None and org_slug <= cursor_slug:
+        agent_is_stale = agent.get("is_stale")
+        if stale != "all" and agent_is_stale != (stale == "stale"):
             continue
         if search and search not in org_slug.casefold() and search not in org_name.casefold():
             continue
@@ -1038,11 +1078,53 @@ async def list_marketplace_agents_endpoint(
                 "agent_card_url": f"{agent_url}/.well-known/agent-card.json",
                 "message_endpoint": f"{agent_url}/message:send",
                 "catalog_endpoint": f"/marketplace/catalog?org_slug={org_slug}",
+                "last_event_at": agent.get("last_event_at"),
+                "is_stale": agent_is_stale,
             }
         )
 
+    def reputation_score(agent: dict[str, Any]) -> float | None:
+        value = agent.get("reputation_score")
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return None
+        return score if math.isfinite(score) else None
+
+    if sort == "reputation":
+        def reputation_sort_key(agent: dict[str, Any]) -> tuple[bool, float, str]:
+            score = reputation_score(agent)
+            return (score is None, -(score or 0.0), str(agent["org_slug"]))
+
+        candidates.sort(key=reputation_sort_key)
+    else:
+        candidates.sort(key=lambda agent: str(agent["org_slug"]))
+
+    if cursor_data is not None and cursor_slug is not None:
+        if sort == "name":
+            candidates = [agent for agent in candidates if str(agent["org_slug"]) > cursor_slug]
+        else:
+            cursor_score = float(cursor_key) if cursor_key is not None else None
+            filtered_candidates: list[dict[str, Any]] = []
+            for agent in candidates:
+                agent_slug = str(agent["org_slug"])
+                agent_score = reputation_score(agent)
+                if cursor_score is None:
+                    is_after = agent_score is None and agent_slug > cursor_slug
+                else:
+                    is_after = (
+                        agent_score is None
+                        or agent_score < cursor_score
+                        or (agent_score == cursor_score and agent_slug > cursor_slug)
+                    )
+                if is_after:
+                    filtered_candidates.append(agent)
+            candidates = filtered_candidates
+
     page = candidates[:limit]
-    next_cursor = _build_agent_cursor(page[-1]) if len(page) == limit else None
+    next_cursor = _build_agent_cursor(page[-1], sort, stale) if len(page) == limit else None
     return JSONResponse(
         content={"agents": page, "next_cursor": next_cursor},
         headers={"Cache-Control": "public, max-age=60"},

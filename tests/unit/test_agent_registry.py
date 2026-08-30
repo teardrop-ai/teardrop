@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import base64
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from marketplace.agents import _load_agent_directory, set_agent_registration
+from marketplace.agents import _build_agent_cursor, _decode_agent_cursor, _load_agent_directory, set_agent_registration
 from teardrop.a2a_client import A2AAgentCard
 
 
@@ -152,6 +154,17 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
                 "unique_caller_count": 4,
                 "last_event_at": now,
             },
+            {
+                "org_id": "org-3",
+                "agent_url": "https://stale.example.com",
+                "org_slug": "stale",
+                "org_name": "Stale Agent",
+                "tool_count": 1,
+                "weighted_successes": 1,
+                "weighted_sample_size": 1,
+                "unique_caller_count": 5,
+                "last_event_at": now - timedelta(days=61),
+            },
         ]
     )
     monkeypatch.setattr("marketplace.agents._get_pool", lambda: pool)
@@ -163,10 +176,41 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
     assert trusted["confidence"] == pytest.approx(10 / 15, abs=0.000001)
     assert trusted["unique_caller_count"] == 5
     assert trusted["reputation_score"] is not None
+    assert trusted["last_event_at"] == now.isoformat()
+    assert trusted["is_stale"] is False
     assert snapshot["agents"][1]["success_rate"] is None
+    assert snapshot["agents"][1]["last_event_at"] is None
+    assert snapshot["agents"][1]["is_stale"] is None
+    assert snapshot["agents"][2]["is_stale"] is True
+    assert json.loads(json.dumps(snapshot)) == snapshot
     sql = pool.fetch.call_args.args[0]
     assert "a2a_agent_registry" in sql
     assert "rtrim(e.agent_url, '/') = r.agent_url" in sql
     assert "e.failure_origin <> 'local'" in sql
     assert "e.task_status <> 'possibly_delivered'" in sql
     assert "e.org_id IS DISTINCT FROM r.org_id" in sql
+
+
+def test_agent_cursor_supports_sort_keys_and_legacy_name_tokens():
+    agent = {"org_slug": "alpha", "reputation_score": 0.91}
+
+    assert _decode_agent_cursor(_build_agent_cursor(agent, "name")) == ("name", "alpha", "alpha", "all")
+    assert _decode_agent_cursor(_build_agent_cursor(agent, "reputation")) == ("reputation", 0.91, "alpha", "all")
+
+    legacy = base64.urlsafe_b64encode(json.dumps({"org_slug": "alpha"}).encode()).decode().rstrip("=")
+    assert _decode_agent_cursor(legacy) == ("name", "alpha", "alpha", "all")
+
+
+def test_agent_cursor_normalizes_invalid_reputation_keys():
+    for value in ("not-a-number", True, float("nan")):
+        agent = {"org_slug": "bad", "reputation_score": value}
+        assert _decode_agent_cursor(_build_agent_cursor(agent, "reputation")) == ("reputation", None, "bad", "all")
+
+    malformed_sort = base64.urlsafe_b64encode(
+        json.dumps({"sort": ["reputation"], "key": 0.9, "org_slug": "bad", "stale": "all"}).encode()
+    ).decode().rstrip("=")
+    missing_key = base64.urlsafe_b64encode(
+        json.dumps({"sort": "reputation", "org_slug": "bad", "stale": "all"}).encode()
+    ).decode().rstrip("=")
+    assert _decode_agent_cursor(malformed_sort) is None
+    assert _decode_agent_cursor(missing_key) is None

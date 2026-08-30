@@ -24,6 +24,7 @@ _AGENT_DIRECTORY_TTL_SECONDS = 300
 _MIN_PUBLIC_CALLERS = 5
 _REPUTATION_RECENCY_HALF_LIFE_DAYS = 14.0
 _REPUTATION_FRESHNESS_HALF_LIFE_DAYS = 30.0
+_REPUTATION_STALE_AFTER_DAYS = 2 * _REPUTATION_FRESHNESS_HALF_LIFE_DAYS
 _REPUTATION_PRIOR_SUCCESSES = 4.0
 _REPUTATION_PRIOR_SAMPLE_SIZE = 5.0
 _REPUTATION_FRESHNESS_FLOOR = 0.75
@@ -219,17 +220,21 @@ async def _load_agent_directory() -> dict[str, Any]:
         }
         caller_count = int(row["unique_caller_count"] or 0)
         weighted_sample_size = float(row["weighted_sample_size"] or 0.0)
-        if caller_count >= _MIN_PUBLIC_CALLERS and weighted_sample_size > 0:
+        public_last_event_at: str | None = None
+        is_stale: bool | None = None
+        last_event_at = row["last_event_at"]
+        if caller_count >= _MIN_PUBLIC_CALLERS and weighted_sample_size > 0 and last_event_at is not None:
             weighted_successes = float(row["weighted_successes"] or 0.0)
             success_rate = (weighted_successes + _REPUTATION_PRIOR_SUCCESSES) / (
                 weighted_sample_size + _REPUTATION_PRIOR_SAMPLE_SIZE
             )
             confidence = weighted_sample_size / (weighted_sample_size + _REPUTATION_PRIOR_SAMPLE_SIZE)
-            last_event_at = row["last_event_at"]
             if last_event_at.tzinfo is None:
                 last_event_at = last_event_at.replace(tzinfo=timezone.utc)
             age_days = max(0.0, (datetime.now(timezone.utc) - last_event_at).total_seconds() / 86400.0)
             freshness = math.exp(-math.log(2.0) * age_days / _REPUTATION_FRESHNESS_HALF_LIFE_DAYS)
+            public_last_event_at = last_event_at.isoformat()
+            is_stale = age_days >= _REPUTATION_STALE_AFTER_DAYS
             agent.update(
                 {
                     "reputation_score": round(
@@ -252,6 +257,7 @@ async def _load_agent_directory() -> dict[str, Any]:
                     "unique_caller_count": None,
                 }
             )
+        agent.update({"last_event_at": public_last_event_at, "is_stale": is_stale})
         agents.append(agent)
     return {"generated_at": generated_at, "agents": agents}
 
@@ -275,12 +281,26 @@ async def invalidate_agent_directory_cache() -> None:
     await _AGENT_DIRECTORY_CACHE.invalidate()
 
 
-def _build_agent_cursor(agent: dict[str, Any]) -> str:
-    raw = json.dumps({"org_slug": agent["org_slug"]}, separators=(",", ":")).encode()
+def _build_agent_cursor(agent: dict[str, Any], sort: str = "name", stale_filter: str = "all") -> str:
+    sort_key: Any = agent["org_slug"]
+    if sort == "reputation":
+        sort_key = None
+        raw_score = agent.get("reputation_score")
+        if raw_score is not None and not isinstance(raw_score, bool):
+            try:
+                score = float(raw_score)
+            except (TypeError, ValueError):
+                score = None
+            if score is not None and math.isfinite(score):
+                sort_key = score
+    raw = json.dumps(
+        {"sort": sort, "key": sort_key, "org_slug": agent["org_slug"], "stale": stale_filter},
+        separators=(",", ":"),
+    ).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def _decode_agent_cursor(cursor: str | None) -> str | None:
+def _decode_agent_cursor(cursor: str | None) -> tuple[str, Any, str, str] | None:
     if not cursor:
         return None
     try:
@@ -288,5 +308,35 @@ def _decode_agent_cursor(cursor: str | None) -> str | None:
         data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
     except Exception:
         return None
-    value = data.get("org_slug") if isinstance(data, dict) else None
-    return value if isinstance(value, str) and value else None
+    if not isinstance(data, dict):
+        return None
+
+    org_slug = data.get("org_slug")
+    if not isinstance(org_slug, str) or not org_slug:
+        return None
+
+    sort = data.get("sort")
+    if sort is None:
+        return ("name", org_slug, org_slug, "all")
+    if not isinstance(sort, str) or sort not in {"name", "reputation"}:
+        return None
+    if "key" not in data:
+        return None
+
+    sort_key = data["key"]
+    if sort == "name":
+        if not isinstance(sort_key, str) or not sort_key:
+            return None
+    elif sort_key is not None:
+        if isinstance(sort_key, bool):
+            return None
+        try:
+            sort_key = float(sort_key)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(sort_key):
+            return None
+    stale_filter = data.get("stale", "all")
+    if not isinstance(stale_filter, str) or stale_filter not in {"all", "active", "stale"}:
+        return None
+    return (sort, sort_key, org_slug, stale_filter)
