@@ -323,6 +323,27 @@ class TestDailyDebitSpendHelper:
         result = await billing_module._get_daily_debit_spend(conn, "org-1")
         assert result == 54_321
 
+    async def test_helper_excludes_reversed_debits(self):
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={"daily_spend": 0})
+
+        await billing_module._get_daily_debit_spend(pool, "org-1")
+
+        query = pool.fetchrow.call_args.args[0]
+        assert "reversal.reverses_ledger_id = debit.id" in query
+        assert "reversal.id IS NULL" in query
+
+    async def test_principal_helper_excludes_reversed_debits(self):
+        pool = MagicMock()
+        pool.fetchrow = AsyncMock(return_value={"daily_spend": 0})
+
+        await billing_module._get_daily_principal_debit_spend(pool, "org-1", "principal-1")
+
+        query = pool.fetchrow.call_args.args[0]
+        assert "reversal.reverses_ledger_id = debit.id" in query
+        assert "debit.principal_id = $2" in query
+        assert "reversal.id IS NULL" in query
+
 
 @pytest.mark.anyio
 class TestGetOrgSpendingConfig:
@@ -1187,7 +1208,10 @@ class TestDebitCreditMock:
             )
 
         assert result == (True, 5_000)
-        assert any("a2a_delegation_refund_outbox" in call.args[0] for call in pool._conn.execute.call_args_list)
+        outbox_calls = [call for call in pool._conn.execute.call_args_list if "a2a_delegation_refund_outbox" in call.args[0]]
+        assert len(outbox_calls) == 1
+        assert "debit_ledger_id" in outbox_calls[0].args[0]
+        assert outbox_calls[0].args[-1]
 
     async def test_delegation_funding_rolls_back_when_refund_state_insert_fails(self):
         pool = _pool_mock()

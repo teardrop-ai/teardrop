@@ -60,6 +60,7 @@ ALWAYS_KEEP = frozenset(
         "web_search",
         "resolve_ens",
         "delegate_to_agent",
+        "discover_agents",
         "http_fetch",
     }
 )

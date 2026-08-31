@@ -115,3 +115,4 @@ python -m migrations.runner
 | `099_org_principal_spend_limits.sql` | Sparse, org-scoped 24-hour spend limits and pause controls for authenticated principals |
 | `100_pending_settlement_principal.sql` | Preserves principal attribution across asynchronous credit-settlement retries |
 | `101_a2a_agent_registry.sql` | Opt-in organization A2A endpoint registry, normalized failure-origin telemetry, and agent-directory lookup index |
+| `103_a2a_refund_ledger_link.sql` | Links new credit-funded A2A refund outbox rows to immutable debit/reversal ledger entries and seeds zero-cost planner agent discovery; existing unlinked rows retain balance-only refund behavior |

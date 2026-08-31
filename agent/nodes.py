@@ -369,7 +369,7 @@ async def planner_node(state: AgentState) -> dict[str, Any]:
     excluded_tool_names = frozenset(state.metadata.get("_excluded_tool_names", []))
     server_excluded = frozenset()
     if not settings.a2a_delegation_enabled:
-        server_excluded = frozenset({"delegate_to_agent"})
+        server_excluded = frozenset({"delegate_to_agent", "discover_agents"})
     effective_excluded = excluded_tool_names | server_excluded
     llm_config = state.metadata.get("_llm_config")
     tool_iterations = int(state.metadata.get("_usage", {}).get("tool_iterations", 0))

@@ -15,13 +15,13 @@ Teardrop is a streaming AI agent API. You send it a message; it reasons using yo
 
 ### Agent-to-Agent (A2A) Delegation
 
-Agents can securely delegate tasks to other agents via the `delegate_to_agent` tool (invoked during `/agent/run`). Features include allowlist control, JWT forwarding, per-run quotas, destination cost caps, and optional credit billing with org-level and caller-principal pause/24-hour spend-limit enforcement.
+Agents can discover opt-in specialists with the zero-cost `discover_agents` tool and securely delegate tasks via `delegate_to_agent` (both invoked during `/agent/run`). Features include allowlist control, JWT forwarding, per-run quotas, destination cost caps, and optional credit billing with org-level and caller-principal pause/24-hour spend-limit enforcement. Definitive non-delivery of a newly linked credit-funded delegation creates a reversal-linked refund, restoring the refunded amount to both rolling spend-cap calculations; ambiguous `possibly_delivered` calls remain held for explicit resolution. Refund rows created before migration 103 may be unlinked and restore balance without rolling-cap headroom.
 
 For the full protocol specification, environment variables, allowlists, and billing event payloads, see [docs/a2a-delegation.md](docs/a2a-delegation.md).
 
 ### Platform Tool Marketplace
 
-Teardrop exposes 30 built-in, metered tools through the marketplace catalog. Callers can invoke them:
+Teardrop exposes 31 caller-facing built-in, metered tools through the marketplace catalog. Callers can invoke them:
 - Via the **MCP gateway** at `GET /tools/mcp` (direct tool invocation, billed per call).
 - As **tools called during agent runs** (via `POST /agent/run` when the agent decides to use them; billed in the run's usage cost).
 

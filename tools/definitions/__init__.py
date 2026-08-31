@@ -8,6 +8,7 @@ from tools.definitions.calculate import TOOL as calculate_tool
 from tools.definitions.convert_currency import TOOL as convert_currency_tool
 from tools.definitions.decode_transaction import TOOL as decode_transaction_tool
 from tools.definitions.delegate_to_agent import TOOL as delegate_to_agent_tool
+from tools.definitions.discover_agents import TOOL as discover_agents_tool
 from tools.definitions.get_block import TOOL as get_block_tool
 from tools.definitions.get_chain_metrics import TOOL as get_chain_metrics_tool
 from tools.definitions.get_datetime import TOOL as get_datetime_tool
@@ -42,6 +43,7 @@ _ALL_TOOLS = [
     convert_currency_tool,
     decode_transaction_tool,
     delegate_to_agent_tool,
+    discover_agents_tool,
     get_datetime_tool,
     get_block_tool,
     get_chain_metrics_tool,

@@ -340,10 +340,16 @@ class TestDelegationRefundOutbox:
         conn = MagicMock()
         conn.fetchrow = AsyncMock(
             side_effect=[
-                {"run_id": "run-1", "amount_usdc": 5_000},
+                {
+                    "run_id": "run-1",
+                    "amount_usdc": 5_000,
+                    "debit_ledger_id": "debit-1",
+                    "principal_id": "principal-1",
+                },
                 {"balance_usdc": 25_000},
             ]
         )
+        conn.fetchval = AsyncMock(return_value=None)
         conn.execute = AsyncMock()
         conn.transaction = MagicMock(return_value=_AsyncContext(conn))
         pool.acquire = MagicMock(return_value=_AsyncContext(conn))
@@ -353,6 +359,32 @@ class TestDelegationRefundOutbox:
         assert result is True
         assert "org_credit_ledger" in conn.execute.call_args_list[0].args[0]
         assert "a2a_delegation_refund_outbox" in conn.execute.call_args_list[1].args[0]
+        ledger_args = conn.execute.call_args_list[0].args
+        assert "reverses_ledger_id" in ledger_args[0]
+        assert ledger_args[-2:] == ("principal-1", "debit-1")
+
+    async def test_complete_refund_reuses_existing_reversal_without_crediting_again(self):
+        pool = MagicMock()
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(
+            return_value={
+                "run_id": "run-1",
+                "amount_usdc": 5_000,
+                "debit_ledger_id": "debit-1",
+                "principal_id": "principal-1",
+            }
+        )
+        conn.fetchval = AsyncMock(return_value="reversal-1")
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+
+        result = await self._service(pool).complete_delegation_refund("org-1", "delegation-1")
+
+        assert result is True
+        assert conn.fetchrow.await_count == 1
+        assert len(conn.execute.call_args_list) == 1
+        assert "status = 'refunded'" in conn.execute.call_args_list[0].args[0]
 
     async def test_complete_refund_is_idempotent_after_terminal_state(self):
         pool = MagicMock()

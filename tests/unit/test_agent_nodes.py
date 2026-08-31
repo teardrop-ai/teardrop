@@ -360,7 +360,7 @@ class TestPlannerNode:
             return mock_response
 
         monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
-        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "7")
         from teardrop.config import get_settings
 
         get_settings.cache_clear()
@@ -373,6 +373,7 @@ class TestPlannerNode:
             _Tool("unrelated_beta", "Unrelated data"),
             _Tool("unrelated_gamma", "Unrelated data"),
             _Tool("unrelated_delta", "Unrelated data"),
+            _Tool("unrelated_epsilon", "Unrelated data"),
         ]
         state = _make_state(
             messages=[HumanMessage(content="compare aave usdc yield")],
@@ -409,7 +410,7 @@ class TestPlannerNode:
             return mock_response
 
         monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
-        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "7")
         from teardrop.config import get_settings
 
         get_settings.cache_clear()
@@ -424,6 +425,8 @@ class TestPlannerNode:
             _Tool("unrelated_alpha", "Unrelated data"),
             _Tool("unrelated_beta", "Unrelated data"),
             _Tool("unrelated_gamma", "Unrelated data"),
+            _Tool("unrelated_delta", "Unrelated data"),
+            _Tool("unrelated_epsilon", "Unrelated data"),
         ]
         state = _make_state(
             messages=[HumanMessage(content="compare aave usdc yield")],
@@ -465,7 +468,7 @@ class TestPlannerNode:
             return mock_response
 
         monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
-        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "7")
         from teardrop.config import get_settings
 
         get_settings.cache_clear()
@@ -478,6 +481,7 @@ class TestPlannerNode:
             _Tool("unrelated_beta", "Unrelated data"),
             _Tool("unrelated_gamma", "Unrelated data"),
             _Tool("unrelated_delta", "Unrelated data"),
+            _Tool("unrelated_epsilon", "Unrelated data"),
         ]
         state = _make_state(
             messages=[
@@ -518,7 +522,7 @@ class TestPlannerNode:
             return ll
 
         monkeypatch.setenv("AGENT_TOOL_SHORTLIST_ENABLED", "true")
-        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "6")
+        monkeypatch.setenv("AGENT_TOOL_SHORTLIST_MAX_TOOLS", "7")
         from teardrop.config import get_settings
 
         get_settings.cache_clear()
@@ -531,6 +535,7 @@ class TestPlannerNode:
             _Tool("unrelated_beta", "Unrelated data"),
             _Tool("unrelated_gamma", "Unrelated data"),
             _Tool("unrelated_delta", "Unrelated data"),
+            _Tool("unrelated_epsilon", "Unrelated data"),
         ]
         state = _make_state(
             messages=[HumanMessage(content="compare aave usdc yield")],
@@ -1130,7 +1135,11 @@ class TestPlannerNode:
             patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None),
-            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(
+                nodes_module,
+                "_cached_tools",
+                [_Tool("delegate_to_agent"), _Tool("discover_agents"), _Tool("calculate")],
+            ),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
@@ -1138,6 +1147,7 @@ class TestPlannerNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         bound_names = [tool.name for tool in captured["tools"]]
         assert "delegate_to_agent" not in bound_names
+        assert "discover_agents" not in bound_names
         assert "calculate" in bound_names
 
     async def test_delegate_to_agent_included_when_a2a_enabled(self, test_settings):
@@ -1164,7 +1174,11 @@ class TestPlannerNode:
             patch("agent.nodes._bind_tools_for_provider", side_effect=_bind_spy),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None),
-            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(
+                nodes_module,
+                "_cached_tools",
+                [_Tool("delegate_to_agent"), _Tool("discover_agents"), _Tool("calculate")],
+            ),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
@@ -1172,6 +1186,7 @@ class TestPlannerNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         bound_names = [tool.name for tool in captured["tools"]]
         assert "delegate_to_agent" in bound_names
+        assert "discover_agents" in bound_names
         assert "calculate" in bound_names
 
     async def test_delegate_to_agent_absent_from_system_prompt_when_a2a_disabled(self, test_settings):
@@ -1198,7 +1213,11 @@ class TestPlannerNode:
             patch("agent.nodes._invoke_planner_llm", side_effect=_invoke_spy),
             patch("agent.nodes.is_provider_cooled_down", return_value=False),
             patch("agent.nodes._get_fallback_llm", return_value=None),
-            patch.object(nodes_module, "_cached_tools", [_Tool("delegate_to_agent"), _Tool("calculate")]),
+            patch.object(
+                nodes_module,
+                "_cached_tools",
+                [_Tool("delegate_to_agent"), _Tool("discover_agents"), _Tool("calculate")],
+            ),
             patch.object(nodes_module, "_cached_tools_by_name", {}),
         ):
             result = await planner_node(state)
@@ -1206,6 +1225,7 @@ class TestPlannerNode:
         assert result["task_status"] == TaskStatus.GENERATING_UI
         system_text = "\n".join(str(msg.content) for msg in captured["messages"] if getattr(msg, "type", "") == "system")
         assert "delegate_to_agent" not in system_text
+        assert "discover_agents" not in system_text
         assert "calculate" in system_text
 
 

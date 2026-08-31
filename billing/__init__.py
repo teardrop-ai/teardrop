@@ -226,6 +226,7 @@ def _get_delegation_service() -> BillingDelegationService:
         debit_credit=debit_credit,
         debit_credit_with_refund_outbox=debit_credit_with_delegation_refund,
         get_live_pricing_for_model=get_live_pricing_for_model,
+        invalidate_daily_spend_cache=lambda org_id: _get_daily_spend_cache(org_id).invalidate(),
     )
 
 

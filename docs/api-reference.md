@@ -81,7 +81,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 
 `GET /billing/balance` returns atomic USDC fields. For human orgs, a `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`). For machine-provisioned orgs, zero resolves to `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC`; an explicit org limit is preserved.
 
-Principal limits are optional and additive to org controls. The authenticated JWT `sub` identifies the principal; absent configuration leaves org-level behavior unchanged. Every credit debit records that principal when available, including retried settlements.
+Principal limits are optional and additive to org controls. The authenticated JWT `sub` identifies the principal; absent configuration leaves org-level behavior unchanged. Every credit debit records that principal when available, including retried settlements. New credit-funded A2A debits are linked to their refund outbox row; a definitive non-delivery refund is an immutable reversal-linked top-up, and rolling org/principal spend totals exclude the reversed debit so the corresponding 24-hour cap headroom returns. Pre-migration refund rows without a debit link credit the balance but do not restore rolling-cap headroom.
 
 ### Payment-first bootstrap
 
@@ -241,6 +241,8 @@ Connect external MCP servers to your org. Their tools are discovered and made av
 ### A2A Delegation
 
 Agent allowlist and delegation history. Agents must be added to the allowlist before delegating to them.
+
+The planner may call the zero-cost `discover_agents` tool when a remote URL is unknown. It reads the local public directory snapshot, excludes the caller's own organization, derives the remote Agent Card and `/message:send` URLs, and reports allowlist status for context. It does not authorize an agent or make outbound network requests; `delegate_to_agent` remains the authorization and delivery path. Discovery returns an empty result when either marketplace or outbound A2A delegation is disabled.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

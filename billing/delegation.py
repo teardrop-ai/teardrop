@@ -47,6 +47,7 @@ class BillingDelegationService:
         debit_credit_with_refund_outbox: Callable[..., Awaitable[tuple[bool, int]]] | None = None,
         get_live_pricing_for_model: Callable[..., Awaitable[object | None]],
         get_daily_principal_debit_spend: Callable[[PgConnection | PgPool, str, str], Awaitable[int]] | None = None,
+        invalidate_daily_spend_cache: Callable[[str], Awaitable[None]] | None = None,
     ):
         self._get_pool = get_pool
         self._get_settings = get_settings
@@ -55,6 +56,7 @@ class BillingDelegationService:
         self._debit_credit = debit_credit
         self._debit_credit_with_refund_outbox = debit_credit_with_refund_outbox
         self._get_live_pricing_for_model = get_live_pricing_for_model
+        self._invalidate_daily_spend_cache = invalidate_daily_spend_cache
 
     async def check_delegation_budget(
         self,
@@ -202,6 +204,26 @@ class BillingDelegationService:
     async def _complete_refund_locked(self, conn: PgConnection, org_id: str, delegation_id: str, row) -> bool:
         """Apply a refund while the caller owns the outbox row lock."""
         amount_usdc = int(row["amount_usdc"])
+        debit_ledger_id = row.get("debit_ledger_id")
+        principal_id = row.get("principal_id")
+        if debit_ledger_id:
+            existing_reversal = await conn.fetchval(
+                "SELECT id FROM org_credit_ledger WHERE reverses_ledger_id = $1",
+                debit_ledger_id,
+            )
+            if existing_reversal is not None:
+                await conn.execute(
+                    """
+                    UPDATE a2a_delegation_refund_outbox
+                    SET status = 'refunded', resolved_at = COALESCE(resolved_at, NOW())
+                    WHERE id = $1 AND org_id = $2
+                      AND status = 'refund_requested'
+                      AND delivery_status IN ('not_attempted', 'failed')
+                    """,
+                    delegation_id,
+                    org_id,
+                )
+                return True
         credit_row = await conn.fetchrow(
             """
             UPDATE org_credits
@@ -218,14 +240,16 @@ class BillingDelegationService:
         await conn.execute(
             """
             INSERT INTO org_credit_ledger
-                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, created_at)
-            VALUES ($1, $2, 'topup', $3, $4, $5, NOW())
+                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, principal_id, reverses_ledger_id, created_at)
+            VALUES ($1, $2, 'topup', $3, $4, $5, $6, $7, NOW())
             """,
             str(uuid.uuid4()),
             org_id,
             amount_usdc,
             int(credit_row["balance_usdc"]),
             f"a2a:refund delegation={delegation_id} run={row['run_id']}",
+            principal_id,
+            debit_ledger_id,
         )
         await conn.execute(
             """
@@ -312,10 +336,13 @@ class BillingDelegationService:
                 async with conn.transaction():
                     row = await conn.fetchrow(
                         """
-                        SELECT status, delivery_status, run_id, amount_usdc
-                        FROM a2a_delegation_refund_outbox
-                        WHERE id = $1 AND org_id = $2
-                        FOR UPDATE
+                        SELECT outbox.status, outbox.delivery_status, outbox.run_id, outbox.amount_usdc,
+                               outbox.debit_ledger_id, debit.principal_id
+                        FROM a2a_delegation_refund_outbox AS outbox
+                        LEFT JOIN org_credit_ledger AS debit
+                            ON debit.id = outbox.debit_ledger_id AND debit.org_id = outbox.org_id
+                        WHERE outbox.id = $1 AND outbox.org_id = $2
+                        FOR UPDATE OF outbox
                         """,
                         delegation_id,
                         org_id,
@@ -356,7 +383,18 @@ class BillingDelegationService:
                             delegation_id,
                             org_id,
                         )
-                    return await self._complete_refund_locked(conn, org_id, delegation_id, row)
+                    resolved = await self._complete_refund_locked(conn, org_id, delegation_id, row)
+                if resolved and self._invalidate_daily_spend_cache is not None:
+                    try:
+                        await self._invalidate_daily_spend_cache(org_id)
+                    except Exception:
+                        logger.warning(
+                            "Delegation refund cache invalidation failed org=%s delegation=%s",
+                            org_id,
+                            delegation_id,
+                            exc_info=True,
+                        )
+                return resolved
         except Exception:
             logger.exception("Failed to resolve delegation as not delivered org=%s delegation=%s", org_id, delegation_id)
             return False
@@ -434,12 +472,15 @@ class BillingDelegationService:
                 async with conn.transaction():
                     row = await conn.fetchrow(
                         """
-                        SELECT run_id, amount_usdc
-                        FROM a2a_delegation_refund_outbox
-                                                WHERE id = $1 AND org_id = $2
-                                                    AND status = 'refund_requested'
-                                                    AND delivery_status IN ('not_attempted', 'failed')
-                        FOR UPDATE
+                                                SELECT outbox.run_id, outbox.amount_usdc, outbox.debit_ledger_id,
+                                                             debit.principal_id
+                                                FROM a2a_delegation_refund_outbox AS outbox
+                                                LEFT JOIN org_credit_ledger AS debit
+                                                        ON debit.id = outbox.debit_ledger_id AND debit.org_id = outbox.org_id
+                                                WHERE outbox.id = $1 AND outbox.org_id = $2
+                                                    AND outbox.status = 'refund_requested'
+                                                    AND outbox.delivery_status IN ('not_attempted', 'failed')
+                                                FOR UPDATE OF outbox
                         """,
                         delegation_id,
                         org_id,
@@ -452,7 +493,18 @@ class BillingDelegationService:
                         )
                         return status == "refunded"
 
-                    return await self._complete_refund_locked(conn, org_id, delegation_id, row)
+                    resolved = await self._complete_refund_locked(conn, org_id, delegation_id, row)
+                if resolved and self._invalidate_daily_spend_cache is not None:
+                    try:
+                        await self._invalidate_daily_spend_cache(org_id)
+                    except Exception:
+                        logger.warning(
+                            "Delegation refund cache invalidation failed org=%s delegation=%s",
+                            org_id,
+                            delegation_id,
+                            exc_info=True,
+                        )
+                return resolved
         except Exception:
             logger.exception("Failed to complete delegation refund org=%s delegation=%s", org_id, delegation_id)
             return False

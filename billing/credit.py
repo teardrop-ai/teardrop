@@ -53,11 +53,14 @@ class BillingCreditService:
         """Return 24h rolling debit spend in atomic USDC for an org."""
         daily_row = await executor.fetchrow(
             """
-            SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-            FROM org_credit_ledger
-            WHERE org_id = $1
-              AND operation = 'debit'
-              AND created_at >= NOW() - INTERVAL '24 hours'
+                        SELECT COALESCE(SUM(debit.amount_usdc), 0) AS daily_spend
+                        FROM org_credit_ledger AS debit
+                        LEFT JOIN org_credit_ledger AS reversal
+                                ON reversal.reverses_ledger_id = debit.id
+                        WHERE debit.org_id = $1
+                            AND debit.operation = 'debit'
+                            AND debit.created_at >= NOW() - INTERVAL '24 hours'
+                            AND reversal.id IS NULL
             """,
             org_id,
         )
@@ -151,7 +154,7 @@ class BillingCreditService:
         amount_usdc: int,
         reason: str,
         principal_id: str | None = None,
-    ) -> tuple[bool, int]:
+    ) -> tuple[bool, int, str | None]:
         """Debit one org while the caller owns the surrounding transaction."""
         row = await conn.fetchrow(
             """
@@ -165,7 +168,7 @@ class BillingCreditService:
             org_id,
         )
         if row is None:
-            return False, 0
+            return False, 0, None
 
         original_balance = int(row["balance_usdc"])
         spending_limit = int(row["spending_limit_usdc"])
@@ -175,12 +178,12 @@ class BillingCreditService:
             spending_limit = machine_cap
 
         if is_paused:
-            return False, 0
+            return False, 0, None
 
         if spending_limit > 0:
             daily_spend = await self._get_daily_debit_spend_fn(conn, org_id)
             if daily_spend + amount_usdc > spending_limit:
-                return False, 0
+                return False, 0, None
 
         if principal_id:
             principal_limit = await conn.fetchrow(
@@ -195,15 +198,15 @@ class BillingCreditService:
             )
             if principal_limit is not None:
                 if bool(principal_limit["is_paused"]):
-                    return False, 0
+                    return False, 0, None
                 daily_principal_spend = await self._get_daily_principal_debit_spend_fn(conn, org_id, principal_id)
                 if daily_principal_spend + amount_usdc > int(principal_limit["daily_limit_usdc"]):
-                    return False, 0
+                    return False, 0, None
 
         # Never partially settle. The row lock closes the concurrent-debit race
         # between the non-locking preflight and this authoritative mutation.
         if original_balance < amount_usdc:
-            return False, 0
+            return False, 0, None
 
         new_balance = original_balance - amount_usdc
         await conn.execute(
@@ -215,20 +218,21 @@ class BillingCreditService:
             org_id,
             new_balance,
         )
+        ledger_id = str(uuid.uuid4())
         await conn.execute(
             """
             INSERT INTO org_credit_ledger
                 (id, org_id, operation, amount_usdc, balance_usdc_after, reason, principal_id, created_at)
             VALUES ($1, $2, 'debit', $3, $4, $5, $6, NOW())
             """,
-            str(uuid.uuid4()),
+            ledger_id,
             org_id,
             amount_usdc,
             new_balance,
             reason,
             principal_id,
         )
-        return True, amount_usdc
+        return True, amount_usdc, ledger_id
 
     async def debit_credit(
         self,
@@ -247,7 +251,7 @@ class BillingCreditService:
         try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason, principal_id)
+                    success, actual_deducted, _ = await self._debit_credit_locked(conn, org_id, amount_usdc, reason, principal_id)
                 if success:
                     try:
                         await self._get_daily_spend_cache(org_id).invalidate()
@@ -296,20 +300,23 @@ class BillingCreditService:
                             raise ValueError("Delegation funding amount changed for an existing id")
                         return existing["status"] == "pending", int(existing["amount_usdc"])
 
-                    success, actual_deducted = await self._debit_credit_locked(conn, org_id, amount_usdc, reason, principal_id)
+                    success, actual_deducted, debit_ledger_id = await self._debit_credit_locked(
+                        conn, org_id, amount_usdc, reason, principal_id
+                    )
                     if not success:
                         return False, 0
 
                     await conn.execute(
                         """
                         INSERT INTO a2a_delegation_refund_outbox
-                            (id, org_id, run_id, amount_usdc, status, created_at)
-                        VALUES ($1, $2, $3, $4, 'pending', NOW())
+                            (id, org_id, run_id, amount_usdc, debit_ledger_id, status, created_at)
+                        VALUES ($1, $2, $3, $4, $5, 'pending', NOW())
                         """,
                         delegation_id,
                         org_id,
                         run_id,
                         actual_deducted,
+                        debit_ledger_id,
                     )
                 try:
                     await self._get_daily_spend_cache(org_id).invalidate()

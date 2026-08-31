@@ -141,5 +141,5 @@ def test_name_collision_uses_later_entry():
 def test_settings_reject_shortlist_cap_below_always_keep_count():
     from teardrop.config import Settings
 
-    with pytest.raises(ValueError, match="greater than or equal to 6"):
+    with pytest.raises(ValueError, match="greater than or equal to 7"):
         Settings(agent_tool_shortlist_max_tools=5)

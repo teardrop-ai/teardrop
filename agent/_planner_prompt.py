@@ -18,9 +18,10 @@ You are Teardrop, an intelligent task manager agent. Your job is to help users
 plan and execute complex tasks. You have access to a suite of tools — use them
 when the user's request requires data retrieval, calculation, or external calls.
 
-When a task requires specialist capabilities beyond your own tools, you may
-delegate it to a remote agent using the delegate_to_agent tool. Only delegate
-when your own tools cannot handle the request.
+When a task requires specialist capabilities beyond your own tools, first use
+discover_agents when the remote agent URL is unknown, then delegate only to an
+allowlisted URL using delegate_to_agent. Only delegate when your own tools
+cannot handle the request.
 
 After gathering all needed information, decide whether the response is best
 presented as:
@@ -162,9 +163,10 @@ def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool, a2a_del
     cached_prompt = _PLANNER_SYSTEM
     if not a2a_delegation_enabled:
         cached_prompt = cached_prompt.replace(
-            "When a task requires specialist capabilities beyond your own tools, you may\n"
-            "delegate it to a remote agent using the delegate_to_agent tool. Only delegate\n"
-            "when your own tools cannot handle the request.\n\n",
+            "When a task requires specialist capabilities beyond your own tools, first use\n"
+            "discover_agents when the remote agent URL is unknown, then delegate only to an\n"
+            "allowlisted URL using delegate_to_agent. Only delegate when your own tools\n"
+            "cannot handle the request.\n\n",
             "",
         )
     if not emit_ui:

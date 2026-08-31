@@ -38,5 +38,26 @@
     "max_cost_usdc": 500000,
     "scorer": "contains",
     "rubric": "Explains the configurable outbound timeout and per-run concurrent delegation limit."
+  },
+  {
+    "id": "a2a.discovery.001",
+    "messages": [{"role": "user", "content": "Find an opt-in remote A2A specialist I could delegate to and tell me whether my organization already allows it."}],
+    "expected_tool_calls": ["discover_agents"],
+    "expected_text_contains": ["agent", "allowlist"],
+    "expected_text_not_contains": ["network error"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Uses the bounded planner discovery tool and explains that allowlist status is separate from public discovery."
+  },
+  {
+    "id": "a2a.refund_cap_recovery.001",
+    "messages": [{"role": "user", "content": "How does a failed, credit-funded A2A delegation affect the organization's and caller principal's rolling 24-hour spending limits?"}],
+    "expected_text_contains": ["refund", "spending", "headroom", "principal"],
+    "expected_text_not_contains": ["unlimited"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains that a definitive non-delivery refund reverses the debit for both organization and principal rolling-cap calculations."
   }
 ]

@@ -39,11 +39,14 @@ async def _get_daily_debit_spend(executor: PgConnection | PgPool, org_id: str) -
     """Return 24h rolling debit spend in atomic USDC for an org."""
     daily_row = await executor.fetchrow(
         """
-        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-        FROM org_credit_ledger
-        WHERE org_id = $1
-          AND operation = 'debit'
-          AND created_at >= NOW() - INTERVAL '24 hours'
+                SELECT COALESCE(SUM(debit.amount_usdc), 0) AS daily_spend
+                FROM org_credit_ledger AS debit
+                LEFT JOIN org_credit_ledger AS reversal
+                        ON reversal.reverses_ledger_id = debit.id
+                WHERE debit.org_id = $1
+                    AND debit.operation = 'debit'
+                    AND debit.created_at >= NOW() - INTERVAL '24 hours'
+                    AND reversal.id IS NULL
         """,
         org_id,
     )
@@ -58,12 +61,15 @@ async def _get_daily_principal_debit_spend(
     """Return 24h rolling debit spend for one principal within an org."""
     daily_row = await executor.fetchrow(
         """
-        SELECT COALESCE(SUM(amount_usdc), 0) AS daily_spend
-        FROM org_credit_ledger
-        WHERE org_id = $1
-          AND principal_id = $2
-          AND operation = 'debit'
-          AND created_at >= NOW() - INTERVAL '24 hours'
+                SELECT COALESCE(SUM(debit.amount_usdc), 0) AS daily_spend
+                FROM org_credit_ledger AS debit
+                LEFT JOIN org_credit_ledger AS reversal
+                        ON reversal.reverses_ledger_id = debit.id
+                WHERE debit.org_id = $1
+                    AND debit.principal_id = $2
+                    AND debit.operation = 'debit'
+                    AND debit.created_at >= NOW() - INTERVAL '24 hours'
+                    AND reversal.id IS NULL
         """,
         org_id,
         principal_id,

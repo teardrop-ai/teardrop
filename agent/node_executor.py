@@ -112,6 +112,16 @@ async def _execute_single_tool(
         }
         return await delegate_to_agent(config=config, **kwargs)
 
+    async def _discover_agents_invoke(**kwargs: Any) -> Any:
+        from tools.definitions.discover_agents import discover_agents
+
+        config = {
+            "configurable": {
+                "org_id": metadata.get("org_id", "") if metadata else "",
+            }
+        }
+        return await discover_agents(config=config, **kwargs)
+
     if tool_name == "delegate_to_agent" and metadata:
         # Enforce per-run delegation quota.
         from teardrop.config import get_settings as _get_settings
@@ -142,6 +152,13 @@ async def _execute_single_tool(
             tool_call_id=call_id,
             tool_args=tool_args,
             invoke=_delegate_invoke,
+        )
+    elif tool_name == "discover_agents" and metadata is not None:
+        result = await execute_tool(
+            tool_name=tool_name,
+            tool_call_id=call_id,
+            tool_args=tool_args,
+            invoke=_discover_agents_invoke,
         )
     else:
         result = await execute_tool(

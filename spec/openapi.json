@@ -162,6 +162,45 @@
             "description": "ISO 8601 timestamp; null if unavailable.",
             "title": "Created At"
           },
+          "delivery_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Error"
+          },
+          "delivery_resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp; null while unresolved.",
+            "title": "Delivery Resolved At"
+          },
+          "delivery_settlement_tx": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Settlement Tx"
+          },
+          "delivery_status": {
+            "default": "not_attempted",
+            "title": "Delivery Status",
+            "type": "string"
+          },
           "error": {
             "anyOf": [
               {
@@ -765,6 +804,18 @@
             ],
             "description": "Present when org_id is set.",
             "title": "Org Name"
+          },
+          "org_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when org_id is set.",
+            "title": "Org Slug"
           },
           "role": {
             "title": "Role",
@@ -2632,6 +2683,196 @@
         "title": "LogoutRequest",
         "type": "object"
       },
+      "MarketplaceAgentDirectoryResponse": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceAgentSummary"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "title": "MarketplaceAgentDirectoryResponse",
+        "type": "object"
+      },
+      "MarketplaceAgentRegistrationRequest": {
+        "properties": {
+          "agent_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Agent Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_url"
+        ],
+        "title": "MarketplaceAgentRegistrationRequest",
+        "type": "object"
+      },
+      "MarketplaceAgentRegistrationResponse": {
+        "properties": {
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "agent_url",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MarketplaceAgentRegistrationResponse",
+        "type": "object"
+      },
+      "MarketplaceAgentSummary": {
+        "properties": {
+          "agent_card_url": {
+            "title": "Agent Card Url",
+            "type": "string"
+          },
+          "agent_url": {
+            "title": "Agent Url",
+            "type": "string"
+          },
+          "catalog_endpoint": {
+            "title": "Catalog Endpoint",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "is_stale": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Stale"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "message_endpoint": {
+            "title": "Message Endpoint",
+            "type": "string"
+          },
+          "org_name": {
+            "title": "Org Name",
+            "type": "string"
+          },
+          "org_slug": {
+            "title": "Org Slug",
+            "type": "string"
+          },
+          "reputation_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reputation Score"
+          },
+          "sample_size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Size"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          },
+          "tool_count": {
+            "title": "Tool Count",
+            "type": "integer"
+          },
+          "unique_caller_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique Caller Count"
+          }
+        },
+        "required": [
+          "org_slug",
+          "org_name",
+          "agent_url",
+          "agent_card_url",
+          "message_endpoint",
+          "catalog_endpoint",
+          "tool_count"
+        ],
+        "title": "MarketplaceAgentSummary",
+        "type": "object"
+      },
       "MarketplaceAuthorConfigResponse": {
         "properties": {
           "created_at": {
@@ -2680,6 +2921,33 @@
         "title": "MarketplaceAuthorConfigResponse",
         "type": "object"
       },
+      "MarketplaceAuthorIndexResponse": {
+        "properties": {
+          "authors": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceAuthorSummary"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "authors"
+        ],
+        "title": "MarketplaceAuthorIndexResponse",
+        "type": "object"
+      },
       "MarketplaceAuthorProfileResponse": {
         "properties": {
           "next_cursor": {
@@ -2725,6 +2993,34 @@
           "tools"
         ],
         "title": "MarketplaceAuthorProfileResponse",
+        "type": "object"
+      },
+      "MarketplaceAuthorSummary": {
+        "properties": {
+          "org_name": {
+            "title": "Org Name",
+            "type": "string"
+          },
+          "org_slug": {
+            "title": "Org Slug",
+            "type": "string"
+          },
+          "tool_count": {
+            "title": "Tool Count",
+            "type": "integer"
+          },
+          "total_calls": {
+            "title": "Total Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "org_slug",
+          "org_name",
+          "tool_count",
+          "total_calls"
+        ],
+        "title": "MarketplaceAuthorSummary",
         "type": "object"
       },
       "MarketplaceBalanceResponse": {
@@ -3356,6 +3652,48 @@
           "base_price_usdc"
         ],
         "title": "MarketplaceImportPublishedTool",
+        "type": "object"
+      },
+      "MarketplaceQuoteResponse": {
+        "properties": {
+          "currency": {
+            "const": "USDC",
+            "default": "USDC",
+            "title": "Currency",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "ISO 8601 advisory expiry matching the active pricing-cache TTL.",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "price_usdc": {
+            "description": "Current price in atomic USDC.",
+            "maximum": 100000000.0,
+            "minimum": 0.0,
+            "title": "Price Usdc",
+            "type": "integer"
+          },
+          "qualified_name": {
+            "title": "Qualified Name",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "override",
+              "marketplace"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "qualified_name",
+          "price_usdc",
+          "source",
+          "expires_at"
+        ],
+        "title": "MarketplaceQuoteResponse",
         "type": "object"
       },
       "MarketplaceSubscriptionItem": {
@@ -4432,6 +4770,157 @@
         "title": "PendingSettlementsResponse",
         "type": "object"
       },
+      "PossiblyDeliveredDelegationItem": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
+          },
+          "amount_usdc": {
+            "title": "Amount Usdc",
+            "type": "integer"
+          },
+          "billing_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Method"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At"
+          },
+          "delivery_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Error"
+          },
+          "delivery_settlement_tx": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Settlement Tx"
+          },
+          "delivery_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp.",
+            "title": "Delivery Started At"
+          },
+          "delivery_status": {
+            "const": "possibly_delivered",
+            "title": "Delivery Status",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "refund_status": {
+            "title": "Refund Status",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settlement_tx": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Tx"
+          },
+          "task_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Status"
+          },
+          "task_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Type"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "run_id",
+          "amount_usdc",
+          "refund_status",
+          "delivery_status"
+        ],
+        "title": "PossiblyDeliveredDelegationItem",
+        "type": "object"
+      },
       "PricingRuleWithOverrides": {
         "properties": {
           "created_at": {
@@ -4486,6 +4975,61 @@
           "run_price_usdc"
         ],
         "title": "PricingRuleWithOverrides",
+        "type": "object"
+      },
+      "PrincipalSpendLimitRequest": {
+        "properties": {
+          "daily_limit_usdc": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000000.0,
+            "title": "Daily Limit Usdc",
+            "type": "integer"
+          },
+          "is_paused": {
+            "default": false,
+            "title": "Is Paused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "daily_limit_usdc"
+        ],
+        "title": "PrincipalSpendLimitRequest",
+        "type": "object"
+      },
+      "PrincipalSpendLimitResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "daily_limit_usdc": {
+            "title": "Daily Limit Usdc",
+            "type": "integer"
+          },
+          "is_paused": {
+            "title": "Is Paused",
+            "type": "boolean"
+          },
+          "principal_id": {
+            "title": "Principal Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal_id",
+          "daily_limit_usdc",
+          "is_paused",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PrincipalSpendLimitResponse",
         "type": "object"
       },
       "PublicReputationResponse": {
@@ -4666,6 +5210,85 @@
           "message"
         ],
         "title": "ResendVerificationResponse",
+        "type": "object"
+      },
+      "ResolveA2ADelegationRequest": {
+        "properties": {
+          "org_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Org Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "confirmed",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "settlement_tx": {
+            "anyOf": [
+              {
+                "maxLength": 66,
+                "pattern": "^0x[a-fA-F0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Tx"
+          }
+        },
+        "required": [
+          "org_id",
+          "outcome"
+        ],
+        "title": "ResolveA2ADelegationRequest",
+        "type": "object"
+      },
+      "ResolveA2ADelegationResponse": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "confirmed",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "refund_status": {
+            "enum": [
+              "cancelled",
+              "refunded"
+            ],
+            "title": "Refund Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "outcome",
+          "refund_status"
+        ],
+        "title": "ResolveA2ADelegationResponse",
         "type": "object"
       },
       "RevenueSummaryResponse": {
@@ -5212,6 +5835,7 @@
           "spending_limit_usdc": {
             "anyOf": [
               {
+                "minimum": 0.0,
                 "type": "integer"
               },
               {
@@ -5707,6 +6331,18 @@
               }
             ],
             "title": "Email"
+          },
+          "grant_type": {
+            "anyOf": [
+              {
+                "const": "x402",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
           },
           "secret": {
             "anyOf": [
@@ -6701,6 +7337,53 @@
         ],
         "title": "WithdrawalResetResponse",
         "type": "object"
+      },
+      "X402BootstrapResponse": {
+        "description": "Bootstrap response; the secret is present only when the org has no credential.",
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One-time secret on first bootstrap; omitted when the existing credential is reused.",
+            "title": "Client Secret"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "token_type": {
+            "const": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "org_id",
+          "client_id"
+        ],
+        "title": "X402BootstrapResponse",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -6713,7 +7396,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7201,6 +7884,125 @@
           }
         ],
         "summary": "Admin List A2A Agents",
+        "tags": [
+          "Admin",
+          "Admin / A2A"
+        ]
+      }
+    },
+    "/admin/a2a/delegations/possibly-delivered": {
+      "get": {
+        "description": "List paid delegations whose delivery outcome needs operator review.",
+        "operationId": "admin_list_possibly_delivered_delegations_admin_a2a_delegations_possibly_delivered_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "org_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PossiblyDeliveredDelegationItem"
+                  },
+                  "title": "Response Admin List Possibly Delivered Delegations Admin A2A Delegations Possibly Delivered Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin List Possibly Delivered Delegations",
+        "tags": [
+          "Admin",
+          "Admin / A2A"
+        ]
+      }
+    },
+    "/admin/a2a/delegations/{delegation_id}/resolve": {
+      "post": {
+        "description": "Resolve one ambiguous delivery without re-dispatching the task.",
+        "operationId": "admin_resolve_a2a_delegation_admin_a2a_delegations__delegation_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delegation_id",
+            "required": true,
+            "schema": {
+              "title": "Delegation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveA2ADelegationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveA2ADelegationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Resolve A2A Delegation",
         "tags": [
           "Admin",
           "Admin / A2A"
@@ -10753,6 +11555,196 @@
         ]
       }
     },
+    "/marketplace/agent-registration": {
+      "delete": {
+        "description": "Unpublish the authenticated organization's A2A endpoint.",
+        "operationId": "delete_marketplace_agent_registration_marketplace_agent_registration_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Marketplace Agent Registration",
+        "tags": [
+          "Marketplace"
+        ]
+      },
+      "get": {
+        "description": "Return the authenticated organization's A2A endpoint registration.",
+        "operationId": "get_marketplace_agent_registration_marketplace_agent_registration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAgentRegistrationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Marketplace Agent Registration",
+        "tags": [
+          "Marketplace"
+        ]
+      },
+      "put": {
+        "description": "Publish the authenticated organization's A2A endpoint.",
+        "operationId": "set_marketplace_agent_registration_marketplace_agent_registration_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketplaceAgentRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAgentRegistrationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Marketplace Agent Registration",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
+    "/marketplace/agents": {
+      "get": {
+        "description": "Publicly list opt-in A2A endpoints and derived trust metrics.\n\n``sort`` accepts ``name`` or ``reputation``; ``stale`` accepts ``all``,\n``active``, or ``stale``. Privacy-suppressed or untested agents have\n``is_stale=None`` and are returned only by ``stale=all``. Cursors are\nscoped to both query modes.",
+        "operationId": "list_marketplace_agents_endpoint_marketplace_agents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "name",
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stale",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Stale",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAgentDirectoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Marketplace Agents Endpoint",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
     "/marketplace/author-config": {
       "get": {
         "description": "Get the marketplace author configuration for the authenticated org.",
@@ -10780,7 +11772,7 @@
         ]
       },
       "post": {
-        "description": "Configure or update the marketplace author settings for the org.\n\nAdmin-only: the settlement wallet is the destination for all marketplace\npayouts, so changing it is a financial control and must not be available to\nordinary members.",
+        "description": "Configure or update the marketplace author settings for the org.\n\nAdmins or the owning SIWE wallet may configure the payout destination.",
         "operationId": "set_marketplace_author_config_marketplace_author_config_post",
         "requestBody": {
           "content": {
@@ -10820,6 +11812,86 @@
           }
         ],
         "summary": "Set Marketplace Author Config",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
+    "/marketplace/authors": {
+      "get": {
+        "description": "Public: list marketplace authors grouped above their published tools.",
+        "operationId": "list_marketplace_authors_endpoint_marketplace_authors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAuthorIndexResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Marketplace Authors Endpoint",
         "tags": [
           "Marketplace"
         ]
@@ -11307,6 +12379,51 @@
           }
         ],
         "summary": "Publish Marketplace Import",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
+    "/marketplace/quote": {
+      "get": {
+        "description": "Public: quote the current effective price for one published marketplace tool.",
+        "operationId": "get_marketplace_quote_marketplace_quote_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "tool",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 3,
+              "title": "Tool",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceQuoteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Marketplace Quote",
         "tags": [
           "Marketplace"
         ]
@@ -12134,7 +13251,7 @@
     },
     "/message:send": {
       "post": {
-        "description": "Blocking inbound A2A endpoint for external agent callers.",
+        "description": "Inbound A2A endpoint with opt-in asynchronous execution.",
         "operationId": "message_send_message_send_post",
         "responses": {
           "200": {
@@ -12147,6 +13264,47 @@
           }
         },
         "summary": "Message Send",
+        "tags": [
+          "A2A"
+        ]
+      }
+    },
+    "/message:status/{task_id}": {
+      "get": {
+        "description": "Return the status and terminal result for an asynchronous inbound task.",
+        "operationId": "message_status_message_status__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Message Status",
         "tags": [
           "A2A"
         ]
@@ -12234,7 +13392,7 @@
     },
     "/org/credentials/regenerate": {
       "post": {
-        "description": "Rotate org M2M credentials: delete all existing and issue a new pair.\n\nAdmin-only: this destroys every existing machine credential for the org and\nreveals the replacement secret, so it must not be available to ordinary\nmembers. The new client_secret is returned exactly once \u2014 store it\nimmediately.",
+        "description": "Rotate org M2M credentials for an admin or machine-org SIWE owner.\n\nThe operation destroys every existing machine credential and reveals the\nreplacement secret exactly once, so ordinary members and client credentials\ncannot invoke it.",
         "operationId": "regenerate_org_credentials_org_credentials_regenerate_post",
         "responses": {
           "201": {
@@ -12303,6 +13461,137 @@
         "summary": "Create Invite",
         "tags": [
           "Auth"
+        ]
+      }
+    },
+    "/org/principals/spend-limits": {
+      "get": {
+        "operationId": "list_principal_spend_limits_org_principals_spend_limits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PrincipalSpendLimitResponse"
+                  },
+                  "title": "Response List Principal Spend Limits Org Principals Spend Limits Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Principal Spend Limits",
+        "tags": [
+          "Organizations"
+        ]
+      }
+    },
+    "/org/principals/{principal_id}/spend-limit": {
+      "delete": {
+        "operationId": "delete_principal_spend_limit_org_principals__principal_id__spend_limit_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "principal_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Principal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Principal Spend Limit",
+        "tags": [
+          "Organizations"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_principal_spend_limit_org_principals__principal_id__spend_limit_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "principal_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Principal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrincipalSpendLimitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalSpendLimitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upsert Principal Spend Limit",
+        "tags": [
+          "Organizations"
         ]
       }
     },
@@ -12392,7 +13681,7 @@
     },
     "/token": {
       "post": {
-        "description": "Tri-mode token endpoint.\n\nAccepts one of:\n  1. email+secret (user credentials)\n  2. client_id+client_secret (machine-to-machine)\n  3. siwe_message+siwe_signature (Sign-In with Ethereum)\nReturns a signed RS256 JWT.",
+        "description": "Tri-mode token endpoint.\n\nAccepts one of:\n  1. email+secret (user credentials)\n  2. client_id+client_secret (machine-to-machine)\n  3. siwe_message+siwe_signature (Sign-In with Ethereum)\n        4. grant_type=x402 + payment header (payment-first org bootstrap)\n    Returns a signed RS256 JWT, and for x402 bootstrap also a one-time client credential.",
         "operationId": "token_token_post",
         "requestBody": {
           "content": {
@@ -12409,11 +13698,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TokenResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TokenResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/X402BootstrapResponse"
+                    }
+                  ],
+                  "title": "Response Token Token Post"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "402": {
+            "description": "Payment required or payment settlement failed."
+          },
+          "409": {
+            "description": "The payer wallet is already registered."
           },
           "422": {
             "content": {

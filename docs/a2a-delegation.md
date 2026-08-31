@@ -13,6 +13,8 @@ When `MARKETPLACE_ENABLED=true`, an organization may separately opt into the pub
 
 `GET /marketplace/agents` exposes only registered endpoints. It supports `q`, `limit` (1-200), and an opaque slug cursor. Directory reputation is derived from outbound delegation events using a 14-day recency decay and a Beta(4,1) prior. It is shown only after five distinct calling organizations; the caller's own traffic, locally caused failures, and `possibly_delivered` outcomes are excluded. Legacy events whose failure origin is `unknown` remain in the derived denominator because they cannot be reliably reclassified. These metrics are advisory trust signals, not ownership, identity, payment, or service-level attestations.
 
+The planner-facing `discover_agents` tool performs a bounded, read-only lookup against this local cached directory. It accepts an optional search across agent name or organization slug, omits the caller's own organization, derives the Agent Card, `/message:send`, and marketplace catalog URLs, and reports whether each endpoint is already in the caller's allowlist. An unavailable organization context leaves `allowlisted` null. Discovery never fetches a remote card, authorizes a destination, or sends a delegation; `delegate_to_agent` remains responsible for SSRF, allowlist, budget, and outbound delivery checks. The tool returns an empty result unless both `MARKETPLACE_ENABLED=true` and `A2A_DELEGATION_ENABLED=true`, and has zero marginal cost.
+
 The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. Platform tool entries include cached aggregate reputation when available; the complete active-tool index is published at `/.well-known/reputation.json`. `supportedInterfaces` advertises both the streaming AG-UI surface (`/agent/run`) and the inbound A2A surface (`/message:send`). When enabled, `capabilities.asyncTasks` advertises the opt-in `Prefer: respond-async` flow and its polling endpoint.
 
 The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
@@ -148,11 +150,18 @@ Invoke-RestMethod -Uri "http://localhost:8000/a2a/agents" `
 Every delegation is recorded in the `a2a_delegation_events` table:
 
 Credit-funded delegations create a durable refund record in
-`a2a_delegation_refund_outbox` in the same transaction as the debit. Successful
-delegations cancel that record. Dispatch failures and non-completed remote tasks
-request a refund; the compensating top-up and immutable credit-ledger row are
-written atomically. A background retry worker reconciles requested refunds and
-pending rows with deterministic delegation event IDs after process failure.
+`a2a_delegation_refund_outbox` in the same transaction as the debit. For new
+funding rows, the outbox stores the debit ledger ID, and a completed refund is
+an immutable top-up linked to that debit by `reverses_ledger_id`. Successful
+delegations cancel the pending record. Dispatch failures and non-completed
+remote tasks request a refund; the compensating top-up and ledger linkage are
+written atomically. Rolling org and principal spend aggregates exclude the
+reversed debit, so refunded headroom is available again under both 24-hour
+caps. Refund rows created before migration 103 may not have a debit link;
+those legacy refunds still credit the org balance but do not restore
+rolling-cap headroom. A background retry worker reconciles requested refunds
+and pending rows with deterministic delegation event IDs after process
+failure, without double-crediting a repeated refund attempt.
 
 When an x402 payment header has been signed and the paid retry begins but the
 remote outcome cannot be determined, the delegation is recorded as

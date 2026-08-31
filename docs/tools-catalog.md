@@ -32,6 +32,7 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_dex_quote` | $0.005 (5,000 atomic) |
 | `get_gas_price` | $0.002 (2,000 atomic) |
 | `resolve_ens` | $0.003 (3,000 atomic) |
+| `discover_agents` | $0.000 (0 atomic) |
 
 ## Agent Discovery
 
@@ -65,7 +66,7 @@ DeFiLlama analytics tools `get_yield_rates`, `get_protocol_tvl`, and `get_chain_
 
 ## Tool Definitions
 
-All system tool implementations are under [tools/definitions/](tools/definitions/). The following 30 tools are currently registered:
+All system tool implementations are under [tools/definitions/](tools/definitions/). The following 31 caller-facing tools are currently registered in the catalog:
 
 | Tool | Description |
 |------|-------------|
@@ -73,6 +74,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `convert_currency` | Converts between fiat and crypto currencies using CoinGecko and live fiat exchange rates. |
 | `decode_transaction` | Decodes transaction calldata into human-readable form using the supplied ABI or 4byte.directory. |
 | `delegate_to_agent` | Delegate a task to a remote A2A-compliant agent. Discovers capabilities, sends a message, handles optional x402 payment, debits org credits, and records audit events. |
+| `discover_agents` | Finds opt-in remote A2A agents from the local directory snapshot, including derived endpoints, allowlist status, tool counts, and public reputation status; it makes no network requests and does not authorize delegation. |
 | `get_block` | Block metadata (timestamp, gas, miner, tx count) by number or `"latest"`. |
 | `get_chain_metrics` | Blockchain ecosystem health via DeFiLlama: current TVL, 7d/30d TVL change, aggregate chain fees, and provenance metadata. |
 | `get_datetime` | Returns current UTC date/time. Accepts an optional `strftime` format string. |
@@ -99,3 +101,6 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `get_protocol_tvl` | Total Value Locked (TVL) for a DeFi protocol via DeFiLlama: current USD TVL, 7d/30d change, fees/revenue when reported, optional daily historical series, and provenance metadata. Single-protocol calls include chain/history detail; batch calls return a compact TVL/fee/revenue summary to preserve all requested records in planner context. Upstream revenue failures are exposed as `revenue_error_type`; null economic fields remain data gaps. Supports batching and 3,000+ protocols. |
 | `get_token_price_historical` | Historical crypto price data via CoinGecko over a 1–365 day window. Returns period statistics, a downsampled daily series, `high_30d`, `std_30d` (population standard deviation of daily returns), and `dca_baseline_90d` from weekly samples over the preceding 90 UTC days; check `dca_baseline_90d_partial` for incomplete history. |
 | `get_yield_rates` | DeFi yield pool rates from DeFiLlama across 1,000+ protocols and all chains. Returns pools sorted by APY with TVL, base/reward APY, 7d/30d mean APY context, and provenance metadata. |
+
+The internal `record_predictions` tool is registered for scheduled analysis but is
+not a caller-facing marketplace listing.
