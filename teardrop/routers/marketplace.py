@@ -1094,6 +1094,7 @@ async def list_marketplace_agents_endpoint(
         return score if math.isfinite(score) else None
 
     if sort == "reputation":
+
         def reputation_sort_key(agent: dict[str, Any]) -> tuple[bool, float, str]:
             score = reputation_score(agent)
             return (score is None, -(score or 0.0), str(agent["org_slug"]))

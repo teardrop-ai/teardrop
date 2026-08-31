@@ -479,13 +479,13 @@ Teardrop uses Postgres (Neon recommended for production, local via Docker for de
 
 ### Migrations
 
-All schema changes are in `migrations/versions/`. Run them with:
+Active schema changes are in `migrations/versions/`. The current `102_squashed_baseline.sql` replaces the historical files in `migrations/archive/`. Run migrations with:
 
 ```powershell
 python -m migrations.runner
 ```
 
-For the complete tracking list of database schema migrations, seed entries, and indexes, please refer to the [docs/migrations.md](docs/migrations.md) catalog.
+For the active baseline, replacement manifest, and historical catalog of schema migrations, seed entries, and indexes, please refer to the [docs/migrations.md](docs/migrations.md) catalog.
 
 ### Neon (production)
 
@@ -516,8 +516,9 @@ tools/
   mcp_server.py       # Standalone MCPServer for MCP protocol clients
   definitions/        # One file per tool (calculate, get_datetime, web_search, …)
 migrations/
-  runner.py           # Applies SQL migrations in order
-  versions/           # 001_baseline through 088_withdrawal_in_flight
+  runner.py           # Applies active SQL migrations and squash baselines
+  versions/           # Active SQL and .replaces manifests
+  archive/            # Git-only historical migrations superseded by baselines
 shared/               # Internal shared utilities: db pool registry, audit inserts, webhook caller
 scripts/              # generate_keys.py, seed_users.py, audit_dependencies.py, export_api_spec.py, …
 ```

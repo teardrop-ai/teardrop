@@ -206,11 +206,15 @@ def test_agent_cursor_normalizes_invalid_reputation_keys():
         agent = {"org_slug": "bad", "reputation_score": value}
         assert _decode_agent_cursor(_build_agent_cursor(agent, "reputation")) == ("reputation", None, "bad", "all")
 
-    malformed_sort = base64.urlsafe_b64encode(
-        json.dumps({"sort": ["reputation"], "key": 0.9, "org_slug": "bad", "stale": "all"}).encode()
-    ).decode().rstrip("=")
-    missing_key = base64.urlsafe_b64encode(
-        json.dumps({"sort": "reputation", "org_slug": "bad", "stale": "all"}).encode()
-    ).decode().rstrip("=")
+    malformed_sort = (
+        base64.urlsafe_b64encode(json.dumps({"sort": ["reputation"], "key": 0.9, "org_slug": "bad", "stale": "all"}).encode())
+        .decode()
+        .rstrip("=")
+    )
+    missing_key = (
+        base64.urlsafe_b64encode(json.dumps({"sort": "reputation", "org_slug": "bad", "stale": "all"}).encode())
+        .decode()
+        .rstrip("=")
+    )
     assert _decode_agent_cursor(malformed_sort) is None
     assert _decode_agent_cursor(missing_key) is None

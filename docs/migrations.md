@@ -1,13 +1,15 @@
 # Database Migrations Catalog
 
-Teardrop automatically manages database schemas utilizing SQL-based migration scripts. All schema changes reside in the [migrations/versions/](migrations/versions/) mapping.
+Teardrop automatically manages database schemas using SQL migration scripts. Only active SQL files and `.replaces` manifests belong in [migrations/versions/](../migrations/versions/). Historical source migrations are retained in [migrations/archive/](../migrations/archive/) for auditability and tests, but are not shipped in the production image.
+
+The active baseline is `102_squashed_baseline.sql`, with `102_squashed_baseline.replaces` listing the 107 source migration stems it supersedes. On a fresh database, the runner executes the baseline and records the baseline plus every replaced stem. On an existing database with the complete historical set recorded, it records the baseline without replaying SQL. A partial historical set fails closed and must be completed before deployment.
 
 To run migrations locally:
 ```powershell
 python -m migrations.runner
 ```
 
-## Migration Catalog
+## Historical Migration Catalog
 
 | File | Contents |
 |------|----------|

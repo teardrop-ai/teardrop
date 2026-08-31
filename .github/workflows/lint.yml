@@ -25,3 +25,6 @@ jobs:
 
       - name: Check lint
         run: ruff check .
+
+      - name: Check migration prefixes
+        run: python scripts/check_migration_prefixes.py

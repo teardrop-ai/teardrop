@@ -44,6 +44,7 @@ tests/
 docs/
 
 # Non-runtime project content
+migrations/archive/
 notes/
 prompts/
 spec/

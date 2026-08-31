@@ -32,6 +32,8 @@ Copy-Item .env.example .env
 python scripts/generate_keys.py
 python -m migrations.runner
 
+New migrations belong in `migrations/versions/`; files in `migrations/archive/` are historical and must not be edited. Active SQL filenames must use unique numeric prefixes. Generate a new squash baseline with `python -m scripts.squash_migrations --cutoff <migration-stem> --write` during a coordinated release.
+
 # 6. Seed a local admin user
 python scripts/seed_users.py
 

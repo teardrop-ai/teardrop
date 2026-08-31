@@ -50,7 +50,7 @@ async def bind_pools_and_schema(db_pool, test_settings, monkeypatch):
     org_tools._fernet = None
 
     # Apply the MCP server schema and its additive discovery metadata migration.
-    migrations_dir = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+    migrations_dir = Path(__file__).resolve().parents[2] / "migrations" / "archive"
     for migration_name in ("012_org_mcp_servers.sql", "071_mcp_client_schema_hash.sql"):
         await db_pool.execute((migrations_dir / migration_name).read_text())
 

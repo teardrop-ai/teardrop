@@ -6,7 +6,7 @@
 import re
 from pathlib import Path
 
-MIGRATION = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "097_machine_org_provisioning.sql"
+MIGRATION = Path(__file__).resolve().parents[2] / "migrations" / "archive" / "097_machine_org_provisioning.sql"
 
 
 def _migration_sql() -> str:
