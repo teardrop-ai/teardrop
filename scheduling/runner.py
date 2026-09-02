@@ -172,7 +172,7 @@ async def _run_and_record(
         user_role=user_role,
         emit_ui=False,
     )
-    error_text = result.output_text if result.task_state != "completed" else ""
+    error_text = result.error or (result.output_text if result.task_state != "completed" else "")
     stored = await record_scheduled_run_result(
         schedule_id=schedule.id,
         org_id=schedule.org_id,
@@ -182,7 +182,7 @@ async def _run_and_record(
         cost_usdc=result.usage_event.cost_usdc,
         error=error_text,
     )
-    if settings.labeling_enabled and result.task_state == "completed":
+    if settings.labeling_enabled and result.task_state in {"completed", "timeout"}:
         await _ingest_labeling_prediction(
             org_id=schedule.org_id,
             schedule_id=schedule.id,

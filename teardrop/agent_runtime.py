@@ -121,6 +121,7 @@ class AgentRunOnceResult:
     marketplace_stats_billable: bool
     settlement_amount_usdc: int = 0
     settlement_tx: str = ""
+    error: str = ""
 
 
 def _usage_metadata_template() -> dict[str, Any]:
@@ -151,18 +152,35 @@ def _snapshot_values(snapshot_or_state: Any) -> dict[str, Any]:
     return {}
 
 
-def _extract_final_agent_text(messages: list[Any]) -> str:
+def _extract_final_agent_text(messages: list[Any], *, allow_non_ai_fallback: bool = True) -> str:
     for message in reversed(messages):
         if getattr(message, "type", "") != "ai":
             continue
         text = _coerce_stream_text(getattr(message, "content", "")).strip()
         if text:
             return text
+    if not allow_non_ai_fallback:
+        return ""
     for message in reversed(messages):
         text = _coerce_stream_text(getattr(message, "content", "")).strip()
         if text:
             return text
     return ""
+
+
+def _extract_partial_agent_text(snapshot_values: dict[str, Any]) -> str:
+    messages = snapshot_values.get("messages", [])
+    if not isinstance(messages, list):
+        return ""
+    return _extract_final_agent_text(messages, allow_non_ai_fallback=False)
+
+
+def _extract_snapshot_usage_data(snapshot_values: dict[str, Any]) -> dict[str, Any]:
+    metadata = snapshot_values.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    usage_data = metadata.get("_usage")
+    return usage_data if isinstance(usage_data, dict) else {}
 
 
 async def record_failure_usage_event(
@@ -180,13 +198,14 @@ async def record_failure_usage_event(
     platform_fee: int,
     runtime_settings: Settings,
     source: Literal["api", "schedule", "trigger", "a2a"],
-) -> UsageEvent:
+) -> tuple[UsageEvent, dict[str, Any]]:
     state_snapshot, usage_data = await fetch_usage_snapshot(
         graph=graph,
         config=config,
         run_id=run_id,
         settings=runtime_settings,
     )
+    snapshot_values = _snapshot_values(state_snapshot)
     usage_event = UsageEvent(
         user_id=usage_user_id,
         org_id=usage_org_id,
@@ -215,14 +234,14 @@ async def record_failure_usage_event(
         org_id=org_id,
         user_id=user_id,
         usage_data=usage_data,
-        state_values=_snapshot_values(state_snapshot),
+        state_values=snapshot_values,
         settings=runtime_settings,
         outcome=-1,
         outcome_source="auto",
         thread_id=thread_id,
         source=source,
     )
-    return usage_event
+    return usage_event, snapshot_values
 
 
 async def run_agent_once(
@@ -294,7 +313,7 @@ async def run_agent_once(
             )
     except asyncio.TimeoutError:
         duration_ms = int((time.monotonic() - start_time) * 1000)
-        usage_event = await record_failure_usage_event(
+        usage_event, snapshot_values = await record_failure_usage_event(
             graph=ctx.graph,
             config=config,
             run_id=run_id,
@@ -309,20 +328,23 @@ async def run_agent_once(
             runtime_settings=runtime_settings,
             source=source,
         )
+        usage_data = _extract_snapshot_usage_data(snapshot_values)
+        partial_text = _extract_partial_agent_text(snapshot_values)
         return AgentRunOnceResult(
             task_state="timeout",
             response_state="failed",
-            output_text="Task timed out.",
+            output_text=partial_text or "Task timed out.",
             duration_ms=duration_ms,
             usage_event=usage_event,
-            usage_data={},
+            usage_data=usage_data,
             llm_config=ctx.llm_config,
             marketplace_stats_billable=False,
+            error="Task timed out.",
         )
     except Exception:
         logger.exception("run_agent_once failed run_id=%s", run_id)
         duration_ms = int((time.monotonic() - start_time) * 1000)
-        usage_event = await record_failure_usage_event(
+        usage_event, snapshot_values = await record_failure_usage_event(
             graph=ctx.graph,
             config=config,
             run_id=run_id,
@@ -337,15 +359,18 @@ async def run_agent_once(
             runtime_settings=runtime_settings,
             source=source,
         )
+        usage_data = _extract_snapshot_usage_data(snapshot_values)
+        partial_text = _extract_partial_agent_text(snapshot_values)
         return AgentRunOnceResult(
             task_state="failed",
             response_state="failed",
-            output_text="Task failed.",
+            output_text=partial_text or "Task failed.",
             duration_ms=duration_ms,
             usage_event=usage_event,
-            usage_data={},
+            usage_data=usage_data,
             llm_config=ctx.llm_config,
             marketplace_stats_billable=False,
+            error="Task failed.",
         )
 
     duration_ms = int((time.monotonic() - start_time) * 1000)

@@ -32,6 +32,19 @@ def test_onboarding_credit_amount_is_bounded():
     config.get_settings.cache_clear()
 
 
+def test_scheduled_run_timeout_must_exceed_per_turn_budgets():
+    s = Settings()
+    minimum_timeout = s.agent_llm_timeout_seconds + s.agent_tool_executor_timeout_seconds + 60
+    assert s.scheduled_runs_execution_timeout_seconds >= minimum_timeout
+    with pytest.raises(ValueError, match="scheduled_runs_execution_timeout_seconds must be at least"):
+        Settings(
+            scheduled_runs_execution_timeout_seconds=359,
+            agent_llm_timeout_seconds=180,
+            agent_tool_executor_timeout_seconds=120,
+        )
+    config.get_settings.cache_clear()
+
+
 def test_pg_dsn_strips_asyncpg_prefix(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user:pass@host/db")
     s = Settings()

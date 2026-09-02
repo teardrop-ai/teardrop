@@ -500,6 +500,67 @@ async def test_marketplace_quote_rejects_invalid_or_unknown_tool(anon_client, mo
 
 
 @pytest.mark.anyio
+async def test_delegation_quote_discloses_default_charge(anon_client, monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/delegation/quote")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    s = config.get_settings()
+    assert body["max_cost_usdc"] == s.a2a_delegation_max_cost_usdc == 100_000
+    assert body["platform_fee_bps"] == s.a2a_delegation_platform_fee_bps == 500
+    assert body["effective_max_charge_usdc"] == 105_000
+    assert body["currency"] == "USDC"
+    expires_at = datetime.fromisoformat(body["expires_at"])
+    assert expires_at.tzinfo is not None
+    assert (expires_at - datetime.now(timezone.utc)).total_seconds() <= s.pricing_cache_ttl_seconds
+    assert resp.headers["cache-control"] == "public, max-age=60"
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_delegation_quote_reflects_overridden_cap(anon_client, monkeypatch):
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "2000000")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/delegation/quote")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["max_cost_usdc"] == 2_000_000
+    assert body["platform_fee_bps"] == 500
+    assert body["effective_max_charge_usdc"] == 2_100_000
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_delegation_quote_disabled_without_marketplace(anon_client, monkeypatch):
+    monkeypatch.delenv("MARKETPLACE_ENABLED", raising=False)
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await anon_client.get("/marketplace/delegation/quote")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Marketplace disabled."
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
 async def test_catalog_category_and_popularity_params(anon_client, monkeypatch):
     tool = MarketplaceTool(
         name="price_feed",

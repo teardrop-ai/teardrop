@@ -156,6 +156,45 @@ async def test_labeling_ingestion_finishes_before_scheduled_run_returns(monkeypa
 
 
 @pytest.mark.anyio
+async def test_timeout_preserves_prediction_capture_for_labeling(monkeypatch, test_settings):
+    test_settings.scheduled_runs_execution_timeout_seconds = 5
+    test_settings.labeling_enabled = True
+    monkeypatch.setattr("scheduling.runner.get_settings", lambda: test_settings)
+    monkeypatch.setattr("scheduling.runner.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.get_current_pricing", AsyncMock(return_value=SimpleNamespace(run_price_usdc=1000)))
+    monkeypatch.setattr(
+        "scheduling.runner.verify_credit",
+        AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
+    )
+    run_result = AgentRunOnceResult(
+        task_state="timeout",
+        response_state="failed",
+        output_text="partial report",
+        duration_ms=25,
+        usage_event=SimpleNamespace(cost_usdc=0),
+        usage_data={"_tool_call_log": [{"tool_name": "record_predictions", "success": True}]},
+        llm_config=None,
+        marketplace_stats_billable=False,
+        error="Task timed out.",
+    )
+    monkeypatch.setattr("scheduling.runner.run_agent_once", AsyncMock(return_value=run_result))
+    record_mock = AsyncMock(return_value=_stored_result(status="timeout", error="Task timed out."))
+    monkeypatch.setattr("scheduling.runner.record_scheduled_run_result", record_mock)
+    monkeypatch.setattr("scheduling.runner.mark_scheduled_run_failed", AsyncMock(return_value=None))
+    ingest = AsyncMock()
+    monkeypatch.setattr("scheduling.runner._ingest_labeling_prediction", ingest)
+
+    from scheduling.runner import execute_scheduled_run
+
+    result = await execute_scheduled_run(_schedule())
+
+    assert result.status == "timeout"
+    ingest.assert_awaited_once()
+    assert record_mock.await_args.kwargs["output_text"] == "partial report"
+    assert record_mock.await_args.kwargs["error"] == "Task timed out."
+
+
+@pytest.mark.anyio
 async def test_execute_scheduled_run_blocks_ssrf_callback_without_failing_run(monkeypatch, test_settings):
     test_settings.scheduled_runs_execution_timeout_seconds = 5
     monkeypatch.setattr("scheduling.runner.get_settings", lambda: test_settings)

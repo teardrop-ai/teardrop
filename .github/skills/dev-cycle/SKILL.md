@@ -109,12 +109,17 @@ Actions:
 - Include invariant checks required by the touched domains.
 - If tool behavior, planner behavior, pricing, or cost accounting may change, add an eval-harness follow-up.
 - State whether the work is ordinary investigation or durable research, and name the future consumer when research is selected.
+- Review tradeoffs and decision strategy: name the alternatives considered, why the chosen option wins, and what was rejected as feature creep.
 
 Plan requirements:
 - concrete edit target
 - falsifiable hypothesis
 - validation command or check
 - rollback or retry path if VERIFY blocks
+- decision summary
+- implementation steps, including test files and doc updates
+- verification steps
+- 400-800 tokens (target), optimized for handoff to an execution agent; may exceed only if a blocking finding requires it
 
 Versioning checkpoint (lightweight):
 - Ask: "Does this cycle change the public API, agent behavior, marketplace contract, or billing semantics?"
@@ -158,6 +163,8 @@ Always check:
 - edge cases exposed by the local code path
 - test coverage for the changed slice
 - assumptions that were inferred rather than proven
+- plan-vs-implementation diff: changed files and call sites match the plan; no scope creep
+- `README.md` and `docs/` updated where behavior, configuration, or contracts changed
 
 Additional checks by domain:
 - billing, Stripe, x402, credits, marketplace, MCP, A2A, SSRF: load `teardrop-domain-invariants`

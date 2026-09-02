@@ -889,8 +889,12 @@ class Settings(BaseSettings):
         description="Auto-disable a scheduled run after this many consecutive execution failures.",
     )
     scheduled_runs_execution_timeout_seconds: int = Field(
-        default=120,
-        description="Timeout in seconds for a single scheduled agent execution.",
+        default=360,
+        description=(
+            "Run-level backstop in seconds for a scheduled agent execution. It must allow "
+            "one planner/tool pass plus a recovery buffer; longer multi-turn runs may still "
+            "hit this wall and return partial state."
+        ),
     )
     scheduled_runs_max_concurrency: int = Field(
         default=4,
@@ -1070,6 +1074,13 @@ class Settings(BaseSettings):
             raise ValueError("x402_treasury_addresses must not contain duplicates")
         if any(not re.fullmatch(r"0x[0-9a-fA-F]{40}", address) for address in self.x402_treasury_addresses):
             raise ValueError("x402_treasury_addresses entries must be 20-byte EVM addresses")
+        min_scheduled_timeout = self.agent_llm_timeout_seconds + self.agent_tool_executor_timeout_seconds + 60
+        if self.scheduled_runs_execution_timeout_seconds < min_scheduled_timeout:
+            raise ValueError(
+                "scheduled_runs_execution_timeout_seconds must be at least "
+                "agent_llm_timeout_seconds + agent_tool_executor_timeout_seconds + 60 "
+                "for timeout recovery"
+            )
         return self
 
 

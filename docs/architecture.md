@@ -47,7 +47,7 @@ Retention sweeps are batched, parameterized, and log per-table counts on every p
 
 ## Generalized Labeling Data Plane (`labeling/`)
 
-Scheduled runs can call the internal `record_predictions` tool once with the exact machine-readable prediction document. Its arguments are retained only for this opt-in tool; ordinary tool telemetry remains hash-only. The scheduled runner stores the prediction asynchronously after a successful run, while the existing callback receives `output_text`, which is the mobile-friendly human report.
+Scheduled runs can call the internal `record_predictions` tool once with the exact machine-readable prediction document. Its arguments are retained only for this opt-in tool; ordinary tool telemetry remains hash-only. The scheduled runner stores the prediction asynchronously after a completed or timed-out run when a valid capture exists, while the existing callback receives `output_text`, which is the mobile-friendly human report.
 
 Scheduled callbacks remain JSON by default for compatibility. Set a schedule's `callback_format` to `text` to POST only `output_text` as `text/plain`, which is suitable for ntfy and similar mobile endpoints.
 

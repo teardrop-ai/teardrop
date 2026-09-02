@@ -229,6 +229,55 @@ def test_normalize_output_rejects_incomplete_basket():
     assert normalize_eth_primitive_output(json.dumps(payload)) is None
 
 
+def test_normalize_output_accepts_prompt_example_shape_with_null_numerics_and_gaps():
+    """Pins the corrected scheduled-task prompt shape: numeric fields are null
+    (never the literal "DATA_GAP" string) with field names in per-protocol
+    data_gaps, and prediction carries the schema-required prediction_outcome."""
+    payload = _valid_report()
+    for protocol in payload["protocols"]:
+        protocol["fees_7d_change_pct"] = None
+        protocol["fees_30d_change_pct"] = None
+        protocol["revenue_7d_change_pct"] = None
+        protocol["revenue_30d_change_pct"] = None
+        protocol["tvl_7d_change_pct"] = None
+        protocol["fee_to_fdv"] = None
+        protocol["price_24h_change_pct"] = None
+        protocol["data_gaps"] = ["fees", "fdv"]
+        protocol["prediction"]["confidence"] = 0.0
+    payload["basket_median_fee_to_fdv"] = None
+
+    normalized = normalize_eth_primitive_output(json.dumps(payload))
+
+    assert normalized is not None
+    canonical = json.loads(normalized.split("\n---\n", maxsplit=1)[0])
+    assert canonical["protocols"][0]["fees_7d_change_pct"] is None
+    assert canonical["protocols"][0]["data_gaps"] == ["fees", "fdv"]
+
+
+def test_normalize_output_rejects_data_gap_string_in_numeric_field():
+    """The old prompt wording ('record it as DATA_GAP') produced a string in a
+    ["number", "null"] field, which must fail validation."""
+    payload = _valid_report()
+    payload["protocols"][0]["fees_7d_change_pct"] = "DATA_GAP"
+    payload["protocols"][0]["data_gaps"] = ["fees"]
+
+    assert normalize_eth_primitive_output(json.dumps(payload)) is None
+
+
+def test_normalize_output_rejects_missing_prediction_outcome():
+    """The original prompt example omitted the schema-required prediction_outcome;
+    this pin ensures the corrected example shape stays valid and the old one fails."""
+    contract = get_output_contract(ETH_PRIMITIVE_FEES_TASK)
+    assert contract is not None
+
+    valid_payload = _valid_report()
+    assert contract.validate(valid_payload)
+
+    stale_prompt_example = _valid_report()
+    del stale_prompt_example["protocols"][0]["prediction"]["prediction_outcome"]
+    assert not contract.validate(stale_prompt_example)
+
+
 def test_fallback_is_machine_parseable_and_explicitly_insufficient():
     fallback = build_eth_primitive_fallback()
     json_part, summary = fallback.split("\n---\n", maxsplit=1)

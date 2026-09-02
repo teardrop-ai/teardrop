@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from billing import (
+    apply_platform_fee,
     get_current_pricing,
     get_invoice_by_run,
     get_live_pricing,
@@ -881,6 +882,14 @@ class MarketplaceQuoteResponse(BaseModel):
     expires_at: str = Field(..., description="ISO 8601 advisory expiry matching the active pricing-cache TTL.")
 
 
+class MarketplaceDelegationQuoteResponse(BaseModel):
+    max_cost_usdc: int = Field(..., ge=0, le=100_000_000, description="Global per-delegation cost cap in atomic USDC.")
+    platform_fee_bps: int = Field(..., ge=0, description="Platform fee on delegations in basis points.")
+    effective_max_charge_usdc: int = Field(..., ge=0, le=100_000_000, description="Cap plus platform fee, in atomic USDC.")
+    currency: Literal["USDC"] = "USDC"
+    expires_at: str = Field(..., description="ISO 8601 advisory expiry matching the active pricing-cache TTL.")
+
+
 class MarketplaceAuthorSummary(BaseModel):
     org_slug: str
     org_name: str
@@ -1301,6 +1310,31 @@ async def get_marketplace_quote(
             "price_usdc": price_usdc,
             "currency": "USDC",
             "source": source,
+            "expires_at": expires_at.isoformat(),
+        },
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
+@router.get("/marketplace/delegation/quote", tags=["Marketplace"], response_model=MarketplaceDelegationQuoteResponse)
+async def get_marketplace_delegation_quote(request: Request) -> JSONResponse:
+    """Public: quote the deterministic default per-delegation charge (global cap plus platform fee)."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
+
+    effective_max_charge_usdc = apply_platform_fee(s.a2a_delegation_max_cost_usdc)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=s.pricing_cache_ttl_seconds)
+
+    return JSONResponse(
+        content={
+            "max_cost_usdc": s.a2a_delegation_max_cost_usdc,
+            "platform_fee_bps": s.a2a_delegation_platform_fee_bps,
+            "effective_max_charge_usdc": effective_max_charge_usdc,
+            "currency": "USDC",
             "expires_at": expires_at.isoformat(),
         },
         headers={"Cache-Control": "public, max-age=60"},

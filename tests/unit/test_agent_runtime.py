@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -475,7 +476,7 @@ class TestPromotionalCreditExclusions:
             patch.object(agent_runtime, "record_usage_event", AsyncMock()),
             patch.object(agent_runtime, "record_post_run_telemetry", telemetry_mock),
         ):
-            await agent_runtime.record_failure_usage_event(
+            usage_event, snapshot_values = await agent_runtime.record_failure_usage_event(
                 graph=MagicMock(),
                 config={},
                 run_id="run-1",
@@ -503,3 +504,117 @@ class TestPromotionalCreditExclusions:
             thread_id="thread-1",
             source="a2a",
         )
+        assert snapshot_values == state_values
+
+    async def test_run_agent_once_timeout_surfaces_partial_output(self, test_settings):
+        """Run-level timeout emits the last assistant text, not a bare 'Task timed out.'"""
+        from langchain_core.messages import AIMessage
+
+        from teardrop import agent_runtime
+
+        failure_usage_data = {"_tool_call_log": [{"tool_name": "record_predictions", "success": True}]}
+        state_values = {
+            "messages": [AIMessage(content="partial synthesis from tools")],
+            "metadata": {"_usage": failure_usage_data},
+        }
+        ctx = _RunContext(
+            graph=MagicMock(),
+            org_lc_tools=[],
+            org_tools_by_name={},
+            mp_by_name={},
+            recalled=[],
+            llm_config=None,
+            org_name="test-org",
+            credit_balance_usdc=None,
+        )
+
+        async def _hang(*_args, **_kwargs):
+            await asyncio.sleep(3600)
+
+        with (
+            patch.object(agent_runtime, "get_settings", return_value=test_settings),
+            patch.object(agent_runtime, "_prepare_run_context", AsyncMock(return_value=ctx)),
+            patch.object(
+                agent_runtime,
+                "fetch_usage_snapshot",
+                AsyncMock(return_value=(MagicMock(values=state_values), failure_usage_data)),
+            ),
+            patch.object(agent_runtime, "record_usage_event", AsyncMock()),
+            patch.object(agent_runtime, "record_post_run_telemetry"),
+        ):
+            graph_mock = ctx.graph
+            graph_mock.ainvoke = AsyncMock(side_effect=_hang)
+            result = await agent_runtime.run_agent_once(
+                org_id="org-1",
+                user_id="user-1",
+                usage_user_id="user-1",
+                usage_org_id="org-1",
+                user_message="hello",
+                run_id="run-1",
+                thread_id="thread-1",
+                billing=BillingResult(verified=True, billing_method="credit"),
+                is_byok=False,
+                org_llm_cfg=None,
+                platform_fee=0,
+                timeout_seconds=0.05,
+                source="schedule",
+            )
+
+        assert result.task_state == "timeout"
+        assert result.output_text == "partial synthesis from tools"
+        assert result.error == "Task timed out."
+        assert result.usage_data == failure_usage_data
+
+    async def test_run_agent_once_timeout_falls_back_when_no_partial(self, test_settings):
+        """With no assistant text in state, timeout keeps the legacy message."""
+        from langchain_core.messages import ToolMessage
+
+        from teardrop import agent_runtime
+
+        state_values = {
+            "messages": [
+                ToolMessage(content='{"secret":"must not become webhook text"}', tool_call_id="tool-1"),
+            ],
+            "metadata": {"_usage": "malformed"},
+        }
+        ctx = _RunContext(
+            graph=MagicMock(),
+            org_lc_tools=[],
+            org_tools_by_name={},
+            mp_by_name={},
+            recalled=[],
+            llm_config=None,
+            org_name="test-org",
+            credit_balance_usdc=None,
+        )
+
+        async def _hang(*_args, **_kwargs):
+            await asyncio.sleep(3600)
+
+        with (
+            patch.object(agent_runtime, "get_settings", return_value=test_settings),
+            patch.object(agent_runtime, "_prepare_run_context", AsyncMock(return_value=ctx)),
+            patch.object(agent_runtime, "fetch_usage_snapshot", AsyncMock(return_value=(MagicMock(values=state_values), {}))),
+            patch.object(agent_runtime, "record_usage_event", AsyncMock()),
+            patch.object(agent_runtime, "record_post_run_telemetry"),
+        ):
+            graph_mock = ctx.graph
+            graph_mock.ainvoke = AsyncMock(side_effect=_hang)
+            result = await agent_runtime.run_agent_once(
+                org_id="org-1",
+                user_id="user-1",
+                usage_user_id="user-1",
+                usage_org_id="org-1",
+                user_message="hello",
+                run_id="run-1",
+                thread_id="thread-1",
+                billing=BillingResult(verified=True, billing_method="credit"),
+                is_byok=False,
+                org_llm_cfg=None,
+                platform_fee=0,
+                timeout_seconds=0.05,
+                source="schedule",
+            )
+
+        assert result.task_state == "timeout"
+        assert result.output_text == "Task timed out."
