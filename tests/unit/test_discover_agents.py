@@ -90,6 +90,8 @@ async def test_discovery_excludes_own_org_marks_allowlist_and_unrated(monkeypatc
     assert result["agents"][0]["registered_at"] == "2026-08-30T00:00:00+00:00"
     assert result["agents"][1]["allowlisted"] is False
     assert result["agents"][0]["message_endpoint"] == "https://new.example.com/message:send"
+    assert result["registration_endpoint"] == "/marketplace/agent-registration"
+    assert result["registration_benefits_url"] == "/.well-known/registry-benefits.json"
     assert "must-not-leak" not in json.dumps(result)
     query = pool.fetch.call_args.args[0]
     assert "a2a_allowed_agents" in query

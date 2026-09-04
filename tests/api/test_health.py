@@ -190,6 +190,41 @@ async def test_public_reputation_metadata_and_cache(api_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_registry_benefits_metadata_and_cache(api_client, test_settings):
+    test_settings.marketplace_enabled = True
+
+    response = await api_client.get("/.well-known/registry-benefits.json")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "public, max-age=300"
+    body = response.json()
+    assert body["schema_version"] == "1.0"
+    assert body["registration"]["endpoint"] == "http://test/marketplace/agent-registration"
+    assert body["registration"]["auth"] == ["org_admin", "org_bound_client_credentials"]
+    assert {benefit["id"] for benefit in body["benefits"]} == {
+        "directory_discovery",
+        "planner_discovery",
+        "outcome_reputation",
+    }
+    assert "guaranteed inbound calls or revenue" in body["does_not_provide"]
+
+    cached_response = await api_client.get(
+        "/.well-known/registry-benefits",
+        headers={"If-None-Match": response.headers["etag"]},
+    )
+    assert cached_response.status_code == 304
+
+
+@pytest.mark.anyio
+async def test_registry_benefits_hidden_when_marketplace_disabled(api_client, test_settings):
+    test_settings.marketplace_enabled = False
+
+    response = await api_client.get("/.well-known/registry-benefits.json")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_agent_card_marketplace_discovery(api_client, test_settings):
     test_settings.marketplace_enabled = True
 
@@ -207,6 +242,7 @@ async def test_agent_card_marketplace_discovery(api_client, test_settings):
         "author_catalog_endpoint": "/marketplace/catalog?org_slug={org_slug}",
         "self_inventory_endpoint": "/agent/tools",
         "agent_registration_endpoint": "/marketplace/agent-registration",
+        "registration_benefits_endpoint": "/.well-known/registry-benefits.json",
         "mcp_gateway_endpoint": "/tools/mcp",
         "registration": {
             "author_config_endpoint": "/marketplace/author-config",
@@ -435,6 +471,7 @@ async def test_root_llms_txt(api_client, test_settings):
     assert "# Teardrop" in resp.text
     assert "http://test/.well-known/agent-card.json" in resp.text
     assert "http://test/.well-known/reputation.json" in resp.text
+    assert "http://test/.well-known/registry-benefits.json" in resp.text
     assert "http://test/marketplace/llms.txt" in resp.text
 
 

@@ -1,5 +1,7 @@
 # A2A Delegation & cross-agent revenue routing
 
+The public `/.well-known/registry-benefits.json` contract explains how organizations register an A2A endpoint, what discovery and advisory reputation benefits they receive, and which guarantees are intentionally not provided. It is linked from the Agent Card and root `llms.txt`.
+
 Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and charge those delegations back to the calling organisation. This enables:
 
 - **Network effect**: Agents discover and call each other via published Agent Cards.

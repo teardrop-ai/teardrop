@@ -412,6 +412,8 @@ For the full set of billing environment variables (`BILLING_ENABLED`, `X402_*`, 
 
 Teardrop agents can delegate tasks to remote A2A-compliant agents and charge those delegations back to the calling organization. This unlocks decentralized specialisation, built-in spend orchestration, and automatic revenue routing.
 
+The machine-readable `/.well-known/registry-benefits.json` contract explains how organizations register an A2A endpoint, what discovery and advisory reputation benefits they receive, and which guarantees are intentionally not provided.
+
 For a detailed protocol specification, system configurations, allowlists, and billing event payload structures, see the [docs/a2a-delegation.md](docs/a2a-delegation.md) guide.
 
 ---

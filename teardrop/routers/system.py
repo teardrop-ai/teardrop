@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+_REGISTRY_REGISTRATION_PATH = "/marketplace/agent-registration"
+_REGISTRY_BENEFITS_PATH = "/.well-known/registry-benefits.json"
 
 
 class PublicToolReputation(BaseModel):
@@ -111,6 +114,10 @@ def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
                 "## Marketplace",
                 f"- [Marketplace Catalog]({base_url}/marketplace/catalog): Public paid MCP tool catalogue.",
                 f"- [Marketplace llms.txt]({base_url}/marketplace/llms.txt): LLM-friendly marketplace index.",
+                (
+                    f"- [A2A Registry Benefits]({base_url}{_REGISTRY_BENEFITS_PATH}): "
+                    "Machine-readable endpoint registration benefits and requirements."
+                ),
             ]
         )
     lines.append("")
@@ -209,7 +216,8 @@ def _build_agent_card_content(
             "quote_endpoint": "/marketplace/quote?tool={qualified_name}",
             "author_catalog_endpoint": "/marketplace/catalog?org_slug={org_slug}",
             "self_inventory_endpoint": "/agent/tools",
-            "agent_registration_endpoint": "/marketplace/agent-registration",
+            "agent_registration_endpoint": _REGISTRY_REGISTRATION_PATH,
+            "registration_benefits_endpoint": _REGISTRY_BENEFITS_PATH,
             "mcp_gateway_endpoint": endpoints["mcp_tools"],
             "registration": {
                 "author_config_endpoint": "/marketplace/author-config",
@@ -410,6 +418,65 @@ def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
     }
 
 
+def _build_registry_benefits_content(request: Request) -> dict[str, Any]:
+    current_settings = get_settings()
+    base_url = _public_base_url(request, current_settings)
+    return {
+        "schema_version": "1.0",
+        "name": "Teardrop A2A Agent Endpoint Registry",
+        "description": (
+            "Opt-in registration makes an organization's A2A endpoint discoverable to Teardrop agents "
+            "and eligible for advisory reputation signals derived from delegation outcomes."
+        ),
+        "registration": {
+            "endpoint": f"{base_url}{_REGISTRY_REGISTRATION_PATH}",
+            "method": "PUT",
+            "auth": ["org_admin", "org_bound_client_credentials"],
+            "idempotent": True,
+            "one_per_organization": True,
+        },
+        "benefits": [
+            {
+                "id": "directory_discovery",
+                "description": "Appear in the public opt-in A2A endpoint directory.",
+                "endpoint": f"{base_url}/marketplace/agents",
+            },
+            {
+                "id": "planner_discovery",
+                "description": (
+                    "Become a candidate returned by the zero-cost discover_agents planner tool; "
+                    "delegation still requires the caller's allowlist and budget controls."
+                ),
+                "tool": "discover_agents",
+            },
+            {
+                "id": "outcome_reputation",
+                "description": "Expose advisory reputation derived from observed outbound delegation outcomes.",
+                "methodology": {
+                    "recency_decay_days": 14,
+                    "prior": "Beta(4,1)",
+                    "minimum_distinct_calling_organizations": 5,
+                },
+            },
+        ],
+        "requirements": {
+            "base_url_scheme": "https",
+            "agent_card_path": "/.well-known/agent-card.json",
+            "message_endpoint": "/message:send",
+            "ssrf_validation": True,
+        },
+        "does_not_provide": [
+            "automatic delegation authorization",
+            "quality, ownership, identity, payment, or service-level attestation",
+            "guaranteed inbound calls or revenue",
+        ],
+        "links": {
+            "directory": f"{base_url}/marketplace/agents",
+            "documentation": f"{base_url}/docs",
+        },
+    }
+
+
 # ─── Health & Ops ─────────────────────────────────────────────────────────
 
 
@@ -533,6 +600,15 @@ async def x402_discovery(request: Request) -> Response:
 async def x402_discovery_json(request: Request) -> Response:
     """Legacy JSON alias for x402 discovery metadata."""
     return _json_discovery_response(request, _build_x402_discovery_content(request))
+
+
+@router.get("/.well-known/registry-benefits", tags=["System"])
+@router.get("/.well-known/registry-benefits.json", include_in_schema=False, tags=["System"])
+async def registry_benefits(request: Request) -> Response:
+    """Publish machine-readable benefits and requirements for A2A registration."""
+    if not get_settings().marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+    return _json_discovery_response(request, _build_registry_benefits_content(request))
 
 
 # ─── MCP OAuth Protected-Resource Discovery ────────────────────────────────

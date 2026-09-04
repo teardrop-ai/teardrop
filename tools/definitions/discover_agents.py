@@ -64,10 +64,23 @@ class DiscoverAgentsOutput(BaseModel):
     generated_at: str | None
     count: int
     agents: list[DiscoveredAgent]
+    registration_endpoint: str | None = Field(
+        default=None,
+        description="Endpoint where an organization can publish its own A2A endpoint.",
+    )
+    registration_benefits_url: str | None = Field(
+        default=None,
+        description="Machine-readable registration benefits, requirements, and non-guarantees.",
+    )
 
 
 def _agent_url_key(value: Any) -> str:
     return str(value or "").rstrip("/")
+
+
+def _registry_url(settings: Any, path: str) -> str:
+    base_url = str(getattr(settings, "app_base_url", "") or "").strip().rstrip("/")
+    return f"{base_url}{path}" if base_url else path
 
 
 async def _load_allowlist_context(org_id: str) -> tuple[str | None, set[str] | None]:
@@ -172,6 +185,8 @@ async def discover_agents(
         "generated_at": snapshot.get("generated_at"),
         "count": len(discovered),
         "agents": discovered,
+        "registration_endpoint": _registry_url(settings, "/marketplace/agent-registration"),
+        "registration_benefits_url": _registry_url(settings, "/.well-known/registry-benefits.json"),
     }
 
 
