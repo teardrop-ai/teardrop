@@ -558,6 +558,24 @@ class TestWeb3MarketplaceToolsMigration046:
     # ── Billing integration: resolve_tool_cost ────────────────────────────
 
     @pytest.mark.anyio
+    async def test_resolve_tool_cost_assess_counterparty_risk(self, monkeypatch):
+        """Billing resolves assess_counterparty_risk at its marketplace price."""
+        from billing import resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=35000))
+        cost = await resolve_tool_cost("assess_counterparty_risk", {}, default_cost=0, marketplace_enabled=True)
+        assert cost == 35000
+
+    @pytest.mark.anyio
+    async def test_resolve_tool_cost_validate_opportunity(self, monkeypatch):
+        """Billing resolves validate_opportunity at its marketplace price."""
+        from billing import resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=15000))
+        cost = await resolve_tool_cost("validate_opportunity", {}, default_cost=0, marketplace_enabled=True)
+        assert cost == 15000
+
+    @pytest.mark.anyio
     async def test_resolve_tool_cost_eth_balance(self, monkeypatch):
         """Billing resolves get_eth_balance at its marketplace price."""
         from billing import resolve_tool_cost

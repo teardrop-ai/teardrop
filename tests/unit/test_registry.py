@@ -270,3 +270,56 @@ def test_list_latest_one_per_name():
     assert "beta" in names
     alpha = next(t for t in latest if t.name == "alpha")
     assert alpha.version == "2.0.0"
+
+
+def test_assess_counterparty_risk_registered():
+    from tools.definitions import register_all
+
+    reg = ToolRegistry()
+    register_all(reg)
+    tool = reg.get("assess_counterparty_risk")
+    assert tool is not None
+    assert tool.name == "assess_counterparty_risk"
+    assert tool.version == "1.0.0"
+    assert tool.use_when != ""
+    assert "get_wallet_approvals" in tool.alternatives
+
+
+def test_validate_opportunity_registered():
+    from tools.definitions import register_all
+
+    reg = ToolRegistry()
+    register_all(reg)
+    tool = reg.get("validate_opportunity")
+    assert tool is not None
+    assert tool.name == "validate_opportunity"
+    assert tool.version == "1.0.0"
+    assert tool.use_when != ""
+    assert "get_yield_rates" in tool.alternatives
+
+
+def test_every_implementation_accepts_input_schema_fields_as_kwargs():
+    """Executor and LangChain paths both call implementations with schema fields as kwargs."""
+    import inspect
+
+    from tools.definitions import register_all
+
+    reg = ToolRegistry()
+    register_all(reg)
+
+    failures: list[str] = []
+    for tool in reg.list_all():
+        sig = inspect.signature(tool.implementation)
+        accepts_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if accepts_var_kw:
+            continue
+        bindable = {
+            name
+            for name, p in sig.parameters.items()
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        missing = set(tool.input_schema.model_fields) - bindable
+        if missing:
+            failures.append(f"{tool.name}: {sorted(missing)}")
+
+    assert not failures, f"Implementations cannot be called with their schema fields: {failures}"

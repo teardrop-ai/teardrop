@@ -140,13 +140,53 @@ def _write_get_protocol_tvl(payload: dict[str, Any], slots: dict[str, Any]) -> d
     return slots
 
 
+def _write_assess_counterparty_risk(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    wallet = str(payload.get("wallet_address") or "").lower()
+    if not wallet:
+        return slots
+    risk_data = dict(slots.get("counterparty_risk", {}))
+    approval = payload.get("approval_summary") if isinstance(payload.get("approval_summary"), dict) else {}
+    liq = payload.get("liquidation") if isinstance(payload.get("liquidation"), dict) else {}
+    risk_data[wallet] = {
+        "verdict": payload.get("verdict"),
+        "total_net_worth_usd": payload.get("total_net_worth_usd"),
+        "liquidation_status": liq.get("status"),
+        "worst_health_factor": liq.get("worst_health_factor"),
+        "hacked_spenders": approval.get("hacked_spenders"),
+        "unlimited_approvals": approval.get("unlimited"),
+    }
+    slots["counterparty_risk"] = risk_data
+    return slots
+
+
+def _write_validate_opportunity(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    pool_id = str(payload.get("pool_id") or "").lower()
+    if not pool_id:
+        return slots
+    opp_data = dict(slots.get("opportunity_validations", {}))
+    y_sum = payload.get("yield_summary") if isinstance(payload.get("yield_summary"), dict) else {}
+    l_sum = payload.get("liquidity_summary") if isinstance(payload.get("liquidity_summary"), dict) else {}
+    opp_data[pool_id] = {
+        "verdict": payload.get("verdict"),
+        "project": payload.get("project"),
+        "symbol": payload.get("symbol"),
+        "tvl_usd": l_sum.get("tvl_usd"),
+        "apy": y_sum.get("apy"),
+        "sustainability_reason": payload.get("sustainability_reason"),
+    }
+    slots["opportunity_validations"] = opp_data
+    return slots
+
+
 _WRITERS = {
+    "assess_counterparty_risk": _write_assess_counterparty_risk,
     "get_wallet_portfolio": _write_get_wallet_portfolio,
     "get_erc20_balance": _write_get_erc20_balance,
     "get_token_price": _write_get_token_price,
     "get_defi_positions": _write_get_defi_positions,
     "get_lending_rates": _write_get_lending_rates,
     "get_protocol_tvl": _write_get_protocol_tvl,
+    "validate_opportunity": _write_validate_opportunity,
 }
 
 

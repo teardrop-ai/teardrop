@@ -113,3 +113,49 @@ def test_summarize_ignores_non_dict_list_items():
     payload = json.dumps(["string", 42, {"protocol": "aave-v3", "current_tvl_usd": 100.0}])
     slots = summarize_into_slots("get_protocol_tvl", payload, {})
     assert slots["tvl"]["aave-v3"]["current_tvl_usd"] == 100.0
+
+
+def test_summarize_assess_counterparty_risk_into_slots():
+    import json
+
+    payload = json.dumps(
+        {
+            "wallet_address": "0x5853ed4f26a3fcea565b3fbc698bb19cdf6deb85",
+            "verdict": "acceptable",
+            "total_net_worth_usd": 27654.14,
+            "liquidation": {"status": "no_debt", "worst_health_factor": None},
+            "approval_summary": {"hacked_spenders": 0, "unlimited": 2},
+        }
+    )
+    slots = summarize_into_slots("assess_counterparty_risk", payload, {})
+    assert "counterparty_risk" in slots
+    addr = "0x5853ed4f26a3fcea565b3fbc698bb19cdf6deb85"
+    assert addr in slots["counterparty_risk"]
+    assert slots["counterparty_risk"][addr]["verdict"] == "acceptable"
+    assert slots["counterparty_risk"][addr]["total_net_worth_usd"] == 27654.14
+    assert slots["counterparty_risk"][addr]["unlimited_approvals"] == 2
+
+
+def test_summarize_validate_opportunity_into_slots():
+    import json
+
+    payload = json.dumps(
+        {
+            "pool_id": "747c1d2a-c668-4682-b9f9-296708a3dd90",
+            "project": "aave-v3",
+            "symbol": "USDC",
+            "verdict": "sustainable",
+            "sustainability_reason": "Pool exhibits healthy liquidity, consistent yields, and stable track record.",
+            "yield_summary": {"apy": 4.5},
+            "liquidity_summary": {"tvl_usd": 50000000.0},
+        }
+    )
+    slots = summarize_into_slots("validate_opportunity", payload, {})
+    assert "opportunity_validations" in slots
+    pid = "747c1d2a-c668-4682-b9f9-296708a3dd90"
+    assert pid in slots["opportunity_validations"]
+    assert slots["opportunity_validations"][pid]["verdict"] == "sustainable"
+    assert slots["opportunity_validations"][pid]["project"] == "aave-v3"
+    assert slots["opportunity_validations"][pid]["symbol"] == "USDC"
+    assert slots["opportunity_validations"][pid]["tvl_usd"] == 50000000.0
+    assert slots["opportunity_validations"][pid]["apy"] == 4.5

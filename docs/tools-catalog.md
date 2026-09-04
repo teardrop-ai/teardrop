@@ -33,6 +33,8 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 | `get_gas_price` | $0.002 (2,000 atomic) |
 | `resolve_ens` | $0.003 (3,000 atomic) |
 | `discover_agents` | $0.000 (0 atomic) |
+| `assess_counterparty_risk` | $0.035 (35,000 atomic) |
+| `validate_opportunity` | $0.015 (15,000 atomic) |
 
 ## Agent Discovery
 
@@ -106,6 +108,8 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `get_protocol_tvl` | Total Value Locked (TVL) for a DeFi protocol via DeFiLlama: current USD TVL, 7d/30d change, fees/revenue when reported, optional daily historical series, and provenance metadata. Single-protocol calls include chain/history detail; batch calls return a compact TVL/fee/revenue summary to preserve all requested records in planner context. Upstream revenue failures are exposed as `revenue_error_type`; null economic fields remain data gaps. Supports batching and 3,000+ protocols. |
 | `get_token_price_historical` | Historical crypto price data via CoinGecko over a 1–365 day window. Returns period statistics, a downsampled daily series, `high_30d`, `std_30d` (population standard deviation of daily returns), and `dca_baseline_90d` from weekly samples over the preceding 90 UTC days; check `dca_baseline_90d_partial` for incomplete history. |
 | `get_yield_rates` | DeFi yield pool rates from DeFiLlama across 1,000+ protocols and all chains. Returns pools sorted by APY with TVL, base/reward APY, 7d/30d mean APY context, and provenance metadata. |
+| `assess_counterparty_risk` | Composite counterparty risk assessment fanning out to token approvals, liquidation health, and activity history to return an agent-branchable risk verdict without raw transaction payloads. |
+| `validate_opportunity` | Composite DeFi yield pool sustainability verdict and risk factor analysis fanning out to pool metrics, historical charts, and token price stability. |
 
 The internal `record_predictions` tool is registered for scheduled analysis but is
 not a caller-facing marketplace listing.
