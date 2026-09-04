@@ -164,6 +164,7 @@ async def test_public_agent_directory_paginates_and_sets_cache_header(anon_clien
             "org_name": "Alpha",
             "agent_url": "https://alpha.example.com",
             "tool_count": 2,
+            "registered_at": "2026-08-01T00:00:00+00:00",
             "reputation_score": None,
             "success_rate": None,
             "sample_size": None,
@@ -197,6 +198,7 @@ async def test_public_agent_directory_paginates_and_sets_cache_header(anon_clien
     assert first.json()["agents"][0]["org_slug"] == "alpha"
     assert first.json()["agents"][0]["agent_card_url"] == "https://alpha.example.com/.well-known/agent-card.json"
     assert first.json()["agents"][0]["message_endpoint"] == "https://alpha.example.com/message:send"
+    assert first.json()["agents"][0]["registered_at"] == "2026-08-01T00:00:00+00:00"
     assert first.json()["agents"][0]["last_event_at"] is None
     assert first.json()["agents"][0]["is_stale"] is None
     assert first.json()["next_cursor"]

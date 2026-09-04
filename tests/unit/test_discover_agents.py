@@ -25,6 +25,8 @@ def _snapshot() -> dict:
                 "org_name": "Caller",
                 "agent_url": "https://caller.example.com/",
                 "tool_count": 2,
+                "tool_names": ["web_search"],
+                "registered_at": "2026-08-01T00:00:00+00:00",
                 "reputation_score": 0.9,
                 "success_rate": 0.95,
                 "sample_size": 8.0,
@@ -38,6 +40,8 @@ def _snapshot() -> dict:
                 "org_name": "New Agent",
                 "agent_url": "https://new.example.com/",
                 "tool_count": 3,
+                "tool_names": ["get_yield_rates"],
+                "registered_at": "2026-08-30T00:00:00+00:00",
                 "reputation_score": None,
                 "success_rate": None,
                 "sample_size": None,
@@ -52,6 +56,8 @@ def _snapshot() -> dict:
                 "org_name": "Rated Agent",
                 "agent_url": "https://rated.example.com",
                 "tool_count": 4,
+                "tool_names": ["risk_analysis"],
+                "registered_at": "2026-07-01T00:00:00+00:00",
                 "reputation_score": 0.8,
                 "success_rate": 0.9,
                 "sample_size": 10.0,
@@ -81,12 +87,23 @@ async def test_discovery_excludes_own_org_marks_allowlist_and_unrated(monkeypatc
     assert [agent["org_slug"] for agent in result["agents"]] == ["new-agent", "rated-agent"]
     assert result["agents"][0]["allowlisted"] is True
     assert result["agents"][0]["reputation"]["status"] == "unrated"
+    assert result["agents"][0]["registered_at"] == "2026-08-30T00:00:00+00:00"
     assert result["agents"][1]["allowlisted"] is False
     assert result["agents"][0]["message_endpoint"] == "https://new.example.com/message:send"
     assert "must-not-leak" not in json.dumps(result)
     query = pool.fetch.call_args.args[0]
     assert "a2a_allowed_agents" in query
     assert pool.fetch.call_args.args[1] == "caller-id"
+
+
+async def test_discovery_matches_published_tool_names(monkeypatch):
+    monkeypatch.setattr("tools.definitions.discover_agents.get_settings", lambda: SimpleNamespace(marketplace_enabled=True))
+    monkeypatch.setattr("marketplace.agents.get_agent_directory", AsyncMock(return_value=_snapshot()))
+
+    result = await discover_agents(q="YIELD")
+
+    assert [agent["org_slug"] for agent in result["agents"]] == ["new-agent"]
+    assert result["agents"][0]["tool_names"] == ["get_yield_rates"]
 
 
 async def test_discovery_is_bounded_and_context_free(monkeypatch):

@@ -5,7 +5,7 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 - **Network effect**: Agents discover and call each other via published Agent Cards.
 - **Specialisation**: Route complex tasks to domain-expert agents.
 - **Payment routing**: Outbound delegations use the configured credit or x402 rail; endpoint registration alone does not create marketplace author-earnings entries.
-- **Budget control**: Destination cost caps, global delegation limits, org controls, and optional caller-principal pause/24-hour spend limits.
+- **Budget control**: Destination cost caps, optional advertised task prices, global delegation limits, org controls, and optional caller-principal pause/24-hour spend limits.
 
 The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace`, `endpoints.marketplace_catalog`, `endpoints.marketplace_authors`, and `endpoints.marketplace_quote` so external clients can discover the paid marketplace catalog, its active author index, and current effective prices without hard-coding Teardrop-specific URLs. The quote endpoint accepts a qualified tool name, returns an atomic-USDC price with an advisory expiry bounded by the active pricing-cache TTL, and does not reserve or authorize payment. The author catalog is the complete active published inventory for an `org_slug`; `/agent/tools` remains the authenticated current-org inventory. The author index is a catalog metadata surface, not a directory of remote A2A URLs; `delegate_to_agent` still requires an explicit URL and the normal SSRF, allowlist, and budget controls. Its additive `capabilities.marketplace.registration` metadata identifies `/tools` for agent-owned tool registration and `/marketplace/author-config` for payout setup; SIWE sessions are restricted to their own wallet, while organization admins retain treasury-wallet control. MCP import publishing remains admin-only.
 
@@ -13,7 +13,7 @@ When `MARKETPLACE_ENABLED=true`, an organization may separately opt into the pub
 
 `GET /marketplace/agents` exposes only registered endpoints. It supports `q`, `limit` (1-200), and an opaque slug cursor. Directory reputation is derived from outbound delegation events using a 14-day recency decay and a Beta(4,1) prior. It is shown only after five distinct calling organizations; the caller's own traffic, locally caused failures, and `possibly_delivered` outcomes are excluded. Legacy events whose failure origin is `unknown` remain in the derived denominator because they cannot be reliably reclassified. These metrics are advisory trust signals, not ownership, identity, payment, or service-level attestations.
 
-The planner-facing `discover_agents` tool performs a bounded, read-only lookup against this local cached directory. It accepts an optional search across agent name or organization slug, omits the caller's own organization, derives the Agent Card, `/message:send`, and marketplace catalog URLs, and reports whether each endpoint is already in the caller's allowlist. An unavailable organization context leaves `allowlisted` null. Discovery never fetches a remote card, authorizes a destination, or sends a delegation; `delegate_to_agent` remains responsible for SSRF, allowlist, budget, and outbound delivery checks. The tool returns an empty result unless both `MARKETPLACE_ENABLED=true` and `A2A_DELEGATION_ENABLED=true`, and has zero marginal cost.
+The directory also exposes `registered_at`, an additive ISO 8601 timestamp derived from the endpoint registry. It is a recency/cohort signal for newly registered entrants, not a quality, ownership, identity, payment, or service-level attestation; it does not bypass the five-caller reputation threshold or any delegation control. The planner-facing `discover_agents` tool performs a bounded, read-only lookup against this local cached directory. It accepts an optional search across agent name, organization slug, or active published tool name and returns up to 20 published tool names per agent. It omits the caller's own organization, derives the Agent Card, `/message:send`, and marketplace catalog URLs, and reports whether each endpoint is already in the caller's allowlist. An unavailable organization context leaves `allowlisted` null. Discovery never fetches a remote card, authorizes a destination, or sends a delegation; `delegate_to_agent` remains responsible for SSRF, allowlist, budget, and outbound delivery checks. The tool returns an empty result unless both `MARKETPLACE_ENABLED=true` and `A2A_DELEGATION_ENABLED=true`, and has zero marginal cost.
 
 The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. Platform tool entries include cached aggregate reputation when available; the complete active-tool index is published at `/.well-known/reputation.json`. `supportedInterfaces` advertises both the streaming AG-UI surface (`/agent/run`) and the inbound A2A surface (`/message:send`). When enabled, `capabilities.asyncTasks` advertises the opt-in `Prefer: respond-async` flow and its polling endpoint.
 
@@ -78,6 +78,22 @@ Outbound x402 challenges are accepted only on `X402_NETWORK` and only when the
 integer atomic amount is at or below the effective delegation cap (the per-agent
 cap after the platform fee). Missing, malformed, or over-cap requirements are
 rejected before the treasury signs a payment.
+
+### Advertised Task Price
+
+An outbound agent card may include the Teardrop extension
+`price_per_task_usdc` as a positive integer in atomic USDC, with a maximum of
+100,000,000 atomic units. The value is advisory and never bypasses the caller's
+allowlist or budget controls. When billing is enabled, Teardrop compares it with
+the effective allowlist cap before funding a delegation. A price above that cap
+fails before any debit, x402 attempt, or audit mutation with
+`error_type=advertised_price_exceeds_cap`; callers should select another agent or
+configure a compatible cap. A valid lower price is charged with the existing
+platform fee and checked again against the live org/principal budget before
+funding. A missing or malformed field preserves the existing cap-based behavior:
+a non-integer, zero, negative, or out-of-range value is ignored rather than
+failing card discovery, so a remote cannot make itself undelegatable — or raise
+its own price — through this field.
 
 ---
 

@@ -59,6 +59,10 @@ class DelegateToAgentOutput(BaseModel):
     status: str = Field(description="A2A task state: completed, failed, etc.")
     result: str = Field(description="Text result extracted from the remote agent's response")
     error: str | None = Field(default=None, description="Error message, if any")
+    error_type: Literal["advertised_price_exceeds_cap"] | None = Field(
+        default=None,
+        description="Stable error type for delegation failures that require planner recovery.",
+    )
     cost_usdc: int = Field(default=0, description="Cost of this delegation in atomic USDC")
 
 
@@ -169,7 +173,8 @@ async def delegate_to_agent(
     agent_rule: dict | None = None
     allowed = False
     use_x402 = False
-    estimated_cost = settings.a2a_delegation_max_cost_usdc
+    delegation_cap_usdc = settings.a2a_delegation_max_cost_usdc
+    estimated_cost = delegation_cap_usdc
 
     # ── Allowlist check (independent of billing) ─────────────────────────
     if org_id and db_pool:
@@ -223,24 +228,10 @@ async def delegate_to_agent(
 
         # Per-agent cost cap overrides global default.
         if agent_rule and agent_rule.get("max_cost_usdc", 0) > 0:
-            estimated_cost = agent_rule["max_cost_usdc"]
+            delegation_cap_usdc = agent_rule["max_cost_usdc"]
 
-        estimated_cost = apply_platform_fee(estimated_cost)
+        estimated_cost = apply_platform_fee(delegation_cap_usdc)
         use_x402 = bool(agent_rule and agent_rule.get("require_x402"))
-
-        budget_err = await check_delegation_budget(
-            org_id,
-            estimated_cost,
-            principal_id=principal_id or None,
-        )
-        if budget_err:
-            return {
-                "agent_name": "unknown",
-                "status": "failed",
-                "result": "",
-                "error": budget_err,
-                "cost_usdc": 0,
-            }
 
     # ── Discover agent card ───────────────────────────────────────────────
     from teardrop.a2a_client import discover_agent_card, extract_result_text, send_message
@@ -260,6 +251,39 @@ async def delegate_to_agent(
             "error": f"Could not discover agent card at {agent_url}: {exc}",
             "cost_usdc": 0,
         }
+
+    if billing_enabled:
+        advertised_price_usdc = card.price_per_task_usdc
+        if advertised_price_usdc is not None:
+            if advertised_price_usdc > delegation_cap_usdc:
+                return {
+                    "agent_name": card.name,
+                    "status": "failed",
+                    "result": "",
+                    "error": (
+                        f"Remote agent advertised price ({advertised_price_usdc} atomic USDC) exceeds "
+                        f"the delegation cap ({delegation_cap_usdc} atomic USDC); choose a lower-priced "
+                        "agent or increase the allowlist cap."
+                    ),
+                    "error_type": "advertised_price_exceeds_cap",
+                    "cost_usdc": 0,
+                }
+
+            estimated_cost = apply_platform_fee(advertised_price_usdc)
+
+        budget_err = await check_delegation_budget(
+            org_id,
+            estimated_cost,
+            principal_id=principal_id or None,
+        )
+        if budget_err:
+            return {
+                "agent_name": "unknown",
+                "status": "failed",
+                "result": "",
+                "error": budget_err,
+                "cost_usdc": 0,
+            }
 
     # ── Send message (with x402 payment if required) ──────────────────────
     # Pre-debit: charge the org BEFORE dispatching to the remote agent so a

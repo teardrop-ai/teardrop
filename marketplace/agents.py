@@ -150,9 +150,19 @@ async def _load_agent_directory() -> dict[str, Any]:
             SELECT
                 r.org_id,
                 r.agent_url,
+                MIN(r.created_at) AS registered_at,
                 o.slug AS org_slug,
                 o.name AS org_name,
-                COUNT(t.id)::INT AS tool_count
+                COUNT(t.id)::INT AS tool_count,
+                ARRAY(
+                    SELECT DISTINCT published_tool.name
+                    FROM org_tools AS published_tool
+                    WHERE published_tool.org_id = r.org_id
+                        AND published_tool.publish_as_mcp = TRUE
+                        AND published_tool.is_active = TRUE
+                    ORDER BY published_tool.name
+                    LIMIT 20
+                ) AS tool_names
             FROM a2a_agent_registry r
             JOIN orgs o ON o.id = r.org_id
             LEFT JOIN org_tools t
@@ -217,7 +227,15 @@ async def _load_agent_directory() -> dict[str, Any]:
             "org_name": str(row["org_name"]),
             "agent_url": str(row["agent_url"]),
             "tool_count": int(row["tool_count"] or 0),
+            "tool_names": [str(tool_name) for tool_name in (row.get("tool_names") or []) if tool_name],
         }
+        registered_at = row["registered_at"]
+        if registered_at is not None:
+            if registered_at.tzinfo is None:
+                registered_at = registered_at.replace(tzinfo=timezone.utc)
+            agent["registered_at"] = registered_at.isoformat()
+        else:
+            agent["registered_at"] = None
         caller_count = int(row["unique_caller_count"] or 0)
         weighted_sample_size = float(row["weighted_sample_size"] or 0.0)
         public_last_event_at: str | None = None

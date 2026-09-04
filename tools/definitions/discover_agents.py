@@ -19,7 +19,11 @@ _MAX_AGENTS = 50
 
 
 class DiscoverAgentsInput(BaseModel):
-    q: str | None = Field(default=None, max_length=200, description="Optional search across agent name and organization slug")
+    q: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Optional search across agent name, organization slug, or published tool name",
+    )
     limit: int = Field(default=20, ge=1, le=_MAX_AGENTS, description="Maximum number of agents to return")
 
 
@@ -42,6 +46,14 @@ class DiscoveredAgent(BaseModel):
     message_endpoint: str
     catalog_endpoint: str
     tool_count: int
+    tool_names: list[str] = Field(
+        default_factory=list,
+        description="Names of up to 20 active published tools exposed by the agent organization",
+    )
+    registered_at: str | None = Field(
+        default=None,
+        description="UTC timestamp when the organization first registered its A2A endpoint",
+    )
     allowlisted: bool | None = Field(
         description="Whether the caller's org has this endpoint in its allowlist; null when caller context is unavailable"
     )
@@ -119,9 +131,10 @@ async def discover_agents(
             continue
         org_slug = str(raw_agent.get("org_slug", "") or "")
         org_name = str(raw_agent.get("org_name", "") or "")
+        tool_names = [str(tool_name) for tool_name in (raw_agent.get("tool_names") or []) if tool_name]
         if not org_slug or org_slug == caller_org_slug:
             continue
-        if search and search not in org_slug.casefold() and search not in org_name.casefold():
+        if search and not any(search in searchable_value.casefold() for searchable_value in [org_slug, org_name, *tool_names]):
             continue
 
         agent_url = _agent_url_key(raw_agent.get("agent_url"))
@@ -137,6 +150,8 @@ async def discover_agents(
                 "message_endpoint": f"{agent_url}/message:send",
                 "catalog_endpoint": f"{agent_url}/marketplace/catalog",
                 "tool_count": max(0, int(raw_agent.get("tool_count", 0) or 0)),
+                "tool_names": tool_names,
+                "registered_at": raw_agent.get("registered_at"),
                 "allowlisted": None if allowed_urls is None else agent_url in allowed_urls,
                 "reputation": {
                     "status": "rated" if reputation_score is not None else "unrated",
@@ -169,7 +184,7 @@ async def _get_directory() -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="discover_agents",
     version="1.0.0",
-    description="Find opt-in remote A2A agents, their endpoints, tool counts, and public reputation status.",
+    description="Find opt-in remote A2A agents, published tool capabilities, endpoints, and public reputation status.",
     tags=["a2a", "agents", "marketplace", "discovery"],
     use_when="Use before delegate_to_agent when a specialist agent is needed but its URL is unknown.",
     limitations="Discovery is read-only and does not add an agent to the org allowlist; delegate_to_agent remains authoritative.",

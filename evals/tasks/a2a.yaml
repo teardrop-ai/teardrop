@@ -51,6 +51,37 @@
     "rubric": "Uses the bounded planner discovery tool and explains that allowlist status is separate from public discovery."
   },
   {
+    "id": "a2a.discovery_capability.001",
+    "messages": [{"role": "user", "content": "Find a remote A2A agent that publishes a yield-rate capability before I delegate to it."}],
+    "expected_tool_calls": ["discover_agents"],
+    "expected_text_contains": ["agent", "yield"],
+    "expected_text_not_contains": ["network error"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Uses bounded local capability discovery and identifies that published tool names can be searched."
+  },
+  {
+    "id": "a2a.advertised_price_cap.001",
+    "messages": [{"role": "user", "content": "What happens when a remote A2A agent advertises a task price above my allowlist cap?"}],
+    "expected_text_contains": ["advertised", "cap", "reject", "error_type"],
+    "expected_text_not_contains": ["debit anyway", "signs it anyway"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains typed pre-funding rejection and selecting another agent or changing the cap."
+  },
+  {
+    "id": "a2a.discovery_cold_start.001",
+    "messages": [{"role": "user", "content": "How should I assess a newly registered A2A entrant whose directory reputation is unrated before delegating to it?"}],
+    "expected_text_contains": ["registered", "unrated", "allowlist"],
+    "expected_text_not_contains": ["automatically authorized", "unlimited"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Explains that registration timing is only a recency signal, unrated reputation is not earned quality evidence, and allowlist and budget controls remain mandatory."
+  },
+  {
     "id": "a2a.reciprocal_discovery.001",
     "messages": [{"role": "user", "content": "My organization has registered its A2A endpoint. Find an opt-in specialist I can delegate to, explain how other agents can discover us, and tell me what authorization is still needed before I delegate."}],
     "expected_tool_calls": ["discover_agents"],

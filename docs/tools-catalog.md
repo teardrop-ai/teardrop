@@ -48,6 +48,11 @@ intent tags, price, health, and aggregate reputation. Browse these through
 tags through the authenticated org-tool API; tags are normalized and bounded
 before being included in catalog search.
 
+The zero-cost `discover_agents` tool searches registered agent names, organization
+slugs, and active published tool names without fetching remote cards. Results are
+bounded and include up to 20 published tool names per agent; allowlisting and
+delegation budget checks remain separate.
+
 In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` have zero marginal cost and are billed at $0.000 per call.
 
 `get_yield_rates` supports an optional `stable_only` filter for consistency-focused stablecoin discovery and returns both `apy_mean_7d` and `apy_mean_30d` so clients can avoid short-window APY spikes. Use `max_apy` (e.g. `30`) to exclude leveraged/boosted pools so genuine stablecoin yields surface; combine with `stable_only=true` and rank by `apy_mean_30d` for durable, risk-averse screening.

@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from teardrop.cache import get_redis
 
@@ -129,6 +129,13 @@ class A2AAgentCard(BaseModel):
     description: str = ""
     url: str = ""
     version: str = ""
+    price_per_task_usdc: int | None = Field(
+        default=None,
+        gt=0,
+        le=100_000_000,
+        strict=True,
+        description="Optional advertised task price in atomic USDC.",
+    )
     capabilities: dict[str, Any] = Field(default_factory=dict)
     skills: list[dict[str, Any]] = Field(default_factory=list)
     default_input_modes: list[str] = Field(default_factory=lambda: ["text"])
@@ -136,6 +143,14 @@ class A2AAgentCard(BaseModel):
     authentication: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
+
+    @field_validator("price_per_task_usdc", mode="before")
+    @classmethod
+    def _drop_unusable_price(cls, value: Any) -> Any:
+        # A malformed remote price must not brick the card; fall back to the caller's own cap.
+        if value is None or (type(value) is int and 0 < value <= 100_000_000):
+            return value
+        return None
 
 
 class A2APart(BaseModel):

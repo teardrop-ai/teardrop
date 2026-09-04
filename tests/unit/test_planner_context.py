@@ -87,7 +87,9 @@ def test_planner_reciprocal_discovery_guidance_respects_delegation_setting():
     disabled_prompt = _build_cached_planner_prefix(platform_tools=[], emit_ui=True, a2a_delegation_enabled=False)
 
     assert "Registered organizations become discoverable" in enabled_prompt
+    assert "registered_at for unrated entrants" in enabled_prompt
     assert "Registered organizations become discoverable" not in disabled_prompt
+    assert "registered_at for unrated entrants" not in disabled_prompt
     assert "discover_agents" not in disabled_prompt
 
 

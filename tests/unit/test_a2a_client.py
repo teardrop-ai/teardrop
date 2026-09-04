@@ -34,6 +34,20 @@ from teardrop.a2a_client import (
 pytestmark = pytest.mark.anyio
 
 
+class TestA2AAgentCard:
+    def test_accepts_positive_atomic_task_price(self):
+        card = A2AAgentCard(name="Priced Agent", price_per_task_usdc=25_000)
+
+        assert card.price_per_task_usdc == 25_000
+
+    @pytest.mark.parametrize("invalid_price", [0, -1, "25000", 25_000.5, True, 100_000_001, [1], {"a": 1}])
+    def test_ignores_invalid_task_price_instead_of_failing_the_card(self, invalid_price):
+        card = A2AAgentCard.model_validate({"name": "Priced Agent", "price_per_task_usdc": invalid_price})
+
+        assert card.price_per_task_usdc is None
+        assert card.name == "Priced Agent"
+
+
 # ─── SSRF Guard ───────────────────────────────────────────────────────────────
 
 

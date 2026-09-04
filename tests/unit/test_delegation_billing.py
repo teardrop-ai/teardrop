@@ -598,6 +598,7 @@ class TestDelegateToAgentBilling:
 
         with (
             patch(f"{_A2A_MOD}.validate_url", return_value=None),
+            patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=A2AAgentCard(name="Budget Agent"))),
             patch(
                 f"{_BILLING_MOD}._get_pool",
                 return_value=AsyncMock(
@@ -608,6 +609,84 @@ class TestDelegateToAgentBilling:
             result = await delegate_to_agent("https://agent.example.com", "test", config=config)
         assert result["status"] == "failed"
         assert "insufficient" in result["error"].lower()
+
+    async def test_advertised_price_over_cap_returns_typed_error_before_funding(self, test_settings, monkeypatch):
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        monkeypatch.setenv("A2A_DELEGATION_PLATFORM_FEE_BPS", "0")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        config = {"configurable": {"org_id": "org-1", "run_id": "run-1", "db_pool": mock_pool}}
+        budget = AsyncMock(return_value=None)
+        fund = AsyncMock(return_value=True)
+        send = AsyncMock()
+        card = A2AAgentCard(name="Expensive Agent", price_per_task_usdc=50_001)
+
+        with (
+            patch(f"{_A2A_MOD}.validate_url", return_value=None),
+            patch(f"{_A2A_MOD}.check_delegation_allowed", AsyncMock(return_value=(True, {"max_cost_usdc": 50_000}))),
+            patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=card)),
+            patch(f"{_BILLING_MOD}.check_delegation_budget", budget),
+            patch(f"{_BILLING_MOD}.fund_delegation", fund),
+            patch(f"{_A2A_MOD}.send_message", send),
+        ):
+            result = await delegate_to_agent("https://agent.example.com", "do work", config=config)
+
+        assert result["status"] == "failed"
+        assert result["error_type"] == "advertised_price_exceeds_cap"
+        assert "choose a lower-priced" in result["error"]
+        budget.assert_not_awaited()
+        fund.assert_not_awaited()
+        send.assert_not_awaited()
+
+    async def test_advertised_price_lowers_charge_and_rechecks_budget(self, test_settings, monkeypatch):
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        monkeypatch.setenv("A2A_DELEGATION_PLATFORM_FEE_BPS", "500")
+        _config.get_settings.cache_clear()
+
+        mock_pool = AsyncMock()
+        config = {"configurable": {"org_id": "org-1", "run_id": "run-1", "db_pool": mock_pool}}
+
+        async def budget_check(_org_id, estimated_cost, *, principal_id=None):
+            del principal_id
+            return "Insufficient credit at the cap." if estimated_cost > 21_000 else None
+
+        budget = AsyncMock(side_effect=budget_check)
+        fund = AsyncMock(return_value=True)
+        record = AsyncMock(return_value=True)
+        cancel = AsyncMock(return_value=True)
+        card = A2AAgentCard(name="Value Agent", price_per_task_usdc=20_000)
+        response = A2ASendMessageResponse(
+            task=A2ATask(id="task-priced", status=A2ATaskStatus(state="completed"), artifacts=[]),
+            raw={},
+        )
+
+        with (
+            patch(f"{_A2A_MOD}.validate_url", return_value=None),
+            patch(f"{_A2A_MOD}.check_delegation_allowed", AsyncMock(return_value=(True, {"max_cost_usdc": 50_000}))),
+            patch(f"{_A2A_MOD}.discover_agent_card", AsyncMock(return_value=card)),
+            patch(f"{_A2A_MOD}.send_message", AsyncMock(return_value=response)),
+            patch(f"{_A2A_MOD}.extract_result_text", return_value="Done"),
+            patch(f"{_BILLING_MOD}.check_delegation_budget", budget),
+            patch(f"{_BILLING_MOD}.fund_delegation", fund),
+            patch(f"{_BILLING_MOD}.record_delegation_event", record),
+            patch(f"{_BILLING_MOD}.cancel_delegation_refund", cancel),
+        ):
+            result = await delegate_to_agent("https://agent.example.com", "do work", config=config)
+
+        assert result["status"] == "completed"
+        assert result["cost_usdc"] == 21_000
+        budget.assert_awaited_once_with("org-1", 21_000, principal_id=None)
+        fund.assert_awaited_once()
+        assert fund.await_args.args[1] == 21_000
 
     async def test_happy_path_with_billing(self, test_settings, monkeypatch):
         """Successful delegation debits credits and records event."""

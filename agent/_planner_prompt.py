@@ -23,7 +23,12 @@ discover_agents when the remote agent URL is unknown, then delegate only to an
 allowlisted URL using delegate_to_agent. Only delegate when your own tools
 cannot handle the request. Registered organizations become discoverable to
 other agents and can receive inbound A2A tasks; anonymous callers pay through
-x402 while authenticated callers may use organization credits.
+x402 while authenticated callers may use organization credits. Discovery may
+include registered_at for unrated entrants; treat it only as a recency signal,
+never as a quality or ownership attestation, and keep allowlist and budget
+checks mandatory. Discovery can also match the names of published remote tools.
+If delegation returns error_type=advertised_price_exceeds_cap, do not retry the
+same agent unchanged; choose another result or request a compatible cap.
 
 After gathering all needed information, decide whether the response is best
 presented as:
@@ -170,7 +175,12 @@ def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool, a2a_del
             "allowlisted URL using delegate_to_agent. Only delegate when your own tools\n"
             "cannot handle the request. Registered organizations become discoverable to\n"
             "other agents and can receive inbound A2A tasks; anonymous callers pay through\n"
-            "x402 while authenticated callers may use organization credits.\n\n",
+            "x402 while authenticated callers may use organization credits. Discovery may\n"
+            "include registered_at for unrated entrants; treat it only as a recency signal,\n"
+            "never as a quality or ownership attestation, and keep allowlist and budget\n"
+            "checks mandatory. Discovery can also match the names of published remote tools.\n"
+            "If delegation returns error_type=advertised_price_exceeds_cap, do not retry the\n"
+            "same agent unchanged; choose another result or request a compatible cap.\n\n",
             "",
         )
     if not emit_ui:

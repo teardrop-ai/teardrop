@@ -922,6 +922,10 @@ class MarketplaceAgentSummary(BaseModel):
     message_endpoint: str
     catalog_endpoint: str
     tool_count: int
+    registered_at: str | None = Field(
+        default=None,
+        description="UTC timestamp when the organization first registered its A2A endpoint",
+    )
     reputation_score: float | None = None
     success_rate: float | None = None
     sample_size: float | None = None

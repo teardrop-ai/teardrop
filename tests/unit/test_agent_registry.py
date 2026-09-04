@@ -135,9 +135,11 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
             {
                 "org_id": "org-1",
                 "agent_url": "https://trusted.example.com",
+                "registered_at": now,
                 "org_slug": "trusted",
                 "org_name": "Trusted Agent",
                 "tool_count": 3,
+                "tool_names": ["get_yield_rates", "risk_analysis"],
                 "weighted_successes": 8,
                 "weighted_sample_size": 10,
                 "unique_caller_count": 5,
@@ -146,9 +148,11 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
             {
                 "org_id": "org-2",
                 "agent_url": "https://new.example.com",
+                "registered_at": now,
                 "org_slug": "new",
                 "org_name": "New Agent",
                 "tool_count": 0,
+                "tool_names": [],
                 "weighted_successes": 10,
                 "weighted_sample_size": 10,
                 "unique_caller_count": 4,
@@ -157,9 +161,11 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
             {
                 "org_id": "org-3",
                 "agent_url": "https://stale.example.com",
+                "registered_at": now,
                 "org_slug": "stale",
                 "org_name": "Stale Agent",
                 "tool_count": 1,
+                "tool_names": ["web_search"],
                 "weighted_successes": 1,
                 "weighted_sample_size": 1,
                 "unique_caller_count": 5,
@@ -176,6 +182,8 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
     assert trusted["confidence"] == pytest.approx(10 / 15, abs=0.000001)
     assert trusted["unique_caller_count"] == 5
     assert trusted["reputation_score"] is not None
+    assert trusted["tool_names"] == ["get_yield_rates", "risk_analysis"]
+    assert trusted["registered_at"] == now.isoformat()
     assert trusted["last_event_at"] == now.isoformat()
     assert trusted["is_stale"] is False
     assert snapshot["agents"][1]["success_rate"] is None
@@ -185,6 +193,9 @@ async def test_load_agent_directory_suppresses_small_and_derives_reputation(monk
     assert json.loads(json.dumps(snapshot)) == snapshot
     sql = pool.fetch.call_args.args[0]
     assert "a2a_agent_registry" in sql
+    assert "MIN(r.created_at) AS registered_at" in sql
+    assert "published_tool.name" in sql
+    assert "LIMIT 20" in sql
     assert "rtrim(e.agent_url, '/') = r.agent_url" in sql
     assert "e.failure_origin <> 'local'" in sql
     assert "e.task_status <> 'possibly_delivered'" in sql
