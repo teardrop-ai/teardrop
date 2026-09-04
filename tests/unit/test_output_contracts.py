@@ -83,14 +83,21 @@ def test_detect_output_contract_uses_latest_human_turn():
 
 
 def test_registry_resolves_all_scheduled_contracts():
-    for task_class in ("eth_primitive_fees", "entry_timing_test", "stablecoin_yield_compare"):
+    for task_class in ("eth_primitive_fees", "entry_timing", "stablecoin_yield_compare"):
         contract = get_output_contract(task_class)
         assert contract is not None
         assert contract.schema_version == 1
 
 
+def test_detect_output_contract_resolves_all_production_task_classes():
+    for task_class in ("eth_primitive_fees", "entry_timing", "stablecoin_yield_compare"):
+        contract = detect_output_contract([HumanMessage(content=f"TASK_CLASS: {task_class}")])
+        assert contract is not None
+        assert contract.task_class == task_class
+
+
 def test_scheduled_contract_schemas_accept_null_safe_records_and_reject_extras():
-    entry_contract = get_output_contract("entry_timing_test")
+    entry_contract = get_output_contract("entry_timing")
     stable_contract = get_output_contract("stablecoin_yield_compare")
     assert entry_contract is not None
     assert stable_contract is not None
@@ -108,7 +115,7 @@ def test_scheduled_contract_schemas_accept_null_safe_records_and_reject_extras()
         "orca",
     ]
     entry_payload = {
-        "task_class": "entry_timing_test",
+        "task_class": "entry_timing",
         "schema_version": 1,
         "generated_at": None,
         "data_gaps": [],

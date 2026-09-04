@@ -17,6 +17,7 @@ __all__ = [
     "require_auth",
     "require_admin",
     "require_org_admin",
+    "require_org_machine",
     "require_credential_recovery",
     "require_settlement_wallet_auth",
     "_require_org_id",
@@ -66,6 +67,28 @@ async def require_org_admin(
             detail="No org_id in token.",
         )
     return payload
+
+
+async def require_org_machine(
+    payload: dict = Depends(require_auth),
+) -> dict:
+    """Allow org admins or org-bound machine credentials to act for an org."""
+    org_id = payload.get("org_id")
+    if payload.get("role") == "admin":
+        if not isinstance(org_id, str) or not org_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No org_id in token.",
+            )
+        return payload
+
+    if payload.get("auth_method") == "client_credentials" and isinstance(org_id, str) and org_id:
+        return payload
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Organization admin or org-bound machine credentials required.",
+    )
 
 
 async def require_credential_recovery(

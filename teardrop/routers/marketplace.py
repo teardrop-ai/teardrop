@@ -63,6 +63,7 @@ from teardrop.dependencies import (
     _require_org_id,
     require_auth,
     require_org_admin,
+    require_org_machine,
     require_settlement_wallet_auth,
 )
 from teardrop.rate_limit import _enforce_rate_limit
@@ -942,7 +943,7 @@ class MarketplaceAgentDirectoryResponse(BaseModel):
 )
 async def set_marketplace_agent_registration(
     body: MarketplaceAgentRegistrationRequest,
-    payload: dict = Depends(require_org_admin),
+    payload: dict = Depends(require_org_machine),
 ) -> JSONResponse:
     """Publish the authenticated organization's A2A endpoint."""
     s = get_settings()
@@ -995,7 +996,7 @@ async def get_marketplace_agent_registration(payload: dict = Depends(require_aut
 
 
 @router.delete("/marketplace/agent-registration", tags=["Marketplace"], status_code=status.HTTP_204_NO_CONTENT)
-async def delete_marketplace_agent_registration(payload: dict = Depends(require_org_admin)) -> Response:
+async def delete_marketplace_agent_registration(payload: dict = Depends(require_org_machine)) -> Response:
     """Unpublish the authenticated organization's A2A endpoint."""
     s = get_settings()
     if not s.marketplace_enabled:

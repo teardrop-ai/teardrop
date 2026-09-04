@@ -51,6 +51,17 @@
     "rubric": "Uses the bounded planner discovery tool and explains that allowlist status is separate from public discovery."
   },
   {
+    "id": "a2a.reciprocal_discovery.001",
+    "messages": [{"role": "user", "content": "My organization has registered its A2A endpoint. Find an opt-in specialist I can delegate to, explain how other agents can discover us, and tell me what authorization is still needed before I delegate."}],
+    "expected_tool_calls": ["discover_agents"],
+    "expected_text_contains": ["discover", "delegat", "allowlist", "x402"],
+    "expected_text_not_contains": ["automatically authorized", "unlimited"],
+    "max_duration_ms": 12000,
+    "max_cost_usdc": 500000,
+    "scorer": "contains",
+    "rubric": "Uses bounded discovery, explains that registration makes the organization discoverable for inbound A2A tasks, and preserves the separate outbound allowlist requirement and payment model."
+  },
+  {
     "id": "a2a.refund_cap_recovery.001",
     "messages": [{"role": "user", "content": "How does a failed, credit-funded A2A delegation affect the organization's and caller principal's rolling 24-hour spending limits?"}],
     "expected_text_contains": ["refund", "spending", "headroom", "principal"],

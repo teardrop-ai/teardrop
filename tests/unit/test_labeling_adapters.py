@@ -24,7 +24,7 @@ def _definition(parser: str = "entry") -> Definition:
 
 
 def test_entry_parser_expands_items_without_changing_payload():
-    payload = {"task_class": "entry_timing_test", "tokens": [{"id": "one", "signal": "ENTRY"}]}
+    payload = {"task_class": "entry_timing", "tokens": [{"id": "one", "signal": "ENTRY"}]}
     targets = parse_entry_timing(payload, _definition(), _NOW)
     assert [target.item_key for target in targets] == ["one"]
     assert targets[0].item_payload == payload["tokens"][0]

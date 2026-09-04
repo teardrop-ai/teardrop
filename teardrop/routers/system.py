@@ -205,6 +205,7 @@ def _build_agent_card_content(
             "catalog_endpoint": "/marketplace/catalog",
             "authors_endpoint": "/marketplace/authors",
             "agents_endpoint": "/marketplace/agents",
+            "agent_directory_endpoint": "/marketplace/agents",
             "quote_endpoint": "/marketplace/quote?tool={qualified_name}",
             "author_catalog_endpoint": "/marketplace/catalog?org_slug={org_slug}",
             "self_inventory_endpoint": "/agent/tools",

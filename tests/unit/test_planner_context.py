@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from agent._planner_prompt import _build_cached_planner_prefix
 from agent.nodes import planner_node
 from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState
@@ -79,6 +80,15 @@ def _default_settings():
         agent_tool_shortlist_enabled=False,
         agent_tool_shortlist_max_tools=12,
     )
+
+
+def test_planner_reciprocal_discovery_guidance_respects_delegation_setting():
+    enabled_prompt = _build_cached_planner_prefix(platform_tools=[], emit_ui=True)
+    disabled_prompt = _build_cached_planner_prefix(platform_tools=[], emit_ui=True, a2a_delegation_enabled=False)
+
+    assert "Registered organizations become discoverable" in enabled_prompt
+    assert "Registered organizations become discoverable" not in disabled_prompt
+    assert "discover_agents" not in disabled_prompt
 
 
 # ─── Date/Time injection ─────────────────────────────────────────────────────

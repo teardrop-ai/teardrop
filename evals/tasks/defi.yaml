@@ -67,7 +67,7 @@
     "messages": [
       {
         "role": "user",
-        "content": "TASK_CLASS: entry_timing_test. OUTPUT_CONTRACT: entry_timing_test. Analyze the fixed ten-token basket using exactly one get_token_price_historical call with days=90, stats_only=true and one get_token_price call in USD. Return the contract JSON first, then --- and a report."
+        "content": "TASK_CLASS: entry_timing. OUTPUT_CONTRACT: entry_timing. Analyze the fixed ten-token basket using exactly one get_token_price_historical call with days=90, stats_only=true and one get_token_price call in USD. Return the contract JSON first, then --- and a report."
       }
     ],
     "expected_tool_calls": ["get_token_price_historical", "get_token_price"],
@@ -83,12 +83,12 @@
         "vs_currency": "usd"
       }
     },
-    "expected_text_contains": ["entry_timing_test", "tokens", "actionable"],
+    "expected_text_contains": ["entry_timing", "tokens", "actionable"],
     "expected_json_shape": {"task_class": null, "schema_version": null, "tokens": null, "actionable": null},
     "max_duration_ms": 60000,
     "max_cost_usdc": 1000000,
     "scorer": "json_shape",
-    "rubric": "Calls both market-data tools exactly once, emits the entry_timing_test JSON contract before the summary, preserves null data gaps, and provides exactly ten token rows."
+    "rubric": "Calls both market-data tools exactly once, emits the entry_timing JSON contract before the summary, preserves null data gaps, and provides exactly ten token rows."
   },
   {
     "id": "defi.stablecoin_yield_compare.001",

@@ -23,7 +23,7 @@ def _registration():
 
 
 @pytest.mark.anyio
-async def test_agent_registration_requires_org_admin(api_client, monkeypatch):
+async def test_agent_registration_requires_org_machine_or_admin(api_client, monkeypatch):
     set_mock = AsyncMock()
     monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
@@ -38,6 +38,89 @@ async def test_agent_registration_requires_org_admin(api_client, monkeypatch):
 
     assert response.status_code == 403
     set_mock.assert_not_awaited()
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_agent_registration_machine_credentials_success(anon_client, monkeypatch):
+    from teardrop.auth import create_access_token
+
+    set_mock = AsyncMock(return_value=_registration())
+    rate_limit = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+    token = create_access_token(
+        subject="machine-client",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id"},
+    )
+    response = await anon_client.put(
+        "/marketplace/agent-registration",
+        json={"agent_url": "https://agent.example.com"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    set_mock.assert_awaited_once_with("test-org-id", "https://agent.example.com")
+    rate_limit.assert_awaited_once()
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_agent_registration_unscoped_machine_credentials_forbidden(anon_client, monkeypatch):
+    from teardrop.auth import create_access_token
+
+    set_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+    token = create_access_token(
+        subject="config-client",
+        extra_claims={"auth_method": "client_credentials", "org_id": ""},
+    )
+    response = await anon_client.put(
+        "/marketplace/agent-registration",
+        json={"agent_url": "https://agent.example.com"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    set_mock.assert_not_awaited()
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_agent_registration_machine_credentials_delete(anon_client, monkeypatch):
+    from teardrop.auth import create_access_token
+
+    delete_mock = AsyncMock()
+    rate_limit = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.delete_agent_registration", delete_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+    token = create_access_token(
+        subject="machine-client",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id"},
+    )
+    response = await anon_client.delete(
+        "/marketplace/agent-registration",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 204
+    delete_mock.assert_awaited_once_with("test-org-id")
+    rate_limit.assert_awaited_once()
     config.get_settings.cache_clear()
 
 

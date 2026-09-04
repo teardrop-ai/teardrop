@@ -46,7 +46,7 @@ async def test_bind_labeling_definition_requires_owned_schedule(api_client, monk
 
     response = await api_client.post(
         "/labeling/bindings",
-        json={"schedule_id": "schedule-1", "definition_key": "entry_timing_test", "definition_version": 1},
+        json={"schedule_id": "schedule-1", "definition_key": "entry_timing", "definition_version": 1},
     )
 
     assert response.status_code == 404

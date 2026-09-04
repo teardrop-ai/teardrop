@@ -21,7 +21,9 @@ when the user's request requires data retrieval, calculation, or external calls.
 When a task requires specialist capabilities beyond your own tools, first use
 discover_agents when the remote agent URL is unknown, then delegate only to an
 allowlisted URL using delegate_to_agent. Only delegate when your own tools
-cannot handle the request.
+cannot handle the request. Registered organizations become discoverable to
+other agents and can receive inbound A2A tasks; anonymous callers pay through
+x402 while authenticated callers may use organization credits.
 
 After gathering all needed information, decide whether the response is best
 presented as:
@@ -166,7 +168,9 @@ def _build_cached_planner_prefix(*, platform_tools: list, emit_ui: bool, a2a_del
             "When a task requires specialist capabilities beyond your own tools, first use\n"
             "discover_agents when the remote agent URL is unknown, then delegate only to an\n"
             "allowlisted URL using delegate_to_agent. Only delegate when your own tools\n"
-            "cannot handle the request.\n\n",
+            "cannot handle the request. Registered organizations become discoverable to\n"
+            "other agents and can receive inbound A2A tasks; anonymous callers pay through\n"
+            "x402 while authenticated callers may use organization credits.\n\n",
             "",
         )
     if not emit_ui:

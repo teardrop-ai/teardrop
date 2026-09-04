@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "teardrop://output-contracts/entry_timing_test/1",
+  "$id": "teardrop://output-contracts/entry_timing/1",
   "type": "object",
   "additionalProperties": false,
   "required": ["task_class", "schema_version", "generated_at", "data_gaps", "tokens", "actionable", "executive_summary", "summary"],
   "properties": {
-    "task_class": {"const": "entry_timing_test"},
+    "task_class": {"const": "entry_timing"},
     "schema_version": {"const": 1},
     "generated_at": {"type": ["string", "null"]},
     "data_gaps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},

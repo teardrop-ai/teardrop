@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from teardrop.dependencies import require_settlement_wallet_auth
+from teardrop.dependencies import require_org_machine, require_settlement_wallet_auth
 
 
 def _siwe_payload(**overrides: object) -> dict[str, object]:
@@ -29,6 +29,36 @@ async def test_settlement_wallet_auth_allows_org_admin():
     payload = await require_settlement_wallet_auth({"role": "admin", "org_id": "org-1"})
 
     assert payload["org_id"] == "org-1"
+
+
+@pytest.mark.anyio
+async def test_org_machine_auth_allows_org_admin():
+    payload = await require_org_machine({"role": "admin", "org_id": "org-1"})
+
+    assert payload["org_id"] == "org-1"
+
+
+@pytest.mark.anyio
+async def test_org_machine_auth_allows_org_bound_client_credentials():
+    payload = await require_org_machine({"auth_method": "client_credentials", "org_id": "machine-org"})
+
+    assert payload["org_id"] == "machine-org"
+
+
+@pytest.mark.anyio
+async def test_org_machine_auth_rejects_unscoped_client_credentials():
+    with pytest.raises(HTTPException) as exc_info:
+        await require_org_machine({"auth_method": "client_credentials", "org_id": ""})
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_org_machine_auth_rejects_regular_member():
+    with pytest.raises(HTTPException) as exc_info:
+        await require_org_machine({"role": "user", "org_id": "org-1"})
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.anyio
