@@ -26,6 +26,10 @@ class GetWalletPositionsInput(BaseModel):
         default=False,
         description="Include DeBank's complete cross-chain token balance list; adds a billable provider request.",
     )
+    include_token_lists: bool = Field(
+        default=True,
+        description="Include protocol position token lists; disable for a compact balance and debt summary.",
+    )
 
     @field_validator("wallet_address")
     @classmethod
@@ -92,7 +96,11 @@ class GetWalletPositionsOutput(BaseModel):
     wallet_address: str
     include_net_worth: bool
     include_token_balances: bool
+    include_token_lists: bool
     total_net_worth_usd: float | None = None
+    total_asset_usd: float | None = None
+    total_debt_usd: float | None = None
+    total_net_usd: float | None = None
     chain_balances: list[WalletChainBalance] = Field(default_factory=list)
     positions: list[WalletProtocolPosition] = Field(default_factory=list)
     token_balances: list[WalletToken] = Field(default_factory=list)
@@ -182,7 +190,7 @@ def _normalize_token_lists(detail: Any) -> dict[str, list[WalletToken]]:
     return token_lists
 
 
-def _normalize_position_item(raw: Any) -> WalletPositionItem:
+def _normalize_position_item(raw: Any, *, include_token_lists: bool = True) -> WalletPositionItem:
     if not isinstance(raw, dict):
         return WalletPositionItem()
     stats = raw.get("stats") if isinstance(raw.get("stats"), dict) else {}
@@ -196,18 +204,26 @@ def _normalize_position_item(raw: Any) -> WalletPositionItem:
         debt_usd_value=_number(stats.get("debt_usd_value")),
         net_usd_value=_number(stats.get("net_usd_value")),
         detail_types=[item for item in detail_types if isinstance(item, str)] if isinstance(detail_types, list) else [],
-        token_lists=_normalize_token_lists(detail),
+        token_lists=_normalize_token_lists(detail) if include_token_lists else {},
     )
 
 
-def _normalize_protocol_position(raw: Any) -> WalletProtocolPosition | None:
+def _normalize_protocol_position(
+    raw: Any,
+    *,
+    include_token_lists: bool = True,
+) -> WalletProtocolPosition | None:
     if not isinstance(raw, dict):
         return None
     protocol_id = _text(raw.get("id"))
     if protocol_id is None:
         return None
     item_list = raw.get("portfolio_item_list")
-    items = [_normalize_position_item(item) for item in item_list] if isinstance(item_list, list) else []
+    items = (
+        [_normalize_position_item(item, include_token_lists=include_token_lists) for item in item_list]
+        if isinstance(item_list, list)
+        else []
+    )
     return WalletProtocolPosition(
         protocol_id=protocol_id,
         chain_id=_text(raw.get("chain")),
@@ -231,6 +247,16 @@ def _max_staleness_seconds(positions: list[WalletProtocolPosition]) -> float | N
             if oldest is None or age > oldest:
                 oldest = age
     return oldest
+
+
+def _sum_position_stat(positions: list[WalletProtocolPosition], attribute: str) -> float | None:
+    values: list[float] = []
+    for position in positions:
+        for item in position.items:
+            value = getattr(item, attribute, None)
+            if value is not None:
+                values.append(value)
+    return math.fsum(values) if values else None
 
 
 def _normalize_chain_balances(raw: Any) -> list[WalletChainBalance]:
@@ -258,12 +284,14 @@ async def get_wallet_positions(
     wallet_address: str,
     include_net_worth: bool = True,
     include_token_balances: bool = False,
+    include_token_lists: bool = True,
 ) -> dict[str, Any]:
     """Return all-chain DeBank protocol positions for an EVM wallet."""
     wallet = GetWalletPositionsInput(
         wallet_address=wallet_address,
         include_net_worth=include_net_worth,
         include_token_balances=include_token_balances,
+        include_token_lists=include_token_lists,
     )
     snapshot = await fetch_wallet_positions(
         wallet.wallet_address,
@@ -289,16 +317,23 @@ async def get_wallet_positions(
         cache_age_seconds=cache_age_seconds(snapshot.source_fetched_at) if snapshot.cache_hit else None,
         cache_ttl_seconds=60,
     )
-    positions = [
-        position
-        for raw_position in snapshot.protocol_positions
-        if (position := _normalize_protocol_position(raw_position)) is not None
-    ]
+    positions: list[WalletProtocolPosition] = []
+    for raw_position in snapshot.protocol_positions:
+        position = _normalize_protocol_position(
+            raw_position,
+            include_token_lists=wallet.include_token_lists,
+        )
+        if position is not None:
+            positions.append(position)
     output = GetWalletPositionsOutput(
         wallet_address=wallet.wallet_address,
         include_net_worth=wallet.include_net_worth,
         include_token_balances=wallet.include_token_balances,
+        include_token_lists=wallet.include_token_lists,
         total_net_worth_usd=_number(total_balance.get("total_usd_value")) if wallet.include_net_worth else None,
+        total_asset_usd=_sum_position_stat(positions, "asset_usd_value"),
+        total_debt_usd=_sum_position_stat(positions, "debt_usd_value"),
+        total_net_usd=_sum_position_stat(positions, "net_usd_value"),
         chain_balances=_normalize_chain_balances(total_balance.get("chain_list")) if wallet.include_net_worth else [],
         positions=positions,
         token_balances=[token for raw_token in snapshot.token_balances if (token := _normalize_token(raw_token)) is not None],
@@ -312,24 +347,27 @@ async def get_wallet_positions(
 
 TOOL = ToolDefinition(
     name="get_wallet_positions",
-    version="1.0.0",
+    version="1.1.0",
     description=(
         "Get a wallet's DeFi positions across all DeBank-supported chains and protocols. "
-        "Returns protocol-level positions, asset/debt/net USD values, token lists, and optional all-chain net worth. "
+        "Returns protocol-level positions, asset/debt/net USD values, optional token lists, aggregate exposure, "
+        "and optional all-chain net worth. "
         "Set include_token_balances=true to also return DeBank's complete cross-chain wallet token list. "
+        "Set include_token_lists=false for a compact balance and debt summary without nested position tokens. "
         "This covers substantially more protocols and chains than the block-accurate get_defi_positions tool. "
         "Use raw-RPC tools for liquidation, swap quotes, or other transaction-critical questions."
     ),
     use_when=(
         "Use for broad wallet discovery, portfolio allocation, protocol exposure, or cross-chain position questions. "
         "Set include_token_balances=true when complete wallet token discovery is required; otherwise the response "
-        "only includes tokens attached to protocol positions. "
+        "only includes tokens attached to protocol positions. Set include_token_lists=false when only protocol "
+        "balances, debt, or aggregate exposure are needed. "
         "Use get_defi_positions when the user needs a block-accurate Aave, Compound, Uniswap, or Lido snapshot."
     ),
     limitations=(
         "DeBank portfolio data is third-party analytics and may be stale, including occasional long refresh delays. "
         "It is read-only, EVM wallet oriented, and does not prove current liquidation or execution state. "
-        "include_token_balances adds a separate billable DeBank request."
+        "include_token_balances adds a separate billable DeBank request; include_token_lists only changes response detail."
     ),
     alternatives=["get_defi_positions", "get_wallet_portfolio", "get_token_approvals"],
     tags=["web3", "defi", "portfolio", "wallet", "cross-chain", "debank"],

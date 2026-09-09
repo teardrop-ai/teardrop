@@ -589,6 +589,24 @@ def build_usdc_topup_requirements(amount_usdc: int) -> list:
     return requirements
 
 
+def build_exact_payment_requirements(amount_usdc: int) -> list:
+    """Build exact x402 requirements for a scoped atomic-USDC offer."""
+    if amount_usdc <= 0:
+        raise ValueError("Payment amount must be positive")
+
+    settings = get_settings()
+    treasuries = _effective_treasury_addresses(settings)
+    if not treasuries:
+        return []
+    exact, _, _ = _build_requirements(
+        _get_server(),
+        settings,
+        treasuries,
+        atomic_usdc_to_price_str(amount_usdc),
+    )
+    return exact
+
+
 async def verify_and_settle_usdc_topup(
     payment_header: str,
     amount_usdc: int,

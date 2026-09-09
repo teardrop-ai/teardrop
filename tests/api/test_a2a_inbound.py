@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -191,6 +191,65 @@ async def test_message_send_anonymous_missing_payment_returns_402(anon_client, t
     assert seen["body"]["resource"]["mimeType"] == "application/json"
     assert seen["headers"]["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
     audit_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_message_send_intro_price_uses_exact_requirements_for_challenge(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.a2a_inbound_intro_price_usdc = 25_000
+    test_settings.rate_limit_requests_per_minute = 1_000
+    requirements = [SimpleNamespace(id="intro")]
+    seen: dict[str, dict] = {}
+    builder_mock = MagicMock(return_value=requirements)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_exact_payment_requirements", builder_mock)
+
+    def _body(**kwargs):
+        seen["body"] = kwargs
+        return {"error": "Payment required"}
+
+    def _headers(**kwargs):
+        seen["headers"] = kwargs
+        return {}
+
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_response_body",
+        _body,
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_headers",
+        _headers,
+    )
+
+    resp = await anon_client.post("/message:send")
+
+    assert resp.status_code == 402
+    builder_mock.assert_called_once_with(25_000)
+    assert seen["body"]["requirements"] is requirements
+    assert seen["headers"]["requirements"] is requirements
+
+
+@pytest.mark.anyio
+async def test_message_send_intro_price_is_used_for_sync_verification(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings)
+    test_settings.a2a_inbound_intro_price_usdc = 25_000
+    requirements = [SimpleNamespace(id="intro")]
+    builder_mock = MagicMock(return_value=requirements)
+    verify_mock = AsyncMock(
+        return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc"))
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_exact_payment_requirements", builder_mock)
+    monkeypatch.setattr("billing.verify_payment", verify_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"X-PAYMENT": "signed-payment"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 200
+    builder_mock.assert_called_once_with(25_000)
+    verify_mock.assert_awaited_once_with("signed-payment", requirements=requirements)
 
 
 @pytest.mark.anyio
@@ -627,6 +686,8 @@ async def test_message_send_async_database_error_returns_503(anon_client, test_s
 @pytest.mark.anyio
 async def test_async_worker_verifies_payment_only_after_claim(anon_client, test_settings, monkeypatch):
     _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    test_settings.a2a_inbound_intro_price_usdc = 25_000
+    requirements = [SimpleNamespace(id="intro")]
     stored_task = _async_task()
     create_mock = AsyncMock(return_value=(stored_task, True))
     enqueue_mock = AsyncMock(return_value=True)
@@ -651,6 +712,8 @@ async def test_async_worker_verifies_payment_only_after_claim(anon_client, test_
     monkeypatch.setattr("teardrop.routers.a2a_messages.mark_inbound_task_billing_method", mark_billing_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    builder_mock = MagicMock(return_value=requirements)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_exact_payment_requirements", builder_mock)
     monkeypatch.setattr("billing.verify_payment", verify_mock)
     monkeypatch.setattr("teardrop.routers.a2a_messages.run_agent_once", run_mock)
 
@@ -666,7 +729,8 @@ async def test_async_worker_verifies_payment_only_after_claim(anon_client, test_
 
     await runner()
 
-    verify_mock.assert_awaited_once_with("signed-payment")
+    builder_mock.assert_called_once_with(25_000)
+    verify_mock.assert_awaited_once_with("signed-payment", requirements=requirements)
     run_mock.assert_awaited_once()
     assert finish_mock.await_args.kwargs["task_state"] == "completed"
     assert finish_mock.await_args.kwargs["usage_event_id"] == "usage-1"

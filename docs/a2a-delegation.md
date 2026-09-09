@@ -17,6 +17,27 @@ When `MARKETPLACE_ENABLED=true`, an organization may separately opt into the pub
 
 The directory also exposes `registered_at`, an additive ISO 8601 timestamp derived from the endpoint registry. It is a recency/cohort signal for newly registered entrants, not a quality, ownership, identity, payment, or service-level attestation; it does not bypass the five-caller reputation threshold or any delegation control. The planner-facing `discover_agents` tool performs a bounded, read-only lookup against this local cached directory. It accepts an optional search across agent name, organization slug, or active published tool name and returns up to 20 published tool names per agent. It omits the caller's own organization, derives the Agent Card, `/message:send`, and marketplace catalog URLs, and reports whether each endpoint is already in the caller's allowlist. An unavailable organization context leaves `allowlisted` null. Discovery never fetches a remote card, authorizes a destination, or sends a delegation; `delegate_to_agent` remains responsible for SSRF, allowlist, budget, and outbound delivery checks. The tool returns an empty result unless both `MARKETPLACE_ENABLED=true` and `A2A_DELEGATION_ENABLED=true`, and has zero marginal cost.
 
+### Genuine reputation seeding
+
+The public directory requires five distinct calling organizations before it
+shows reputation metrics. Use `scripts/seed_a2a_reputation.py` only when those
+organizations are real callers with existing allowlist entries and billing
+capacity. It is dry-run by default:
+
+```powershell
+python scripts/seed_a2a_reputation.py `
+  --caller-org-id org-1 --caller-org-id org-2 --caller-org-id org-3 `
+  --caller-org-id org-4 --caller-org-id org-5 `
+  --target-url https://target.example.com `
+  --task-description "Return a short capability check" --json
+```
+
+Review the plan hash and rerun the same command with
+`--execute --confirm-live-calls` to perform real delegations. The utility calls
+the existing `delegate_to_agent` flow, so its SSRF, allowlist, budget, payment,
+settlement, refund, and immutable audit controls remain authoritative. It never
+inserts synthetic `a2a_delegation_events` or reputation rows.
+
 The card also emits additive A2A v1.0 discovery fields such as `protocolVersion`, `supportedInterfaces`, `securitySchemes`, `defaultInputModes`, and `defaultOutputModes` while preserving Teardrop-specific `endpoints`, `tools`, and `authentication` metadata for current SDK consumers. Platform tool entries include cached aggregate reputation when available; the complete active-tool index is published at `/.well-known/reputation.json`. `supportedInterfaces` advertises both the streaming AG-UI surface (`/agent/run`) and the inbound A2A surface (`/message:send`). When enabled, `capabilities.asyncTasks` advertises the opt-in `Prefer: respond-async` flow and its polling endpoint.
 
 The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
@@ -72,6 +93,9 @@ A2A_INBOUND_ASYNC_MAX_CONCURRENCY=8
 A2A_INBOUND_ASYNC_QUEUE_SIZE=100
 A2A_INBOUND_TASK_TTL_DAYS=7
 
+# Optional anonymous inbound A2A intro offer (atomic USDC; 0 disables it)
+A2A_INBOUND_INTRO_PRICE_USDC=0
+
 # For x402 delegations (optional):
 X402_TREASURY_PRIVATE_KEY=0x...      # Treasury wallet private key (hex-encoded)
 ```
@@ -104,6 +128,7 @@ its own price — through this field.
 External agents can call Teardrop directly over `POST /message:send`.
 
 - Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response. The challenge now uses the standard `PAYMENT-REQUIRED` header and also serves `X-PAYMENT-REQUIRED` as a legacy compatibility alias.
+- Operators may set `A2A_INBOUND_INTRO_PRICE_USDC` to a positive atomic-USDC amount to advertise and verify an exact-price offer for anonymous inbound A2A calls only. The default `0` leaves the global x402 pricing rule unchanged; authenticated credit billing and `/agent/run` are unaffected.
 - Unpaid anonymous probes receive the `402 Payment Required` challenge before request-body validation, which keeps registry validators compatible with empty or malformed probe payloads.
 - The `402` body is a full x402 v2 `PaymentRequired` payload with top-level `resource`, `accepts`, and `extensions`. On `POST /message:send`, `extensions.bazaar` advertises the A2A request and response shape for registries.
 - Authenticated callers may present a Teardrop JWT and reuse the existing credit/x402 billing gate.

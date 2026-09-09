@@ -157,6 +157,39 @@ def test_public_exports_include_reputation_when_supplied():
     assert mcp_tool["reputation"] == reputation["platform/test_tool"]
 
 
+def test_dynamic_mcp_defs_include_reputation_in_description():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {
+        "platform/test_tool": {
+            "reputation_score": 0.9,
+            "success_rate": 0.98,
+            "sample_size": 150,
+            "average_latency_ms": 210,
+        }
+    }
+
+    definition = reg.to_mcp_tool_defs(reputation)[0]
+
+    assert "Observed quality: score=0.90, success=98.0%, sample_size=150, latency=210ms." in definition["description"]
+    assert reg.to_mcp_tool_defs()[0]["description"] == _make_tool().description
+
+
+def test_dynamic_mcp_defs_ignore_malformed_reputation():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {
+        "platform/test_tool": {
+            "reputation_score": "not-a-number",
+            "success_rate": None,
+            "sample_size": "invalid",
+            "average_latency_ms": {},
+        }
+    }
+
+    assert reg.to_mcp_tool_defs(reputation)[0]["description"] == _make_tool().description
+
+
 def test_public_exports_ignore_unknown_reputation():
     reg = ToolRegistry()
     reg.register(_make_tool())

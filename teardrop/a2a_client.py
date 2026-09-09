@@ -11,14 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import ipaddress
 import logging
 import re
-import socket
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -36,53 +34,18 @@ logger = logging.getLogger(__name__)
 # future range additions only need to be maintained in one place.
 from tools.definitions.http_fetch import (  # noqa: E402
     _BLOCKED_NETWORKS,  # noqa: F401  (re-exported for backward compatibility)
-    _is_ip_blocked,
+    _is_ip_blocked,  # noqa: F401  (re-exported for backward compatibility)
 )
+from tools.definitions.http_fetch import validate_url as _canonical_validate_url  # noqa: E402
 
 
 def validate_url(url: str) -> str | None:
-    """Validate a URL for SSRF safety. Returns error message or None if safe."""
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return "Invalid URL"
-
-    if parsed.scheme not in ("http", "https"):
-        return f"Blocked scheme: {parsed.scheme} (only http/https allowed)"
-
-    hostname = parsed.hostname
-    if not hostname:
-        return "No hostname in URL"
-
-    # Block raw IP addresses in private ranges
-    try:
-        addr = ipaddress.ip_address(hostname)
-        if _is_ip_blocked(str(addr)):
-            return f"Blocked IP address: {hostname}"
-    except ValueError:
-        pass  # Not a raw IP — resolve via DNS below
-
-    # DNS resolution check
-    try:
-        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for _family, _, _, _, sockaddr in infos:
-            ip_str = sockaddr[0]
-            if _is_ip_blocked(ip_str):
-                return f"Hostname {hostname} resolves to blocked IP: {ip_str}"
-    except socket.gaierror:
-        return f"DNS resolution failed for: {hostname}"
-
-    return None
+    """Delegate URL validation to the canonical SSRF implementation."""
+    return _canonical_validate_url(url)
 
 
 async def async_validate_url(url: str) -> str | None:
-    """Async wrapper around :func:`validate_url`.
-
-    ``validate_url`` calls :func:`socket.getaddrinfo`, which blocks the event
-    loop while the OS resolver runs (potentially seconds on cold/slow DNS).
-    Off-load it to a worker thread so the calling coroutine — and any
-    sibling tasks (e.g. LLM token streaming) — stay responsive.
-    """
+    """Run the local compatibility wrapper without blocking the event loop."""
     return await asyncio.to_thread(validate_url, url)
 
 

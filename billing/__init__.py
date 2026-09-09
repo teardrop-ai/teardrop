@@ -66,6 +66,7 @@ _VERIFY_PAYMENT_ORIG = _x402.verify_payment
 _SETTLE_PAYMENT_ORIG = _x402.settle_payment
 _CLEANUP_EXPIRED_PAYMENT_NONCES_ORIG = _x402.cleanup_expired_payment_nonces
 _BUILD_USDC_TOPUP_REQUIREMENTS_ORIG = _x402.build_usdc_topup_requirements
+_BUILD_EXACT_PAYMENT_REQUIREMENTS_ORIG = _x402.build_exact_payment_requirements
 _VERIFY_AND_SETTLE_USDC_TOPUP_ORIG = _x402.verify_and_settle_usdc_topup
 _CREDIT_USDC_TOPUP_ORIG = _x402.credit_usdc_topup
 _GET_TREASURY_SIGNER_ORIG = _x402.get_treasury_signer
@@ -646,6 +647,11 @@ def build_usdc_topup_requirements(amount_usdc: int) -> list:
     return _call_sync(_BUILD_USDC_TOPUP_REQUIREMENTS_ORIG, amount_usdc)
 
 
+def build_exact_payment_requirements(amount_usdc: int) -> list:
+    """Build exact x402 requirements for a scoped atomic-USDC offer."""
+    return _call_sync(_BUILD_EXACT_PAYMENT_REQUIREMENTS_ORIG, amount_usdc)
+
+
 async def verify_and_settle_usdc_topup(
     payment_header: str,
     amount_usdc: int,
@@ -796,6 +802,7 @@ __all__ = [
     "build_402_headers",
     "build_402_response_body",
     "build_usdc_topup_requirements",
+    "build_exact_payment_requirements",
     "verify_and_settle_usdc_topup",
     "credit_usdc_topup",
     "get_treasury_signer",

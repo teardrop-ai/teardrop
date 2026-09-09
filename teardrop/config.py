@@ -704,6 +704,14 @@ class Settings(BaseSettings):
         default=True,
         description="Enable the public inbound A2A /message:send endpoint and advertise it in discovery.",
     )
+    a2a_inbound_intro_price_usdc: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Optional exact x402 intro price for anonymous inbound A2A calls, in atomic USDC. "
+            "Zero disables the A2A-only offer and preserves the global pricing rule."
+        ),
+    )
     a2a_inbound_timeout_seconds: int = Field(
         default=60,
         description="Timeout for inbound A2A /message:send agent execution (seconds)",

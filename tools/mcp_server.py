@@ -71,16 +71,24 @@ def _signature_default_for_field(field_info: Any) -> Any:
 # ─── Build MCP server ─────────────────────────────────────────────────────────
 
 
-def _register_tools_with_mcp(server: MCPServer) -> None:
+def _register_tools_with_mcp(
+    server: MCPServer,
+    *,
+    reputation: dict[str, dict[str, Any]] | None = None,
+    replace_existing: bool = False,
+) -> None:
     """Auto-register all active tools from the registry with MCPServer."""
-    for tool_def in registry.to_mcp_tool_defs():
+    for tool_def in registry.to_mcp_tool_defs(reputation):
         name = tool_def["name"]
         description = tool_def["description"]
         input_schema = tool_def["input_schema"]
         output_model = tool_def["output_model"]
         implementation = tool_def["implementation"]
 
-        # Create a closure to capture the current tool_def values
+        if replace_existing:
+            server.remove_tool(name)
+
+        # Closure captures this iteration's values while rebuilding the live registry.
         def _make_handler(impl: Any, schema: Any, result_model: Any) -> Any:
             async def handler(**kwargs: Any) -> Any:
                 validated = schema(**kwargs)
@@ -117,6 +125,19 @@ def _register_tools_with_mcp(server: MCPServer) -> None:
             annotations=tool_def.get("annotations"),
         )(handler)
         logger.debug("MCP: registered tool %s", name)
+
+
+async def refresh_mcp_tool_reputations(server: MCPServer) -> None:
+    """Refresh dynamic MCP descriptions after the database-backed services start."""
+    from marketplace.reputation import get_public_reputation
+
+    try:
+        reputation = await get_public_reputation()
+    except Exception:
+        logger.warning("MCP: reputation refresh unavailable", exc_info=True)
+        return
+
+    _register_tools_with_mcp(server, reputation=reputation, replace_existing=True)
 
 
 def create_mcp_server() -> MCPServer:

@@ -48,6 +48,19 @@
     "rubric": "The agent should select get_wallet_positions for broad DeBank all-chain protocol coverage and net worth, rather than the tracked-token portfolio tool or the narrower raw-RPC protocol adapter."
   },
   {
+    "id": "tool_discovery.positions_compact.001",
+    "messages": [{"role": "user", "content": "Give me a compact per-protocol DeFi balance and debt summary for wallet 0x0000000000000000000000000000000000000000, including aggregate USD exposure but no token-level position details."}],
+    "expected_tool_calls": ["get_wallet_positions"],
+    "expected_tool_args": {"get_wallet_positions": {"include_token_lists": false}},
+    "forbidden_tool_calls": ["get_wallet_portfolio", "get_defi_positions"],
+    "expected_text_contains": ["protocol", "debt", "USD"],
+    "expected_text_not_contains": ["not supported"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "The agent should select get_wallet_positions with include_token_lists=false for a compact DeBank protocol balance/debt summary and aggregate exposure, rather than a tracked-token portfolio or block-accurate protocol adapter."
+  },
+  {
     "id": "tool_discovery.approvals.001",
     "messages": [{"role": "user", "content": "Audit every current ERC-20 token authorization for wallet 0x0000000000000000000000000000000000000000 on Arbitrum. I need spender protocol attribution and hacked or abandoned risk flags, not only the curated Ethereum/Base scan."}],
     "expected_tool_calls": ["get_wallet_approvals"],

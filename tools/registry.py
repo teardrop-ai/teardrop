@@ -295,7 +295,10 @@ class ToolRegistry:
             tools.append(entry)
         return tools
 
-    def to_mcp_tool_defs(self) -> list[dict[str, Any]]:
+    def to_mcp_tool_defs(
+        self,
+        reputation: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         """Return metadata dicts suitable for dynamic MCP tool registration."""
         defs: list[dict[str, Any]] = []
         for tool in self.list_latest():
@@ -311,11 +314,39 @@ class ToolRegistry:
             if _mcp_safe_output_schema(raw_output_schema) is None:
                 output_model = None
 
+            description = tool.description
+            metrics = (reputation or {}).get(f"platform/{tool.name}")
+            if metrics:
+                quality_metrics: list[str] = []
+                if "reputation_score" in metrics:
+                    try:
+                        quality_metrics.append(f"score={float(metrics['reputation_score']):.2f}")
+                    except (TypeError, ValueError):
+                        pass
+                if "success_rate" in metrics:
+                    try:
+                        quality_metrics.append(f"success={float(metrics['success_rate']):.1%}")
+                    except (TypeError, ValueError):
+                        pass
+                if "reputation_sample_size" in metrics or "sample_size" in metrics:
+                    sample_size = metrics.get("reputation_sample_size", metrics.get("sample_size"))
+                    try:
+                        quality_metrics.append(f"sample_size={int(sample_size)}")
+                    except (TypeError, ValueError):
+                        pass
+                if "average_latency_ms" in metrics:
+                    try:
+                        quality_metrics.append(f"latency={float(metrics['average_latency_ms']):.0f}ms")
+                    except (TypeError, ValueError):
+                        pass
+                if quality_metrics:
+                    description = f"{description}\n\nObserved quality: {', '.join(quality_metrics)}."
+
             defs.append(
                 {
                     "name": tool.name,
                     "title": tool.name.replace("_", " ").title(),
-                    "description": tool.description,
+                    "description": description,
                     "input_schema": tool.input_schema,
                     "output_schema": _mcp_safe_output_schema(raw_output_schema),
                     "output_model": output_model,

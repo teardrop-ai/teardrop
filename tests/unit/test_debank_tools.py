@@ -93,11 +93,18 @@ def test_input_normalizes_wallet_address() -> None:
     result = positions_module.GetWalletPositionsInput(wallet_address=_WALLET.lower())
     assert result.wallet_address == _WALLET
     assert result.include_net_worth is True
+    assert result.include_token_lists is True
 
 
 def test_input_rejects_non_evm_address() -> None:
     with pytest.raises(ValidationError):
         positions_module.GetWalletPositionsInput(wallet_address="not-an-address")
+
+
+def test_compact_mode_fields_are_in_public_schemas() -> None:
+    assert "include_token_lists" in positions_module.TOOL.input_schema.model_fields
+    output_fields = positions_module.TOOL.output_schema.model_fields
+    assert {"include_token_lists", "total_asset_usd", "total_debt_usd", "total_net_usd"} <= output_fields.keys()
 
 
 @pytest.mark.asyncio
@@ -131,6 +138,10 @@ async def test_normalizes_positions_and_net_worth(monkeypatch: pytest.MonkeyPatc
     assert item["net_usd_value"] == 100.0
     assert token["display_symbol"] == "USDC.e"
     assert token["usd_value"] == 100.0
+    assert result["include_token_lists"] is True
+    assert result["total_asset_usd"] == 125.5
+    assert result["total_debt_usd"] == 25.5
+    assert result["total_net_usd"] == 100.0
     assert result["provenance"]["provider"] == "DeBank Cloud"
     assert result["provenance"]["cache_hit"] is False
     assert session.get.call_count == 2
@@ -214,6 +225,50 @@ async def test_positions_only_mode_makes_one_provider_request(monkeypatch: pytes
     assert result["data_complete"] is True
     session.get.assert_called_once()
     assert session.get.call_args.args[0].endswith("/user/all_complex_protocol_list")
+
+
+@pytest.mark.asyncio
+async def test_compact_mode_omits_position_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(debank_module, "get_settings", lambda: SimpleNamespace(debank_api_key="test-key"))
+    session = _mock_session(_response(200, _protocol_payload()))
+    monkeypatch.setattr(debank_module, "get_debank_session", AsyncMock(return_value=session))
+
+    result = await positions_module.get_wallet_positions(
+        _WALLET,
+        include_net_worth=False,
+        include_token_lists=False,
+    )
+
+    assert result["include_token_lists"] is False
+    assert result["positions"][0]["items"][0]["token_lists"] == {}
+    assert result["total_asset_usd"] == 125.5
+    assert result["total_debt_usd"] == 25.5
+    assert result["total_net_usd"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_aggregates_are_none_when_position_stats_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(debank_module, "get_settings", lambda: SimpleNamespace(debank_api_key="test-key"))
+    payload = [
+        {
+            "id": "aave-v3",
+            "chain": "arb",
+            "portfolio_item_list": [{"name": "Lending", "stats": {}}],
+        }
+    ]
+    session = _mock_session(_response(200, payload))
+    monkeypatch.setattr(debank_module, "get_debank_session", AsyncMock(return_value=session))
+
+    result = await positions_module.get_wallet_positions(
+        _WALLET,
+        include_net_worth=False,
+        include_token_lists=False,
+    )
+
+    assert result["positions"][0]["items"][0]["asset_usd_value"] is None
+    assert result["total_asset_usd"] is None
+    assert result["total_debt_usd"] is None
+    assert result["total_net_usd"] is None
 
 
 @pytest.mark.asyncio

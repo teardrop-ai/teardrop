@@ -256,7 +256,7 @@ def _validate_production_config(s: "Settings") -> None:
 
 lifespan = build_lifespan(_validate_production_config)
 
-from tools.mcp_server import build_mcp_app  # noqa: E402
+from tools.mcp_server import build_mcp_app, refresh_mcp_tool_reputations  # noqa: E402
 from tools.mcp_server import mcp as _mcp_server  # noqa: E402
 
 mcp_app = build_mcp_app(_mcp_server)
@@ -265,6 +265,7 @@ mcp_app = build_mcp_app(_mcp_server)
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
     async with lifespan(app):
+        await refresh_mcp_tool_reputations(_mcp_server)
         async with _mcp_server.session_manager.run():
             yield
 

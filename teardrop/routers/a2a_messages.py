@@ -23,7 +23,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
 
-from billing import BillingResult, build_402_headers, build_402_response_body, get_byok_platform_fee
+from billing import (
+    BillingResult,
+    build_402_headers,
+    build_402_response_body,
+    build_exact_payment_requirements,
+    get_byok_platform_fee,
+)
 from billing.context import _get_pool
 from shared.audit import insert_event_row
 from shared.request_ip import client_ip_from_request
@@ -187,12 +193,40 @@ def _a2a_402_extensions() -> dict[str, Any]:
     return extension
 
 
-def _a2a_402_kwargs(request: Request, *, error: str | None = "Payment required") -> dict[str, Any]:
-    return {
+def _a2a_intro_payment_requirements() -> list | None:
+    amount_usdc = int(getattr(settings, "a2a_inbound_intro_price_usdc", 0) or 0)
+    if amount_usdc <= 0:
+        return None
+    try:
+        requirements = build_exact_payment_requirements(amount_usdc)
+    except (RuntimeError, ValueError):
+        logger.warning("A2A intro payment requirements unavailable", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A2A intro pricing is temporarily unavailable",
+        ) from None
+    if not requirements:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A2A intro pricing is temporarily unavailable",
+        )
+    return requirements
+
+
+def _a2a_402_kwargs(
+    request: Request,
+    *,
+    error: str | None = "Payment required",
+    requirements: list | None = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
         "error": error,
         "resource": _a2a_402_resource(request),
         "extensions": _a2a_402_extensions(),
     }
+    if requirements is not None:
+        kwargs["requirements"] = requirements
+    return kwargs
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -521,6 +555,7 @@ async def _run_async_inbound_task(
     request_body: A2ASendMessageRequest,
     payload: dict[str, Any] | None,
     payment_header: str | None,
+    payment_requirements: list | None,
     jwt_token: str | None,
 ) -> None:
     claimed = await claim_inbound_task(task.id)
@@ -539,7 +574,11 @@ async def _run_async_inbound_task(
             if settings.billing_enabled:
                 from billing import verify_payment
 
-                billing = await verify_payment(payment_header)
+                billing = (
+                    await verify_payment(payment_header, requirements=payment_requirements)
+                    if payment_requirements is not None
+                    else await verify_payment(payment_header)
+                )
                 if not billing.verified:
                     await _finish_async_task(
                         task=claimed,
@@ -693,6 +732,7 @@ async def message_send(request: Request) -> JSONResponse:
     run_id = str(uuid.uuid4())
     payload = _parse_auth_payload(request)
     payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+    intro_requirements: list | None = None
 
     org_id = payload.get("org_id", "") if payload else ""
     user_id = payload.get("sub", "") if payload else ""
@@ -707,7 +747,8 @@ async def message_send(request: Request) -> JSONResponse:
         if settings.billing_enabled and not payment_header:
             # Registry probes may omit or malform the body; unpaid anonymous
             # callers should still receive the x402 challenge first.
-            response_kwargs = _a2a_402_kwargs(request)
+            intro_requirements = _a2a_intro_payment_requirements()
+            response_kwargs = _a2a_402_kwargs(request, requirements=intro_requirements)
             try:
                 _402_body = build_402_response_body(**response_kwargs)
                 _402_hdrs = build_402_headers(**response_kwargs)
@@ -741,6 +782,9 @@ async def message_send(request: Request) -> JSONResponse:
     user_message = _message_text(body.message)
     resolved_task_id = body.task_id or run_id
     scoped_thread_id = f"{user_id or 'anonymous-a2a'}:{body.task_id or body.context_id or run_id}"
+
+    if payload is None and settings.billing_enabled:
+        intro_requirements = _a2a_intro_payment_requirements()
 
     if _prefers_async(request):
         async_task_id = str(uuid.uuid4())
@@ -802,6 +846,7 @@ async def message_send(request: Request) -> JSONResponse:
                     request_body=body,
                     payload=payload,
                     payment_header=payment_header,
+                    payment_requirements=intro_requirements,
                     jwt_token=_extract_bearer_token(request),
                 ),
             )
@@ -854,7 +899,11 @@ async def message_send(request: Request) -> JSONResponse:
         if settings.billing_enabled:
             from billing import verify_payment
 
-            billing = await verify_payment(payment_header)
+            billing = (
+                await verify_payment(payment_header, requirements=intro_requirements)
+                if intro_requirements is not None
+                else await verify_payment(payment_header)
+            )
             if not billing.verified:
                 await _record_inbound_event(
                     run_id=run_id,
@@ -874,7 +923,11 @@ async def message_send(request: Request) -> JSONResponse:
                     duration_ms=0,
                     error=billing.error,
                 )
-                response_kwargs = _a2a_402_kwargs(request, error=billing.error)
+                response_kwargs = _a2a_402_kwargs(
+                    request,
+                    error=billing.error,
+                    requirements=intro_requirements,
+                )
                 try:
                     _402_body = build_402_response_body(**response_kwargs)
                     _402_hdrs = build_402_headers(**response_kwargs)

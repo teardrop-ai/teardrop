@@ -117,6 +117,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `EVENT_TRIGGERS_RECOVERY_BATCH_SIZE` | Maximum expired leases finalized per recovery tick (default: `100`) |
 | `EVENT_TRIGGERS_PROMPT_MAX_CHARS` | Maximum rendered event prompt length (default: `12000`) |
 | `A2A_INBOUND_ENABLED` | Enable inbound A2A message handling (default: `true`) |
+| `A2A_INBOUND_INTRO_PRICE_USDC` | Optional exact x402 price for anonymous inbound A2A calls in atomic USDC; `0` disables the A2A-only offer and preserves the global pricing rule |
 | `A2A_INBOUND_TIMEOUT_SECONDS` | Inbound A2A execution timeout (default: `60`) |
 | `A2A_INBOUND_ASYNC_ENABLED` | Enable opt-in inbound A2A execution with `Prefer: respond-async` (default: `true`) |
 | `A2A_INBOUND_ASYNC_MAX_CONCURRENCY` | Maximum concurrent asynchronous inbound A2A executions per process (default: `8`) |

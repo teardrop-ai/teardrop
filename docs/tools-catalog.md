@@ -39,9 +39,10 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 ## Agent Discovery
 
 Public A2A skills/tools and the MCP server card expose each built-in tool's
-description, tags, version, input schema, and output schema. Selected tools
-also publish `use_when`, `limitations`, and `alternatives` guidance to help
-agents choose the right capability and avoid redundant calls.
+description, tags, version, input schema, and output schema. Live MCP
+`tools/list` responses include the same observed quality summary after startup.
+Selected tools also publish `use_when`, `limitations`, and `alternatives`
+guidance to help agents choose the right capability and avoid redundant calls.
 
 Marketplace discovery adds a commerce-facing `marketplace_description`,
 intent tags, price, health, and aggregate reputation. Browse these through
@@ -61,7 +62,7 @@ In-process utility tools `calculate`, `get_datetime`, and `count_text_stats` hav
 
 `get_wallet_portfolio` tracks the major assets used by the Ethereum and Base lending/staking adapters, including `wstETH`, `cbETH`, `rETH`, `weETH`, and `cbBTC` where deployed. The same tracked-asset registry supplies the default token set for `get_token_approvals`; untracked assets remain explicitly excluded from both default scans.
 
-`get_wallet_positions` uses DeBank Cloud for broad, all-chain protocol positions and optional net worth. Its data is third-party portfolio analytics and may be stale, including occasional long refresh delays; use raw-RPC tools for liquidation, swap quotes, and transaction-critical checks. Set `include_net_worth=false` when only protocol positions are needed. Set `include_token_balances=true` when complete cross-chain wallet token discovery is required; this adds one DeBank provider request and returns `token_balances`.
+`get_wallet_positions` uses DeBank Cloud for broad, all-chain protocol positions and optional net worth. Its data is third-party portfolio analytics and may be stale, including occasional long refresh delays; use raw-RPC tools for liquidation, swap quotes, and transaction-critical checks. Set `include_net_worth=false` when only protocol positions are needed. Set `include_token_lists=false` when only protocol balances, debt, and the derived `total_asset_usd`, `total_debt_usd`, and `total_net_usd` aggregates are needed; this omits nested protocol position token lists without adding a provider request. Set `include_token_balances=true` when complete cross-chain wallet token discovery is required; this adds one DeBank provider request and returns `token_balances`.
 
 `get_wallet_approvals` uses DeBank's token authorization discovery for one requested chain at a time. It returns spender exposure, protocol attribution, and hacked/abandoned flags, but is not block-accurate and does not inspect NFT approvals or off-chain Permit2 sub-permits. Use `get_token_approvals` for the free, block-accurate Ethereum/Base scan of curated tokens and spenders; call `get_wallet_approvals` once per chain when broad discovery is more important than cost.
 
@@ -91,7 +92,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `get_token_price` | Crypto asset price in USD (or any supported currency) via CoinGecko. |
 | `get_transaction` | Transaction details and status by hash. |
 | `get_wallet_portfolio` | Aggregated token holdings and USD value for an Ethereum or Base wallet, including major spot, lending, liquid-staking, restaking, and stablecoin assets. |
-| `get_wallet_positions` | All-chain DeBank protocol positions, token lists, and optional net worth for an EVM wallet. |
+| `get_wallet_positions` | All-chain DeBank protocol positions, optional token lists, derived asset/debt/net aggregates, and optional net worth for an EVM wallet. |
 | `get_wallet_approvals` | DeBank token authorization exposure, spender protocol attribution, and risk flags for one chain. |
 | `get_wallet_history` | One paginated page of DeBank decoded wallet transaction history with protocol, token, exchange, and gas metadata. |
 | `http_fetch` | Fetches and extracts content from a URL. Includes SSRF protection — private/cloud-metadata IPs are blocked, and every redirect hop is re-validated before being followed. |

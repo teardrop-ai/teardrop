@@ -110,7 +110,7 @@ class TestIsIpBlocked:
 
 class TestValidateUrl:
     def test_valid_https_url(self):
-        with patch("teardrop.a2a_client.socket") as mock_socket:
+        with patch("tools.definitions.http_fetch.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("93.184.216.34", 0)),
             ]
@@ -135,7 +135,7 @@ class TestValidateUrl:
         assert "Blocked" in result
 
     def test_dns_resolves_to_private(self):
-        with patch("teardrop.a2a_client.socket") as mock_socket:
+        with patch("tools.definitions.http_fetch.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("10.0.0.1", 0)),
             ]
@@ -148,7 +148,7 @@ class TestValidateUrl:
     def test_dns_failure(self):
         import socket
 
-        with patch("teardrop.a2a_client.socket") as mock_socket:
+        with patch("tools.definitions.http_fetch.socket") as mock_socket:
             mock_socket.getaddrinfo.side_effect = socket.gaierror("Name or service not known")
             mock_socket.AF_UNSPEC = 0
             mock_socket.SOCK_STREAM = 1
@@ -163,7 +163,7 @@ class TestAsyncValidateUrl:
     loop remains responsive while validation is in flight."""
 
     async def test_returns_same_result_as_sync(self):
-        with patch("teardrop.a2a_client.socket") as mock_socket:
+        with patch("tools.definitions.http_fetch.socket") as mock_socket:
             mock_socket.getaddrinfo.return_value = [
                 (2, 1, 6, "", ("93.184.216.34", 0)),
             ]
@@ -189,7 +189,7 @@ class TestAsyncValidateUrl:
                 sibling_ticks.append(asyncio.get_running_loop().time())
                 await asyncio.sleep(0.05)
 
-        with patch("teardrop.a2a_client.socket") as mock_socket:
+        with patch("tools.definitions.http_fetch.socket") as mock_socket:
             mock_socket.getaddrinfo.side_effect = slow_getaddrinfo
             mock_socket.AF_UNSPEC = 0
             mock_socket.SOCK_STREAM = 1

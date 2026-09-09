@@ -21,6 +21,7 @@ from billing import (
     PricingRule,
     admin_topup_credit,
     atomic_usdc_to_price_str,
+    build_exact_payment_requirements,
     build_usdc_topup_requirements,
     calculate_run_cost_usdc,
     clear_onboarding_credit_outbox,
@@ -1568,6 +1569,28 @@ class TestBuildUsdcTopupRequirements:
         # $1.00 in atomic USDC = 1_000_000 → price string "$1.00"
         call_kwargs = mock_server.build_payment_requirements.call_args[0][0]
         assert call_kwargs.price == "$1.00"
+        assert call_kwargs.pay_to == "0xTreasury"
+        assert result == ["req"]
+
+
+class TestBuildExactPaymentRequirements:
+    def test_builds_exact_requirement_with_correct_price(self):
+        mock_server = MagicMock()
+        mock_server.build_payment_requirements.return_value = ["req"]
+
+        mock_settings = MagicMock()
+        mock_settings.x402_network = "eip155:84532"
+        mock_settings.x402_pay_to_address = "0xTreasury"
+
+        with (
+            patch.object(billing_module, "_server", mock_server),
+            patch("billing.get_settings", return_value=mock_settings),
+        ):
+            result = build_exact_payment_requirements(12_345)
+
+        call_kwargs = mock_server.build_payment_requirements.call_args[0][0]
+        assert call_kwargs.scheme == "exact"
+        assert call_kwargs.price == atomic_usdc_to_price_str(12_345)
         assert call_kwargs.pay_to == "0xTreasury"
         assert result == ["req"]
 
