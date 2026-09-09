@@ -316,6 +316,7 @@ async def get_token_price_historical(
 
 TOOL = ToolDefinition(
     name="get_token_price_historical",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Get historical price data for crypto tokens over a specified time window (1–365 days). "

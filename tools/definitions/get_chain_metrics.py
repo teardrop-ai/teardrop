@@ -538,6 +538,7 @@ async def get_chain_metrics(
 
 TOOL = ToolDefinition(
     name="get_chain_metrics",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Compare blockchain ecosystem health using DeFiLlama current TVL, 7-day and 30-day TVL "

@@ -231,6 +231,7 @@ async def get_wallet_approvals(wallet_address: str, chain_id: str) -> dict[str, 
 
 TOOL = ToolDefinition(
     name="get_wallet_approvals",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Inspect a wallet's current ERC-20 token authorization exposure on one DeBank-supported chain. "

@@ -181,8 +181,10 @@ async def _execute(plan: dict[str, Any], pg_dsn: str | None, principal_id: str) 
         finally:
             await pool.close()
 
-    succeeded = bool(results) and len(results) == len(plan["caller_org_ids"]) and all(
-        result["status"] == "completed" for result in results
+    succeeded = (
+        bool(results)
+        and len(results) == len(plan["caller_org_ids"])
+        and all(result["status"] == "completed" for result in results)
     )
     return results, succeeded
 

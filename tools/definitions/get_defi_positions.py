@@ -927,6 +927,7 @@ async def get_defi_positions(
 
 TOOL = ToolDefinition(
     name="get_defi_positions",
+    show_on_agent_card=False,
     version="1.2.0",
     description=(
         "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, Uniswap v3 LP, and canonical "

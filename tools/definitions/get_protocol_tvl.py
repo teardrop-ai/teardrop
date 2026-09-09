@@ -818,6 +818,7 @@ def _build_output_schema() -> dict[str, Any]:
 
 TOOL = ToolDefinition(
     name="get_protocol_tvl",
+    show_on_agent_card=False,
     version="1.4.0",
     description=(
         "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "

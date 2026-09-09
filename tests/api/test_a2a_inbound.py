@@ -235,9 +235,7 @@ async def test_message_send_intro_price_is_used_for_sync_verification(anon_clien
     test_settings.a2a_inbound_intro_price_usdc = 25_000
     requirements = [SimpleNamespace(id="intro")]
     builder_mock = MagicMock(return_value=requirements)
-    verify_mock = AsyncMock(
-        return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc"))
-    )
+    verify_mock = AsyncMock(return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc")))
     monkeypatch.setattr("teardrop.routers.a2a_messages.build_exact_payment_requirements", builder_mock)
     monkeypatch.setattr("billing.verify_payment", verify_mock)
 

@@ -283,7 +283,8 @@ def _build_agent_card_content(
         "protocolVersion": "1.0",
         "name": "Teardrop",
         "description": (
-            "Intelligence beyond the browser. A task-manager agent with AG-UI streaming, MCP tool discovery, and A2UI rendering."
+            "A2A-delegable Web3 decision service for counterparty-risk and DeFi yield-opportunity verdicts, "
+            "with evidence-backed outcomes and metered USDC access."
         ),
         "version": APP_VERSION,
         "url": base_url,

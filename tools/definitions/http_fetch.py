@@ -466,6 +466,7 @@ async def http_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
 
 TOOL = ToolDefinition(
     name="http_fetch",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Fetch a web page and extract its main text content. Useful for reading "

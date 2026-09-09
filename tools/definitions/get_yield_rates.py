@@ -501,6 +501,7 @@ async def get_yield_rates(
 
 TOOL = ToolDefinition(
     name="get_yield_rates",
+    show_on_agent_card=False,
     version="1.3.0",
     description=(
         "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "

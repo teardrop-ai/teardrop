@@ -347,6 +347,7 @@ async def get_wallet_positions(
 
 TOOL = ToolDefinition(
     name="get_wallet_positions",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Get a wallet's DeFi positions across all DeBank-supported chains and protocols. "

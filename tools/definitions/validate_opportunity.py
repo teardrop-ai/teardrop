@@ -462,13 +462,13 @@ TOOL = ToolDefinition(
     name="validate_opportunity",
     version="1.0.0",
     description=(
-        "Assess the economic sustainability and liquidity risk of a DeFi yield pool using DeFiLlama "
-        "metrics, historical TVL drawdown charts, and token price stability. Returns an agent-branchable "
-        "verdict (sustainable, caution, unsustainable, or insufficient_data) and structured risk factors."
+        "Return a decision-ready yield-opportunity verdict before capital is deployed. The result branches "
+        "to sustainable, caution, unsustainable, or insufficient_data and gives the calling agent the "
+        "evidence needed to proceed, pause, or reject the opportunity."
     ),
     use_when=(
-        "Before deploying capital into a DeFi yield pool or staking opportunity to verify "
-        "economic sustainability and liquidity health."
+        "Delegate this check before deploying capital into a DeFi yield pool or staking opportunity when "
+        "the caller needs an independent sustainability and liquidity decision."
     ),
     limitations=(
         "Heuristic economic assessment based on DeFiLlama analytics and CoinGecko pricing. "

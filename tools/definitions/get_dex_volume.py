@@ -309,6 +309,7 @@ async def get_dex_volume(
 
 TOOL = ToolDefinition(
     name="get_dex_volume",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Compare decentralized exchange activity from DeFiLlama. Returns 24-hour, 7-day, and 30-day "

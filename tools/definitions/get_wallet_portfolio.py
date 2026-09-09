@@ -250,6 +250,7 @@ async def get_wallet_portfolio(
 
 TOOL = ToolDefinition(
     name="get_wallet_portfolio",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Get aggregated token holdings with USD values for a wallet address. "

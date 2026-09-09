@@ -313,6 +313,7 @@ async def get_token_price(tokens: list[str], vs_currency: str = "usd") -> dict[s
 
 TOOL = ToolDefinition(
     name="get_token_price",
+    show_on_agent_card=False,
     version="1.2.0",
     description=(
         "Get current price, 24h change, market cap, fully-diluted valuation, and "

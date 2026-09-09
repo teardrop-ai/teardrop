@@ -394,6 +394,7 @@ async def get_dex_quote(
 
 TOOL = ToolDefinition(
     name="get_dex_quote",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Get the best Uniswap v3 swap quote on Ethereum (chain_id=1) or Base "

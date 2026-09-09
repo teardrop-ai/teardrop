@@ -206,6 +206,7 @@ async def _safe_get_receipt(w3: Any, tx_hash: str) -> dict[str, Any] | None:
 
 TOOL = ToolDefinition(
     name="decode_transaction",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Decode a transaction's calldata into a human-readable function name and arguments. "

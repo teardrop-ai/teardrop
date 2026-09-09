@@ -131,6 +131,7 @@ def _stub_results(query: str, num_results: int) -> dict[str, Any]:
 
 TOOL = ToolDefinition(
     name="web_search",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Real-time web search via Tavily. Use for current events, fact-checking, and research. "

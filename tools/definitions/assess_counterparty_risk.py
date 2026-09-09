@@ -526,11 +526,14 @@ TOOL = ToolDefinition(
     name="assess_counterparty_risk",
     version="1.0.0",
     description=(
-        "Assess counterparty risk for an EVM address across token approvals, liquidation health, "
-        "and activity history. Returns an agent-branchable verdict (high_risk, caution, acceptable, "
-        "or insufficient_data) and compact risk summaries."
+        "Return a decision-ready counterparty-risk verdict for an EVM address before funds or authority "
+        "are committed. The result branches to high_risk, caution, acceptable, or insufficient_data "
+        "with the evidence needed for the calling agent to act."
     ),
-    use_when="Before sending funds, delegating authority, or interacting with an unknown EVM address.",
+    use_when=(
+        "Delegate this check before sending funds, granting approvals, or interacting with an unknown "
+        "EVM address when the caller needs a bounded risk decision."
+    ),
     limitations=(
         "Analytics and heuristic risk assessment; not a credit bureau, fraud guarantee, or legal endorsement. "
         "Relies on DeBank indexing and on-chain Aave/Compound contract states."

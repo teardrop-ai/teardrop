@@ -368,6 +368,7 @@ async def get_liquidation_risk(
 
 TOOL = ToolDefinition(
     name="get_liquidation_risk",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Assess DeFi liquidation risk for up to 50 wallets across expanded Aave v3 and Compound v3 coverage on "

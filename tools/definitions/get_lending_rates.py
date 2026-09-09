@@ -392,6 +392,7 @@ async def get_lending_rates(
 
 TOOL = ToolDefinition(
     name="get_lending_rates",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Get current on-chain lending supply/borrow rates for expanded Aave v3 reserves and Compound v3 markets "

@@ -515,7 +515,7 @@ class TestToolDefinitionMetadata:
     def test_tool_definition_fields(self):
         assert TOOL.name == "assess_counterparty_risk"
         assert TOOL.version == "1.0.0"
-        assert "approvals" in TOOL.description.lower()
+        assert "verdict" in TOOL.description.lower()
         assert TOOL.use_when != ""
         assert TOOL.limitations != ""
         assert "get_wallet_approvals" in TOOL.alternatives

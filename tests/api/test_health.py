@@ -58,6 +58,13 @@ async def test_agent_card_shape(api_client):
     assert body["protocolVersion"] == "1.0"
     assert "skills" in body
     assert "tools" in body
+    assert body["description"].startswith("A2A-delegable Web3 decision service")
+    assert {tool["name"] for tool in body["tools"]} == {
+        "assess_counterparty_risk",
+        "validate_opportunity",
+        "delegate_to_agent",
+        "discover_agents",
+    }
     assert "authentication" in body
     assert "securitySchemes" in body
     assert body["supportedInterfaces"][0]["url"] == "http://test/agent/run"
@@ -137,7 +144,12 @@ async def test_agent_card_hides_disabled_event_trigger_control_plane(api_client,
 async def test_agent_card_includes_public_tool_reputation(api_client, monkeypatch):
     snapshot = {
         "generated_at": "2026-08-02T12:00:00+00:00",
-        "tools": {"platform/web_search": {"reputation_score": 0.93, "success_rate": 0.97}},
+        "tools": {
+            "platform/assess_counterparty_risk": {
+                "reputation_score": 0.93,
+                "success_rate": 0.97,
+            }
+        },
     }
     monkeypatch.setattr(
         "teardrop.routers.system.get_public_reputation_snapshot",
@@ -146,8 +158,8 @@ async def test_agent_card_includes_public_tool_reputation(api_client, monkeypatc
 
     response = await api_client.get("/.well-known/agent-card.json")
 
-    web_search = next(tool for tool in response.json()["tools"] if tool["name"] == "web_search")
-    assert web_search["reputation"] == snapshot["tools"]["platform/web_search"]
+    risk_tool = next(tool for tool in response.json()["tools"] if tool["name"] == "assess_counterparty_risk")
+    assert risk_tool["reputation"] == snapshot["tools"]["platform/assess_counterparty_risk"]
 
 
 @pytest.mark.anyio
@@ -423,6 +435,8 @@ async def test_mcp_server_card(api_client, test_settings):
     # Check that tools have outputSchema, annotations, title
     tools = body["tools"]
     assert len(tools) > 0
+    tool_names = {tool["name"] for tool in tools}
+    assert {"web_search", "get_wallet_portfolio"} <= tool_names
     t = tools[0]
     assert "title" in t
     assert "inputSchema" in t

@@ -163,6 +163,7 @@ async def get_gas_price(chain_id: int = 1, include_usd_estimate: bool = False) -
 
 TOOL = ToolDefinition(
     name="get_gas_price",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Get current EIP-1559 gas fees on Ethereum or Base. Returns base fee, priority fee, "

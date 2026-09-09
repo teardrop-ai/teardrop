@@ -243,6 +243,7 @@ async def get_wallet_history(
 
 TOOL = ToolDefinition(
     name="get_wallet_history",
+    show_on_agent_card=False,
     version="1.0.0",
     description=(
         "Get one page of decoded transaction history for an EVM wallet across DeBank-supported chains. "

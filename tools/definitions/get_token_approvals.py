@@ -296,6 +296,7 @@ async def get_token_approvals(
 
 TOOL = ToolDefinition(
     name="get_token_approvals",
+    show_on_agent_card=False,
     version="1.1.0",
     description=(
         "Audit ERC-20 token allowances for a wallet address. By default, returns all non-zero approvals "
