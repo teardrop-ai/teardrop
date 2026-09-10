@@ -116,3 +116,30 @@ async def test_queue_scheduled_run_now_requires_enabled_interval(monkeypatch):
     query = pool.fetchrow.await_args.args[0]
     assert "schedule_kind = 'interval'" in query
     assert "enabled = TRUE" in query
+
+
+@pytest.mark.anyio
+async def test_reserve_x_broadcast(monkeypatch):
+    pool = AsyncMock()
+    pool.fetchval.return_value = "run-1"
+    monkeypatch.setattr(crud, "_get_pool", lambda: pool)
+
+    assert await crud.reserve_x_broadcast("run-1", "sched-1", "org-1") is True
+    query = pool.fetchval.await_args.args[0]
+    assert "INSERT INTO x_broadcasts" in query
+    assert "ON CONFLICT (run_id) DO NOTHING" in query
+
+    pool.fetchval.return_value = None
+    assert await crud.reserve_x_broadcast("run-1", "sched-1", "org-1") is False
+
+
+@pytest.mark.anyio
+async def test_record_x_broadcast_tweet(monkeypatch):
+    pool = AsyncMock()
+    monkeypatch.setattr(crud, "_get_pool", lambda: pool)
+
+    await crud.record_x_broadcast_tweet("run-1", "tweet-123456")
+    query = pool.execute.await_args.args[0]
+    assert "UPDATE x_broadcasts" in query
+    assert "SET tweet_id = $2" in query
+    assert pool.execute.await_args.args[1:] == ("run-1", "tweet-123456")

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Literal
 from urllib.parse import urlparse
@@ -19,6 +20,8 @@ from scheduling.crud import (
     mark_scheduled_run_skipped,
     mark_scheduled_run_succeeded,
     record_scheduled_run_result,
+    record_x_broadcast_tweet,
+    reserve_x_broadcast,
 )
 from scheduling.models import ScheduledRun, ScheduledRunResult
 from teardrop.agent_runtime import run_agent_once
@@ -42,6 +45,22 @@ def _human_callback_text(output_text: object, error: object) -> str:
     if not isinstance(value, dict) or not isinstance(value.get("task_class"), str):
         return text
     return stripped[end:].lstrip()
+
+
+_URL_PATTERN = re.compile(r"https?://|\bwww\.|\b[a-zA-Z0-9-]+\.(?:com|org|net|io|ai|xyz|dev|co|app)\b", re.IGNORECASE)
+
+
+def _x_post_text(output_text: object, max_chars: int = 280) -> str | None:
+    text = _human_callback_text(output_text, error="").strip()
+    if not text:
+        return None
+    if len(text) > max_chars:
+        logger.warning("X broadcast text exceeds limit length=%d max=%d", len(text), max_chars)
+        return None
+    if _URL_PATTERN.search(text):
+        logger.warning("X broadcast text contains forbidden link")
+        return None
+    return text
 
 
 async def _ingest_labeling_prediction(
@@ -113,6 +132,71 @@ async def _deliver_callback(
             )
     except Exception:
         logger.warning("scheduled callback dispatch failed schedule_id=%s host=%s", schedule_id, host, exc_info=True)
+
+
+async def _publish_x_broadcast(
+    schedule: ScheduledRun,
+    stored: ScheduledRunResult,
+) -> None:
+    settings = get_settings()
+    if not settings.x_broadcast_enabled or not settings.x_broadcast_configured:
+        logger.warning(
+            "X broadcast skipped not enabled or configured schedule_id=%s",
+            schedule.id,
+        )
+        return
+
+    if settings.x_broadcast_org_id != schedule.org_id:
+        logger.warning(
+            "X broadcast skipped non-operator org schedule_id=%s",
+            schedule.id,
+        )
+        return
+
+    if stored.status != "completed":
+        logger.debug(
+            "X broadcast skipped non-completed status=%s schedule_id=%s",
+            stored.status,
+            schedule.id,
+        )
+        return
+
+    text = _x_post_text(stored.output_text, max_chars=settings.x_broadcast_max_chars)
+    if not text:
+        logger.warning(
+            "X broadcast skipped invalid text schedule_id=%s run_id=%s",
+            schedule.id,
+            stored.run_id,
+        )
+        return
+
+    reserved = await reserve_x_broadcast(stored.run_id, schedule.id, schedule.org_id)
+    if not reserved:
+        logger.info(
+            "X broadcast already reserved schedule_id=%s run_id=%s",
+            schedule.id,
+            stored.run_id,
+        )
+        return
+
+    try:
+        from shared.x_client import post_tweet  # noqa: PLC0415
+
+        tweet_id = await post_tweet(text)
+        await record_x_broadcast_tweet(stored.run_id, tweet_id)
+        logger.info(
+            "X broadcast published tweet_id=%s schedule_id=%s run_id=%s",
+            tweet_id,
+            schedule.id,
+            stored.run_id,
+        )
+    except Exception:
+        logger.warning(
+            "X broadcast dispatch failed schedule_id=%s run_id=%s",
+            schedule.id,
+            stored.run_id,
+            exc_info=True,
+        )
 
 
 async def _run_and_record(
@@ -198,7 +282,9 @@ async def _run_and_record(
             max_consecutive_failures=settings.scheduled_runs_max_consecutive_failures,
         )
 
-    if schedule.callback_url:
+    if schedule.callback_format == "x":
+        await _publish_x_broadcast(schedule, stored)
+    elif schedule.callback_url:
         await _deliver_callback(
             schedule.callback_url,
             {

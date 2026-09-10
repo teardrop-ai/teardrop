@@ -133,6 +133,13 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `LABELING_MAX_PER_ORG` | Maximum concurrently leased labeling targets per organization (default: `10`) |
 | `LABELING_LEASE_SECONDS` | Target lease duration before another worker may reclaim it (default: `120`) |
 | `LABELING_RETENTION_DAYS` | Retain structured prediction labels for this many days (default: `365`; `0` keeps them indefinitely) |
+| `X_BROADCAST_ENABLED` | Enable automated publishing of completed scheduled runs to X (Twitter) (default: `false`) |
+| `X_BROADCAST_ORG_ID` | Operator organization ID authorized to configure X broadcast schedules (required when enabled; other orgs are rejected) |
+| `X_API_KEY` | X API consumer key / API key for OAuth 1.0a authentication (optional) |
+| `X_API_SECRET` | X API consumer secret / API secret for OAuth 1.0a authentication (optional) |
+| `X_ACCESS_TOKEN` | X user access token for OAuth 1.0a authentication (optional) |
+| `X_ACCESS_TOKEN_SECRET` | X user access token secret for OAuth 1.0a authentication (optional) |
+| `X_BROADCAST_MAX_CHARS` | Maximum characters permitted in an X broadcast post (default: `280`) |
 | `SENTRY_DSN` | Sentry error tracking DSN (optional; leave empty to disable) |
 
 Event-trigger admission uses a short cluster-global Postgres advisory lock so global and per-org limits remain exact. The default concurrency is intentionally small; benchmark and redesign admission counters before raising the global limit above roughly 50.

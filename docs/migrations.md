@@ -116,3 +116,6 @@ python -m migrations.runner
 | `100_pending_settlement_principal.sql` | Preserves principal attribution across asynchronous credit-settlement retries |
 | `101_a2a_agent_registry.sql` | Opt-in organization A2A endpoint registry, normalized failure-origin telemetry, and agent-directory lookup index |
 | `103_a2a_refund_ledger_link.sql` | Links new credit-funded A2A refund outbox rows to immutable debit/reversal ledger entries and seeds zero-cost planner agent discovery; existing unlinked rows retain balance-only refund behavior |
+| `104_counterparty_risk_platform_tool.sql` | Registers `assess_counterparty_risk` composite platform tool at $0.035 USDC |
+| `105_opportunity_validation_platform_tool.sql` | Registers `validate_opportunity` composite platform tool at $0.015 USDC |
+| `106_x_broadcast_sink.sql` | Adds X (Twitter) broadcast sink to `scheduled_runs` and durable `x_broadcasts` audit ledger |

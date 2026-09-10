@@ -39,7 +39,7 @@ Each graph invocation records its thread in `checkpoint_thread_activity` before 
 | `org_tool_events` with `executed` or `failed` event types | Disposable execution telemetry; 90 days by default |
 | `telemetry_run_starts` | Run-source completeness denominator; 120 days by default |
 | Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |
-| `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events` | Immutable financial or audit records; never swept |
+| `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events`, `x_broadcasts` | Immutable financial or audit records; never swept |
 | `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; each row carries `source` (`api`, `schedule`, `trigger`, or `a2a`); never swept |
 | `labeling_predictions`, targets, and results | Structured ML labels; 365 days by default via `LABELING_RETENTION_DAYS`; never mixed with billing ledgers |
 

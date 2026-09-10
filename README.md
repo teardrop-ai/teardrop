@@ -65,6 +65,12 @@ Managed via the `/agent/event-triggers` API (CRUD, secret rotation, and run poll
 
 Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly. Configure via `EVENT_TRIGGERS_*` settings (see [docs/configuration.md](docs/configuration.md)).
 
+### X (Twitter) Broadcast Posts
+
+Organizations can configure scheduled runs to broadcast market analysis and opportunity verdicts directly to X (Twitter). Setting `callback_format=x` publishes the final output text to X via the v2 API using OAuth 1.0a authentication upon successful run completion, recording published tweet IDs in the immutable `x_broadcasts` audit ledger.
+
+Broadcast runs require `X_BROADCAST_ENABLED=true` and a designated operator organization via `X_BROADCAST_ORG_ID`; schedules from any other organization are rejected with `403`. To guard against elevated pay-per-usage API costs and phishing, output text containing URLs is rejected before publication. Configure via `X_*` settings (see [docs/configuration.md](docs/configuration.md)).
+
 ---
 
 ## Requirements

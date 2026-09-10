@@ -34,7 +34,7 @@ class CreateScheduledRunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=12_000)
     interval_seconds: int = Field(..., ge=1)
     callback_url: str | None = Field(default=None, max_length=2048)
-    callback_format: Literal["json", "text"] = "json"
+    callback_format: Literal["json", "text", "x"] = "json"
     first_run_at: datetime | None = None
 
 
@@ -44,7 +44,7 @@ class UpdateScheduledRunRequest(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=1)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
-    callback_format: Literal["json", "text"] | None = None
+    callback_format: Literal["json", "text", "x"] | None = None
 
 
 class ScheduledRunItem(BaseModel):
@@ -57,7 +57,7 @@ class ScheduledRunItem(BaseModel):
     interval_seconds: int
     enabled: bool
     callback_url: str | None = None
-    callback_format: Literal["json", "text"] = "json"
+    callback_format: Literal["json", "text", "x"] = "json"
     next_run_at: str = Field(..., description="ISO 8601 timestamp.")
     last_run_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until first run.")
     consecutive_failures: int
@@ -158,6 +158,27 @@ def _validate_interval(interval_seconds: int) -> None:
         )
 
 
+def _validate_x_sink(org_id: str, callback_format: str | None, callback_url: str | None) -> None:
+    if callback_format != "x":
+        return
+    current_settings = get_settings()
+    if not current_settings.x_broadcast_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="X broadcast is disabled.",
+        )
+    if not current_settings.x_broadcast_org_id or org_id != current_settings.x_broadcast_org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization not authorized for X broadcast.",
+        )
+    if callback_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="callback_url must not be set when callback_format is 'x'.",
+        )
+
+
 def _normalize_first_run_at(first_run_at: datetime | None) -> datetime | None:
     if first_run_at is None:
         return None
@@ -187,6 +208,7 @@ async def create_agent_schedule(
     _validate_interval(body.interval_seconds)
     first_run_at = _normalize_first_run_at(body.first_run_at)
     await _validate_callback_url(body.callback_url)
+    _validate_x_sink(org_id, body.callback_format, body.callback_url)
     if await count_scheduled_runs(org_id) >= settings.scheduled_runs_max_per_org:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -267,6 +289,17 @@ async def update_agent_schedule_endpoint(
         _validate_interval(body.interval_seconds)
     if "callback_url" in update_fields:
         await _validate_callback_url(body.callback_url)
+    if "callback_format" in update_fields or "callback_url" in update_fields:
+        existing = await get_scheduled_run(schedule_id, org_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled run not found.")
+        target_format = (
+            body.callback_format
+            if "callback_format" in update_fields and body.callback_format is not None
+            else existing.callback_format
+        )
+        target_url = body.callback_url if "callback_url" in update_fields else existing.callback_url
+        _validate_x_sink(org_id, target_format, target_url)
     update_kwargs: dict[str, object] = {}
     if "name" in update_fields:
         update_kwargs["name"] = body.name

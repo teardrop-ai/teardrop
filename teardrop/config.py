@@ -950,6 +950,44 @@ class Settings(BaseSettings):
         ge=1,
         description="Maximum length of a rendered event-trigger prompt after payload interpolation.",
     )
+
+    # ── X (Twitter) Broadcast ─────────────────────────────────────────────────
+    x_broadcast_enabled: bool = Field(
+        default=False,
+        description="Enable automated publishing of completed scheduled runs to X (Twitter).",
+    )
+    x_broadcast_org_id: str = Field(
+        default="",
+        description="Operator organization ID authorized to configure X broadcast schedules.",
+    )
+    x_api_key: str = Field(
+        default="",
+        description="X API consumer key / API key (OAuth 1.0a).",
+    )
+    x_api_secret: str = Field(
+        default="",
+        description="X API consumer secret / API secret (OAuth 1.0a).",
+    )
+    x_access_token: str = Field(
+        default="",
+        description="X user access token (OAuth 1.0a).",
+    )
+    x_access_token_secret: str = Field(
+        default="",
+        description="X user access token secret (OAuth 1.0a).",
+    )
+    x_broadcast_max_chars: int = Field(
+        default=280,
+        ge=1,
+        le=280,
+        description="Maximum characters allowed in an X broadcast post.",
+    )
+
+    @property
+    def x_broadcast_configured(self) -> bool:
+        """True when all four OAuth 1.0a credentials are set."""
+        return bool(self.x_api_key and self.x_api_secret and self.x_access_token and self.x_access_token_secret)
+
     marketplace_max_sweep_retries: int = Field(
         default=5,
         description=(

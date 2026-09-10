@@ -21,7 +21,7 @@ class ScheduledRun(BaseModel):
     cron_expr: str | None = None
     enabled: bool = True
     callback_url: str | None = None
-    callback_format: Literal["json", "text"] = "json"
+    callback_format: Literal["json", "text", "x"] = "json"
     trigger_token: str | None = None
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None

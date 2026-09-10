@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 
-def _schedule(schedule_id: str = "sched-1", org_id: str = "test-org-id") -> SimpleNamespace:
+def _schedule(
+    schedule_id: str = "sched-1",
+    org_id: str = "test-org-id",
+    callback_url: str | None = "https://example.com/hook",
+    callback_format: str = "json",
+) -> SimpleNamespace:
     now = datetime.now(timezone.utc)
     return SimpleNamespace(
         id=schedule_id,
@@ -21,7 +26,8 @@ def _schedule(schedule_id: str = "sched-1", org_id: str = "test-org-id") -> Simp
         schedule_kind="interval",
         interval_seconds=3600,
         enabled=True,
-        callback_url="https://example.com/hook",
+        callback_url=callback_url,
+        callback_format=callback_format,
         next_run_at=now,
         last_run_at=None,
         consecutive_failures=0,
@@ -247,3 +253,102 @@ async def test_agent_schedules_disabled_returns_404(api_client, test_settings, m
     resp = await api_client.get("/agent/schedules")
 
     assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_create_schedule_x_format_disabled_returns_404(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    test_settings.x_broadcast_enabled = False
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={"name": "X post", "prompt": "Post update", "interval_seconds": 3600, "callback_format": "x"},
+    )
+
+    assert resp.status_code == 404
+    assert "X broadcast is disabled" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_schedule_x_format_non_operator_returns_403(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    test_settings.x_broadcast_enabled = True
+    test_settings.x_broadcast_org_id = ""
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={"name": "X post", "prompt": "Post update", "interval_seconds": 3600, "callback_format": "x"},
+    )
+
+    assert resp.status_code == 403
+    assert "not authorized" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_schedule_x_format_with_callback_url_returns_422(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    test_settings.x_broadcast_enabled = True
+    test_settings.x_broadcast_org_id = "test-org-id"
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+    monkeypatch.setattr("tools.definitions.http_fetch.async_validate_url", AsyncMock(return_value=None))
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={
+            "name": "X post",
+            "prompt": "Post update",
+            "interval_seconds": 3600,
+            "callback_format": "x",
+            "callback_url": "https://notify.example/hook",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "callback_url must not be set" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_schedule_x_format_success(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    test_settings.x_broadcast_enabled = True
+    test_settings.x_broadcast_org_id = "test-org-id"
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.count_scheduled_runs", AsyncMock(return_value=0))
+
+    sched = _schedule()
+    sched.callback_format = "x"
+    create_mock = AsyncMock(return_value=sched)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.create_scheduled_run", create_mock)
+
+    resp = await api_client.post(
+        "/agent/schedules",
+        json={"name": "X post", "prompt": "Post update", "interval_seconds": 3600, "callback_format": "x"},
+    )
+
+    assert resp.status_code == 201
+    assert create_mock.await_args.kwargs["callback_format"] == "x"
+    assert resp.json()["callback_format"] == "x"
+
+
+@pytest.mark.anyio
+async def test_update_schedule_x_format_rejects_url_conflict(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    test_settings.x_broadcast_enabled = True
+    test_settings.x_broadcast_org_id = "test-org-id"
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+
+    sched = _schedule(callback_url="https://notify.example/hook")
+    monkeypatch.setattr("teardrop.routers.agent_schedules.get_scheduled_run", AsyncMock(return_value=sched))
+
+    resp = await api_client.patch(
+        "/agent/schedules/sched-1",
+        json={"callback_format": "x"},
+    )
+
+    assert resp.status_code == 422
+    assert "callback_url must not be set" in resp.json()["detail"]

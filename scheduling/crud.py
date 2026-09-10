@@ -445,6 +445,37 @@ async def reserve_event_dispatch(schedule_id: str, idempotency_key: str, run_id:
     return (str(existing) if existing is not None else run_id), False
 
 
+async def reserve_x_broadcast(run_id: str, schedule_id: str, org_id: str) -> bool:
+    """Reserve an at-most-once publication slot for a completed scheduled run."""
+    pool = _get_pool()
+    inserted = await pool.fetchval(
+        """
+        INSERT INTO x_broadcasts (run_id, schedule_id, org_id, tweet_id, created_at)
+        VALUES ($1, $2, $3, '', NOW())
+        ON CONFLICT (run_id) DO NOTHING
+        RETURNING run_id
+        """,
+        run_id,
+        schedule_id,
+        org_id,
+    )
+    return inserted is not None
+
+
+async def record_x_broadcast_tweet(run_id: str, tweet_id: str) -> None:
+    """Record the published tweet ID for a reserved X broadcast."""
+    pool = _get_pool()
+    await pool.execute(
+        """
+        UPDATE x_broadcasts
+        SET tweet_id = $2
+        WHERE run_id = $1
+        """,
+        run_id,
+        tweet_id,
+    )
+
+
 async def reserve_event_dispatch_lease(
     *,
     schedule_id: str,
