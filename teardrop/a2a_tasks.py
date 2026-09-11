@@ -43,6 +43,7 @@ _worker_tasks: set[asyncio.Task[None]] = set()
 _worker_heartbeat_task: asyncio.Task[None] | None = None
 _worker_owner_id = f"a2a-{uuid.uuid4()}"
 _task_lease_seconds = 60
+RECOVERY_INTERRUPTION_ERROR = "Task interrupted before its result was persisted."
 
 _TASK_COLUMNS = (
     "id, run_id, client_task_id, context_id, message, metadata, user_message, "
@@ -305,7 +306,14 @@ async def finish_inbound_task(
         UPDATE a2a_inbound_tasks
         SET task_state = $2,
             output_text = $3,
-            error = $4,
+            error = CASE
+                WHEN task_state = 'failed'
+                    AND error = $12
+                    AND $2 = 'completed'
+                    AND $4 = ''
+                THEN $12
+                ELSE $4
+            END,
             usage_event_id = $5,
             cost_usdc = $6,
             settlement_tx = $7,
@@ -315,7 +323,17 @@ async def finish_inbound_task(
             finished_at = COALESCE(finished_at, NOW()),
             lease_expires_at = NOW(),
             updated_at = NOW()
-        WHERE id = $1 AND task_state IN ('submitted', 'running')
+        WHERE id = $1
+          AND worker_owner_id = $11
+          AND (
+              task_state IN ('submitted', 'running')
+              OR (
+                  task_state = 'failed'
+                  AND error = $12
+                  AND $2 IN ('completed', 'failed', 'timeout', 'rejected_payment', 'rejected_auth_credit')
+                  AND (NULLIF($3, '') IS NOT NULL OR NULLIF($4, '') IS NOT NULL)
+              )
+          )
         RETURNING {_TASK_COLUMNS}
         """,
         task_id,
@@ -328,28 +346,50 @@ async def finish_inbound_task(
         billing_method,
         max(0, settlement_amount_usdc),
         max(0, duration_ms),
+        _worker_owner_id,
+        RECOVERY_INTERRUPTION_ERROR,
     )
     return _row_to_task(row) if row is not None else None
 
 
-async def recover_orphaned_inbound_tasks() -> list[A2AInboundTask]:
-    """Fail active tasks whose process lease has expired."""
+async def recover_orphaned_inbound_tasks(*, batch_size: int = 500) -> list[A2AInboundTask]:
+    """Fail active tasks whose lease expired in another process."""
+    if batch_size <= 0:
+        return []
     pool = _get_pool()
-    rows = await pool.fetch(
-        f"""
-        UPDATE a2a_inbound_tasks
-        SET task_state = 'failed',
-            output_text = 'Task interrupted by process restart.',
-            error = 'Task interrupted by process restart; billing outcome is unknown.',
-            finished_at = COALESCE(finished_at, NOW()),
-                        lease_expires_at = NOW(),
-            updated_at = NOW()
+    recovered: list[A2AInboundTask] = []
+    while True:
+        rows = await pool.fetch(
+            f"""
+            WITH candidates AS (
+                SELECT ctid
+                FROM a2a_inbound_tasks
                 WHERE task_state IN ('submitted', 'running')
-                    AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-        RETURNING {_TASK_COLUMNS}
-        """
-    )
-    return [_row_to_task(row) for row in rows]
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= NOW()
+                  AND worker_owner_id <> $1
+                ORDER BY created_at, id
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE a2a_inbound_tasks AS tasks
+            SET task_state = 'failed',
+                output_text = '',
+                error = $3,
+                finished_at = COALESCE(finished_at, NOW()),
+                lease_expires_at = NOW(),
+                updated_at = NOW()
+            WHERE tasks.ctid IN (SELECT ctid FROM candidates)
+            RETURNING {_TASK_COLUMNS}
+            """,
+            _worker_owner_id,
+            batch_size,
+            RECOVERY_INTERRUPTION_ERROR,
+        )
+        batch = [_row_to_task(row) for row in rows]
+        recovered.extend(batch)
+        if len(batch) < batch_size:
+            return recovered
 
 
 async def delete_terminal_inbound_tasks(*, ttl_days: int, batch_size: int, pool: PgPool | None = None) -> int:

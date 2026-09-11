@@ -30,6 +30,9 @@ async def test_recovery_audit_preserves_billing_projection(monkeypatch):
         error="Task interrupted by process restart; billing outcome is unknown.",
     )
     audit_mock = AsyncMock()
+    pool = AsyncMock()
+    pool.fetchval.return_value = 456
+    monkeypatch.setattr(background_tasks, "_get_pool", lambda: pool)
     monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
 
     await background_tasks._record_recovered_a2a_task_audits([task])
@@ -45,7 +48,7 @@ async def test_recovery_audit_preserves_billing_projection(monkeypatch):
         context_id="ctx-1",
         task_id="task-1",
         task_state="failed",
-        cost_usdc=123,
+        cost_usdc=456,
         settlement_amount_usdc=100,
         settlement_tx="0xtx",
         billing_method="x402",

@@ -70,7 +70,7 @@ def _row(**overrides):
         "billing_method": "",
         "settlement_amount_usdc": 0,
         "duration_ms": 0,
-        "worker_owner_id": "",
+        "worker_owner_id": a2a_tasks._worker_owner_id,
         "lease_expires_at": None,
         "created_at": now,
         "started_at": None,
@@ -170,14 +170,70 @@ async def test_claim_and_finish_limit_state_transitions(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_recover_orphaned_tasks_marks_active_rows_failed(monkeypatch):
-    pool = _FakePool(_row(task_state="running"))
+async def test_recover_orphaned_tasks_marks_foreign_expired_rows_failed(monkeypatch):
+    pool = _FakePool(_row(task_state="running", worker_owner_id="a2a-foreign-owner"))
     monkeypatch.setattr(a2a_tasks, "_pool", pool)
 
     recovered = await a2a_tasks.recover_orphaned_inbound_tasks()
 
     assert [task.id for task in recovered] == ["task-internal"]
-    assert "task_state IN ('submitted', 'running')" in pool.fetch_calls[0][0]
+    assert [task.worker_owner_id for task in recovered] == ["a2a-foreign-owner"]
+    query, args = pool.fetch_calls[0]
+    assert "task_state IN ('submitted', 'running')" in query
+    assert "worker_owner_id <> $1" in query
+    assert "FOR UPDATE SKIP LOCKED" in query
+    assert args == (a2a_tasks._worker_owner_id, 500, a2a_tasks.RECOVERY_INTERRUPTION_ERROR)
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_tasks_excludes_own_rows_and_null_leases(monkeypatch):
+    pool = _FakePool(_row(task_state="running"))
+    monkeypatch.setattr(a2a_tasks, "_pool", pool)
+    await a2a_tasks.recover_orphaned_inbound_tasks(batch_size=7)
+
+    query, args = pool.fetch_calls[0]
+    assert "lease_expires_at IS NOT NULL" in query
+    assert "worker_owner_id <> $1" in query
+    assert args == (a2a_tasks._worker_owner_id, 7, a2a_tasks.RECOVERY_INTERRUPTION_ERROR)
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_tasks_drains_batches(monkeypatch):
+    class _BatchPool(_FakePool):
+        def __init__(self):
+            super().__init__(None)
+            self.rows = [[_row(id="task-1")], [_row(id="task-2")], []]
+
+        async def fetch(self, query: str, *args):
+            self.fetch_calls.append((query, args))
+            return self.rows.pop(0)
+
+    pool = _BatchPool()
+    monkeypatch.setattr(a2a_tasks, "_pool", pool)
+
+    recovered = await a2a_tasks.recover_orphaned_inbound_tasks(batch_size=1)
+
+    assert [task.id for task in recovered] == ["task-1", "task-2"]
+    assert len(pool.fetch_calls) == 3
+
+
+@pytest.mark.anyio
+async def test_finish_reconciles_late_result_for_recovered_owner(monkeypatch):
+    pool = _FakePool(_row(task_state="failed", error=a2a_tasks.RECOVERY_INTERRUPTION_ERROR))
+    monkeypatch.setattr(a2a_tasks, "_pool", pool)
+
+    finished = await a2a_tasks.finish_inbound_task(
+        "task-internal",
+        task_state="completed",
+        output_text="authentic result",
+    )
+
+    assert finished is not None
+    query, args = pool.fetchrow_calls[0]
+    assert "worker_owner_id = $11" in query
+    assert "task_state = 'failed'" in query
+    assert "NULLIF($3, '') IS NOT NULL" in query
+    assert args[-2:] == (a2a_tasks._worker_owner_id, a2a_tasks.RECOVERY_INTERRUPTION_ERROR)
 
 
 @pytest.mark.anyio

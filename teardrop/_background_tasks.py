@@ -15,6 +15,7 @@ from billing import (
     process_onboarding_credit_outbox,
     process_pending_settlements,
 )
+from billing.context import _get_pool
 from labeling.worker import labeling_tick
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
@@ -127,6 +128,17 @@ async def _record_recovered_a2a_task_audits(tasks: list[A2AInboundTask]) -> None
     from teardrop.routers.a2a_messages import _record_inbound_event
 
     for task in tasks:
+        cost_usdc = max(0, task.cost_usdc)
+        if task.usage_event_id:
+            try:
+                usage_cost = await _get_pool().fetchval(
+                    "SELECT cost_usdc FROM usage_events WHERE id = $1",
+                    task.usage_event_id,
+                )
+                if usage_cost is not None:
+                    cost_usdc = max(0, int(usage_cost))
+            except Exception:
+                logger.warning("Unable to resolve recovered A2A usage cost task_id=%s", task.id, exc_info=True)
         await _record_inbound_event(
             run_id=task.run_id,
             usage_event_id=task.usage_event_id,
@@ -138,7 +150,7 @@ async def _record_recovered_a2a_task_audits(tasks: list[A2AInboundTask]) -> None
             context_id=task.context_id,
             task_id=task.id,
             task_state="failed",
-            cost_usdc=task.cost_usdc,
+            cost_usdc=cost_usdc,
             settlement_amount_usdc=task.settlement_amount_usdc,
             settlement_tx=task.settlement_tx,
             billing_method=task.billing_method,
