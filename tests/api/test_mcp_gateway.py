@@ -5,13 +5,88 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
 import teardrop.config as config  # ── JWKS endpoint ─────────────────────────────────────────────────────────────
 from teardrop._meta import APP_VERSION
+
+
+def test_mcp_bazaar_extension_has_valid_flat_jsonrpc_schema():
+    from x402.extensions.bazaar import validate_discovery_extension
+
+    from teardrop.mcp_gateway import _mcp_402_extensions
+
+    bazaar = _mcp_402_extensions()["bazaar"]
+    body_schema = bazaar["schema"]["properties"]["input"]["properties"]["body"]
+
+    result = validate_discovery_extension(bazaar)
+
+    assert result.valid, result.errors
+    assert bazaar["info"]["input"]["method"] == "POST"
+    assert body_schema["properties"]["method"]["const"] == "tools/call"
+    assert "$defs" not in json.dumps(body_schema)
+    assert "$ref" not in json.dumps(body_schema)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payment_header", [None, "invalid-payment"])
+async def test_mcp_x402_challenges_include_bazaar_in_body_and_headers(monkeypatch, payment_header):
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    headers = [] if payment_header is None else [(b"payment-signature", payment_header.encode())]
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("test", 443),
+            "path": "/tools/mcp",
+            "headers": headers,
+        }
+    )
+    seen: dict[str, dict] = {}
+
+    def _body(**kwargs):
+        seen["body"] = kwargs
+        return {
+            "error": kwargs.get("error", "Payment required"),
+            "accepts": [],
+            "x402Version": 2,
+            "resource": kwargs["resource"],
+            "extensions": kwargs["extensions"],
+        }
+
+    def _headers(**kwargs):
+        seen["headers"] = kwargs
+        return {"PAYMENT-REQUIRED": "encoded", "X-PAYMENT-REQUIRED": "legacy"}
+
+    monkeypatch.setattr(billing, "build_402_response_body", _body)
+    monkeypatch.setattr(billing, "build_402_headers", _headers)
+    verify_mock = AsyncMock(return_value=SimpleNamespace(verified=False, error="Invalid payment"))
+    monkeypatch.setattr(billing, "verify_payment", verify_mock)
+
+    response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(request)
+
+    assert response is not None
+    assert response.status_code == 402
+    body = json.loads(response.body)
+    assert body["extensions"]["bazaar"]["info"]["input"]["method"] == "POST"
+    assert body["resource"]["url"] == "https://test/tools/mcp"
+    assert seen["headers"]["extensions"] == seen["body"]["extensions"]
+    assert "org_id" not in json.dumps(body)
+    if payment_header is None:
+        verify_mock.assert_not_awaited()
+        assert body["error"] == "Payment required"
+    else:
+        verify_mock.assert_awaited_once_with(payment_header)
+        assert body["error"] == "Invalid payment"
 
 
 @pytest.mark.asyncio

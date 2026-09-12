@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
+from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
 
 from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
@@ -29,6 +30,39 @@ from teardrop.public_url import public_base_url
 logger = logging.getLogger(__name__)
 
 _MCP_PREFIX = "/tools/mcp"
+_MCP_BAZAAR_INPUT_EXAMPLE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "get_datetime", "arguments": {}},
+}
+_MCP_BAZAAR_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "jsonrpc": {"type": "string", "const": "2.0"},
+        "id": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+        "method": {"type": "string", "const": "tools/call"},
+        "params": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "arguments": {"type": "object"},
+            },
+            "required": ["name", "arguments"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["jsonrpc", "id", "method", "params"],
+    "additionalProperties": False,
+}
+_MCP_BAZAAR_OUTPUT_EXAMPLE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+        "content": [{"type": "text", "text": '{"datetime":"2026-09-11T00:00:00+00:00"}'}],
+        "isError": False,
+    },
+}
 
 
 class MCPPathNormalizer:
@@ -56,6 +90,17 @@ def _mcp_402_resource(request: Request) -> dict[str, str]:
         "description": "MCP gateway tools/call execution endpoint.",
         "mimeType": "application/json",
     }
+
+
+def _mcp_402_extensions() -> dict:
+    extension = declare_discovery_extension(
+        input=_MCP_BAZAAR_INPUT_EXAMPLE,
+        input_schema=_MCP_BAZAAR_INPUT_SCHEMA,
+        body_type="json",
+        output=OutputConfig(example=_MCP_BAZAAR_OUTPUT_EXAMPLE),
+    )
+    extension["bazaar"]["info"]["input"]["method"] = "POST"
+    return extension
 
 
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
@@ -310,7 +355,10 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         )
 
         payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
-        response_kwargs = {"resource": _mcp_402_resource(request)}
+        response_kwargs = {
+            "resource": _mcp_402_resource(request),
+            "extensions": _mcp_402_extensions(),
+        }
         if not payment_header:
             return JSONResponse(
                 status_code=402,

@@ -46,7 +46,7 @@ The `skills`/`tools` sections of the public card are curated: each `ToolDefiniti
 
 Each `ToolDefinition` may also carry agent-commerce guidance fields — `use_when`, `limitations`, and `alternatives` — that are emitted on the A2A skills/tools sections and the MCP server card when present. These help external agents decide when to select a tool, what constraints apply, and which related tools to consider instead. They are additive and omitted when empty, so existing consumers see no change.
 
-Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`.
+Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`. Payment-required responses from both paid entrypoints include Bazaar metadata describing their request and response shapes.
 
 ---
 
