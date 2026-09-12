@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from teardrop.usage import TelemetryCompletenessBySource, UsageSummary
+from teardrop.usage import MachineFunnelResponse, TelemetryCompletenessBySource, UsageSummary
 
 _SUMMARY = UsageSummary(
     total_runs=5,
@@ -103,6 +103,42 @@ async def test_admin_telemetry_completeness(admin_api_client, monkeypatch):
 async def test_admin_telemetry_completeness_requires_admin(api_client):
     resp = await api_client.get("/admin/telemetry/completeness")
     assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_machine_funnel(admin_api_client, monkeypatch):
+    report = MachineFunnelResponse(
+        window_days=14,
+        settlement_attempts=5,
+        settled_calls=4,
+        failed_calls=1,
+        settlement_failure_rate=0.2,
+        unique_anonymous_payers=2,
+        converted_payers=1,
+        wallet_conversion_rate=0.5,
+        repeat_payers=1,
+        repeat_payer_rate=0.5,
+        repeat_payer_gate=True,
+    )
+    monkeypatch.setattr("teardrop.routers.admin.usage.get_machine_funnel", AsyncMock(return_value=report))
+
+    resp = await admin_api_client.get("/admin/telemetry/machine-funnel", params={"days": 14})
+
+    assert resp.status_code == 200
+    assert resp.json()["wallet_conversion_rate"] == 0.5
+    assert resp.json()["settlement_failure_rate"] == 0.2
+    assert resp.json()["repeat_payer_gate"] is True
+
+
+@pytest.mark.anyio
+async def test_admin_machine_funnel_requires_admin(api_client):
+    assert (await api_client.get("/admin/telemetry/machine-funnel")).status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_machine_funnel_bounds_window(admin_api_client):
+    assert (await admin_api_client.get("/admin/telemetry/machine-funnel", params={"days": 0})).status_code == 422
+    assert (await admin_api_client.get("/admin/telemetry/machine-funnel", params={"days": 91})).status_code == 422
 
 
 @pytest.mark.anyio

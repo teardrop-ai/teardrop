@@ -119,3 +119,4 @@ python -m migrations.runner
 | `104_counterparty_risk_platform_tool.sql` | Registers `assess_counterparty_risk` composite platform tool at $0.035 USDC |
 | `105_opportunity_validation_platform_tool.sql` | Registers `validate_opportunity` composite platform tool at $0.015 USDC |
 | `106_x_broadcast_sink.sql` | Adds X (Twitter) broadcast sink to `scheduled_runs` and durable `x_broadcasts` audit ledger |
+| `107_mcp_call_events.sql` | Adds immutable MCP settlement outcome events for machine-volume conversion and retention metrics |

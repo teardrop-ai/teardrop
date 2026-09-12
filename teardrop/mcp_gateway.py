@@ -401,6 +401,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # subscription gate and credit verification are credit-rail concepts and
         # do not apply to anonymous per-call x402 payments.
         if is_x402:
+            request.state.mcp_call_event_id = str(uuid.uuid4())
             return (org_id, tool_cost, tool_name, req_id)
 
         # Verified-email promotional credit must not create author earnings
@@ -448,7 +449,41 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 content=_jsonrpc_error(req_id, -32000, billing.error),
             )
 
+        request.state.mcp_call_event_id = str(uuid.uuid4())
         return (org_id, tool_cost, tool_name, req_id)
+
+    @staticmethod
+    def _record_mcp_outcome(
+        request: Request,
+        org_id: str | None,
+        tool_name: str,
+        tool_cost: int,
+        billing_method: str,
+        settlement_status: str,
+        settlement_tx: str = "",
+    ) -> None:
+        from teardrop.usage import record_mcp_call_event
+
+        event_id = getattr(request.state, "mcp_call_event_id", None)
+        if not isinstance(event_id, str) or not event_id:
+            event_id = str(uuid.uuid4())
+            request.state.mcp_call_event_id = event_id
+        billing = getattr(request.state, "x402_billing", None)
+        payer = getattr(billing, "payer", "") if billing_method == "x402" else ""
+        if not isinstance(payer, str):
+            payer = ""
+        asyncio.create_task(
+            record_mcp_call_event(
+                event_id,
+                org_id or "",
+                payer,
+                tool_name,
+                billing_method,
+                tool_cost,
+                settlement_status,
+                settlement_tx,
+            )
+        )
 
     @staticmethod
     async def _enqueue_mcp_recovery(
@@ -516,13 +551,24 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             except Exception:
                 logger.warning("x402 MCP settlement failed", exc_info=True)
                 await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
+                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
                 return response  # Settlement failed — do not record phantom earnings
 
             if not settled.settled:
                 logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
                 await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
+                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
                 return response
 
+            self._record_mcp_outcome(
+                request,
+                org_id,
+                tool_name,
+                tool_cost,
+                "x402",
+                "settled",
+                settled.tx_hash,
+            )
             if settled.tx_hash:
                 logger.info("x402 MCP settlement succeeded org=%s tool=%s tx_hash=%s", org_id, tool_name, settled.tx_hash)
         else:
@@ -544,7 +590,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     None,
                     principal_id=getattr(request.state, "mcp_principal_id", "") or None,
                 )
+                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "failed")
                 return response
+            self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "settled")
 
         # Record marketplace earnings (fire-and-forget).
         if "/" in tool_name and tool_cost > 0:

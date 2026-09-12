@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 TOOL_CALL_EVENT_SCHEMA_VERSION = 1
 TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a"]
+McpBillingMethod = Literal["x402", "credit"]
+McpSettlementStatus = Literal["settled", "failed"]
 _VALID_TELEMETRY_SOURCES = frozenset({"api", "schedule", "trigger", "a2a"})
 
 
@@ -91,6 +93,26 @@ class TelemetryCompletenessBySource(BaseModel):
 class TelemetryCompletenessResponse(BaseModel):
     window_days: int
     sources: list[TelemetryCompletenessBySource]
+
+
+class MachineFunnelResponse(BaseModel):
+    window_days: int
+    machine_orgs_provisioned: int = 0
+    siwe_orgs_provisioned: int = 0
+    x402_orgs_provisioned: int = 0
+    settlement_attempts: int = 0
+    settled_calls: int = 0
+    failed_calls: int = 0
+    settlement_failure_rate: float | None = None
+    settled_revenue_usdc: int = 0
+    anonymous_settled_calls: int = 0
+    org_bound_settled_calls: int = 0
+    unique_anonymous_payers: int = 0
+    converted_payers: int = 0
+    wallet_conversion_rate: float | None = None
+    repeat_payers: int = 0
+    repeat_payer_rate: float | None = None
+    repeat_payer_gate: bool = False
 
 
 # ─── Database initialisation ─────────────────────────────────────────────────
@@ -222,6 +244,41 @@ async def record_telemetry_run_started(
         logger.warning("Telemetry run-start recording unavailable")
 
 
+async def record_mcp_call_event(
+    event_id: str,
+    org_id: str,
+    payer_address: str,
+    tool_name: str,
+    billing_method: McpBillingMethod,
+    cost_usdc: int,
+    settlement_status: McpSettlementStatus,
+    settlement_tx: str = "",
+) -> None:
+    """Persist an immutable MCP billing outcome without exposing payment material."""
+    if _pool is None:
+        return
+    try:
+        await _pool.execute(
+            """
+            INSERT INTO mcp_call_events
+                (id, org_id, payer_address, tool_name, billing_method,
+                 cost_usdc, settlement_status, settlement_tx, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            event_id,
+            org_id,
+            payer_address,
+            tool_name,
+            billing_method,
+            cost_usdc,
+            settlement_status,
+            settlement_tx,
+        )
+    except Exception:
+        logger.warning("MCP call event recording unavailable event_id=%s", event_id)
+
+
 async def get_telemetry_completeness(days: int = 7) -> list[TelemetryCompletenessBySource]:
     """Return source-split post-run telemetry coverage over recent starts."""
     if not 1 <= days <= 90:
@@ -289,6 +346,84 @@ async def get_telemetry_completeness(days: int = 7) -> list[TelemetryCompletenes
             )
         )
     return result
+
+
+async def get_machine_funnel(days: int = 7) -> MachineFunnelResponse:
+    """Derive machine acquisition, settlement, conversion, and retention signals."""
+    if not 1 <= days <= 90:
+        raise ValueError("days must be between 1 and 90")
+
+    row = await _get_pool().fetchrow(
+        """
+        WITH window_calls AS (
+            SELECT *
+            FROM mcp_call_events
+            WHERE created_at >= NOW() - ($1 * INTERVAL '1 day')
+        ),
+        anonymous_payers AS (
+            SELECT payer_address, MIN(created_at) AS first_call_at, COUNT(*) AS settled_calls
+            FROM window_calls
+            WHERE settlement_status = 'settled'
+              AND org_id = ''
+              AND payer_address <> ''
+            GROUP BY payer_address
+        ),
+        payer_conversions AS (
+            SELECT DISTINCT p.payer_address
+            FROM anonymous_payers p
+            JOIN org_provisioning_events e
+              ON LOWER(e.payer_address) = LOWER(p.payer_address)
+             AND e.event_type = 'provisioned'
+             AND e.created_at >= p.first_call_at
+        ),
+        recent_provisioning AS (
+            SELECT DISTINCT org_id, method
+            FROM org_provisioning_events
+            WHERE event_type = 'provisioned'
+              AND created_at >= NOW() - ($1 * INTERVAL '1 day')
+        )
+        SELECT
+            (SELECT COUNT(*) FROM recent_provisioning) AS machine_orgs_provisioned,
+            (SELECT COUNT(*) FROM recent_provisioning WHERE method = 'siwe') AS siwe_orgs_provisioned,
+            (SELECT COUNT(*) FROM recent_provisioning WHERE method = 'x402') AS x402_orgs_provisioned,
+            COUNT(*) AS settlement_attempts,
+            COUNT(*) FILTER (WHERE settlement_status = 'settled') AS settled_calls,
+            COUNT(*) FILTER (WHERE settlement_status = 'failed') AS failed_calls,
+            COALESCE(SUM(cost_usdc) FILTER (WHERE settlement_status = 'settled'), 0) AS settled_revenue_usdc,
+            COUNT(*) FILTER (WHERE settlement_status = 'settled' AND org_id = '') AS anonymous_settled_calls,
+            COUNT(*) FILTER (WHERE settlement_status = 'settled' AND org_id <> '') AS org_bound_settled_calls,
+            (SELECT COUNT(*) FROM anonymous_payers) AS unique_anonymous_payers,
+            (SELECT COUNT(*) FROM payer_conversions) AS converted_payers,
+            (SELECT COUNT(*) FROM anonymous_payers WHERE settled_calls > 1) AS repeat_payers
+        FROM window_calls
+        """,
+        days,
+    )
+
+    settlement_attempts = int(row["settlement_attempts"])
+    failed_calls = int(row["failed_calls"])
+    unique_payers = int(row["unique_anonymous_payers"])
+    converted_payers = int(row["converted_payers"])
+    repeat_payers = int(row["repeat_payers"])
+    return MachineFunnelResponse(
+        window_days=days,
+        machine_orgs_provisioned=int(row["machine_orgs_provisioned"]),
+        siwe_orgs_provisioned=int(row["siwe_orgs_provisioned"]),
+        x402_orgs_provisioned=int(row["x402_orgs_provisioned"]),
+        settlement_attempts=settlement_attempts,
+        settled_calls=int(row["settled_calls"]),
+        failed_calls=failed_calls,
+        settlement_failure_rate=(round(failed_calls / settlement_attempts, 4) if settlement_attempts else None),
+        settled_revenue_usdc=int(row["settled_revenue_usdc"]),
+        anonymous_settled_calls=int(row["anonymous_settled_calls"]),
+        org_bound_settled_calls=int(row["org_bound_settled_calls"]),
+        unique_anonymous_payers=unique_payers,
+        converted_payers=converted_payers,
+        wallet_conversion_rate=(round(converted_payers / unique_payers, 4) if unique_payers else None),
+        repeat_payers=repeat_payers,
+        repeat_payer_rate=(round(repeat_payers / unique_payers, 4) if unique_payers else None),
+        repeat_payer_gate=repeat_payers > 0,
+    )
 
 
 async def record_tool_call_events(

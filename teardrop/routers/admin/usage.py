@@ -15,8 +15,10 @@ from fastapi.responses import JSONResponse
 
 from teardrop.dependencies import require_admin
 from teardrop.usage import (
+    MachineFunnelResponse,
     TelemetryCompletenessResponse,
     UsageSummary,
+    get_machine_funnel,
     get_telemetry_completeness,
     get_usage_by_org,
     get_usage_by_user,
@@ -69,4 +71,17 @@ async def admin_telemetry_completeness(
         window_days=days,
         sources=await get_telemetry_completeness(days),
     )
+    return JSONResponse(content=report.model_dump())
+
+
+@router.get(
+    "/admin/telemetry/machine-funnel",
+    tags=["Admin", "Admin / Usage"],
+    response_model=MachineFunnelResponse,
+)
+async def admin_machine_funnel(
+    _admin: dict = Depends(require_admin),
+    days: int = Query(default=7, ge=1, le=90),
+) -> JSONResponse:
+    report = await get_machine_funnel(days)
     return JSONResponse(content=report.model_dump())

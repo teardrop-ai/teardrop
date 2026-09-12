@@ -128,6 +128,99 @@ class TestTelemetryCompleteness:
             await get_telemetry_completeness(0)
 
 
+@pytest.mark.anyio
+class TestMachineFunnel:
+    async def test_records_idempotent_mcp_billing_outcome(self):
+        from teardrop.usage import record_mcp_call_event
+
+        pool = _pool()
+        with patch.object(usage_module, "_pool", pool):
+            await record_mcp_call_event(
+                "call-1",
+                "",
+                "0xabc",
+                "platform/get_token_price",
+                "x402",
+                2_000,
+                "settled",
+                "0xtx",
+            )
+
+        sql, *values = pool.execute.await_args.args
+        assert "INSERT INTO mcp_call_events" in sql
+        assert "ON CONFLICT (id) DO NOTHING" in sql
+        assert values == ["call-1", "", "0xabc", "platform/get_token_price", "x402", 2_000, "settled", "0xtx"]
+
+    async def test_record_is_noop_without_pool_and_swallows_db_errors(self):
+        from teardrop.usage import record_mcp_call_event
+
+        with patch.object(usage_module, "_pool", None):
+            await record_mcp_call_event("call-1", "", "", "tool", "x402", 1, "failed")
+
+        pool = _pool()
+        pool.execute.side_effect = RuntimeError("DB unavailable")
+        with patch.object(usage_module, "_pool", pool):
+            await record_mcp_call_event("call-1", "", "", "tool", "x402", 1, "failed")
+
+    async def test_derives_conversion_failure_and_repeat_gate(self):
+        from teardrop.usage import get_machine_funnel
+
+        pool = _pool()
+        pool.fetchrow.return_value = {
+            "machine_orgs_provisioned": 3,
+            "siwe_orgs_provisioned": 1,
+            "x402_orgs_provisioned": 2,
+            "settlement_attempts": 5,
+            "settled_calls": 4,
+            "failed_calls": 1,
+            "settled_revenue_usdc": 8_000,
+            "anonymous_settled_calls": 3,
+            "org_bound_settled_calls": 1,
+            "unique_anonymous_payers": 2,
+            "converted_payers": 1,
+            "repeat_payers": 1,
+        }
+        with patch.object(usage_module, "_pool", pool):
+            report = await get_machine_funnel(14)
+
+        assert report.settlement_failure_rate == 0.2
+        assert report.wallet_conversion_rate == 0.5
+        assert report.repeat_payer_rate == 0.5
+        assert report.repeat_payer_gate is True
+        sql = pool.fetchrow.await_args.args[0]
+        assert "org_provisioning_events" in sql
+        assert "e.created_at >= p.first_call_at" in sql
+
+    async def test_empty_window_has_undefined_rates(self):
+        from teardrop.usage import get_machine_funnel
+
+        pool = _pool()
+        pool.fetchrow.return_value = dict.fromkeys(
+            (
+                "machine_orgs_provisioned",
+                "siwe_orgs_provisioned",
+                "x402_orgs_provisioned",
+                "settlement_attempts",
+                "settled_calls",
+                "failed_calls",
+                "settled_revenue_usdc",
+                "anonymous_settled_calls",
+                "org_bound_settled_calls",
+                "unique_anonymous_payers",
+                "converted_payers",
+                "repeat_payers",
+            ),
+            0,
+        )
+        with patch.object(usage_module, "_pool", pool):
+            report = await get_machine_funnel(7)
+
+        assert report.settlement_failure_rate is None
+        assert report.wallet_conversion_rate is None
+        assert report.repeat_payer_rate is None
+        assert report.repeat_payer_gate is False
+
+
 # ─── record_tool_call_events ──────────────────────────────────────────────────
 
 

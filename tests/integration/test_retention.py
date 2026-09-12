@@ -168,6 +168,14 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
         """,
         old,
     )
+    await pool.execute(
+        """
+        INSERT INTO mcp_call_events
+            (id, org_id, payer_address, tool_name, billing_method, cost_usdc, settlement_status, created_at)
+        VALUES ('mcp-call-1', '', '0xabc', 'platform/get_price', 'x402', 100, 'settled', $1)
+        """,
+        old,
+    )
 
     result = await retention_sweep_once(_retention_settings())
 
@@ -191,3 +199,4 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
     assert await pool.fetchval("SELECT COUNT(*) FROM run_decisions") == 1
     assert await pool.fetchval("SELECT COUNT(*) FROM a2a_inbound_events") == 1
     assert await pool.fetchval("SELECT COUNT(*) FROM telemetry_run_starts") == 0
+    assert await pool.fetchval("SELECT COUNT(*) FROM mcp_call_events") == 1

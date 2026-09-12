@@ -10,12 +10,36 @@ Covers the two settle paths:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from billing import BillingResult
 from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+
+@pytest.mark.asyncio
+async def test_record_mcp_outcome_schedules_sanitized_x402_event():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state.mcp_call_event_id = "server-call-1"
+    request.state.x402_billing = BillingResult(payer="0xabc", payment_payload="secret-payload")
+
+    with patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock) as record_mock:
+        gateway._record_mcp_outcome(request, None, "platform/get_price", 200, "x402", "settled", "0xtx")
+        await asyncio.sleep(0)
+
+    record_mock.assert_awaited_once_with(
+        "server-call-1",
+        "",
+        "0xabc",
+        "platform/get_price",
+        "x402",
+        200,
+        "settled",
+        "0xtx",
+    )
 
 
 @pytest.mark.asyncio
@@ -29,12 +53,14 @@ async def test_settle_billing_skips_debit_on_failed_execution():
     with (
         patch("billing.debit_credit", new_callable=AsyncMock) as debit_mock,
         patch("billing.settle_payment", new_callable=AsyncMock) as settle_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=True)
 
     # Neither debit nor settle should fire.
     debit_mock.assert_not_called()
     settle_mock.assert_not_called()
+    record_mock.assert_not_called()
     assert result is response
 
 
@@ -46,10 +72,14 @@ async def test_settle_billing_debits_on_success():
     response = MagicMock()
     pending = ("org-1", 100, "test_tool", "req-1")  # no slash → skip earnings branch
 
-    with patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 100)) as debit_mock:
+    with (
+        patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 100)) as debit_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
+    ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     debit_mock.assert_called_once()
+    record_mock.assert_called_once_with(request, "org-1", "test_tool", 100, "credit", "settled")
     assert result is response
 
 
@@ -68,11 +98,13 @@ async def test_settle_billing_x402_rejected_skips_earnings():
             new=AsyncMock(return_value=BillingResult(verified=True, settled=False, error="rejected")),
         ) as settle_mock,
         patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock()) as get_tool_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     settle_mock.assert_awaited_once()
     get_tool_mock.assert_not_called()
+    record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
     assert result is response
 
 
@@ -93,11 +125,13 @@ async def test_settle_billing_x402_success_records_earnings():
         patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value={"org_id": "author-org"})),
         patch("marketplace.record_tool_call_earnings", new=AsyncMock()),
         patch("teardrop.mcp_gateway.asyncio.create_task") as create_task_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     settle_mock.assert_awaited_once()
     assert create_task_mock.call_count == 2
+    record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "settled", "0xabc")
     assert result is response
 
 
@@ -180,6 +214,7 @@ async def test_billing_gate_x402_returns_pending_tuple():
         result = await gateway._billing_gate(request)
 
     assert result == (None, 250, "get_price", "req-1")
+    assert isinstance(request.state.mcp_call_event_id, str)
     # x402 callers are not credit-verified.
     verify_mock.assert_not_called()
 
@@ -229,6 +264,7 @@ async def test_billing_gate_credit_path_still_verifies():
         result = await gateway._billing_gate(request)
 
     assert result == ("org-7", 100, "get_price", "req-3")
+    assert isinstance(request.state.mcp_call_event_id, str)
     verify_mock.assert_awaited_once()
 
 
@@ -247,6 +283,7 @@ async def test_settle_billing_credit_debit_fail_enqueues_recovery():
     with (
         patch("billing.debit_credit", new=AsyncMock(return_value=(False, 0))),
         patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
@@ -256,6 +293,7 @@ async def test_settle_billing_credit_debit_fail_enqueues_recovery():
     assert args[1] == "org-1"
     assert args[3] == "credit"
     assert args[4] == 100
+    record_mock.assert_called_once_with(request, "org-1", "test_tool", 100, "credit", "failed")
     assert result is response
 
 
@@ -273,6 +311,7 @@ async def test_settle_billing_x402_exception_enqueues_recovery():
     with (
         patch("billing.settle_payment", new=AsyncMock(side_effect=RuntimeError("boom"))),
         patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
@@ -281,6 +320,7 @@ async def test_settle_billing_x402_exception_enqueues_recovery():
     assert args[3] == "x402"
     assert args[4] == 100
     assert enqueue_mock.await_args.kwargs["payment_payload"] == "b64-payload"
+    record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
     assert result is response
 
 
@@ -301,11 +341,13 @@ async def test_settle_billing_x402_rejected_enqueues_recovery():
             new=AsyncMock(return_value=BillingResult(verified=True, settled=False, error="rejected")),
         ),
         patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock) as enqueue_mock,
+        patch.object(gateway, "_record_mcp_outcome") as record_mock,
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
     enqueue_mock.assert_awaited_once()
     assert enqueue_mock.await_args.args[3] == "x402"
+    record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
     assert result is response
 
 
