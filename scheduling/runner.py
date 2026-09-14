@@ -21,10 +21,12 @@ from scheduling.crud import (
     mark_scheduled_run_succeeded,
     record_scheduled_run_result,
     record_x_broadcast_tweet,
+    requeue_scheduled_run_after_capacity,
     reserve_x_broadcast,
 )
 from scheduling.models import ScheduledRun, ScheduledRunResult
 from teardrop.agent_runtime import run_agent_once
+from teardrop.concurrency import AgentRunCapacityError
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
 from tools.definitions.http_fetch import async_validate_url, make_ssrf_safe_httpx_transport
@@ -238,24 +240,40 @@ async def _run_and_record(
         await mark_scheduled_run_skipped(schedule.id)
         return result
 
-    result = await run_agent_once(
-        org_id=schedule.org_id,
-        user_id=schedule.user_id,
-        usage_user_id=schedule.user_id,
-        usage_org_id=schedule.org_id,
-        user_message=prompt,
-        run_id=run_id,
-        thread_id=thread_id,
-        billing=billing,
-        is_byok=is_byok,
-        org_llm_cfg=org_llm_cfg,
-        platform_fee=platform_fee,
-        timeout_seconds=float(settings.scheduled_runs_execution_timeout_seconds),
-        source=source,
-        metadata=metadata,
-        user_role=user_role,
-        emit_ui=False,
-    )
+    try:
+        result = await run_agent_once(
+            org_id=schedule.org_id,
+            user_id=schedule.user_id,
+            usage_user_id=schedule.user_id,
+            usage_org_id=schedule.org_id,
+            user_message=prompt,
+            run_id=run_id,
+            thread_id=thread_id,
+            billing=billing,
+            is_byok=is_byok,
+            org_llm_cfg=org_llm_cfg,
+            platform_fee=platform_fee,
+            timeout_seconds=float(settings.scheduled_runs_execution_timeout_seconds),
+            source=source,
+            metadata=metadata,
+            user_role=user_role,
+            emit_ui=False,
+        )
+    except AgentRunCapacityError:
+        capacity_error = "Agent run capacity is temporarily exhausted."
+        stored = await record_scheduled_run_result(
+            schedule_id=schedule.id,
+            org_id=schedule.org_id,
+            run_id=run_id,
+            status="skipped",
+            output_text="",
+            cost_usdc=0,
+            error=capacity_error,
+        )
+        # Admission was refused, so no attempt happened: re-queue instead of
+        # consuming the occurrence, and leave failure counters untouched.
+        await requeue_scheduled_run_after_capacity(schedule.id)
+        return stored
     error_text = result.error or (result.output_text if result.task_state != "completed" else "")
     stored = await record_scheduled_run_result(
         schedule_id=schedule.id,

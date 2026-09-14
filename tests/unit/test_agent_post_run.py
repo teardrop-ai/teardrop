@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -21,14 +21,14 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
     memory_extraction = AsyncMock()
     scheduled: list[object] = []
 
-    def capture_task(coroutine):
+    def capture_task(coroutine, *, name):
         scheduled.append(coroutine)
-        return MagicMock()
+        return True
 
     with (
         patch.object(agent_post_run, "record_tool_call_events", tool_events),
         patch.object(agent_post_run, "extract_and_store_memories", memory_extraction),
-        patch.object(agent_post_run.asyncio, "create_task", capture_task),
+        patch.object(agent_post_run, "schedule_telemetry_task", capture_task),
     ):
         record_post_run_telemetry(
             run_id="run-1",

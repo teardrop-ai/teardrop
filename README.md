@@ -170,7 +170,7 @@ Starts Postgres + Teardrop API. Migrations run automatically at startup. Keys ar
 
 ### Render (production)
 
-The repo includes a `render.yaml` that configures a Render web service. 
+The repo includes a `render.yaml` that configures a single Standard (`1c-2g`) web service instance connected to Neon Postgres and your shared Redis service. The default database budget is 7 connections: up to six application-pool connections plus one LangGraph checkpointer connection per instance. Confirm that this leaves headroom under the configured Neon connection limit before deploying or increasing instance count.
 
 For the comprehensive list of environment variables, security credentials, database configurations, and rate-limiting limits, please refer to the dedicated [docs/configuration.md](docs/configuration.md) reference guide.
 

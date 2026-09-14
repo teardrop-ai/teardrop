@@ -24,7 +24,7 @@ T = TypeVar("T")
 _redis: redis.asyncio.Redis[Any] | None = None
 
 
-async def init_redis(url: str) -> None:
+async def init_redis(url: str, *, required: bool = False) -> None:
     """Initialize the Redis client. Gracefully degrades if URL is empty or connection fails.
 
     Args:
@@ -33,6 +33,8 @@ async def init_redis(url: str) -> None:
     global _redis
 
     if not url:
+        if required:
+            raise RuntimeError("REDIS_URL is required for this deployment")
         logger.info("Redis disabled (REDIS_URL not set); using in-process fallbacks")
         _redis = None
         return
@@ -47,6 +49,8 @@ async def init_redis(url: str) -> None:
         _redis = client
         logger.info("Redis client connected: %s", url.split("://")[0] + "://...")
     except Exception as exc:
+        if required:
+            raise RuntimeError("Required Redis connection failed") from exc
         logger.warning("Redis connection failed (%s); falling back to in-process caches", exc)
         _redis = None
 

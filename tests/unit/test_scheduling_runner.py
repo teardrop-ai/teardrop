@@ -71,6 +71,40 @@ async def test_execute_scheduled_run_skips_when_credit_unverified(monkeypatch, t
 
 
 @pytest.mark.anyio
+async def test_capacity_exhaustion_requeues_instead_of_burning_the_occurrence(monkeypatch, test_settings):
+    from teardrop.concurrency import AgentRunCapacityError
+
+    test_settings.scheduled_runs_execution_timeout_seconds = 5
+    monkeypatch.setattr("scheduling.runner.get_settings", lambda: test_settings)
+    monkeypatch.setattr("scheduling.runner.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("scheduling.runner.get_current_pricing", AsyncMock(return_value=SimpleNamespace(run_price_usdc=1000)))
+    monkeypatch.setattr("scheduling.runner.verify_credit", AsyncMock(return_value=BillingResult(verified=True)))
+    record_mock = AsyncMock(return_value=_stored_result(status="skipped", error="capacity"))
+    monkeypatch.setattr("scheduling.runner.record_scheduled_run_result", record_mock)
+    requeue = AsyncMock(return_value=None)
+    monkeypatch.setattr("scheduling.runner.requeue_scheduled_run_after_capacity", requeue)
+    mark_skipped = AsyncMock(return_value=None)
+    monkeypatch.setattr("scheduling.runner.mark_scheduled_run_skipped", mark_skipped)
+    mark_failed = AsyncMock(return_value=None)
+    monkeypatch.setattr("scheduling.runner.mark_scheduled_run_failed", mark_failed)
+    monkeypatch.setattr(
+        "scheduling.runner.run_agent_once",
+        AsyncMock(side_effect=AgentRunCapacityError("exhausted")),
+    )
+
+    from scheduling.runner import execute_scheduled_run
+
+    result = await execute_scheduled_run(_schedule())
+
+    assert result.status == "skipped"
+    requeue.assert_awaited_once_with("sched-1")
+    # Admission refusal is not a run attempt: it must not consume the occurrence
+    # or count toward the consecutive-failure auto-disable threshold.
+    mark_skipped.assert_not_awaited()
+    mark_failed.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_text_callback_posts_only_human_report(monkeypatch):
     client = AsyncMock()
     client.__aenter__.return_value = client

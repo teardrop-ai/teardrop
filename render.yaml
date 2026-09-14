@@ -2,7 +2,7 @@
 # Deploy with: Connect repo in Render dashboard → "Blueprint" detected automatically.
 #
 # Services provisioned:
-#   • teardrop      – Starter web service ($7/mo),  Docker runtime
+#   • teardrop       – single Standard (1c-2g) web service instance, Docker runtime
 #
 # Database: Neon Postgres (free tier or $20/mo)
 #   • Create at https://console.neon.tech/ and paste connection string below
@@ -11,7 +11,8 @@ services:
   - type: web
     name: teardrop
     runtime: docker
-    plan: starter
+    plan: 1c-2g
+    numInstances: 1
     healthCheckPath: /health
     # Deploys are gated on CI: auto-deploy is disabled and the deploy is
     # triggered from .github/workflows/test.yml (deploy job) only after the
@@ -31,6 +32,16 @@ services:
       # initial application connections during deploy.
       - key: PG_POOL_OPEN_TIMEOUT_SECONDS
         value: "60"
+      - key: PG_POOL_MIN_SIZE
+        value: "2"
+      - key: PG_POOL_MAX_SIZE
+        value: "6"
+
+      - key: AGENT_MAX_CONCURRENT_RUNS
+        value: "16"
+
+      - key: AGENT_POST_RUN_TELEMETRY_MAX_TASKS
+        value: "32"
 
       # Auto-generated strong secret for client-credentials JWT auth.
       - key: JWT_CLIENT_SECRET
@@ -66,11 +77,12 @@ services:
       - key: BASE_RPC_URL
         sync: false
 
-      # ── Optional: Redis ────────────────────────────────────────────────────
-      # Shared Redis for multi-container rate limiting, SIWE nonces, pricing cache.
-      # Paste the Internal URL from your Render Redis service.
+      # ── Required: shared multi-instance coordination ──────────────────────
+      # REDIS_URL is set in the Render dashboard env vars (existing instance).
       - key: REDIS_URL
         sync: false
+      - key: REDIS_REQUIRED
+        value: "true"
 
       # ── Optional: x402 billing ────────────────────────────────────────────
       # Set BILLING_ENABLED=true once wallet + pricing config is ready.

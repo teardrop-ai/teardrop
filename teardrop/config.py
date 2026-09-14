@@ -189,6 +189,11 @@ class Settings(BaseSettings):
             "default is tuned to stay within that range on shared RPC nodes."
         ),
     )
+    agent_max_concurrent_runs: int = Field(
+        default=16,
+        ge=1,
+        description="Maximum active agent runs admitted by one application process.",
+    )
     agent_rpc_chain_semaphore_limit: int = Field(
         default=2,
         description=(
@@ -216,6 +221,11 @@ class Settings(BaseSettings):
             "Emit lightweight memory telemetry logs (RSS) around /agent/run phases "
             "to diagnose spikes without logging user content."
         ),
+    )
+    agent_post_run_telemetry_max_tasks: int = Field(
+        default=32,
+        ge=1,
+        description="Maximum active best-effort post-run telemetry tasks per process.",
     )
     agent_thread_warning_message_count: int = Field(
         default=250,
@@ -431,6 +441,10 @@ class Settings(BaseSettings):
             "Required for multi-container deployments to share rate limiting, SIWE nonces, and "
             "pricing cache. Leave unset for single-container or local development."
         ),
+    )
+    redis_required: bool = Field(
+        default=False,
+        description="Fail application startup when Redis is unset or unreachable.",
     )
 
     # ── Billing / x402 ────────────────────────────────────────────────────────

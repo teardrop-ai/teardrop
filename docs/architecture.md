@@ -25,6 +25,20 @@ When `AGENT_COMPILER_MODE_ENABLED=true` is set, planner turns may emit an option
 
 Conversation history persists across turns via `AsyncPostgresSaver` (Postgres-backed LangGraph checkpointer).
 
+### Scaling And Admission
+
+Each application process admits at most `AGENT_MAX_CONCURRENT_RUNS` active streaming and non-streaming runs. Admission is immediate: saturated HTTP entry points return `503` with `Retry-After`, and durable scheduled execution re-queues the occurrence instead of building an in-memory queue. Best-effort tool-call and memory telemetry has a separate bounded registry; financial settlement and marketplace earnings remain awaited and non-droppable.
+
+Horizontal deployments require shared Redis so rate limits, SIWE nonces, and pricing caches remain coherent. Settlement retries atomically lease due rows before performing credit debits, preventing two instances from processing the same retry while allowing a crashed worker's lease to expire.
+
+The LangGraph `AsyncPostgresSaver` serializes operations through a saver-level lock, so its pool intentionally remains at one connection per process. Additional instances create independent saver locks and provide checkpoint parallelism. Database capacity must satisfy:
+
+$$
+\text{instances} \times (\text{PG\_POOL\_MAX\_SIZE} + 1) < \text{database connection limit}
+$$
+
+The Render Blueprint runs a single Standard (`1c-2g`) instance with `PG_POOL_MAX_SIZE=6`, for an application upper bound of 7 database connections before external administration or migration connections. The blueprint can be scaled to additional instances; each instance adds one checkpointer connection and one pool, so the connection budget above must be rechecked when scaling.
+
 Planner and executor nodes receive executable org, MCP, and marketplace tool wrappers through `agent/runtime_context.py`. This request-scoped context is isolated across concurrent tasks and is never serialized into checkpoints. `agent/runtime_events.py` translates LangGraph events into framework-neutral runtime events before the SSE layer consumes them; LangGraph-specific metadata does not cross that boundary.
 
 ### Retention And Data Tiers

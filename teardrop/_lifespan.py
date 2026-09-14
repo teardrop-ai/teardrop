@@ -47,11 +47,13 @@ from teardrop.a2a_tasks import (
 from teardrop.agent_wallets import close_agent_wallets_db, init_agent_wallets_db
 from teardrop.benchmarks import close_benchmarks_db, init_benchmarks_db
 from teardrop.cache import close_redis, init_redis
+from teardrop.concurrency import init_agent_run_limiter
 from teardrop.config import Settings, get_settings
 from teardrop.keys import generate_keypair
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
 from teardrop.retention import close_retention_db, init_retention_db
+from teardrop.telemetry_tasks import close_telemetry_tasks, init_telemetry_tasks
 from teardrop.tool_exclusions import close_tool_exclusions_db, init_tool_exclusions_db
 from teardrop.usage import close_usage_db, init_usage_db
 from teardrop.users import close_user_db, init_user_db
@@ -96,7 +98,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         )
         app.state.pool = pool
         await apply_pending(pool)
-        await init_redis(settings.redis_url)
+        await init_redis(settings.redis_url, required=settings.redis_required)
         init_a2a_tasks_db(pool, lease_seconds=settings.a2a_inbound_task_lease_seconds)
         await init_checkpointer()
         await get_graph()
@@ -126,6 +128,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             queue_size=settings.a2a_inbound_async_queue_size,
         )
 
+        init_agent_run_limiter(settings.agent_max_concurrent_runs)
+        init_telemetry_tasks(settings.agent_post_run_telemetry_max_tasks)
         init_rpc_semaphore(settings.agent_rpc_semaphore_limit)
         init_chain_semaphore(1, settings.agent_rpc_chain_semaphore_limit)
         init_chain_semaphore(8453, settings.agent_rpc_chain_semaphore_limit)
@@ -182,6 +186,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
                 pass
 
         await stop_inbound_task_workers()
+        await close_telemetry_tasks()
         close_a2a_tasks_db()
         await close_agent_wallets_db()
         await close_benchmarks_db()

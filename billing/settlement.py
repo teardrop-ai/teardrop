@@ -14,11 +14,15 @@ from billing.context import (
     _get_pool,
 )
 from billing.credit import BillingCreditService
-from billing.history import record_settlement
 from billing.models import BillingResult
+from shared.db_pool import PgPool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+class SettlementClaimLostError(RuntimeError):
+    """Raised when an active settlement retry lease has expired or was claimed by another worker."""
 
 
 def _get_credit_service() -> BillingCreditService:
@@ -29,6 +33,68 @@ def _get_credit_service() -> BillingCreditService:
         get_daily_principal_debit_spend_fn=_get_daily_principal_debit_spend,
         billing_result_factory=BillingResult,
     )
+
+
+async def _settle_claimed_credit(pool: PgPool, row, retry_count: int) -> tuple[bool, int]:
+    """Debit credit and finalize the claimed retry in one transaction."""
+    service = _get_credit_service()
+    lease_until = row.get("next_retry_at")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            claimed = await conn.fetchval(
+                """
+                SELECT id
+                FROM pending_settlements
+                WHERE id = $1
+                  AND status = 'retrying'
+                  AND next_retry_at = $2
+                  AND next_retry_at > NOW()
+                FOR UPDATE
+                """,
+                row["id"],
+                lease_until,
+            )
+            if claimed is None:
+                raise SettlementClaimLostError(f"Settlement retry claim lost for id={row['id']}")
+
+            success, settled_amount, _ = await service._debit_credit_locked(
+                conn,
+                row["org_id"],
+                row["amount_usdc"],
+                reason=f"run:{row['run_id']}",
+                principal_id=row.get("principal_id"),
+            )
+            if not success:
+                return False, 0
+
+            await conn.execute(
+                """
+                UPDATE pending_settlements
+                SET status = 'settled', retry_count = $2, last_error = ''
+                WHERE id = $1
+                  AND status = 'retrying'
+                  AND next_retry_at = $3
+                """,
+                row["id"],
+                retry_count,
+                lease_until,
+            )
+            await conn.execute(
+                """
+                UPDATE usage_events
+                SET cost_usdc = $2, settlement_tx = '', settlement_status = 'settled'
+                WHERE id = $1
+                  AND settlement_status != 'settled'
+                """,
+                row["usage_event_id"],
+                settled_amount,
+            )
+
+    try:
+        await _get_daily_spend_cache(row["org_id"]).invalidate()
+    except Exception:
+        logger.warning("Settlement retry cache invalidation failed org_id=%s", row["org_id"], exc_info=True)
+    return True, settled_amount
 
 
 async def enqueue_failed_settlement(
@@ -87,14 +153,25 @@ async def process_pending_settlements() -> int:
     try:
         rows = await pool.fetch(
             """
-            SELECT id, usage_event_id, org_id, run_id, billing_method,
-                     amount_usdc, payment_payload, principal_id, retry_count, max_retries
-            FROM pending_settlements
-            WHERE status IN ('pending', 'retrying')
-              AND next_retry_at <= NOW()
-            ORDER BY next_retry_at
-            LIMIT 20
-            FOR UPDATE SKIP LOCKED
+                        WITH candidates AS (
+                                SELECT id
+                                FROM pending_settlements
+                                WHERE status IN ('pending', 'retrying')
+                                    AND next_retry_at <= NOW()
+                                ORDER BY next_retry_at
+                                LIMIT 20
+                                FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE pending_settlements AS settlement
+                        SET status = 'retrying',
+                                next_retry_at = NOW() + INTERVAL '5 minutes'
+                        FROM candidates
+                        WHERE settlement.id = candidates.id
+                        RETURNING settlement.id, settlement.usage_event_id, settlement.org_id,
+                                            settlement.run_id, settlement.billing_method, settlement.amount_usdc,
+                                            settlement.payment_payload, settlement.principal_id,
+                                            settlement.retry_count, settlement.max_retries,
+                                            settlement.next_retry_at
             """,
         )
     except Exception:
@@ -112,32 +189,21 @@ async def process_pending_settlements() -> int:
 
         try:
             if billing_method == "credit":
-                success, settled_amount = await _get_credit_service().debit_credit(
-                    row["org_id"],
-                    row["amount_usdc"],
-                    reason=f"run:{row['run_id']}",
-                    principal_id=row.get("principal_id"),
-                )
+                success, settled_amount = await _settle_claimed_credit(pool, row, retry_count)
                 if not success:
                     error_msg = "debit_credit returned False"
             else:
                 error_msg = "x402 settlements cannot be retried after initial failure"
                 retry_count = max_retries
+        except SettlementClaimLostError as exc:
+            logger.warning("Settlement claim lost for id=%s: %s; abandoning", settlement_id, exc)
+            continue
         except Exception as exc:
             error_msg = str(exc)
             logger.warning("Settlement retry failed: id=%s error=%s", settlement_id, exc)
 
+        lease_until = row.get("next_retry_at")
         if success:
-            await pool.execute(
-                """
-                UPDATE pending_settlements
-                SET status = 'settled', retry_count = $2, last_error = ''
-                WHERE id = $1
-                """,
-                settlement_id,
-                retry_count,
-            )
-            await record_settlement(row["usage_event_id"], settled_amount, "", "settled")
             processed += 1
             logger.info(
                 "Settlement retry succeeded: id=%s run_id=%s attempt=%d",
@@ -151,10 +217,13 @@ async def process_pending_settlements() -> int:
                 UPDATE pending_settlements
                 SET status = 'exhausted', retry_count = $2, last_error = $3
                 WHERE id = $1
+                  AND status = 'retrying'
+                  AND next_retry_at = $4
                 """,
                 settlement_id,
                 retry_count,
                 error_msg,
+                lease_until,
             )
             logger.error(
                 "Settlement exhausted after %d retries: id=%s run_id=%s error=%s",
@@ -173,11 +242,14 @@ async def process_pending_settlements() -> int:
                     last_error = $3,
                     next_retry_at = NOW() + ($4 || ' seconds')::INTERVAL
                 WHERE id = $1
+                  AND status = 'retrying'
+                  AND next_retry_at = $5
                 """,
                 settlement_id,
                 retry_count,
                 error_msg,
                 str(backoff_seconds),
+                lease_until,
             )
 
     return processed

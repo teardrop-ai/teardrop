@@ -311,6 +311,26 @@ async def queue_scheduled_run_now(schedule_id: str, org_id: str) -> ScheduledRun
     return _row_to_scheduled_run(row) if row is not None else None
 
 
+async def requeue_scheduled_run_after_capacity(schedule_id: str) -> None:
+    """Pull a claimed schedule back into the due window after admission was refused.
+
+    ``claim_due_schedules`` advances ``next_run_at`` before execution, so a process
+    that refuses the run would otherwise burn the occurrence. ``LEAST`` never delays
+    the schedule past its normal next occurrence and never re-queues it into the
+    current tick, so a saturated process cannot hot-loop on the same row. Event
+    triggers are one-shot and are intentionally excluded.
+    """
+    pool = _get_pool()
+    await pool.execute(
+        """
+        UPDATE scheduled_runs
+        SET next_run_at = LEAST(next_run_at, NOW() + INTERVAL '60 seconds'), updated_at = NOW()
+        WHERE id = $1 AND schedule_kind = 'interval' AND enabled = TRUE
+        """,
+        schedule_id,
+    )
+
+
 async def rotate_event_trigger_secret(schedule_id: str, org_id: str, secret_hash: str) -> bool:
     """Replace the stored secret hash for an event trigger. Returns False when no
     matching event trigger exists for the org."""

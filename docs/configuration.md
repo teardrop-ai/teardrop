@@ -27,12 +27,17 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `AGENT_TOOL_EXECUTOR_TIMEOUT_SECONDS` | Timeout in seconds for the overall tool execution node (default: `120`). |
 | `AGENT_SINGLE_TOOL_TIMEOUT_SECONDS` | Per-tool deadline in seconds (default: `30`). Slow tools are converted into timeout tool messages so synthesis proceeds with partial data. |
 | `AGENT_MAX_TOOL_RESULT_CHARS` | Maximum characters retained in each planner-visible tool message before bounded truncation (default: `8000`). Structured tool facts are summarized into planner slots before truncation. |
+| `AGENT_MAX_CONCURRENT_RUNS` | Maximum active agent runs admitted per application process (default: `16`). Saturated HTTP requests receive `503`; non-streaming callers receive a retryable capacity error. |
+| `AGENT_POST_RUN_TELEMETRY_MAX_TASKS` | Maximum active best-effort tool-event and memory-extraction tasks per process (default: `32`). Excess telemetry is dropped; financial settlement and marketplace earnings are never routed through this limit. |
 | `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
 | `DATABASE_URL` | Neon Postgres connection string |
 | `REDIS_URL` | Redis connection URL for shared rate limiting, SIWE nonces, and pricing cache. Required for consistent behavior across multiple containers; without it, these features use per-process fallbacks. |
+| `REDIS_REQUIRED` | Fail startup when Redis is unset or unreachable (default: `false`). Set to `true` for every multi-instance deployment. |
 | `PG_POOL_OPEN_TIMEOUT_SECONDS` | Maximum startup wait for the initial Postgres pool connections (default: `60`) |
+| `PG_POOL_MIN_SIZE` | Minimum application Postgres connections per process (default: `2`). Does not include the checkpointer connection. |
+| `PG_POOL_MAX_SIZE` | Maximum application Postgres connections per process (default: `6`). Budget one additional connection per process for the LangGraph checkpointer. |
 | `BILLING_ENABLED` | `true` to activate x402 payments |
 | `CREDIT_MIN_RUN_RESERVE_USDC` | Minimum prepaid balance required before a credit-billed run (default: `50000` = $0.05); x402 bootstrap charges at least this amount |
 | `BILLABLE_AUTH_METHODS` | Auth methods requiring payment; default: `siwe,client_credentials,email` |

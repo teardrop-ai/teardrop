@@ -45,6 +45,15 @@ class TestInitRedis:
             await cache_module.init_redis("redis://localhost:6379")
             assert cache_module.get_redis() is None
 
+    async def test_required_redis_failure_aborts_startup(self):
+        with patch("redis.asyncio.from_url", side_effect=Exception("Connection refused")):
+            with pytest.raises(RuntimeError, match="Required Redis connection failed"):
+                await cache_module.init_redis("redis://unreachable:6379", required=True)
+
+    async def test_required_redis_rejects_empty_url(self):
+        with pytest.raises(RuntimeError, match="REDIS_URL is required"):
+            await cache_module.init_redis("", required=True)
+
 
 @pytest.mark.anyio
 class TestCloseRedis:

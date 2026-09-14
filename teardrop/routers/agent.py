@@ -72,6 +72,7 @@ from teardrop.agent_stream import (
     _sse_event,
 )
 from teardrop.agent_telemetry import _log_agent_memory
+from teardrop.concurrency import try_acquire_agent_run_slot
 from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.llm_config import get_org_llm_config_cached
@@ -141,7 +142,27 @@ async def agent_run(
     if gate_response is not None:
         return gate_response
 
+    run_lease = try_acquire_agent_run_slot()
+    if run_lease is None:
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        if payment_header and getattr(billing, "billing_method", "") == "x402":
+            from billing import release_payment_nonce
+
+            await release_payment_nonce(payment_header)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Agent run capacity is temporarily exhausted. Please retry shortly.",
+            headers={"Retry-After": "1"},
+        )
+
     async def _stream() -> AsyncIterator[dict[str, str]]:
+        try:
+            async for event in _run_stream():
+                yield event
+        finally:
+            run_lease.release()
+
+    async def _run_stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
         await record_telemetry_run_started(run_id, org_id, "api")

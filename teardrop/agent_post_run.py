@@ -32,6 +32,7 @@ from billing import (
 from teardrop.agent_stream import _EV_BILLING_SETTLEMENT, _sse_event
 from teardrop.agent_telemetry import _log_agent_memory
 from teardrop.memory import extract_and_store_memories
+from teardrop.telemetry_tasks import schedule_telemetry_task
 from teardrop.usage import record_tool_call_events
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,10 @@ def record_post_run_telemetry(
     if settings.tool_call_event_logging_enabled:
         tool_call_log = usage_data.get("_tool_call_log", [])
         if isinstance(tool_call_log, list) and tool_call_log:
-            asyncio.create_task(record_tool_call_events(run_id, org_id, tool_call_log, source=source))
+            schedule_telemetry_task(
+                record_tool_call_events(run_id, org_id, tool_call_log, source=source),
+                name="tool-call-events",
+            )
 
     if not settings.memory_enabled or not state_values:
         return
@@ -68,7 +72,7 @@ def record_post_run_telemetry(
         if not isinstance(billable_tool_names, list):
             billable_tool_names = []
         run_slots = state_values.get("slots", {})
-        asyncio.create_task(
+        schedule_telemetry_task(
             extract_and_store_memories(
                 org_id,
                 user_id,
@@ -81,7 +85,8 @@ def record_post_run_telemetry(
                 thread_id=thread_id,
                 user_message=user_message,
                 source=source,
-            )
+            ),
+            name="memory-extraction",
         )
     except Exception:
         logger.debug("Post-run memory telemetry kickoff failed", exc_info=True)

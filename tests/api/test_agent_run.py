@@ -241,6 +241,44 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monke
     assert resp.status_code == 200
 
 
+@pytest.mark.anyio
+async def test_agent_run_returns_503_when_process_capacity_is_exhausted(api_client, monkeypatch):
+    from billing import BillingResult
+
+    billing_gate = AsyncMock(return_value=(BillingResult(), None))
+    monkeypatch.setattr("teardrop.routers.agent._run_billing_gate", billing_gate)
+    monkeypatch.setattr("teardrop.routers.agent.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.agent.get_byok_platform_fee", lambda _is_byok: 0)
+    monkeypatch.setattr("teardrop.routers.agent.try_acquire_agent_run_slot", lambda: None)
+
+    response = await api_client.post("/agent/run", json={"message": "hello"})
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    billing_gate.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_agent_run_releases_x402_nonce_when_capacity_is_exhausted(api_client, monkeypatch):
+    from billing import BillingResult
+
+    billing_result = BillingResult(billing_method="x402", verified=True)
+    billing_gate = AsyncMock(return_value=(billing_result, None))
+    release_mock = AsyncMock()
+
+    monkeypatch.setattr("teardrop.routers.agent._run_billing_gate", billing_gate)
+    monkeypatch.setattr("teardrop.routers.agent.get_org_llm_config_cached", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.agent.get_byok_platform_fee", lambda _is_byok: 0)
+    monkeypatch.setattr("teardrop.routers.agent.try_acquire_agent_run_slot", lambda: None)
+    monkeypatch.setattr("billing.release_payment_nonce", release_mock)
+
+    headers = {"payment-signature": "sig-abc-123"}
+    response = await api_client.post("/agent/run", json={"message": "hello"}, headers=headers)
+
+    assert response.status_code == 503
+    release_mock.assert_awaited_once_with("sig-abc-123")
+
+
 # ─── Thread scoping ───────────────────────────────────────────────────────────
 
 

@@ -48,6 +48,7 @@ from mcp_client import build_mcp_langchain_tools
 from org_tools import build_org_langchain_tools
 from teardrop.agent_event_loop import _coerce_stream_text
 from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot, record_post_run_telemetry
+from teardrop.concurrency import limit_agent_runs
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import resolve_llm_config
 from teardrop.memory import recall_memories
@@ -244,6 +245,7 @@ async def record_failure_usage_event(
     return usage_event, snapshot_values
 
 
+@limit_agent_runs
 async def run_agent_once(
     *,
     org_id: str,

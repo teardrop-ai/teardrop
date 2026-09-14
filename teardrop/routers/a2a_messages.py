@@ -46,6 +46,7 @@ from teardrop.a2a_tasks import (
 )
 from teardrop.agent_runtime import _run_billing_gate, run_agent_once
 from teardrop.auth import decode_access_token
+from teardrop.concurrency import AgentRunCapacityError
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
 from teardrop.public_url import public_base_url
@@ -670,6 +671,21 @@ async def _run_async_inbound_task(
             settlement_tx=str(getattr(result, "settlement_tx", "") or ""),
             duration_ms=result.duration_ms,
         )
+    except AgentRunCapacityError as exc:
+        if payment_header and getattr(billing, "billing_method", "") == "x402":
+            from billing import release_payment_nonce
+
+            await release_payment_nonce(payment_header)
+        logger.warning("Inbound A2A task rejected due to capacity exhaustion task_id=%s: %s", task.id, exc)
+        await _finish_async_task(
+            task=claimed,
+            task_state="failed",
+            output_text="Agent run capacity is temporarily exhausted. Please retry shortly.",
+            error="Agent run capacity is temporarily exhausted.",
+            billing=billing,
+            cost_usdc=0,
+            settlement_amount_usdc=0,
+        )
     except asyncio.CancelledError:
         await _finish_async_task(
             task=claimed,
@@ -997,31 +1013,43 @@ async def message_send(request: Request) -> JSONResponse:
         org_id=org_id,
         run_id=run_id,
     )
-    result = await run_agent_once(
-        org_id=org_id,
-        user_id=user_id,
-        usage_user_id=usage_user_id,
-        usage_org_id=usage_org_id,
-        user_message=user_message,
-        run_id=run_id,
-        thread_id=scoped_thread_id,
-        billing=billing,
-        is_byok=is_byok,
-        org_llm_cfg=org_llm_cfg,
-        platform_fee=platform_fee,
-        timeout_seconds=float(settings.a2a_inbound_timeout_seconds),
-        source="a2a",
-        metadata={
-            **body.metadata,
-            "a2a_context_id": body.context_id,
-            "a2a_task_id": body.task_id,
-            "a2a_auth_method": auth_method,
-        },
-        user_role=payload.get("role", "anonymous") if payload else "anonymous",
-        user_wallet_address=payload.get("address") if payload else None,
-        jwt_token=_extract_bearer_token(request),
-        emit_ui=False,
-    )
+    try:
+        result = await run_agent_once(
+            org_id=org_id,
+            user_id=user_id,
+            usage_user_id=usage_user_id,
+            usage_org_id=usage_org_id,
+            user_message=user_message,
+            run_id=run_id,
+            thread_id=scoped_thread_id,
+            billing=billing,
+            is_byok=is_byok,
+            org_llm_cfg=org_llm_cfg,
+            platform_fee=platform_fee,
+            timeout_seconds=float(settings.a2a_inbound_timeout_seconds),
+            source="a2a",
+            metadata={
+                **body.metadata,
+                "a2a_context_id": body.context_id,
+                "a2a_task_id": body.task_id,
+                "a2a_auth_method": auth_method,
+            },
+            user_role=payload.get("role", "anonymous") if payload else "anonymous",
+            user_wallet_address=payload.get("address") if payload else None,
+            jwt_token=_extract_bearer_token(request),
+            emit_ui=False,
+        )
+    except AgentRunCapacityError as exc:
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        if payment_header and getattr(billing, "billing_method", "") == "x402":
+            from billing import release_payment_nonce
+
+            await release_payment_nonce(payment_header)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Retry-After": "1"},
+        ) from exc
 
     await _record_inbound_event(
         run_id=run_id,
