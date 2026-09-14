@@ -76,3 +76,36 @@ class TestGetRedis:
         """get_redis returns None when Redis is disabled or failed to connect."""
         with patch.object(cache_module, "_redis", None):
             assert cache_module.get_redis() is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure_stage", ["redis_read", "loader", "redis_write"])
+async def test_ttl_cache_get_redacts_errors_without_changing_fallback(failure_stage, caplog):
+    secret = "test-only-sensitive-cache-detail"
+    loader = AsyncMock(return_value=50_000)
+    redis_client = AsyncMock()
+    redis_client.get.return_value = None
+    if failure_stage == "redis_read":
+        redis_client.get.side_effect = RuntimeError(secret)
+    elif failure_stage == "loader":
+        loader.side_effect = RuntimeError(secret)
+    else:
+        redis_client.setex.side_effect = RuntimeError(secret)
+    pricing_cache = cache_module.TTLCache[int](
+        name="pricing",
+        redis_key="test:pricing",
+        ttl_seconds_fn=lambda: 60,
+        loader=loader,
+        serialize=str,
+        deserialize=int,
+        stale_default=10_000,
+    )
+
+    with patch.object(cache_module, "_redis", redis_client), caplog.at_level("WARNING", logger="teardrop.cache"):
+        result = await pricing_cache.get()
+
+    assert result == (10_000 if failure_stage == "loader" else 50_000)
+    loader.assert_awaited_once()
+    assert secret not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

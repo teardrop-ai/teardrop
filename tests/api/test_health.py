@@ -5,9 +5,42 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from x402.schemas import PaymentRequirements
+
+from billing.models import PricingRule
+
+
+@pytest.fixture
+def bootstrap_discovery_context(test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.machine_provisioning_enabled = True
+    test_settings.x402_onboarding_enabled = True
+    test_settings.credit_min_run_reserve_usdc = 50_000
+    test_settings.app_base_url = "https://api.teardrop.dev"
+    monkeypatch.setattr("teardrop.onboarding.settings", test_settings)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    pricing = PricingRule(id="test-discovery", name="test-discovery", run_price_usdc=10_000)
+    monkeypatch.setattr("billing.get_live_pricing", AsyncMock(return_value=pricing))
+    requirement = PaymentRequirements(
+        scheme="exact",
+        network="eip155:84532",
+        asset="0x0000000000000000000000000000000000000000",
+        amount="10000",
+        pay_to="0x0000000000000000000000000000000000000001",
+        max_timeout_seconds=300,
+    )
+
+    def requirements_for_amount(amount_usdc):
+        return [requirement.model_copy(update={"amount": str(amount_usdc), "scheme": test_settings.x402_scheme})]
+
+    monkeypatch.setattr("billing.x402.get_payment_requirements", lambda: requirements_for_amount(pricing.run_price_usdc))
+    topup_mock = Mock(side_effect=requirements_for_amount)
+    monkeypatch.setattr("billing.build_usdc_topup_requirements", topup_mock)
+    return pricing, topup_mock
 
 
 @pytest.mark.anyio
@@ -359,6 +392,7 @@ async def test_agent_card_headers_and_legacy_alias(api_client):
 async def test_x402_discovery_metadata(api_client, test_settings, monkeypatch):
     test_settings.billing_enabled = True
     test_settings.mcp_x402_enabled = True
+    test_settings.x402_onboarding_enabled = False
     monkeypatch.setattr(
         "teardrop.routers.system.build_402_response_body",
         lambda: {
@@ -411,6 +445,167 @@ async def test_x402_discovery_metadata(api_client, test_settings, monkeypatch):
         headers={"If-None-Match": resp.headers["etag"]},
     )
     assert cached_resp.status_code == 304
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("run_price", [10_000, 50_000, 75_000, 2**53 + 1])
+@pytest.mark.parametrize("scheme", ["exact", "upto"])
+async def test_x402_discovery_advertises_bootstrap_when_enabled(
+    anon_client, test_settings, bootstrap_discovery_context, run_price, scheme
+):
+    pricing, _ = bootstrap_discovery_context
+    pricing.run_price_usdc = run_price
+    test_settings.x402_scheme = scheme
+    expected_amount = max(run_price, test_settings.credit_min_run_reserve_usdc)
+
+    resp, alias = await asyncio.gather(
+        anon_client.get("/.well-known/x402", headers={"X-Forwarded-Host": "untrusted.example"}),
+        anon_client.get("/.well-known/x402.json"),
+    )
+    challenge = await anon_client.post("/token", json={"grant_type": "x402"})
+
+    assert resp.status_code == 200
+    assert alias.status_code == 200
+    assert challenge.status_code == 402
+    body = resp.json()
+    assert body == alias.json()
+    assert resp.headers["etag"] == alias.headers["etag"]
+    assert body["endpoints"]["bootstrap_token"] == "/token"
+    assert body["bootstrap"] == {
+        "grant_type": "x402",
+        "token_endpoint": "/token",
+        "amount_usdc": expected_amount,
+        "accepts": challenge.json()["accepts"],
+    }
+    requirement = body["bootstrap"]["accepts"][0]
+    assert requirement["amount"] == str(expected_amount)
+    assert requirement["scheme"] == scheme
+    assert requirement["payTo"] == "0x0000000000000000000000000000000000000001"
+    assert requirement["maxTimeoutSeconds"] == 300
+    assert "pay_to" not in requirement
+    assert body["accepts"][0]["amount"] == str(run_price)
+    bootstrap_resource = next(item for item in body["resources"] if item["path"] == "/token")
+    assert bootstrap_resource["url"] == "https://api.teardrop.dev/token"
+    assert bootstrap_resource["method"] == "POST"
+    assert bootstrap_resource["protocol"] == "x402-bootstrap"
+    assert bootstrap_resource["auth_modes"] == ["x402"]
+
+    cached = await anon_client.get("/.well-known/x402.json", headers={"If-None-Match": resp.headers["etag"]})
+    assert cached.status_code == 304
+    pricing.run_price_usdc = expected_amount + 1
+    changed = await anon_client.get("/.well-known/x402", headers={"If-None-Match": resp.headers["etag"]})
+    assert changed.status_code == 200
+    assert changed.headers["etag"] != resp.headers["etag"]
+    assert changed.json()["bootstrap"]["amount_usdc"] == expected_amount + 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_requirements", [None, [], [{"amount": "50000"}]])
+async def test_x402_discovery_rejects_invalid_bootstrap_requirements_and_recovers(
+    anon_client, bootstrap_discovery_context, invalid_requirements
+):
+    _, topup_mock = bootstrap_discovery_context
+    original_builder = topup_mock.side_effect
+    topup_mock.side_effect = None
+    topup_mock.return_value = invalid_requirements
+
+    failed = await anon_client.get("/.well-known/x402")
+
+    assert failed.status_code == 200
+    assert failed.json()["bootstrap"] == {"grant_type": "x402", "token_endpoint": "/token", "accepts": []}
+    assert failed.headers["cache-control"] == "public, max-age=0"
+    topup_mock.side_effect = original_builder
+
+    recovered = await anon_client.get("/.well-known/x402.json", headers={"If-None-Match": failed.headers["etag"]})
+
+    assert recovered.status_code == 200
+    assert recovered.json()["bootstrap"]["amount_usdc"] == 50_000
+    assert recovered.json()["bootstrap"]["accepts"][0]["amount"] == "50000"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("disabled_flag", ["billing_enabled", "machine_provisioning_enabled", "x402_onboarding_enabled"])
+async def test_x402_discovery_hides_bootstrap_when_disabled(anon_client, test_settings, monkeypatch, disabled_flag):
+    test_settings.billing_enabled = True
+    test_settings.machine_provisioning_enabled = True
+    test_settings.x402_onboarding_enabled = True
+    setattr(test_settings, disabled_flag, False)
+    monkeypatch.setattr(
+        "teardrop.routers.system.build_402_response_body",
+        lambda: {"accepts": [], "x402Version": 2},
+    )
+    requirements_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.onboarding.get_bootstrap_payment_requirements", requirements_mock)
+
+    resp = await anon_client.get("/.well-known/x402")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "bootstrap" not in body
+    assert "bootstrap_token" not in body["endpoints"]
+    assert all(item["path"] != "/token" for item in body["resources"])
+    requirements_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_x402_discovery_survives_unavailable_bootstrap_requirements(anon_client, test_settings, monkeypatch):
+    test_settings.billing_enabled = True
+    test_settings.machine_provisioning_enabled = True
+    test_settings.x402_onboarding_enabled = True
+    monkeypatch.setattr(
+        "teardrop.routers.system.build_402_response_body",
+        lambda: {"accepts": [], "x402Version": 2},
+    )
+    monkeypatch.setattr(
+        "teardrop.onboarding.get_bootstrap_payment_requirements",
+        AsyncMock(side_effect=RuntimeError("requirements unavailable")),
+    )
+
+    resp = await anon_client.get("/.well-known/x402")
+
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "public, max-age=0"
+    body = resp.json()
+    assert body["bootstrap"] == {"grant_type": "x402", "token_endpoint": "/token", "accepts": []}
+    assert body["endpoints"]["bootstrap_token"] == "/token"
+    assert next(item for item in body["resources"] if item["path"] == "/token")
+
+
+@pytest.mark.anyio
+async def test_x402_discovery_redacts_bootstrap_errors(anon_client, test_settings, monkeypatch, caplog):
+    test_settings.billing_enabled = True
+    test_settings.machine_provisioning_enabled = True
+    test_settings.x402_onboarding_enabled = True
+    secret = "test-only-sensitive-payment-detail"
+    monkeypatch.setattr("teardrop.routers.system.build_402_response_body", lambda: {"accepts": [], "x402Version": 2})
+    monkeypatch.setattr(
+        "teardrop.onboarding.get_bootstrap_payment_requirements",
+        AsyncMock(side_effect=RuntimeError(secret)),
+    )
+
+    with caplog.at_level("DEBUG", logger="teardrop.routers.system"):
+        response = await anon_client.get("/.well-known/x402")
+
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("path", ["/.well-known/x402", "/.well-known/x402.json"])
+@pytest.mark.parametrize("pricing_ttl", [30, 0, -1, 600])
+async def test_x402_discovery_bounds_cache_ttl(anon_client, test_settings, path, pricing_ttl):
+    test_settings.billing_enabled = False
+    test_settings.pricing_cache_ttl_seconds = pricing_ttl
+
+    response = await anon_client.get(path)
+    cached = await anon_client.get(path, headers={"If-None-Match": response.headers["etag"]})
+
+    assert response.status_code == 200
+    assert cached.status_code == 304
+    expected = f"public, max-age={max(0, min(300, pricing_ttl))}"
+    assert response.headers["cache-control"] == expected
+    assert cached.headers["cache-control"] == expected
 
 
 @pytest.mark.anyio

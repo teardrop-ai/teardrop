@@ -118,9 +118,9 @@ class TTLCache(Generic[T]):
                     return self._deserialize(raw)
             except Exception as exc:
                 logger.warning(
-                    "Redis %s cache read failed; falling back to in-process: %s",
+                    "Redis %s cache read failed; falling back to in-process error_type=%s",
                     self._name,
-                    exc,
+                    type(exc).__name__,
                 )
 
         # ── In-process fast path ──────────────────────────────────────────
@@ -137,11 +137,11 @@ class TTLCache(Generic[T]):
 
             try:
                 value = await self._loader()
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Failed to refresh %s cache; serving stale value",
+                    "Failed to refresh %s cache; serving stale value error_type=%s",
                     self._name,
-                    exc_info=True,
+                    type(exc).__name__,
                 )
                 if self._value is not None:
                     return self._value
@@ -158,9 +158,9 @@ class TTLCache(Generic[T]):
                         await r.setex(self._redis_key, ttl, self._serialize(value))
                     except Exception as exc:
                         logger.warning(
-                            "Redis %s cache write failed (non-fatal): %s",
+                            "Redis %s cache write failed (non-fatal) error_type=%s",
                             self._name,
-                            exc,
+                            type(exc).__name__,
                         )
 
             return value

@@ -30,6 +30,7 @@ router = APIRouter()
 
 _REGISTRY_REGISTRATION_PATH = "/marketplace/agent-registration"
 _REGISTRY_BENEFITS_PATH = "/.well-known/registry-benefits.json"
+_BOOTSTRAP_PATH = "/token"
 
 
 class PublicToolReputation(BaseModel):
@@ -351,7 +352,7 @@ def _build_oauth_protected_resource_content(request: Request, resource_path: str
     }
 
 
-def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
+async def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
     current_settings = get_settings()
     base_url = _public_base_url(request, current_settings)
     endpoints: dict[str, str] = {
@@ -398,14 +399,46 @@ def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
         try:
             payment_body = build_402_response_body()
         except RuntimeError:
-            logger.debug("x402 discovery requested before billing requirements were initialized", exc_info=True)
+            logger.debug("x402 discovery requested before billing requirements were initialized")
         else:
             accepts = payment_body.get("accepts", [])
             x402_version = int(payment_body.get("x402Version", 2))
 
+    bootstrap: dict[str, Any] | None = None
+    if (
+        current_settings.machine_provisioning_enabled
+        and current_settings.billing_enabled
+        and current_settings.x402_onboarding_enabled
+    ):
+        endpoints["bootstrap_token"] = _BOOTSTRAP_PATH
+        resources.append(
+            {
+                "path": _BOOTSTRAP_PATH,
+                "url": f"{base_url}{_BOOTSTRAP_PATH}",
+                "method": "POST",
+                "protocol": "x402-bootstrap",
+                "auth_modes": ["x402"],
+                "description": "Zero-human org bootstrap; POST grant_type=x402 to receive machine credentials.",
+            }
+        )
+        from teardrop.onboarding import get_bootstrap_payment_requirements  # noqa: PLC0415
+
+        bootstrap = {"grant_type": "x402", "token_endpoint": _BOOTSTRAP_PATH, "accepts": []}
+        try:
+            amount_usdc, bootstrap_requirements = await get_bootstrap_payment_requirements()
+            bootstrap = {
+                "grant_type": "x402",
+                "token_endpoint": _BOOTSTRAP_PATH,
+                "amount_usdc": amount_usdc,
+                "accepts": build_402_response_body(requirements=bootstrap_requirements)["accepts"],
+            }
+        except Exception:
+            logger.debug("x402 bootstrap requirements unavailable for discovery")
+
     return {
         "x402Version": x402_version,
         "accepts": accepts,
+        **({"bootstrap": bootstrap} if bootstrap is not None else {}),
         "billing": {
             "enabled": current_settings.billing_enabled,
             "scheme": current_settings.x402_scheme,
@@ -594,13 +627,17 @@ async def public_reputation(request: Request) -> Response:
 @router.get("/.well-known/x402", tags=["System"])
 async def x402_discovery(request: Request) -> Response:
     """Public x402 metadata for registries and validators."""
-    return _json_discovery_response(request, _build_x402_discovery_content(request))
+    content = await _build_x402_discovery_content(request)
+    cache_seconds = max(0, min(300, get_settings().pricing_cache_ttl_seconds))
+    if "bootstrap" in content and not content["bootstrap"]["accepts"]:
+        cache_seconds = 0
+    return _json_discovery_response(request, content, cache_seconds=cache_seconds)
 
 
 @router.get("/.well-known/x402.json", include_in_schema=False, tags=["System"])
 async def x402_discovery_json(request: Request) -> Response:
     """Legacy JSON alias for x402 discovery metadata."""
-    return _json_discovery_response(request, _build_x402_discovery_content(request))
+    return await x402_discovery(request)
 
 
 @router.get("/.well-known/registry-benefits", tags=["System"])

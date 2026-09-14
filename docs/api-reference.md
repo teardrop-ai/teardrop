@@ -21,7 +21,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `DELETE` | `/agent/tool-exclusions/{tool_name}` | Bearer | Remove a persisted tool exclusion |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
 | `GET` | `/.well-known/reputation.json` | — | Aggregate quality metrics for active marketplace tools; caller counts are omitted below five distinct orgs |
-| `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators |
+| `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators; advertises the `grant_type=x402` bootstrap entrypoint when enabled |
 | `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |
 | `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
 | `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
