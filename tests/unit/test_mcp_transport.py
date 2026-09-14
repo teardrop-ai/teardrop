@@ -20,6 +20,7 @@ import pytest
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from sse_starlette.sse import AppStatus
 
 import mcp_client
 from mcp_client import OrgMcpServer
@@ -31,9 +32,16 @@ def _find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+@pytest.fixture(params=[False, True], ids=["clean-shutdown", "stale-shutdown"])
+def prior_sse_shutdown(request, monkeypatch):
+    """Simulate the process-global SSE flag left by an earlier server shutdown."""
+    monkeypatch.setattr(AppStatus, "should_exit", request.param)
+
+
 @pytest.fixture
-async def echo_server_url():
+async def echo_server_url(prior_sse_shutdown, monkeypatch):
     """Start a real local Streamable HTTP MCP server and return its endpoint URL."""
+    monkeypatch.setattr(AppStatus, "should_exit", False)
     app = MCPServer(name="echo")
 
     @app.tool(name="echo_greeting")

@@ -324,11 +324,24 @@ async def test_request_withdrawal_success(admin_api_client, monkeypatch):
         status="pending",
         created_at=_NOW,
     )
+    rate_limit_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit_mock)
     monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", AsyncMock(return_value=withdrawal))
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
 
     resp = await admin_api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
     assert resp.status_code == 201
     assert resp.json()["status"] == "pending"
+    rate_limit_mock.assert_awaited_once_with(
+        "marketplace:withdraw:test-org-id",
+        config.get_settings().rate_limit_auth_rpm,
+        detail="Rate limit exceeded for withdrawal requests.",
+    )
+
+    config.get_settings.cache_clear()
 
 
 @pytest.mark.anyio
@@ -339,6 +352,143 @@ async def test_request_withdrawal_forbidden_for_member(api_client, monkeypatch):
 
     resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
     assert resp.status_code == 403
+    withdraw_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("acquisition_source", "expected_status"), [("siwe", 201), ("x402", 201), ("email", 403), ("", 403)])
+async def test_request_withdrawal_requires_owning_siwe_machine_org(api_client, monkeypatch, acquisition_source, expected_status):
+    from types import SimpleNamespace
+
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    siwe_address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    withdrawal = AuthorWithdrawal(
+        id="w-2",
+        org_id="test-org-id",
+        amount_usdc=200_000,
+        tx_hash="",
+        wallet=_VALID_ADDR,
+        status="pending",
+        created_at=_NOW,
+    )
+    withdraw_mock = AsyncMock(return_value=withdrawal)
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", withdraw_mock)
+
+    async def _mock_siwe_auth():
+        return {
+            "sub": "siwe-user-id",
+            "org_id": "test-org-id",
+            "role": "user",
+            "auth_method": "siwe",
+            "address": siwe_address,
+            "chain_id": 1,
+        }
+
+    app.dependency_overrides[require_auth] = _mock_siwe_auth
+    monkeypatch.setattr(
+        "teardrop.users.get_org_by_id",
+        AsyncMock(return_value=SimpleNamespace(acquisition_source=acquisition_source)),
+    )
+    monkeypatch.setattr(
+        "teardrop.wallets.get_wallet_by_address",
+        AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", user_id="siwe-user-id")),
+    )
+
+    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    assert resp.status_code == expected_status
+    if expected_status == 201:
+        withdraw_mock.assert_awaited_once_with("test-org-id", 200_000)
+        assert resp.json()["wallet"] == _VALID_ADDR
+    else:
+        withdraw_mock.assert_not_awaited()
+
+    app.dependency_overrides.pop(require_auth, None)
+
+
+@pytest.mark.anyio
+async def test_request_withdrawal_forbidden_for_machine_credentials(api_client, monkeypatch):
+    """client_credentials tokens cannot move funds — payout requires the owning wallet."""
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    withdraw_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", withdraw_mock)
+
+    async def _mock_machine_auth():
+        return {
+            "sub": "client-id",
+            "org_id": "test-org-id",
+            "auth_method": "client_credentials",
+        }
+
+    app.dependency_overrides[require_auth] = _mock_machine_auth
+
+    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    assert resp.status_code == 403
+    withdraw_mock.assert_not_awaited()
+
+    app.dependency_overrides.pop(require_auth, None)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("wallet_org", "wallet_user"),
+    [("other-org", "siwe-user-id"), ("test-org-id", "other-user"), ("other-org", "other-user")],
+)
+async def test_request_withdrawal_forbidden_for_non_owning_siwe(api_client, monkeypatch, wallet_org, wallet_user):
+    from types import SimpleNamespace
+
+    from teardrop.auth import require_auth
+    from teardrop.main import app
+
+    siwe_address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    withdraw_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", withdraw_mock)
+
+    async def _mock_siwe_auth():
+        return {
+            "sub": "siwe-user-id",
+            "org_id": "test-org-id",
+            "role": "user",
+            "auth_method": "siwe",
+            "address": siwe_address,
+            "chain_id": 1,
+        }
+
+    app.dependency_overrides[require_auth] = _mock_siwe_auth
+    monkeypatch.setattr(
+        "teardrop.users.get_org_by_id",
+        AsyncMock(return_value=SimpleNamespace(acquisition_source="siwe")),
+    )
+    monkeypatch.setattr(
+        "teardrop.wallets.get_wallet_by_address",
+        AsyncMock(return_value=SimpleNamespace(org_id=wallet_org, user_id=wallet_user)),
+    )
+
+    resp = await api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    assert resp.status_code == 403
+    withdraw_mock.assert_not_awaited()
+
+    app.dependency_overrides.pop(require_auth, None)
+
+
+@pytest.mark.anyio
+async def test_request_withdrawal_rate_limited(admin_api_client, monkeypatch):
+    """Withdrawal requests are org-scoped rate limited before any payout work."""
+    from fastapi import HTTPException
+
+    withdraw_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace.request_withdrawal", withdraw_mock)
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace._enforce_rate_limit",
+        AsyncMock(side_effect=HTTPException(status_code=429, detail="Rate limit exceeded for withdrawal requests.")),
+    )
+
+    resp = await admin_api_client.post("/marketplace/withdraw", json={"amount_usdc": 200_000})
+    assert resp.status_code == 429
     withdraw_mock.assert_not_awaited()
 
 

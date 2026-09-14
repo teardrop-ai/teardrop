@@ -10,7 +10,6 @@ from datetime import datetime
 
 import sentry_sdk
 
-from marketplace.catalog import get_author_config
 from marketplace.context import _get_pool
 from marketplace.models import AuthorEarning, AuthorEarningByTool
 from teardrop.config import get_settings
@@ -37,15 +36,6 @@ async def record_tool_call_earnings(
     try:
         pool = _get_pool()
 
-        config = await get_author_config(author_org_id)
-        if config is None:
-            logger.warning(
-                "No author config for org_id=%s; earnings not recorded for tool=%s",
-                author_org_id,
-                tool_name,
-            )
-            return
-
         bps = get_settings().marketplace_default_revenue_share_bps
         author_share = (total_cost_usdc * bps) // 10_000
         platform_share = total_cost_usdc - author_share
@@ -66,12 +56,13 @@ async def record_tool_call_earnings(
             platform_share,
         )
     except Exception as exc:
-        logger.warning("Failed to record tool earnings", exc_info=True)
+        logger.warning("Failed to record tool earnings error_type=%s", type(exc).__name__)
         with sentry_sdk.new_scope() as scope:
             scope.set_tag("author_org_id", str(author_org_id))
             scope.set_tag("caller_org_id", str(caller_org_id))
             scope.set_tag("tool_name", str(tool_name))
-            sentry_sdk.capture_exception(exc)
+            scope.set_tag("error_type", type(exc).__name__)
+            sentry_sdk.capture_message("Failed to record tool earnings", level="error")
 
 
 async def get_author_balance(org_id: str) -> int:

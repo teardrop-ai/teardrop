@@ -62,7 +62,6 @@ from teardrop.config import get_settings
 from teardrop.dependencies import (
     _require_org_id,
     require_auth,
-    require_org_admin,
     require_org_machine,
     require_settlement_wallet_auth,
 )
@@ -152,7 +151,7 @@ class MarketplaceImportPreviewResponse(BaseModel):
     server_id: str
     slots_remaining: int = Field(..., description="Org tool slots remaining before hitting the quota.")
     can_publish: bool = Field(..., description="False if the caller/org cannot currently publish (see blockers).")
-    blockers: list[str] = Field(default_factory=list, description="Reasons publishing is blocked, e.g. 'requires_org_admin'.")
+    blockers: list[str] = Field(default_factory=list, description="Reasons publishing is blocked, e.g. 'requires_org_machine'.")
     tools: list[MarketplaceImportPreviewTool]
     errors: list[MarketplaceImportPreviewError]
 
@@ -243,7 +242,7 @@ def _classify_import_publish_error(message: str) -> int:
         return status.HTTP_409_CONFLICT
     if "limit reached" in lowered or "invalid" in lowered or "unsupported" in lowered or "required" in lowered:
         return status.HTTP_422_UNPROCESSABLE_ENTITY
-    return status.HTTP_400_BAD_REQUEST
+    return status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def _schema_status(dropped: list[str], *, synthesized: bool = False) -> str:
@@ -447,14 +446,12 @@ async def preview_marketplace_import(
     pricing = await get_current_pricing()
     suggested_base_price_usdc = pricing.tool_call_cost if pricing is not None else 0
 
-    # Surface publish blockers up front so non-admin or unconfigured authors
-    # learn why /marketplace/import/publish would reject them, instead of
-    # discovering it only after preparing a publish payload. Additive fields.
     author_config = await get_author_config(org_id)
-    is_org_admin = payload.get("role") == "admin"
     blockers: list[str] = []
-    if not is_org_admin:
-        blockers.append("requires_org_admin")
+    try:
+        await require_org_machine(payload)
+    except HTTPException:
+        blockers.append("requires_org_machine")
     if author_config is None:
         blockers.append("settlement_wallet_missing")
     can_publish = not blockers
@@ -497,7 +494,7 @@ async def preview_marketplace_import(
 @router.post("/marketplace/import/publish", tags=["Marketplace"], response_model=MarketplaceImportPublishResponse)
 async def publish_marketplace_import(
     body: MarketplaceImportPublishRequest,
-    payload: dict = Depends(require_org_admin),
+    payload: dict = Depends(require_org_machine),
 ) -> JSONResponse:
     """Publish selected MCP tools as marketplace-visible MCP-backed org tools."""
     s = get_settings()
@@ -579,8 +576,13 @@ async def publish_marketplace_import(
                 mcp_tool_name=remote_tool_name,
             )
         except Exception as exc:
-            message = str(exc)
-            status_code = _classify_import_publish_error(message)
+            status_code = (
+                _classify_import_publish_error(str(exc)) if isinstance(exc, ValueError) else status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            message = {
+                status.HTTP_409_CONFLICT: "Tool already exists or settlement wallet is not configured.",
+                status.HTTP_422_UNPROCESSABLE_ENTITY: "Invalid tool definition or organization tool limit reached.",
+            }.get(status_code, "Tool publishing failed.")
             errors.append(
                 {
                     "remote_tool_name": remote_tool_name,
@@ -757,14 +759,17 @@ class MarketplaceWithdrawalResponse(BaseModel):
 )
 async def request_marketplace_withdrawal(
     body: WithdrawRequest,
-    payload: dict = Depends(require_org_admin),
+    payload: dict = Depends(require_settlement_wallet_auth),
 ) -> JSONResponse:
-    """Request a withdrawal of earnings to the settlement wallet.
-
-    Admin-only: moving funds out of the org balance is a financial control and
-    must not be available to ordinary members.
-    """
+    """Admins or machine-org SIWE owners withdraw to the configured settlement wallet."""
+    s = get_settings()
     org_id = _require_org_id(payload)
+
+    await _enforce_rate_limit(
+        f"marketplace:withdraw:{org_id}",
+        s.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for withdrawal requests.",
+    )
 
     try:
         withdrawal = await request_withdrawal(org_id, body.amount_usdc)

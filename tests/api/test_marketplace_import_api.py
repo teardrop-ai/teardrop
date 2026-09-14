@@ -12,6 +12,8 @@ import pytest
 import teardrop.config as config
 from mcp_client import OrgMcpServer
 from org_tools import OrgTool
+from teardrop.auth import require_auth
+from teardrop.main import app
 
 _NOW = datetime.now(timezone.utc)
 
@@ -67,6 +69,32 @@ def _created_tool(name: str = "remote_tool") -> OrgTool:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["preview", "publish"])
+async def test_machine_import_rejects_foreign_server(api_client, monkeypatch, marketplace_enabled, operation):
+    async def authenticated():
+        return {"sub": "publisher", "org_id": "test-org-id", "auth_method": "client_credentials"}
+
+    app.dependency_overrides[require_auth] = authenticated
+    lookup = AsyncMock(return_value=None)
+    discover = AsyncMock()
+    create = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", lookup)
+    monkeypatch.setattr("teardrop.routers.marketplace.discover_mcp_tools", discover)
+    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create)
+    body = {"server_id": "foreign-server"}
+    if operation == "publish":
+        body["tools"] = [{"remote_tool_name": "remote_tool", "name": "remote_tool", "description": "Remote tool"}]
+
+    response = await api_client.post(f"/marketplace/import/{operation}", json=body)
+
+    assert response.status_code == 404
+    lookup.assert_awaited_once_with("foreign-server", "test-org-id")
+    discover.assert_not_awaited()
+    create.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_preview_marketplace_import_member_returns_flags(api_client, monkeypatch, marketplace_enabled):
     monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
     monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
@@ -103,7 +131,7 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
     assert data["server_id"] == "srv-1"
     assert data["slots_remaining"] == config.get_settings().max_org_tools
     assert data["can_publish"] is False
-    assert "requires_org_admin" in data["blockers"]
+    assert "requires_org_machine" in data["blockers"]
     assert "settlement_wallet_missing" in data["blockers"]
     item = data["tools"][0]
     assert item["remote_tool_name"] == "Remote Tool"
@@ -118,8 +146,12 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
 
 
 @pytest.mark.anyio
-async def test_preview_marketplace_import_admin_with_wallet_can_publish(admin_api_client, monkeypatch, marketplace_enabled):
-    """Admin role + registered settlement wallet → can_publish=True, no blockers."""
+@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials"}])
+async def test_preview_marketplace_import_with_wallet_can_publish(api_client, monkeypatch, marketplace_enabled, principal):
+    async def authenticated():
+        return {"sub": "publisher", "org_id": "test-org-id", **principal}
+
+    app.dependency_overrides[require_auth] = authenticated
     monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
     monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
@@ -136,7 +168,7 @@ async def test_preview_marketplace_import_admin_with_wallet_can_publish(admin_ap
         AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", settlement_wallet="0x" + "a" * 40)),
     )
 
-    resp = await admin_api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
+    resp = await api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
 
     assert resp.status_code == 200
     data = resp.json()
@@ -226,7 +258,12 @@ async def test_publish_marketplace_import_admin_partial_success(admin_api_client
 
 
 @pytest.mark.anyio
-async def test_publish_marketplace_import_derives_missing_schemas(admin_api_client, monkeypatch, marketplace_enabled):
+@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials"}])
+async def test_publish_marketplace_import_derives_missing_schemas(api_client, monkeypatch, marketplace_enabled, principal):
+    async def authenticated():
+        return {"sub": "publisher", "org_id": "test-org-id", **principal}
+
+    app.dependency_overrides[require_auth] = authenticated
     monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
     monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
@@ -250,7 +287,7 @@ async def test_publish_marketplace_import_derives_missing_schemas(admin_api_clie
     create_mock = AsyncMock(return_value=_created_tool("remote_tool"))
     monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
 
-    resp = await admin_api_client.post(
+    resp = await api_client.post(
         "/marketplace/import/publish",
         json={
             "server_id": "srv-1",
@@ -267,6 +304,10 @@ async def test_publish_marketplace_import_derives_missing_schemas(admin_api_clie
 
     assert resp.status_code == 201
     create_kwargs = create_mock.await_args.kwargs
+    assert create_kwargs["org_id"] == "test-org-id"
+    assert create_kwargs["actor_id"] == "publisher"
+    assert create_kwargs["publish_as_mcp"] is True
+    assert create_kwargs["base_price_usdc"] == 10
     assert create_kwargs["input_schema"] == {
         "type": "object",
         "properties": {"query": {"type": "string"}},
@@ -280,9 +321,25 @@ async def test_publish_marketplace_import_derives_missing_schemas(admin_api_clie
 
 
 @pytest.mark.anyio
-async def test_publish_marketplace_import_forbidden_for_member(api_client, monkeypatch, marketplace_enabled):
+@pytest.mark.parametrize(
+    "principal",
+    [
+        {"role": "user", "org_id": "test-org-id"},
+        {"auth_method": "siwe", "org_id": "test-org-id"},
+        {"auth_method": "client_credentials", "org_id": ""},
+        {"auth_method": "client_credentials", "org_id": None},
+        {"auth_method": "client_credentials", "org_id": 123},
+    ],
+)
+async def test_publish_marketplace_import_forbidden(api_client, monkeypatch, marketplace_enabled, principal):
+    async def authenticated():
+        return {"sub": "publisher", **principal}
+
+    app.dependency_overrides[require_auth] = authenticated
     create_mock = AsyncMock()
+    discover_mock = AsyncMock()
     monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace.discover_mcp_tools", discover_mock)
 
     resp = await api_client.post(
         "/marketplace/import/publish",
@@ -302,6 +359,7 @@ async def test_publish_marketplace_import_forbidden_for_member(api_client, monke
 
     assert resp.status_code == 403
     create_mock.assert_not_awaited()
+    discover_mock.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -345,7 +403,17 @@ async def test_publish_marketplace_import_requires_author_config(admin_api_clien
 
 
 @pytest.mark.anyio
-async def test_publish_marketplace_import_quota_error(admin_api_client, monkeypatch, marketplace_enabled):
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (ValueError("Organisation tool limit reached (50)"), 422),
+        (RuntimeError("database password=synthetic-secret"), 500),
+        (ValueError("database password=synthetic-secret"), 500),
+    ],
+)
+async def test_publish_marketplace_import_errors_are_sanitized(
+    admin_api_client, monkeypatch, marketplace_enabled, error, expected_status
+):
     monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
     monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
@@ -355,7 +423,7 @@ async def test_publish_marketplace_import_quota_error(admin_api_client, monkeypa
     monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
         "teardrop.routers.marketplace.create_org_tool",
-        AsyncMock(side_effect=ValueError("Organisation tool limit reached (50)")),
+        AsyncMock(side_effect=error),
     )
 
     resp = await admin_api_client.post(
@@ -374,8 +442,9 @@ async def test_publish_marketplace_import_quota_error(admin_api_client, monkeypa
         },
     )
 
-    assert resp.status_code == 422
-    assert resp.json()["errors"][0]["status_code"] == 422
+    assert "synthetic-secret" not in resp.text
+    assert resp.status_code == expected_status
+    assert resp.json()["errors"][0]["status_code"] == expected_status
 
 
 @pytest.mark.anyio

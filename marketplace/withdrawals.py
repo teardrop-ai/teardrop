@@ -208,8 +208,9 @@ class _WithdrawalService:
             with sentry_sdk.new_scope() as scope:
                 scope.set_tag("withdrawal_id", str(withdrawal_id))
                 scope.set_tag("rail", "cdp")
-                sentry_sdk.capture_exception(exc)
-            return _TransferResult("", "failed", "CDP transfer failed")
+                scope.set_tag("error_type", type(exc).__name__)
+                sentry_sdk.capture_message("Marketplace transfer outcome unknown", level="error")
+            return _TransferResult("", "in_flight", "Transfer outcome unknown; reconciliation required")
 
         try:
             confirmed = await verify_usdc_transfer(
@@ -217,13 +218,6 @@ class _WithdrawalService:
                 chain_id=self._settings.marketplace_settlement_chain_id,
                 timeout_seconds=self._settings.marketplace_tx_confirm_timeout_seconds,
             )
-        except ValueError:
-            logger.warning(
-                "process_withdrawal: TX verification skipped (BASE_RPC_URL not set) tx=%s id=%s",
-                tx_hash,
-                withdrawal_id,
-            )
-            confirmed = True
         except Exception as exc:
             logger.error(
                 "process_withdrawal: TX confirmation unavailable id=%s error_type=%s",
@@ -233,7 +227,8 @@ class _WithdrawalService:
             with sentry_sdk.new_scope() as scope:
                 scope.set_tag("withdrawal_id", str(withdrawal_id))
                 scope.set_tag("rail", "cdp")
-                sentry_sdk.capture_exception(exc)
+                scope.set_tag("error_type", type(exc).__name__)
+                sentry_sdk.capture_message("Marketplace transfer confirmation unavailable", level="error")
             return _TransferResult(tx_hash, "in_flight", "Transaction submitted; confirmation unavailable")
 
         if not confirmed:

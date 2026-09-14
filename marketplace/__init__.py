@@ -137,7 +137,6 @@ def _sync_to_modules() -> None:
     _stats.get_marketplace_tool_by_name = get_marketplace_tool_by_name
     _stats.get_platform_tool_price = get_platform_tool_price
 
-    _earnings.get_author_config = get_author_config
     _withdrawals.get_author_config = get_author_config
     _withdrawals.get_author_balance = get_author_balance
     _worker.get_author_config = get_author_config

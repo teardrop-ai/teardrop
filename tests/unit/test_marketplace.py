@@ -52,6 +52,7 @@ def _mock_wallet_settings(monkeypatch, **overrides) -> MagicMock:
         "marketplace_settlement_chain_id": 84532,
         "marketplace_tx_confirm_timeout_seconds": 5,
         "marketplace_settlement_warn_threshold_usdc": 5_000_000,
+        "marketplace_default_revenue_share_bps": 7000,
     }
     mock_s = MagicMock(**{**defaults, **overrides})
     monkeypatch.setattr("marketplace.get_settings", lambda: mock_s)
@@ -183,32 +184,46 @@ class TestRecordToolCallEarnings:
         mock_pool.execute.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_no_author_config_skips(self, monkeypatch):
+    async def test_no_author_config_still_accrues(self, monkeypatch):
+        _mock_wallet_settings(monkeypatch)
         mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(return_value=None)
+        mock_pool.execute = AsyncMock()
+        get_config = AsyncMock(return_value=None)
+        monkeypatch.setattr("marketplace.get_author_config", get_config)
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
-        # Should not raise
         await record_tool_call_earnings(
             author_org_id="author-org",
             tool_name="my_tool",
             caller_org_id="caller-org",
-            total_cost_usdc=1000,
+            total_cost_usdc=1001,
         )
-        # No INSERT should have been called
-        mock_pool.execute.assert_not_called()
+        mock_pool.execute.assert_awaited_once()
+        assert mock_pool.execute.await_args.args[2:] == ("author-org", "my_tool", "caller-org", 1001, 700, 301)
+        get_config.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_record_failure_does_not_disclose_exception(self, monkeypatch, caplog):
+        _mock_wallet_settings(monkeypatch)
+        mock_pool = MagicMock()
+        mock_pool.execute = AsyncMock(side_effect=RuntimeError("database password=synthetic-secret"))
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+        capture_exception = MagicMock()
+        capture_message = MagicMock()
+        monkeypatch.setattr("marketplace.earnings.sentry_sdk.capture_exception", capture_exception)
+        monkeypatch.setattr("marketplace.earnings.sentry_sdk.capture_message", capture_message)
+
+        await record_tool_call_earnings("author-org", "my_tool", "caller-org", 1000)
+
+        assert "synthetic-secret" not in caplog.text
+        assert "RuntimeError" in caplog.text
+        capture_exception.assert_not_called()
+        capture_message.assert_called_once_with("Failed to record tool earnings", level="error")
 
     @pytest.mark.anyio
     async def test_records_correct_split(self, monkeypatch):
-        config_row = {
-            "org_id": "author-org",
-            "settlement_wallet": _VALID_ADDR,
-            "revenue_share_bps": 7000,
-            "created_at": _NOW,
-            "updated_at": _NOW,
-        }
+        _mock_wallet_settings(monkeypatch)
         mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(return_value=config_row)
         mock_pool.execute = AsyncMock()
         monkeypatch.setattr("marketplace._pool", mock_pool)
 
@@ -416,6 +431,49 @@ def _make_conn_mock(withdrawal_row, earnings_rows):
 
 
 class TestProcessWithdrawal:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("transfer_error", "confirmation_error"),
+        [
+            (TimeoutError("synthetic-secret"), None),
+            (RuntimeError("synthetic-secret"), None),
+            (None, ValueError("synthetic-secret")),
+        ],
+    )
+    async def test_ambiguous_transfer_preserves_claim(self, monkeypatch, caplog, transfer_error, confirmation_error):
+        _mock_wallet_settings(monkeypatch)
+        withdrawal_row = {
+            "id": "w-ambiguous",
+            "org_id": "org-1",
+            "amount_usdc": 300,
+            "tx_hash": "",
+            "wallet": _VALID_ADDR,
+            "status": "pending",
+            "created_at": _NOW,
+            "settled_at": None,
+        }
+        pool, conn = _make_conn_mock(withdrawal_row, [{"id": "e1", "author_share_usdc": 300}])
+        monkeypatch.setattr("marketplace._pool", pool)
+        transfer = AsyncMock(return_value="0xtx", side_effect=transfer_error)
+        verify = AsyncMock(return_value=True, side_effect=confirmation_error)
+        monkeypatch.setattr("teardrop.agent_wallets.transfer_usdc", transfer)
+        monkeypatch.setattr("teardrop.agent_wallets.verify_usdc_transfer", verify)
+        capture = MagicMock()
+        monkeypatch.setattr("marketplace.withdrawals.sentry_sdk.capture_exception", capture)
+
+        result = await process_withdrawal("w-ambiguous")
+
+        assert result.status == "in_flight"
+        assert result.tx_hash == ("" if transfer_error else "0xtx")
+        assert result.settled_at is None
+        assert "synthetic-secret" not in result.last_sweep_error
+        assert "synthetic-secret" not in caplog.text
+        capture.assert_not_called()
+        assert not any("SET status = 'pending'" in call.args[0] for call in conn.execute.await_args_list)
+        transfer.assert_awaited_once()
+        if transfer_error:
+            verify.assert_not_awaited()
+
     @pytest.mark.anyio
     async def test_not_found_raises(self, monkeypatch):
         _mock_wallet_settings(monkeypatch)
