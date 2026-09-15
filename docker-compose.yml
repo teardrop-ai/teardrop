@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector-enabled Postgres: migrations/versions/102_squashed_baseline.sql
+    # runs CREATE EXTENSION vector, which plain postgres:16-alpine lacks.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: teardrop

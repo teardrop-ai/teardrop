@@ -41,6 +41,21 @@ async def sweep_db_pool(docker_postgres: str):
     marketplace_module._pool = pool
     users_module.base._pool = pool
 
+    # Truncate on setup as well: other test files' fixtures may have left rows
+    # behind, and org names are globally unique (orgs_name_key).
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            TRUNCATE TABLE
+                tool_author_earnings,
+                tool_author_withdrawals,
+                tool_author_config,
+                users,
+                orgs
+            RESTART IDENTITY CASCADE
+            """
+        )
+
     yield pool
 
     async with pool.acquire() as conn:
@@ -49,7 +64,7 @@ async def sweep_db_pool(docker_postgres: str):
             TRUNCATE TABLE
                 tool_author_earnings,
                 tool_author_withdrawals,
-                org_author_configs,
+                tool_author_config,
                 users,
                 orgs
             RESTART IDENTITY CASCADE
@@ -70,7 +85,7 @@ async def _seed_org_with_earnings(pool: PgPool, org_id: str, amount: int) -> Non
         """
         INSERT INTO tool_author_earnings
             (id, org_id, tool_name, caller_org_id,
-             total_cost_usdc, author_share_usdc, platform_share_usdc,
+             amount_usdc, author_share_usdc, platform_share_usdc,
              status, created_at)
         VALUES (gen_random_uuid()::TEXT, $1, 'test_tool', 'caller-org',
                 $2, $2, 0, 'pending', NOW())
@@ -308,7 +323,7 @@ async def test_complete_in_flight_withdrawal_preserves_claimed_earnings(sweep_db
         "SELECT id FROM tool_author_withdrawals WHERE org_id = $1",
         org.id,
     )
-    await complete_withdrawal(withdrawal_id, "0xmanual-confirmed")
+    await complete_withdrawal(withdrawal_id, "0xmanual-complete")
 
     withdrawal = await pool.fetchrow(
         "SELECT status, tx_hash FROM tool_author_withdrawals WHERE id = $1",
@@ -319,14 +334,14 @@ async def test_complete_in_flight_withdrawal_preserves_claimed_earnings(sweep_db
         org.id,
     )
     assert withdrawal["status"] == "settled"
-    assert withdrawal["tx_hash"] == "0xmanual-confirmed"
+    assert withdrawal["tx_hash"] == "0xmanual-complete"
     assert earning["status"] == "settled"
     assert earning["withdrawal_id"] == withdrawal_id
 
 
 @pytest.mark.anyio
-async def test_sweep_cdp_failure_sets_backoff(sweep_db_pool):
-    """If CDP raises, the withdrawal is marked failed with next_sweep_at set."""
+async def test_sweep_cdp_failure_requires_manual_reconciliation(sweep_db_pool):
+    """A CDP exception has an unknown transfer outcome and must not be retried."""
     pool = sweep_db_pool
 
     org = await create_org("sweep-fail-org")
@@ -354,10 +369,63 @@ async def test_sweep_cdp_failure_sets_backoff(sweep_db_pool):
         "SELECT status, sweep_attempt_count, next_sweep_at, last_sweep_error FROM tool_author_withdrawals WHERE org_id = $1",
         org.id,
     )
-    assert wd_row["status"] == "failed"
-    assert wd_row["sweep_attempt_count"] == 1
-    assert wd_row["next_sweep_at"] is not None
+    assert wd_row["status"] == "in_flight"
+    assert wd_row["sweep_attempt_count"] == 0
+    assert wd_row["next_sweep_at"] is None
     assert wd_row["last_sweep_error"] != ""
+
+
+@pytest.mark.anyio
+async def test_sweep_retries_due_failed_withdrawal_without_duplicate(sweep_db_pool):
+    pool = sweep_db_pool
+
+    org = await create_org("sweep-due-retry-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    transfer = AsyncMock(side_effect=["0xreverted-first", "0xretry-success"])
+    verify = AsyncMock(side_effect=[False, True])
+    with (
+        patch("marketplace.get_settings") as mock_settings,
+        patch("teardrop.agent_wallets.transfer_usdc", new=transfer),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=verify),
+    ):
+        settings = MagicMock()
+        settings.marketplace_minimum_withdrawal_usdc = 100_000
+        settings.marketplace_max_sweep_retries = 5
+        settings.marketplace_withdrawal_cooldown_seconds = 0
+        settings.agent_wallet_enabled = True
+        settings.marketplace_settlement_cdp_account = "td-marketplace"
+        settings.marketplace_settlement_chain_id = 84532
+        settings.marketplace_tx_confirm_timeout_seconds = 5
+        mock_settings.return_value = settings
+
+        assert await marketplace_sweep_once() == 0
+        withdrawal_id = await pool.fetchval(
+            "SELECT id FROM tool_author_withdrawals WHERE org_id = $1",
+            org.id,
+        )
+        await pool.execute(
+            "UPDATE tool_author_withdrawals SET next_sweep_at = NOW() - INTERVAL '1 second' WHERE id = $1",
+            withdrawal_id,
+        )
+
+        assert await marketplace_sweep_once() == 1
+
+    assert transfer.await_count == 2
+    withdrawal = await pool.fetchrow(
+        "SELECT id, status, tx_hash FROM tool_author_withdrawals WHERE org_id = $1",
+        org.id,
+    )
+    earning = await pool.fetchrow(
+        "SELECT status, withdrawal_id FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert withdrawal["id"] == withdrawal_id
+    assert withdrawal["status"] == "settled"
+    assert withdrawal["tx_hash"] == "0xretry-success"
+    assert earning["status"] == "settled"
+    assert earning["withdrawal_id"] == withdrawal_id
 
 
 @pytest.mark.anyio
@@ -406,6 +474,7 @@ async def test_sweep_is_idempotent_on_restart(sweep_db_pool):
     with (
         patch("marketplace.get_settings") as mock_settings,
         patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value="0xtxhash2")),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(return_value=True)),
     ):
         settings = MagicMock()
         settings.marketplace_minimum_withdrawal_usdc = 100_000
@@ -478,8 +547,8 @@ async def test_sweep_tx_reverted_marks_failed(sweep_db_pool):
 
 
 @pytest.mark.anyio
-async def test_sweep_tx_verification_skipped_when_no_rpc_url(sweep_db_pool):
-    """ValueError from verify_usdc_transfer (no RPC URL) → proceeds optimistically as settled."""
+async def test_sweep_tx_verification_unavailable_requires_reconciliation(sweep_db_pool):
+    """Missing RPC verification leaves the submitted transfer in-flight."""
     pool = sweep_db_pool
 
     org = await create_org("sweep-no-rpc-org")
@@ -506,13 +575,13 @@ async def test_sweep_tx_verification_skipped_when_no_rpc_url(sweep_db_pool):
 
         count = await marketplace_sweep_once()
 
-    assert count == 1
+    assert count == 0
 
     wd_row = await pool.fetchrow(
         "SELECT status, tx_hash FROM tool_author_withdrawals WHERE org_id = $1",
         org.id,
     )
-    assert wd_row["status"] == "settled"
+    assert wd_row["status"] == "in_flight"
     assert wd_row["tx_hash"] == "0xtxhash_norpc"
 
 

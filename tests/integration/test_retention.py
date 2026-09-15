@@ -21,6 +21,17 @@ async def retention_db_pool(docker_postgres: str):
     pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-retention")
     await apply_pending(pool)
     await init_retention_db(pool)
+    # Truncate on setup: other test files' fixtures may have left rows behind
+    # (e.g. scheduled_run_results), which would break the count assertions.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "TRUNCATE TABLE checkpoints, checkpoint_blobs, checkpoint_writes, "
+            "checkpoint_thread_activity, scheduled_run_results, scheduled_runs, "
+            "event_dispatch_keys, event_dispatch_leases, event_trigger_events, "
+            "org_tool_events, siwe_login_sessions, usage_events, tool_call_events, "
+            "run_decisions, a2a_inbound_events, telemetry_run_starts, mcp_call_events, "
+            "labeling_predictions, labeling_observations RESTART IDENTITY CASCADE"
+        )
     yield pool
     await close_retention_db()
     await pool.close()

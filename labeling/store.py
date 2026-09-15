@@ -260,7 +260,7 @@ async def claim_due_targets(limit: int, max_per_org: int, lease_seconds: int) ->
                           OR (status = 'leased' AND lease_expires_at <= NOW())
                       )
                 ), due AS (
-                    SELECT target.id
+                    SELECT target.id, target.prediction_id, target.org_id
                     FROM labeling_targets target
                     JOIN ranked ON ranked.id = target.id
                     WHERE ranked.org_rank <= $2
@@ -275,6 +275,9 @@ async def claim_due_targets(limit: int, max_per_org: int, lease_seconds: int) ->
                     lease_expires_at = NOW() + ($4 * INTERVAL '1 second'),
                     last_error = ''
                 FROM due
+                JOIN labeling_predictions p ON p.id = due.prediction_id AND p.org_id = due.org_id
+                JOIN labeling_definitions d
+                    ON d.definition_key = p.definition_key AND d.definition_version = p.definition_version
                 WHERE target.id = due.id
                 RETURNING target.id, target.prediction_id, target.org_id,
                           target.item_key, target.item_payload, target.window_start,

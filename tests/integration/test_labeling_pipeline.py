@@ -25,7 +25,9 @@ async def labeling_db_pool(docker_postgres: str):
     pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-labeling")
     await apply_pending(pool)
     await init_labeling_db(pool)
+    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations RESTART IDENTITY CASCADE")
     yield pool
+    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations RESTART IDENTITY CASCADE")
     await close_labeling_db()
     await pool.close()
 

@@ -49,17 +49,29 @@ async def marketplace_sweep_once() -> int:
 
     rows = await pool.fetch(
         """
-        SELECT e.org_id, SUM(e.author_share_usdc) AS total
-        FROM tool_author_earnings e
-        WHERE e.status = 'pending'
-          AND NOT EXISTS (
-              SELECT 1 FROM tool_author_withdrawals w
-              WHERE w.org_id = e.org_id
-                                AND w.status IN ('pending', 'failed', 'in_flight')
-                AND (w.next_sweep_at IS NULL OR w.next_sweep_at > NOW())
-          )
-        GROUP BY e.org_id
-        HAVING SUM(e.author_share_usdc) >= $1
+        WITH candidates AS (
+            SELECT w.org_id, w.amount_usdc AS total, w.id AS withdrawal_id, w.created_at
+            FROM tool_author_withdrawals w
+            WHERE w.status = 'pending'
+               OR (w.status = 'failed' AND w.next_sweep_at <= NOW())
+
+            UNION ALL
+
+            SELECT e.org_id, SUM(e.author_share_usdc) AS total,
+                   NULL::TEXT AS withdrawal_id, MIN(e.created_at) AS created_at
+            FROM tool_author_earnings e
+            WHERE e.status = 'pending'
+              AND NOT EXISTS (
+                  SELECT 1 FROM tool_author_withdrawals w
+                  WHERE w.org_id = e.org_id
+                    AND w.status IN ('pending', 'failed', 'in_flight', 'exhausted')
+              )
+            GROUP BY e.org_id
+            HAVING SUM(e.author_share_usdc) >= $1
+        )
+        SELECT org_id, total, withdrawal_id
+        FROM candidates
+        ORDER BY created_at ASC
         LIMIT 50
         """,
         min_amount,
@@ -69,7 +81,7 @@ async def marketplace_sweep_once() -> int:
     for r in rows:
         org_id = r["org_id"]
         total = int(r["total"])
-        withdrawal_id = _sweep_withdrawal_id(org_id, epoch_hour)
+        withdrawal_id = r.get("withdrawal_id") or _sweep_withdrawal_id(org_id, epoch_hour)
         try:
             existing = await pool.fetchrow(
                 "SELECT id, status FROM tool_author_withdrawals WHERE id = $1",
@@ -99,6 +111,18 @@ async def marketplace_sweep_once() -> int:
             elif existing["status"] == "settled":
                 processed += 1
                 continue
+            elif existing["status"] == "failed":
+                ready_id = await pool.fetchval(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'pending', next_sweep_at = NULL
+                    WHERE id = $1 AND status = 'failed' AND next_sweep_at <= NOW()
+                    RETURNING id
+                    """,
+                    withdrawal_id,
+                )
+                if ready_id is None:
+                    continue
 
             result = await process_withdrawal(withdrawal_id)
 

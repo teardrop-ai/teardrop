@@ -29,7 +29,15 @@ def translate_sql(query: str) -> str:
 
 
 def _prepare_query(query: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any, ...]]:
-    """Translate placeholders and reorder arguments for repeated or sparse indexes."""
+    """Translate placeholders and reorder arguments for repeated or sparse indexes.
+
+    Queries executed without arguments (e.g. DDL migration scripts) are passed
+    through untouched: ``$N`` sequences in them are literal text (such as
+    ``$1.00`` in a pricing comment), not bound placeholders.
+    """
+    if not args:
+        return query, ()
+
     bound_args: list[Any] = []
 
     def replace(match: re.Match[str]) -> str:

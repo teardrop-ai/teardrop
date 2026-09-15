@@ -64,6 +64,49 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/teardrop_test
+      APP_ENV: test
+      JWT_CLIENT_ID: test-client
+      JWT_CLIENT_SECRET: ci-test-secret
+      ANTHROPIC_API_KEY: dummy-key
+      LANGSMITH_TRACING: "false"
+      SKIP_INTEGRATION_TESTS: ""
+      MCP_CLIENT_CONNECT_TIMEOUT_SECONDS: "30"
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: teardrop_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Generate RSA test keys
+        run: python -m scripts.generate_keys
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -n 0 -q -p no:cacheprovider
+
   docker-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -92,7 +135,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [test, docker-smoke]
+    needs: [test, integration, docker-smoke]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Serialize deploys to main: if two pushes land close together, the second
     # deploy waits for the first to finish rather than firing concurrently.

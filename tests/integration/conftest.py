@@ -9,14 +9,22 @@ the SKIP_INTEGRATION_TESTS env var is set.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
+import sys
 import time
 import uuid
 
 import pytest
 
 from shared.db_pool import create_pool
+
+# psycopg's async mode requires a selector-based event loop; the default
+# ProactorEventLoop on Windows makes pool startup retry forever. Apply the
+# selector policy before any pool is created so the suite runs on Windows.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 _TEST_DB_URL = os.getenv("DATABASE_URL", "")
 
@@ -71,7 +79,9 @@ def docker_postgres():
             "POSTGRES_PASSWORD=testpass",
             "-e",
             "POSTGRES_DB=teardrop_test",
-            "postgres:16-alpine",
+            # pgvector-enabled image: the squashed baseline runs
+            # CREATE EXTENSION vector, which plain postgres:16-alpine lacks.
+            "pgvector/pgvector:pg16",
         ],
         check=True,
         capture_output=True,
@@ -119,6 +129,9 @@ async def db_pool(docker_postgres: str):
     await init_user_db(pool)
     await init_wallets_db(pool)
     await init_usage_db(pool)
+
+    async with pool.acquire() as conn:
+        await conn.execute("TRUNCATE TABLE siwe_nonces, wallets, usage_events, users, orgs RESTART IDENTITY CASCADE")
 
     yield pool
 

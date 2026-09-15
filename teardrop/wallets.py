@@ -338,8 +338,8 @@ async def consume_nonce(nonce: str, ttl_seconds: int = 300, *, expected_address:
            SET used = TRUE
          WHERE nonce = $1
            AND used = FALSE
-           AND created_at > NOW() - INTERVAL '1 second' * $2
-           AND (address IS NULL OR LOWER(address) = LOWER($3) OR $3 IS NULL)
+           AND created_at > NOW() - INTERVAL '1 second' * $2::float8
+           AND (address IS NULL OR LOWER(address) = LOWER($3::text) OR $3::text IS NULL)
         RETURNING nonce
         """,
         nonce,

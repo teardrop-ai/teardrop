@@ -125,7 +125,9 @@ async def test_delegation_network_error(test_settings, monkeypatch):
 
 _AGENT_URL = "https://jwt-agent.example.com"
 _JWT = "eyJhbGciOiJSUzI1NiJ9.test-token"
-_DELEGATION_MOD = "tools.definitions.delegate_to_agent"
+# check_delegation_allowed is imported lazily inside delegate_to_agent from
+# teardrop.a2a_client, so the patch must target the defining module.
+_DELEGATION_MOD = "teardrop.a2a_client"
 
 
 @pytest.mark.anyio

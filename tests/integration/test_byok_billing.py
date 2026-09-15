@@ -23,7 +23,7 @@ from billing import (
 )
 from shared.db_pool import create_pool
 from teardrop.usage import UsageEvent, record_usage_event
-from teardrop.users import create_user
+from teardrop.users import create_org, create_user
 
 
 @pytest.fixture
@@ -60,9 +60,10 @@ async def billing_db_pool(docker_postgres: str):
 
 async def _setup_org_with_credits(billing_db_pool, credit_amount: int = 100_000):
     """Create a test org with prepaid credits and return (org_id, user_id)."""
-    user = await create_user("byok-test@example.com", "byok-test-user")
-    user_id = user["id"]
-    org_id = user["org_id"]
+    org = await create_org("byok-test-org")
+    user = await create_user("byok-test@example.com", "byok-test-user", org.id)
+    user_id = user.id
+    org_id = user.org_id
     await admin_topup_credit(org_id, credit_amount)
     return org_id, user_id
 
