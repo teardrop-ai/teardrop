@@ -11,6 +11,8 @@ other billing tables are available.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 import billing as billing_module
@@ -24,6 +26,7 @@ from billing import (
     get_invoice_by_run,
     get_invoices,
     get_revenue_summary,
+    handle_stripe_webhook,
     record_settlement,
     verify_credit,
 )
@@ -95,6 +98,50 @@ async def test_get_credit_balance_no_row(billing_db_pool):
     """Returns 0 when org has no credit row."""
     balance = await get_credit_balance("nonexistent-org-id")
     assert balance == 0
+
+
+async def test_stripe_webhook_replay_credits_once_and_writes_one_ledger_row(billing_db_pool):
+    org = await create_org("stripe-replay-org")
+    amount_usdc = 50_000
+
+    session = MagicMock()
+    session.payment_status = "paid"
+    session.client_reference_id = org.id
+    session.metadata = {"amount_usdc": str(amount_usdc)}
+    session.amount_total = 5
+
+    event = MagicMock()
+    event.id = "evt_integration_replay_1"
+    event.type = "checkout.session.completed"
+    event.data.object = session
+
+    with patch("stripe.Webhook.construct_event", return_value=event) as construct_event:
+        await handle_stripe_webhook(b"{}", "test-signature")
+        await handle_stripe_webhook(b"{}", "test-signature")
+
+    assert construct_event.call_count == 2
+    assert (
+        await billing_db_pool.fetchval(
+            "SELECT balance_usdc FROM org_credits WHERE org_id = $1",
+            org.id,
+        )
+        == amount_usdc
+    )
+    assert (
+        await billing_db_pool.fetchval(
+            "SELECT COUNT(*) FROM stripe_webhook_events WHERE stripe_event_id = $1",
+            event.id,
+        )
+        == 1
+    )
+    assert (
+        await billing_db_pool.fetchval(
+            "SELECT COUNT(*) FROM org_credit_ledger WHERE org_id = $1 AND reason = $2",
+            org.id,
+            f"stripe:{event.id}",
+        )
+        == 1
+    )
 
 
 async def test_admin_topup_credit_creates_row(billing_db_pool):
