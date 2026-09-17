@@ -96,6 +96,22 @@ _DELETE_TELEMETRY_RUN_STARTS_SQL = """
     SELECT COUNT(*) FROM deleted
 """
 
+_DELETE_DISCOVERY_STAGE_COUNTS_SQL = """
+    WITH candidates AS (
+        SELECT ctid
+        FROM discovery_stage_counts
+        WHERE bucket_hour < NOW() - make_interval(days => $1)
+        ORDER BY bucket_hour
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM discovery_stage_counts
+        WHERE ctid IN (SELECT ctid FROM candidates)
+        RETURNING 1
+    )
+    SELECT COUNT(*) FROM deleted
+"""
+
 _DELETE_LABELING_PREDICTIONS_SQL = """
     WITH candidates AS (
         SELECT id
@@ -157,6 +173,7 @@ class RetentionSweepResult:
     event_dispatch_keys: int = 0
     org_tool_execution_events: int = 0
     telemetry_run_starts: int = 0
+    discovery_stage_counts: int = 0
     labeling_predictions: int = 0
     a2a_inbound_tasks: int = 0
     expired_siwe_login_sessions: int = 0
@@ -169,6 +186,7 @@ class RetentionSweepResult:
             + self.event_dispatch_keys
             + self.org_tool_execution_events
             + self.telemetry_run_starts
+            + self.discovery_stage_counts
             + self.labeling_predictions
             + self.a2a_inbound_tasks
             + self.expired_siwe_login_sessions
@@ -315,6 +333,15 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
             batch_size,
         )
 
+    discovery_stage_counts = 0
+    if settings.discovery_stage_counts_ttl_days > 0:
+        discovery_stage_counts = await _delete_ttl_rows(
+            pool,
+            _DELETE_DISCOVERY_STAGE_COUNTS_SQL,
+            settings.discovery_stage_counts_ttl_days,
+            batch_size,
+        )
+
     labeling_predictions = 0
     labeling_retention_days = int(getattr(settings, "labeling_retention_days", 0))
     if labeling_retention_days > 0:
@@ -347,6 +374,7 @@ async def retention_sweep_once(runtime_settings: Settings | None = None) -> Rete
         event_dispatch_keys=event_dispatch_keys,
         org_tool_execution_events=org_tool_execution_events,
         telemetry_run_starts=telemetry_run_starts,
+        discovery_stage_counts=discovery_stage_counts,
         labeling_predictions=labeling_predictions,
         a2a_inbound_tasks=a2a_inbound_tasks,
         expired_siwe_login_sessions=expired_siwe_login_sessions,

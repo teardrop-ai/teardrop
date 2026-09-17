@@ -182,6 +182,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
+            from teardrop.funnel_counters import SURFACE_TOOLS_LIST, record_discovery_hit
+
+            try:
+                if json.loads(body or b"{}").get("method") == "tools/list":
+                    record_discovery_hit(SURFACE_TOOLS_LIST)
+            except Exception:
+                pass
+
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
             if discovery_response is not None:
@@ -353,6 +361,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             build_402_response_body,
             verify_payment,
         )
+        from teardrop.funnel_counters import SURFACE_MCP_402_CHALLENGE, record_discovery_hit
 
         payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
         response_kwargs = {
@@ -360,6 +369,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             "extensions": _mcp_402_extensions(),
         }
         if not payment_header:
+            record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             return JSONResponse(
                 status_code=402,
                 content=build_402_response_body(**response_kwargs),
@@ -369,6 +379,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         billing = await verify_payment(payment_header)
         if not billing.verified:
             response_kwargs["error"] = billing.error
+            record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             return JSONResponse(
                 status_code=402,
                 content=build_402_response_body(**response_kwargs),
@@ -492,6 +503,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             principal_id=getattr(request.state, "mcp_principal_id", "") or None,
         )
         if not billing.verified:
+            from teardrop.funnel_counters import SURFACE_MCP_402_CHALLENGE, record_discovery_hit
+
+            record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             return JSONResponse(
                 status_code=402,
                 content=_jsonrpc_error(req_id, -32000, billing.error),

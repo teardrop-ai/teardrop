@@ -81,7 +81,7 @@ class TestResolveId:
 
 
 def test_tool_description_mentions_address_limitations():
-    assert "Bare 0x contract addresses" in TOOL.description
+    assert "Bare 0x addresses are not" in TOOL.limitations
 
 
 class TestLoadCoinsListIndex:

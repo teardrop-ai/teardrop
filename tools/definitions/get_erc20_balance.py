@@ -104,8 +104,21 @@ async def _fetch_token_info(contract: Any, wallet: str) -> tuple[int, str, int]:
 TOOL = ToolDefinition(
     name="get_erc20_balance",
     version="1.0.0",
-    description="Get the ERC-20 token balance of a wallet, including symbol and decimals.",
+    description=(
+        "Get the exact on-chain ERC-20 balance of a wallet for one token contract, normalized by decimals "
+        "and returned with the token's symbol. Use for a precise single-token check."
+    ),
     tags=["web3", "ethereum", "erc20", "token", "balance"],
+    use_when=(
+        "Use when a specific token contract's balance must be verified block-accurately — e.g. confirming "
+        "funds before an approval or transfer. For a multi-asset portfolio view use get_wallet_portfolio "
+        "instead."
+    ),
+    limitations=(
+        "One token contract per call on Ethereum or Base; the contract address is required, so unknown "
+        "tokens cannot be looked up by symbol. Returns raw balance data only — no USD valuation."
+    ),
+    alternatives=["get_wallet_portfolio", "get_eth_balance"],
     input_schema=GetErc20BalanceInput,
     output_schema=GetErc20BalanceOutput,
     show_on_agent_card=False,

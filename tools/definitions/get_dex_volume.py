@@ -312,11 +312,20 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.0.0",
     description=(
-        "Compare decentralized exchange activity from DeFiLlama. Returns 24-hour, 7-day, and 30-day "
-        "volume, period-over-period changes, and each protocol's share of reported global 24-hour DEX volume. "
-        "Filter by protocol names or DeFiLlama slugs and rank by a 1-, 7-, or 30-day lookback window."
+        "Compare decentralized exchange activity via DeFiLlama: 24h/7d/30-day volume, period-over-period "
+        "changes, and each protocol's share of reported global 24-hour DEX volume. Filter by protocol and "
+        "rank by a 1-, 7-, or 30-day lookback window."
     ),
     tags=["defi", "dex", "volume", "finance", "defillama"],
+    use_when=(
+        "Use for landscape questions — which DEXs dominate volume, how activity shifted week-over-week, or "
+        "a specific protocol's relative share. For executable swap pricing use get_dex_quote instead."
+    ),
+    limitations=(
+        "Third-party DeFiLlama reporting, not on-chain truth; coverage gaps understate smaller protocols. "
+        "24-hour share is computed against the unfiltered global total, so filtered results retain landscape context."
+    ),
+    alternatives=["get_dex_quote", "get_chain_metrics"],
     input_schema=GetDexVolumeInput,
     output_schema=GetDexVolumeOutput,
     implementation=get_dex_volume,

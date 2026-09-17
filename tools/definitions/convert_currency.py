@@ -273,10 +273,20 @@ TOOL = ToolDefinition(
     name="convert_currency",
     version="1.0.0",
     description=(
-        "Convert between fiat currencies (USD, EUR, GBP, etc.) and crypto assets "
-        "(BTC, ETH, USDC, SOL, etc.). Returns the converted amount and exchange rate."
+        "Convert an amount between fiat currencies (USD, EUR, GBP) and crypto assets (BTC, ETH, USDC, SOL) "
+        "and return the converted amount plus the exchange rate used."
     ),
     tags=["finance", "currency", "crypto", "conversion"],
+    use_when=(
+        "Use when an amount must be expressed in a different currency than the source data — for example "
+        "converting a USD portfolio value into EUR, or a fiat amount into its crypto equivalent. "
+        "For prices only, get_token_price returns the rate directly without a second call."
+    ),
+    limitations=(
+        "Spot-rate conversion at request time; no historical or forward rates, and no slippage or fee "
+        "modeling. Actual swap execution differs — use get_dex_quote for executable on-chain quotes."
+    ),
+    alternatives=["get_token_price", "get_dex_quote"],
     input_schema=ConvertCurrencyInput,
     output_schema=ConvertCurrencyOutput,
     show_on_agent_card=False,

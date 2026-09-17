@@ -65,6 +65,7 @@ from teardrop.dependencies import (
     require_org_machine,
     require_settlement_wallet_auth,
 )
+from teardrop.funnel_counters import SURFACE_CATALOG, SURFACE_QUOTE, record_discovery_hit
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.shared import normalize_to_safe_schema_subset
@@ -1242,6 +1243,7 @@ async def get_marketplace_catalog_endpoint(
             detail=f"Invalid category '{category}'. Allowed: {', '.join(sorted(_MARKETPLACE_VALID_CATEGORIES))}",
         )
 
+    record_discovery_hit(SURFACE_CATALOG)
     client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
 
@@ -1298,6 +1300,7 @@ async def get_marketplace_quote(
             detail="Tool must use the qualified '{org_slug}/{tool_name}' form.",
         )
 
+    record_discovery_hit(SURFACE_QUOTE)
     client_ip = request.client.host if request.client else "unknown"
     await _enforce_rate_limit(f"catalog:{client_ip}", s.rate_limit_auth_rpm)
 

@@ -132,6 +132,9 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `A2A_INBOUND_TASK_RECOVERY_INTERVAL_SECONDS` | Interval for recovering expired asynchronous inbound A2A task leases (default: `30`) |
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
+| `FUNNEL_TELEMETRY_ENABLED` | Count hits on public discovery surfaces as bounded hourly aggregates (default: `false`) |
+| `FUNNEL_COUNTER_FLUSH_INTERVAL_SECONDS` | Interval between discovery-counter flushes to Postgres (default: `300`) |
+| `DISCOVERY_STAGE_COUNTS_TTL_DAYS` | Retain discovery-stage aggregate counts for this many days (default: `180`; `0` keeps them indefinitely) |
 | `LABELING_ENABLED` | Enable asynchronous prediction labeling for registered definitions (default: `false`) |
 | `LABELING_TICK_INTERVAL_SECONDS` | Labeling worker poll interval (default: `300`) |
 | `LABELING_BATCH_SIZE` | Maximum target items claimed per labeling pass (default: `50`) |

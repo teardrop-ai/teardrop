@@ -15,9 +15,11 @@ from fastapi.responses import JSONResponse
 
 from teardrop.dependencies import require_admin
 from teardrop.usage import (
+    DiscoveryFunnelResponse,
     MachineFunnelResponse,
     TelemetryCompletenessResponse,
     UsageSummary,
+    get_discovery_funnel,
     get_machine_funnel,
     get_telemetry_completeness,
     get_usage_by_org,
@@ -84,4 +86,18 @@ async def admin_machine_funnel(
     days: int = Query(default=7, ge=1, le=90),
 ) -> JSONResponse:
     report = await get_machine_funnel(days)
+    return JSONResponse(content=report.model_dump())
+
+
+@router.get(
+    "/admin/telemetry/discovery-funnel",
+    tags=["Admin", "Admin / Usage"],
+    response_model=DiscoveryFunnelResponse,
+)
+async def admin_discovery_funnel(
+    _admin: dict = Depends(require_admin),
+    days: int = Query(default=7, ge=1, le=90),
+) -> JSONResponse:
+    """Return aggregate discovery-stage hit counts and challenge-to-settle rate (admin only)."""
+    report = await get_discovery_funnel(days)
     return JSONResponse(content=report.model_dump())

@@ -213,11 +213,21 @@ TOOL = ToolDefinition(
     name="get_transaction",
     version="1.1.0",
     description=(
-        "Get details and receipt for an Ethereum or Base transaction by hash. "
-        "Includes bounded calldata, normalized event logs, transaction index, and "
-        "receipt-derived effective gas price and fee when available."
+        "Get details and receipt for one Ethereum or Base transaction by hash: bounded calldata, normalized "
+        "event logs, transaction index, and receipt-derived effective gas price and fee when available. "
+        "Use to verify a specific transaction's status and outcome."
     ),
     tags=["web3", "ethereum", "transaction"],
+    use_when=(
+        "Use when one known transaction must be verified — status, logs, gas paid, or execution outcome. "
+        "To understand what the calldata means use decode_transaction; for wallet-wide activity use "
+        "get_wallet_history."
+    ),
+    limitations=(
+        "One transaction hash per call on Ethereum or Base; pending transactions may not resolve yet. "
+        "Calldata is returned bounded, not decoded — use decode_transaction for semantic decoding."
+    ),
+    alternatives=["decode_transaction", "get_block", "get_wallet_history"],
     input_schema=GetTransactionInput,
     output_schema=GetTransactionOutput,
     show_on_agent_card=False,

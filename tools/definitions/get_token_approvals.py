@@ -299,14 +299,23 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.1.0",
     description=(
-        "Audit ERC-20 token allowances for a wallet address. By default, returns all non-zero approvals "
-        "for assets in the shared tracked-asset registry across curated DeFi protocol spenders "
-        "(Uniswap, Aave, Compound, 1inch, 0x, OpenSea). "
-        "Flags unlimited approvals with risk levels: high=unknown spender, medium=trusted protocol, "
-        "low=bounded amount. Use before swaps to verify approval state, or after security incidents "
-        "to detect active exploit vectors. Ethereum mainnet and Base only."
+        "Block-accurate audit of ERC-20 allowances for a wallet across curated DeFi spenders (Uniswap, "
+        "Aave, Compound, 1inch, 0x, OpenSea) on Ethereum or Base. Flags unlimited approvals by risk level "
+        "(high=unknown spender, medium=trusted protocol, low=bounded). Use before swaps or after security "
+        "incidents to detect active exploit vectors."
     ),
     tags=["web3", "ethereum", "security", "erc20", "approvals", "defi"],
+    use_when=(
+        "Use for a free, block-accurate Ethereum/Base check of an address's exposure to the curated spender "
+        "list. For broad all-chain spender discovery, hacked/abandoned flags, or NFT-adjacent exposure use "
+        "get_wallet_approvals instead."
+    ),
+    limitations=(
+        "Covers only the tracked-asset registry and curated spenders — untracked tokens and custom spenders "
+        "are excluded. Does not inspect NFT approvals or off-chain Permit2 sub-permits. An error field "
+        "marks results as incomplete rather than clean."
+    ),
+    alternatives=["get_wallet_approvals", "assess_counterparty_risk"],
     input_schema=GetTokenApprovalsInput,
     output_schema=GetTokenApprovalsOutput,
     implementation=get_token_approvals,

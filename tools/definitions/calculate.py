@@ -118,9 +118,21 @@ TOOL = ToolDefinition(
     name="calculate",
     version="1.0.0",
     description=(
-        "Evaluate a safe arithmetic expression. Supports +,-,*,/,**,%,sqrt,abs,round,floor,ceil,log,sin,cos,tan,pi,e."  # noqa: E501
+        "Evaluate a safe arithmetic expression and return the numeric result. "
+        "Supports +,-,*,/,**,%,sqrt,abs,round,floor,ceil,log,sin,cos,tan,pi,e. "
+        "Use for derived figures (ratios, differences, percentages) that no tool output already provides."
     ),
     tags=["math", "arithmetic", "calculation"],
+    use_when=(
+        "Use when an agent must derive a value that tool outputs do not already include, such as a "
+        "ratio, spread, or percentage. Do not use to re-derive pre-computed fields like std_30d or "
+        "dca_baseline_90d that get_token_price_historical returns."
+    ),
+    limitations=(
+        "Arithmetic only — no aggregation over tool history, no unit conversion, and no financial "
+        "modeling beyond the listed functions. Errors return an error field rather than raising."
+    ),
+    alternatives=["get_token_price_historical", "get_datetime"],
     input_schema=CalculateInput,
     output_schema=CalculateOutput,
     show_on_agent_card=False,

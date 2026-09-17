@@ -20,6 +20,12 @@ from shared.db_pool import PgPool
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
+from teardrop.funnel_counters import (
+    SURFACE_AGENT_CARD,
+    SURFACE_MCP_SERVER_CARD,
+    SURFACE_X402_DISCOVERY,
+    record_discovery_hit,
+)
 from teardrop.public_url import public_base_url
 from tools import registry
 
@@ -600,6 +606,7 @@ async def jwks() -> JSONResponse:
 @router.get("/.well-known/agent-card.json", tags=["A2A"])
 async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
+    record_discovery_hit(SURFACE_AGENT_CARD)
     snapshot = await get_public_reputation_snapshot()
     return _json_discovery_response(request, _build_agent_card_content(request, snapshot["tools"]))
 
@@ -627,6 +634,7 @@ async def public_reputation(request: Request) -> Response:
 @router.get("/.well-known/x402", tags=["System"])
 async def x402_discovery(request: Request) -> Response:
     """Public x402 metadata for registries and validators."""
+    record_discovery_hit(SURFACE_X402_DISCOVERY)
     content = await _build_x402_discovery_content(request)
     cache_seconds = max(0, min(300, get_settings().pricing_cache_ttl_seconds))
     if "bootstrap" in content and not content["bootstrap"]["accepts"]:
@@ -705,6 +713,7 @@ async def robots_txt(request: Request) -> Response:
 @router.get("/.well-known/mcp/server-card.json", tags=["MCP"])
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
+    record_discovery_hit(SURFACE_MCP_SERVER_CARD)
     snapshot = await get_public_reputation_snapshot()
     tools = registry.to_mcp_server_card_tools(snapshot["tools"])
     description = _mcp_server_description()

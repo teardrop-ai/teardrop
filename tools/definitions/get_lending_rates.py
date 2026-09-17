@@ -395,12 +395,22 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.1.0",
     description=(
-        "Get current on-chain lending supply/borrow rates for expanded Aave v3 reserves and Compound v3 markets "
-        "on Ethereum or Base. "
-        "Returns per-asset APY snapshots and Compound utilization where available. "
-        "Useful for protocol-specific stablecoin yield comparisons (e.g., USDC on Aave vs Compound)."
+        "Get current on-chain lending supply/borrow APYs for Aave v3 reserves and Compound v3 markets on "
+        "Ethereum or Base, with per-asset snapshots and Compound utilization. Use for protocol-specific "
+        "yield comparisons such as USDC on Aave vs Compound."
     ),
     tags=["web3", "defi", "lending", "aave", "compound", "yield"],
+    use_when=(
+        "Use for protocol-specific lending-rate questions (e.g. 'Aave vs Compound USDC rates'). Prefer over "
+        "get_yield_rates when the protocols are known; use get_yield_rates for broad pool discovery across "
+        "many protocols. Do not fall back to web_search when this returns errors — report them."
+    ),
+    limitations=(
+        "On-chain snapshots of Aave v3 and Compound v3 on Ethereum and Base only; not a multi-protocol yield "
+        "aggregator. Rates are point-in-time and change per block. Returns an errors list — report each "
+        "unavailable protocol explicitly and treat empty rates with empty errors as transient RPC unavailability."
+    ),
+    alternatives=["get_yield_rates", "get_defi_positions", "get_liquidation_risk"],
     input_schema=GetLendingRatesInput,
     output_schema=GetLendingRatesOutput,
     implementation=get_lending_rates,

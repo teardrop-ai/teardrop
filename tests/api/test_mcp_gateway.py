@@ -90,6 +90,45 @@ async def test_mcp_x402_challenges_include_bazaar_in_body_and_headers(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payment_header", [None, "invalid-payment"])
+async def test_mcp_x402_challenge_records_funnel_counter(monkeypatch, payment_header):
+    import billing
+    import teardrop.funnel_counters as funnel_module
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    funnel_module.init_funnel_counters(None, enabled=True)
+    try:
+        headers = [] if payment_header is None else [(b"payment-signature", payment_header.encode())]
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "scheme": "https",
+                "server": ("test", 443),
+                "path": "/tools/mcp",
+                "headers": headers,
+            }
+        )
+
+        monkeypatch.setattr(billing, "build_402_response_body", lambda **kwargs: {"error": "Payment required"})
+        monkeypatch.setattr(billing, "build_402_headers", lambda **kwargs: {})
+        monkeypatch.setattr(
+            billing,
+            "verify_payment",
+            AsyncMock(return_value=SimpleNamespace(verified=False, error="Invalid payment")),
+        )
+
+        response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(request)
+
+        assert response is not None
+        assert response.status_code == 402
+        assert sum(funnel_module._counters.values()) == 1
+        assert funnel_module.SURFACE_MCP_402_CHALLENGE in {surface for surface, _ in funnel_module._counters}
+    finally:
+        funnel_module.close_funnel_counters()
+
+
+@pytest.mark.asyncio
 async def test_jwks_returns_valid_key(test_settings):
     """GET /.well-known/jwks.json returns a valid RSA JWK."""
     from teardrop.main import app

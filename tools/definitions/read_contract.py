@@ -229,14 +229,21 @@ TOOL = ToolDefinition(
     name="read_contract",
     version="1.1.0",
     description=(
-        "Call any view/pure function on a smart contract and return the result. "
-        "Provide the ABI fragment (JSON array) and function name. "
-        "State-changing functions (payable/nonpayable) are rejected for safety. "
-        "Supports historical queries via block_identifier (block number or 'latest') "
-        "and optional caller_address context for msg.sender-dependent views. "
-        "Calls use Teardrop's bounded RPC timeout and rate-limit retry policy."
+        "Call any view/pure function on a smart contract and return the decoded result, using a supplied "
+        "ABI fragment. Supports historical reads via block_identifier and caller_address context for "
+        "msg.sender-dependent views. Read-only: state-changing functions are rejected."
     ),
     tags=["web3", "ethereum", "contract", "abi", "defi"],
+    use_when=(
+        "Use when a protocol question needs a contract read that no higher-level tool covers — e.g. a "
+        "niche view function or a protocol outside the standard tool set. Prefer purpose-built tools "
+        "(get_defi_positions, get_lending_rates) for supported protocols."
+    ),
+    limitations=(
+        "Requires a valid ABI fragment; payable/nonpayable functions are rejected. Ethereum mainnet and "
+        "Base only, with bounded RPC timeout and retry."
+    ),
+    alternatives=["get_defi_positions", "get_lending_rates", "get_token_approvals"],
     input_schema=ReadContractInput,
     output_schema=ReadContractOutput,
     show_on_agent_card=False,

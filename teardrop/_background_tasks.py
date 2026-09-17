@@ -177,17 +177,26 @@ async def _retention_sweep_iter() -> None:
     logger.info(
         "Retention sweep completed: total_deleted=%d checkpoint_threads=%d "
         "scheduled_run_results=%d org_tool_execution_events=%d "
-        "telemetry_run_starts=%d labeling_predictions=%d a2a_inbound_tasks=%d "
-        "expired_siwe_login_sessions=%d",
+        "telemetry_run_starts=%d discovery_stage_counts=%d labeling_predictions=%d "
+        "a2a_inbound_tasks=%d expired_siwe_login_sessions=%d",
         result.total_deleted,
         result.checkpoint_threads,
         result.scheduled_run_results,
         result.org_tool_execution_events,
         result.telemetry_run_starts,
+        result.discovery_stage_counts,
         getattr(result, "labeling_predictions", 0),
         getattr(result, "a2a_inbound_tasks", 0),
         result.expired_siwe_login_sessions,
     )
+
+
+async def _funnel_counter_flush_iter() -> None:
+    from teardrop.funnel_counters import flush_discovery_counters
+
+    flushed = await flush_discovery_counters()
+    if flushed:
+        logger.info("Funnel counters: flushed %d discovery bucket(s)", flushed)
 
 
 async def _event_dispatch_recovery_iter() -> None:
@@ -296,6 +305,16 @@ async def _retention_sweep_loop() -> None:
         _retention_sweep_iter,
         settings.retention_sweep_interval_seconds,
         monitor_slug="retention-sweep",
+    )
+
+
+async def _funnel_counter_flush_loop() -> None:
+    """Periodically flush discovery-stage hit counters to Postgres (runs as a background task)."""
+    await _run_periodic(
+        "Funnel counter flush",
+        _funnel_counter_flush_iter,
+        settings.funnel_counter_flush_interval_seconds,
+        monitor_slug="funnel-counter-flush",
     )
 
 

@@ -19,6 +19,7 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "scheduled_run_results_ttl_days": 30,
         "org_tool_execution_events_ttl_days": 90,
         "telemetry_run_starts_ttl_days": 120,
+        "discovery_stage_counts_ttl_days": 180,
         "retention_sweep_batch_size": 2,
     }
     values.update(overrides)
@@ -55,7 +56,7 @@ class TestRetentionSweep:
                 [],
             ]
         )
-        pool.fetchval = AsyncMock(side_effect=[2, 0, 0, 1, 1, 1])
+        pool.fetchval = AsyncMock(side_effect=[2, 0, 0, 1, 1, 1, 1])
 
         with patch.object(retention_module, "_pool", pool):
             result = await retention_module.retention_sweep_once(_settings())
@@ -65,8 +66,9 @@ class TestRetentionSweep:
         assert result.event_dispatch_keys == 0
         assert result.org_tool_execution_events == 1
         assert result.telemetry_run_starts == 1
+        assert result.discovery_stage_counts == 1
         assert result.expired_siwe_login_sessions == 1
-        assert result.total_deleted == 7
+        assert result.total_deleted == 8
 
         checkpoint_delete_sql = [call.args[0] for call in connection.execute.await_args_list]
         assert checkpoint_delete_sql == [
@@ -91,6 +93,7 @@ class TestRetentionSweep:
         ):
             assert protected_table not in cleanup_sql
         assert "telemetry_run_starts" in cleanup_sql
+        assert "discovery_stage_counts" in cleanup_sql
 
     async def test_zero_ttl_skips_configurable_cleanup_but_removes_expired_siwe_sessions(self):
         pool, connection = _checkpoint_pool([])
@@ -103,6 +106,7 @@ class TestRetentionSweep:
                     scheduled_run_results_ttl_days=0,
                     org_tool_execution_events_ttl_days=0,
                     telemetry_run_starts_ttl_days=0,
+                    discovery_stage_counts_ttl_days=0,
                 )
             )
 
@@ -122,6 +126,7 @@ class TestRetentionSweep:
                     scheduled_run_results_ttl_days=0,
                     org_tool_execution_events_ttl_days=0,
                     telemetry_run_starts_ttl_days=0,
+                    discovery_stage_counts_ttl_days=0,
                     a2a_inbound_task_ttl_days=7,
                 )
             )
@@ -159,6 +164,9 @@ class TestRetentionWorker:
             scheduled_run_results=0,
             org_tool_execution_events=0,
             telemetry_run_starts=0,
+            discovery_stage_counts=0,
+            labeling_predictions=0,
+            a2a_inbound_tasks=0,
             expired_siwe_login_sessions=0,
         )
         with (

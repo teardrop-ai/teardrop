@@ -821,21 +821,24 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.4.0",
     description=(
-        "Get Total Value Locked (TVL) data for a DeFi protocol from DeFiLlama. "
-        "Returns current TVL in USD, 7-day and 30-day percentage change, and a "
-        "per-chain breakdown. Set include_historical=True to also retrieve a daily "
-        "TVL series for trend analysis. When DeFiLlama reports them, also returns "
-        "current fees and revenue in USD with 7-day and 30-day percentage change. "
-        "You can also batch multiple protocols via "
-        "protocols=[...]. Supports 3,000+ protocols including Aave, "
-        "Uniswap, Curve, Compound, Lido, MakerDAO, and more. "
-        "Batch responses retain one compact economic summary per requested protocol; "
-        "single-protocol calls include chain and historical detail. "
-        "A revenue_error_type identifies an upstream revenue lookup failure. "
-        "Use the DeFiLlama slug format: 'aave-v3', 'uniswap-v3', 'curve-dex'. "
-        "Common aliases such as 'spark-protocol' and 'compound' are auto-corrected."
+        "Get Total Value Locked for one or many DeFi protocols from DeFiLlama: current USD TVL, 7/30-day "
+        "change, fees and revenue when reported, per-chain breakdown, and optional daily historical series. "
+        "Batch multiple protocols via protocols=[...] — batch responses return one compact economic summary "
+        "per protocol; single-protocol calls add chain and historical detail. Supports 3,000+ protocols; "
+        "use DeFiLlama slugs ('aave-v3', 'uniswap-v3'); common aliases are auto-corrected."
     ),
     tags=["defi", "tvl", "finance", "protocol", "defillama"],
+    use_when=(
+        "Use for protocol-level economic questions — size, growth, fees, or revenue of a specific protocol. "
+        "For 2+ protocols always batch in one call rather than calling per-protocol. Pass "
+        "include_historical=true with days when a trend is needed; without it the response is a current "
+        "TVL scalar. For ecosystem-level chain comparisons use get_chain_metrics instead."
+    ),
+    limitations=(
+        "Third-party DeFiLlama analytics, not on-chain truth. Upstream revenue failures surface as "
+        "revenue_error_type and null economic fields are data gaps — never fabricate values for them."
+    ),
+    alternatives=["get_chain_metrics", "get_yield_rates", "get_dex_volume"],
     input_schema=GetProtocolTvlInput,
     output_schema=_build_output_schema(),
     implementation=get_protocol_tvl,

@@ -541,12 +541,20 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.1.0",
     description=(
-        "Compare blockchain ecosystem health using DeFiLlama current TVL, 7-day and 30-day TVL "
-        "changes, and aggregate fee activity. Pass chains such as ['Ethereum', 'Arbitrum', 'Solana'] "
-        "for a focused comparison, or omit chains to inspect the highest-TVL ecosystems. "
-        "Historical and fee fields fail open when DeFiLlama does not cover a chain."
+        "Compare blockchain ecosystem health via DeFiLlama: current TVL, 7/30-day TVL change, and "
+        "aggregate fee activity. Pass chains such as ['Ethereum', 'Arbitrum', 'Solana'] for a focused "
+        "comparison, or omit chains to inspect the highest-TVL ecosystems."
     ),
     tags=["defi", "chains", "tvl", "fees", "finance", "defillama"],
+    use_when=(
+        "Use for ecosystem-level comparisons — which chains are growing, where fee activity concentrates, "
+        "or how a chain's TVL trended. For a single protocol's economics use get_protocol_tvl instead."
+    ),
+    limitations=(
+        "Third-party DeFiLlama analytics; historical and fee fields fail open (null) for uncovered chains. "
+        "Not a real-time measure of chain throughput or security."
+    ),
+    alternatives=["get_protocol_tvl", "get_dex_volume"],
     input_schema=GetChainMetricsInput,
     output_schema=GetChainMetricsOutput,
     implementation=get_chain_metrics,

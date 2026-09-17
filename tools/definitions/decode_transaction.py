@@ -209,12 +209,20 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.0.0",
     description=(
-        "Decode a transaction's calldata into a human-readable function name and arguments. "
-        "Also returns transaction status (1=success, 0=revert), gas used, and block number. "
-        "Optionally provide an ABI for precise decoding; otherwise uses 4byte.directory. "
-        "Supports Ethereum mainnet and Base."
+        "Decode a transaction's calldata into a human-readable function name and arguments, and return "
+        "transaction status (1=success, 0=revert), gas used, and block number. Uses a supplied ABI when "
+        "provided, otherwise 4byte.directory. Supports Ethereum mainnet and Base."
     ),
     tags=["web3", "ethereum", "transaction", "decode", "calldata"],
+    use_when=(
+        "Use when one known transaction must be explained — what function was called, with what arguments, "
+        "and whether it succeeded. For wallet-wide activity patterns use get_wallet_history instead."
+    ),
+    limitations=(
+        "4byte.directory matching can be ambiguous or absent for custom contracts; supply an ABI for "
+        "precise decoding. One transaction per call; Ethereum mainnet and Base only."
+    ),
+    alternatives=["get_transaction", "get_wallet_history"],
     input_schema=DecodeTransactionInput,
     output_schema=DecodeTransactionOutput,
     implementation=decode_transaction,

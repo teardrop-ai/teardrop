@@ -113,11 +113,20 @@ TOOL = ToolDefinition(
     name="resolve_ens",
     version="1.0.0",
     description=(
-        "Resolve an ENS name (e.g. 'vitalik.eth') to an Ethereum address, "
-        "or pass an Ethereum address for reverse lookup to its primary ENS name. "
-        "Also returns the avatar text record when available. Mainnet only."
+        "Resolve an ENS name (e.g. 'vitalik.eth') to an Ethereum address, or an address to its primary ENS "
+        "name, with avatar text record when available. Mainnet only."
     ),
     tags=["web3", "ethereum", "ens", "identity"],
+    use_when=(
+        "Use only when no 0x address is available and a name must become an address (or vice versa for "
+        "attribution). If a 0x address is already present in the task or session, use it directly — "
+        "resolution is redundant and adds latency."
+    ),
+    limitations=(
+        "Ethereum mainnet ENS only — no other chains or naming services. Reverse records are optional on "
+        "ENS, so a valid address may legitimately have no primary name."
+    ),
+    alternatives=["get_wallet_portfolio", "get_wallet_history"],
     input_schema=ResolveEnsInput,
     output_schema=ResolveEnsOutput,
     show_on_agent_card=False,

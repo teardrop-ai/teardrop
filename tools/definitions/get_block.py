@@ -67,8 +67,21 @@ async def get_block(
 TOOL = ToolDefinition(
     name="get_block",
     version="1.0.0",
-    description="Get details for an Ethereum or Base block by number, hash, or 'latest'.",
+    description=(
+        "Get block details (timestamp, gas used, base fee, miner, transaction count) for an Ethereum or "
+        "Base block by number, hash, or 'latest'. Use to anchor events to a point in chain time."
+    ),
     tags=["web3", "ethereum", "block"],
+    use_when=(
+        "Use when a question depends on when a block occurred, how full it was, or its base fee — for "
+        "example dating a transaction or checking congestion at a specific height. For current fee "
+        "levels use get_gas_price instead."
+    ),
+    limitations=(
+        "One block per call; Ethereum mainnet and Base only. Historical base fee data depends on RPC "
+        "node retention for older heights."
+    ),
+    alternatives=["get_transaction", "get_gas_price"],
     input_schema=GetBlockInput,
     output_schema=GetBlockOutput,
     show_on_agent_card=False,

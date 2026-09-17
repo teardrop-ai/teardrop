@@ -134,9 +134,9 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.0.0",
     description=(
-        "Real-time web search via Tavily. Use for current events, fact-checking, and research. "
-        "Set search_depth='advanced' for complex research queries (higher quality, higher cost). "
-        "Set topic='news' for recent headlines or 'finance' for market information."
+        "Real-time web search via Tavily for current events, fact-checking, and research. Use "
+        "search_depth='advanced' for complex queries (higher quality, higher cost) and topic='news' or "
+        "'finance' for headlines or market information."
     ),
     tags=["search", "web", "realtime"],
     use_when=(

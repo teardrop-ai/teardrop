@@ -44,7 +44,14 @@ Asynchronous inbound tasks are persisted in Postgres and executed by a bounded p
 
 The `skills`/`tools` sections of the public card are curated: each `ToolDefinition` carries a `show_on_agent_card` flag (`tools/registry.py`), and commoditized utility/low-level RPC primitives (`calculate`, `get_datetime`, `count_text_stats`, `convert_currency`, `get_block`, `get_erc20_balance`, `get_eth_balance`, `get_transaction`, `read_contract`, `resolve_ens`) are excluded to keep the public discovery surface focused on Teardrop's differentiated capabilities. This does not affect tool availability — every tool remains callable via `/agent/run`, the full org inventory at `GET /agent/tools`, and the MCP catalogue at `/.well-known/mcp/server-card.json`.
 
-Each `ToolDefinition` may also carry agent-commerce guidance fields — `use_when`, `limitations`, and `alternatives` — that are emitted on the A2A skills/tools sections and the MCP server card when present. These help external agents decide when to select a tool, what constraints apply, and which related tools to consider instead. They are additive and omitted when empty, so existing consumers see no change.
+Every `ToolDefinition` carries agent-commerce guidance fields — `use_when`,
+`limitations`, and `alternatives` — that are emitted on the MCP server card,
+rendered into live MCP `tools/list` descriptions, and, for tools with
+`show_on_agent_card=True`, on the A2A skills/tools sections.
+These help external agents decide when to select a tool, what constraints apply,
+and which related tools to consider instead. The contract is enforced by
+`tests/unit/test_tool_definition_standard.py` and new tools are scaffolded with
+the fields required via `scripts/scaffold_tool.py`.
 
 Teardrop also publishes x402 discovery metadata at `/.well-known/x402` and `/.well-known/x402.json`. These public, cacheable aliases advertise the canonical paid entrypoints (`/message:send`, `/tools/mcp`) alongside the public pricing metadata at `/billing/pricing`. When `BILLING_ENABLED`, `MACHINE_PROVISIONING_ENABLED`, and `X402_ONBOARDING_ENABLED` are all enabled, the document advertises a `bootstrap` block with the `POST /token` `grant_type=x402` entrypoint and its own payment requirements (funded at `max(run_price, credit_min_run_reserve_usdc)`, which can differ from the per-run price in the top-level `accepts`). Payment-required responses from both paid entrypoints include Bazaar metadata describing their request and response shapes.
 

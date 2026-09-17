@@ -44,8 +44,21 @@ async def get_datetime(format: str = "%Y-%m-%d %H:%M:%S UTC") -> dict[str, str]:
 TOOL = ToolDefinition(
     name="get_datetime",
     version="1.0.0",
-    description="Return the current UTC date and time. Optional strftime format parameter.",
+    description=(
+        "Return the current UTC date and time as a formatted string and ISO 8601 timestamp, for "
+        "grounding time-relative reasoning in the actual clock rather than training-data assumptions."
+    ),
     tags=["datetime", "utility"],
+    use_when=(
+        "Use when a task must anchor on the current date or time — computing ages, windows, deadlines, "
+        "or 'as of today' context. The runtime context block already states the date, so call this only "
+        "when a specific strftime format or a precise timestamp is needed."
+    ),
+    limitations=(
+        "UTC only — no timezone conversion. An unsupported strftime format silently falls back to the "
+        "default format instead of erroring."
+    ),
+    alternatives=["calculate", "get_block"],
     input_schema=GetDatetimeInput,
     output_schema=GetDatetimeOutput,
     show_on_agent_card=False,

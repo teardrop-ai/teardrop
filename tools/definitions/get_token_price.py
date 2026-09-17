@@ -316,17 +316,21 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.2.0",
     description=(
-        "Get current price, 24h change, market cap, fully-diluted valuation, and "
-        "volume for one or more "
-        "crypto tokens. Accepts ticker symbols (BTC, ETH, LQTY), full token names "
-        "(Bitcoin, Liquity, Chainlink), or CoinGecko IDs. Unknown symbols are "
-        "resolved automatically against the full CoinGecko coin list. "
-        "Supports batch queries up to 50 tokens. Bare 0x contract addresses are "
-        "not resolvable by CoinGecko and should be treated as unknown. "
-        "If get_wallet_portfolio already returned price_usd/value_usd for a held "
-        "token, reuse that value instead of calling get_token_price again."
+        "Get current price, 24h change, market cap, FDV, and volume for one or more crypto tokens. Accepts "
+        "ticker symbols, full names, or CoinGecko IDs; unknown symbols resolve automatically. Batch up to "
+        "50 tokens. Reuse price_usd/value_usd already returned by get_wallet_portfolio instead of re-calling."
     ),
     tags=["finance", "crypto", "price", "market"],
+    use_when=(
+        "Use for spot pricing of named tokens — including batched multi-token queries. Do not call for "
+        "tokens whose price get_wallet_portfolio already returned, or for address-only unknown tokens "
+        "(report them as unrecognized). For historical windows use get_token_price_historical."
+    ),
+    limitations=(
+        "CoinGecko spot data; point-in-time and not an executable swap quote. Bare 0x addresses are not "
+        "resolvable and should be treated as unknown tokens."
+    ),
+    alternatives=["get_token_price_historical", "get_wallet_portfolio", "get_dex_quote"],
     input_schema=GetTokenPriceInput,
     output_schema=GetTokenPriceOutput,
     implementation=get_token_price,

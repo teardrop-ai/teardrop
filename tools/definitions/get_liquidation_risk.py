@@ -371,15 +371,23 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.1.0",
     description=(
-        "Assess DeFi liquidation risk for up to 50 wallets across expanded Aave v3 and Compound v3 coverage on "
-        "Ethereum (chain_id=1) or Base (chain_id=8453). Returns per-wallet health factor and "
-        "tiered risk classification (liquidatable, critical, warning, caution, healthy, no_debt) "
-        "plus an overall_tier aggregate across protocols, and a summary count for alert "
-        "dashboards. Per-protocol failures are isolated — a Compound RPC error does not blank "
-        "the Aave result (and vice versa). View-only (eth_call) against hardcoded protocol "
-        "addresses; duplicate wallet addresses are silently removed."
+        "Assess DeFi liquidation risk for up to 50 wallets across Aave v3 and Compound v3 on Ethereum or "
+        "Base. Returns per-wallet health factor, tiered risk classification (liquidatable, critical, "
+        "warning, caution, healthy, no_debt), and an overall_tier aggregate. Per-protocol failures are "
+        "isolated — one protocol's RPC error does not blank the other's result."
     ),
     tags=["web3", "ethereum", "base", "defi", "risk", "liquidation", "aave", "compound"],
+    use_when=(
+        "Use for multi-wallet batch risk assessment (2+ wallets). For a single-wallet DeFi analysis use "
+        "get_defi_positions, which already includes risk metrics. Use assess_counterparty_risk when the "
+        "question is counterparty trust rather than position health."
+    ),
+    limitations=(
+        "View-only scan of Aave v3 and Compound v3 on Ethereum and Base with hardcoded market addresses; "
+        "not a liquidation simulation or guarantee. Compound v3 exposes only a boolean liquidation flag — "
+        "no numeric health factor. Duplicate wallet addresses are silently removed."
+    ),
+    alternatives=["get_defi_positions", "assess_counterparty_risk", "get_wallet_positions"],
     input_schema=GetLiquidationRiskInput,
     output_schema=GetLiquidationRiskOutput,
     implementation=get_liquidation_risk,

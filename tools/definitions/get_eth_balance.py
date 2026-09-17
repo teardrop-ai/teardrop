@@ -54,12 +54,20 @@ TOOL = ToolDefinition(
     name="get_eth_balance",
     version="1.0.0",
     description=(
-        "Get the native ETH balance of an Ethereum or Base address. "
-        "NOTE: get_wallet_portfolio already includes the native ETH balance in its "
-        "holdings list — only call get_eth_balance when you need a standalone ETH "
-        "balance without a full portfolio scan."
+        "Get the exact on-chain native ETH balance of an address on Ethereum or Base, in wei and ether. "
+        "get_wallet_portfolio already includes native ETH in its holdings — call this only for a "
+        "standalone balance without a portfolio scan."
     ),
     tags=["web3", "ethereum", "balance"],
+    use_when=(
+        "Use when a wallet's gas-availability or standalone ETH amount must be verified block-accurately. "
+        "Do not call after or alongside get_wallet_portfolio — the holdings list already includes native ETH."
+    ),
+    limitations=(
+        "Native ETH only; ERC-20 balances require get_erc20_balance. Requires an EIP-55 checksummed address. "
+        "Ethereum mainnet and Base only."
+    ),
+    alternatives=["get_wallet_portfolio", "get_erc20_balance"],
     input_schema=GetEthBalanceInput,
     output_schema=GetEthBalanceOutput,
     show_on_agent_card=False,

@@ -166,13 +166,20 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.0.0",
     description=(
-        "Get current EIP-1559 gas fees on Ethereum or Base. Returns base fee, priority fee, "
-        "and next-block base fee estimate (useful for timing transactions). "
-        "gas_used_ratio indicates network congestion (>0.5 = busy, >0.9 = very congested). "
-        "Optional USD estimates include ETH spot price and rough transfer/swap costs. "
-        "Results cached 10 seconds per chain."
+        "Get current EIP-1559 gas fees on Ethereum or Base: base fee, priority fee, next-block base fee "
+        "estimate, and congestion (gas_used_ratio >0.5 busy, >0.9 very congested). Optional USD estimates "
+        "cover a simple transfer and a swap-like transaction. Cached 10 seconds per chain."
     ),
     tags=["web3", "ethereum", "gas", "fees", "eip1559"],
+    use_when=(
+        "Use before advising a transaction — to time execution, size a gas budget, or judge congestion. "
+        "Call once per decision; the 10-second cache makes rapid re-calls pointless."
+    ),
+    limitations=(
+        "Point-in-time estimate that changes every block; USD figures are rough heuristics at 21k/150k gas, "
+        "not an execution quote. Ethereum mainnet and Base only."
+    ),
+    alternatives=["get_block", "get_dex_quote"],
     input_schema=GetGasPriceInput,
     output_schema=GetGasPriceOutput,
     implementation=get_gas_price,

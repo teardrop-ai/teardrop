@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from teardrop.usage import MachineFunnelResponse, TelemetryCompletenessBySource, UsageSummary
+from teardrop.usage import (
+    DiscoveryFunnelResponse,
+    DiscoveryStageDay,
+    MachineFunnelResponse,
+    TelemetryCompletenessBySource,
+    UsageSummary,
+)
 
 _SUMMARY = UsageSummary(
     total_runs=5,
@@ -138,6 +144,44 @@ async def test_admin_machine_funnel_requires_admin(api_client):
 @pytest.mark.anyio
 async def test_admin_machine_funnel_bounds_window(admin_api_client):
     assert (await admin_api_client.get("/admin/telemetry/machine-funnel", params={"days": 0})).status_code == 422
+
+
+@pytest.mark.anyio
+async def test_admin_discovery_funnel(admin_api_client, monkeypatch):
+    report = DiscoveryFunnelResponse(
+        window_days=14,
+        agent_card_hits=10,
+        x402_discovery_hits=8,
+        mcp_server_card_hits=6,
+        catalog_hits=5,
+        quote_hits=4,
+        tools_list_hits=3,
+        mcp_402_challenges=2,
+        settled_calls=1,
+        challenge_to_settle_rate=0.5,
+        series=[DiscoveryStageDay(date="2026-09-16", agent_card_hits=10, mcp_402_challenges=2)],
+    )
+    monkeypatch.setattr("teardrop.routers.admin.usage.get_discovery_funnel", AsyncMock(return_value=report))
+
+    resp = await admin_api_client.get("/admin/telemetry/discovery-funnel", params={"days": 14})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["agent_card_hits"] == 10
+    assert body["mcp_402_challenges"] == 2
+    assert body["challenge_to_settle_rate"] == 0.5
+    assert body["series"][0]["date"] == "2026-09-16"
+    assert body["series"][0]["mcp_402_challenges"] == 2
+
+
+@pytest.mark.anyio
+async def test_admin_discovery_funnel_requires_admin(api_client):
+    assert (await api_client.get("/admin/telemetry/discovery-funnel")).status_code == 403
+
+
+@pytest.mark.anyio
+async def test_admin_discovery_funnel_bounds_window(admin_api_client):
+    assert (await admin_api_client.get("/admin/telemetry/discovery-funnel", params={"days": 91})).status_code == 422
     assert (await admin_api_client.get("/admin/telemetry/machine-funnel", params={"days": 91})).status_code == 422
 
 

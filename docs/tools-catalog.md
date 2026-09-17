@@ -40,9 +40,18 @@ Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
 
 Public A2A skills/tools and the MCP server card expose each built-in tool's
 description, tags, version, input schema, and output schema. Live MCP
-`tools/list` responses include the same observed quality summary after startup.
-Selected tools also publish `use_when`, `limitations`, and `alternatives`
-guidance to help agents choose the right capability and avoid redundant calls.
+`tools/list` responses include the same observed quality summary after startup,
+plus `use_when`, `limitations`, and `alternatives` guidance rendered into each
+tool description.
+Every registered tool defines `use_when`, `limitations`, and `alternatives`
+guidance to help agents choose the right capability and avoid redundant calls;
+this contract is enforced by `tests/unit/test_tool_definition_standard.py`.
+The guidance is published on the MCP server card, on live MCP `tools/list`
+descriptions, and — for tools with `show_on_agent_card=True` — on the A2A
+skills/tools sections. LangChain tool binding carries `description` only, so each
+description stays self-sufficient. Tool text is written for agent consumers —
+no env-var setup instructions or human-workflow assumptions; configuration
+guidance lives in [configuration.md](configuration.md).
 
 Marketplace discovery adds a commerce-facing `marketplace_description`,
 intent tags, price, health, and aggregate reputation. Browse these through

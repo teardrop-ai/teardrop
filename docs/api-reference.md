@@ -196,6 +196,7 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `GET` | `/admin/usage/{user_id}` | Admin | Usage for a specific user |
 | `GET` | `/admin/usage/org/{org_id}` | Admin | Usage for an org |
 | `GET` | `/admin/telemetry/machine-funnel` | Admin | Machine acquisition, MCP settlement, wallet-conversion, and repeat-payer metrics |
+| `GET` | `/admin/telemetry/discovery-funnel` | Admin | Aggregate discovery-stage hit counts (agent card, x402 discovery, catalog, quote, tools/list, 402 challenges), challenge-to-settle rate, and a per-day series for the window |
 | `GET` | `/admin/billing/revenue` | Admin | Aggregated revenue summary |
 | `POST` | `/admin/credits/topup` | Admin | Add prepaid USDC credits to an org |
 | `POST` | `/admin/pricing/tools` | Admin | Create or update a per-tool pricing override |

@@ -41,10 +41,19 @@ TOOL = ToolDefinition(
     name="record_predictions",
     version="1.0.0",
     description=(
-        "Record a complete structured prediction document for downstream evaluation. "
-        "Call once with the exact machine-readable prediction; provide the human-readable report separately."
+        "Record a complete structured prediction document for downstream evaluation. Call once with the "
+        "exact machine-readable prediction; the human-readable report is provided separately."
     ),
     tags=["internal", "predictions", "labeling"],
+    use_when=(
+        "Use at the end of a scheduled analysis run to persist the machine-readable prediction for later "
+        "scoring. Call exactly once with the complete prediction document — never partially or repeatedly."
+    ),
+    limitations=(
+        "Internal sink for scheduled analysis, not a caller-facing marketplace tool. Stores the prediction "
+        "as given; no validation of prediction quality or deduplication across calls."
+    ),
+    alternatives=["get_datetime"],
     input_schema=RecordPredictionsInput,
     output_schema=RecordPredictionsOutput,
     capture_args=True,

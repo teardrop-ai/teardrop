@@ -319,18 +319,22 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.1.0",
     description=(
-        "Get historical price data for crypto tokens over a specified time window (1–365 days). "
-        "Returns period statistics (start, end, % change, high, low) plus a downsampled daily "
-        "price series, plus high_30d (raw observation maximum), std_30d (population standard deviation "
-        "of daily returns as a decimal), "
-        "and dca_baseline_90d (weekly samples over the preceding 90 UTC days, excluding the "
-        "latest observation). dca_baseline_90d_partial identifies incomplete history. Use for "
-        "period comparisons (month-over-month, YTD), trend analysis, and price charts. Prefer "
-        "over web_search for time-comparative financial queries. Pass stats_only=true when the "
-        "daily series is unnecessary. These metrics are pre-computed and should not be re-derived "
-        "with calculate."
+        "Get historical crypto prices over a 1–365 day window: period statistics (start, end, % change, "
+        "high, low), a downsampled daily series, high_30d, std_30d, and dca_baseline_90d. Use for period "
+        "comparisons and trend analysis; prefer over web_search for time-comparative financial queries. "
+        "Pass stats_only=true when the daily series is unnecessary."
     ),
     tags=["finance", "crypto", "price", "history", "market"],
+    use_when=(
+        "Use for time-comparative financial questions — month-over-month, YTD, volatility, or DCA baselines. "
+        "Prefer over web_search for such queries. Use the pre-computed stats directly; do not re-derive "
+        "them with calculate."
+    ),
+    limitations=(
+        "Daily granularity (downsampled), max 365-day window, CoinGecko coverage only. Check "
+        "dca_baseline_90d_partial before relying on the baseline — incomplete history yields a partial baseline."
+    ),
+    alternatives=["get_token_price", "web_search"],
     input_schema=GetTokenPriceHistoricalInput,
     output_schema=GetTokenPriceHistoricalOutput,
     implementation=get_token_price_historical,

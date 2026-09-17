@@ -469,10 +469,21 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.0.0",
     description=(
-        "Fetch a web page and extract its main text content. Useful for reading "
-        "articles, documentation, and web resources. Returns cleaned text, not raw HTML."
+        "Fetch a web page and return its main text content, cleaned of markup. Use to read articles, "
+        "documentation, and other resources referenced by URL. Blocks private and cloud-metadata addresses "
+        "and re-validates every redirect hop."
     ),
     tags=["web", "http", "fetch", "content"],
+    use_when=(
+        "Use when a known URL's content is needed and structured tools cannot answer — e.g. reading a "
+        "linked document or API docs. For general factual lookup prefer web_search; for token prices "
+        "prefer get_token_price."
+    ),
+    limitations=(
+        "Read-only GET-style extraction returning cleaned text, not raw HTML or binary content. JS-heavy "
+        "pages may yield little content; private/internal network targets are deliberately unreachable."
+    ),
+    alternatives=["web_search", "get_token_price"],
     input_schema=HttpFetchInput,
     output_schema=HttpFetchOutput,
     implementation=http_fetch,

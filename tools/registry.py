@@ -342,6 +342,15 @@ class ToolRegistry:
                 if quality_metrics:
                     description = f"{description}\n\nObserved quality: {', '.join(quality_metrics)}."
 
+            # MCP protocol has no per-tool metadata extension, so guidance travels
+            # inside description (same pattern as the reputation suffix above).
+            if tool.use_when:
+                description = f"{description}\n\nUse when: {tool.use_when}"
+            if tool.limitations:
+                description = f"{description}\n\nLimitations: {tool.limitations}"
+            if tool.alternatives:
+                description = f"{description}\n\nAlternatives: {', '.join(tool.alternatives)}"
+
             defs.append(
                 {
                     "name": tool.name,

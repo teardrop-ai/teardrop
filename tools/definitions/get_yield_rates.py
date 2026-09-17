@@ -504,25 +504,23 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.3.0",
     description=(
-        "Get DeFi yield pool rates from DeFiLlama, covering 1,000+ protocols across "
-        "all chains. Returns pools sorted by APY with TVL, base rate, reward APY, "
-        "and 7d/30d mean APY context. "
-        "Filter by protocol (e.g. 'aave-v3', 'compound-v3'), chain (e.g. 'Ethereum', "
-        "'Base'), minimum TVL, and minimum APY. Use this to answer questions like "
-        "'Where can I get the best USDC yield?', 'What is Aave's current APY on Ethereum?', "
-        "or 'Compare Aave vs Compound yields'. Returns up to 50 pools. "
-        "Call once per query unless a genuinely disjoint filter is required. The returned `symbol` field contains the "
-        "underlying tokens (e.g. 'USDC', 'ETH-USDC', 'WBTC'); filter on the client side "
-        "by inspecting `symbol` rather than re-calling with different arguments. "
-        "Use `min_apy`, `max_apy`, `min_tvl_usd`, and `symbols_any` to prune noise in a single call. "
-        "`symbols_any` matches whole symbol tokens (e.g. 'USDC' matches 'USDC' and 'ETH-USDC' but not "
-        "'TULIPAUSDC') and returns the highest-ranked pools for EACH requested symbol, so one call gives "
-        "a complete per-symbol comparison; symbols with no matching pool are named in `note`. "
-        "Set `max_apy` (e.g. 30) to exclude leveraged/boosted pools so genuine yields surface. "
-        "Set stable_only=true when you need consistent stablecoin yield screening; this "
-        "ranks by 30d mean APY first and still returns spot/base/reward components."
+        "Get DeFi yield pool rates from DeFiLlama across 1,000+ protocols and all chains: pools sorted by "
+        "APY with TVL, base/reward APY, and 7d/30d mean APY context, filterable by protocol, chain, min "
+        "TVL, min/max APY, and symbol. Returns up to 50 pools. For protocol-specific lending comparisons "
+        "(Aave vs Compound) prefer get_lending_rates."
     ),
     tags=["defi", "yield", "apy", "finance", "defillama"],
+    use_when=(
+        "Use for broad cross-protocol yield discovery. Call at most once per request — filter with "
+        "min_apy, max_apy, min_tvl_usd, and symbols_any in a single call, then sort client-side rather "
+        "than re-calling. For protocol-specific rate questions use get_lending_rates."
+    ),
+    limitations=(
+        "Third-party DeFiLlama analytics; up to 50 pools per call. The `symbol` field lists underlying "
+        "tokens (e.g. 'ETH-USDC') — filter client-side instead of re-calling with different arguments. "
+        "Reward APY indicates reward-dependent yield; do not present spot APY as durable."
+    ),
+    alternatives=["get_lending_rates", "get_protocol_tvl", "get_token_price"],
     input_schema=GetYieldRatesInput,
     output_schema=GetYieldRatesOutput,
     implementation=get_yield_rates,

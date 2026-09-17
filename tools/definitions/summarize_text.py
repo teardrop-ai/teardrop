@@ -49,8 +49,20 @@ async def count_text_stats(text: str) -> dict[str, Any]:
 TOOL = ToolDefinition(
     name="count_text_stats",
     version="1.0.0",
-    description=("Return word count, character count, sentence count, and paragraph statistics for a given text."),
+    description=(
+        "Return word, character, sentence, and paragraph counts plus average words per sentence for a "
+        "given text, for length checks and content sizing decisions."
+    ),
     tags=["text", "analysis", "statistics"],
+    use_when=(
+        "Use when output length must be validated or reported — e.g. verifying a summary meets a length "
+        "contract or comparing document sizes. Do not use for semantic summarization; it counts only."
+    ),
+    limitations=(
+        "Pure counting on the provided text — no language detection, no reading-level or sentiment "
+        "analysis, and no retrieval of external content."
+    ),
+    alternatives=["web_search", "http_fetch"],
     input_schema=SummarizeTextInput,
     output_schema=SummarizeTextOutput,
     show_on_agent_card=False,

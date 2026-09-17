@@ -533,11 +533,21 @@ TOOL = ToolDefinition(
     name="delegate_to_agent",
     version="1.0.0",
     description=(
-        "Delegate a task to a remote A2A-compliant agent. Discovers the agent's "
-        "capabilities via its agent card, sends it a message, and returns the result. "
-        "Use when a task requires specialist capabilities beyond your own tools."
+        "Delegate a task to a remote A2A-compliant agent: discover its capabilities via its agent card, "
+        "send it a message, handle payment, and return the result. Use only when no local platform tool "
+        "can fulfil the request."
     ),
     tags=["a2a", "delegation", "agent"],
+    use_when=(
+        "Use when a task requires specialist capabilities beyond the local tool set. Call discover_agents "
+        "first when the remote agent URL is unknown. Do not retry unchanged after "
+        "error_type=advertised_price_exceeds_cap; pick another result or adjust the cap."
+    ),
+    limitations=(
+        "Requires an allowlisted remote URL and sufficient delegation budget; the remote agent's price and "
+        "capability claims are read from its card and are not independently verified. Involves real payment."
+    ),
+    alternatives=["discover_agents", "web_search"],
     input_schema=DelegateToAgentInput,
     output_schema=DelegateToAgentOutput,
     annotations={

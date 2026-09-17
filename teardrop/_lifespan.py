@@ -25,6 +25,7 @@ from teardrop._background_tasks import (
     _a2a_inbound_task_recovery_loop,
     _delegation_refund_outbox_loop,
     _event_dispatch_recovery_loop,
+    _funnel_counter_flush_loop,
     _labeling_loop,
     _memory_cleanup_loop,
     _onboarding_credit_outbox_loop,
@@ -49,6 +50,7 @@ from teardrop.benchmarks import close_benchmarks_db, init_benchmarks_db
 from teardrop.cache import close_redis, init_redis
 from teardrop.concurrency import init_agent_run_limiter
 from teardrop.config import Settings, get_settings
+from teardrop.funnel_counters import close_funnel_counters, init_funnel_counters
 from teardrop.keys import generate_keypair
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
@@ -117,6 +119,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await init_scheduling_db(pool)
         await init_tool_exclusions_db(pool)
         await init_labeling_db(pool)
+        init_funnel_counters(pool, enabled=settings.funnel_telemetry_enabled)
 
         orphaned_tasks = await recover_orphaned_inbound_tasks()
         await _record_recovered_a2a_task_audits(orphaned_tasks)
@@ -156,6 +159,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_reputation_rollup_loop()))
         if settings.retention_sweep_enabled:
             bg_tasks.append(asyncio.create_task(_retention_sweep_loop()))
+        if settings.funnel_telemetry_enabled:
+            bg_tasks.append(asyncio.create_task(_funnel_counter_flush_loop()))
         if settings.event_triggers_enabled:
             bg_tasks.append(asyncio.create_task(_event_dispatch_recovery_loop()))
         if settings.labeling_enabled:
@@ -187,6 +192,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
 
         await stop_inbound_task_workers()
         await close_telemetry_tasks()
+        close_funnel_counters()
         close_a2a_tasks_db()
         await close_agent_wallets_db()
         await close_benchmarks_db()

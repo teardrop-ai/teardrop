@@ -930,15 +930,24 @@ TOOL = ToolDefinition(
     show_on_agent_card=False,
     version="1.2.0",
     description=(
-        "Aggregate DeFi positions for a wallet across Aave v3, Compound v3, Uniswap v3 LP, and canonical "
-        "Ethereum (chain_id=1) or Base (chain_id=8453). Returns Aave aggregate account health "
-        "(collateral, debt, health factor, LTV) with per-reserve breakdown for major assets, "
-        "Compound v3 Comet market positions (supply, borrow, per-asset collateral, liquidation flag), "
-        "and Uniswap v3 LP positions by token ID (token pair, fee tier, tick range, liquidity, "
-        "uncollected fees). On Ethereum, also returns canonical Lido stETH/wstETH balances and the current "
-        "wstETH-to-stETH equivalent. Per-protocol failures are isolated — other protocols still return."
+        "Block-accurate DeFi positions for a wallet across Aave v3, Compound v3, Uniswap v3 LP, and Lido "
+        "on Ethereum or Base. Returns Aave account health (collateral, debt, health factor, LTV) with "
+        "per-reserve breakdown, Compound v3 market positions, Uniswap v3 LP positions by token ID, and "
+        "on Ethereum the Lido stETH/wstETH balances with the current wstETH-to-stETH equivalent. "
+        "Per-protocol failures are isolated — other protocols still return."
     ),
     tags=["web3", "defi", "aave", "compound", "uniswap", "lido", "staking", "portfolio"],
+    use_when=(
+        "Use when a block-accurate single-wallet protocol snapshot is needed, including health factor and "
+        "LP position detail. For broad all-chain discovery or net worth across many protocols use "
+        "get_wallet_positions instead."
+    ),
+    limitations=(
+        "On-chain RPC view of four protocol families on Ethereum and Base only; does not discover wallets' "
+        "unknown or long-tail protocol positions. Compound v3 reports only a boolean liquidation flag — "
+        "never state a numeric Compound health factor. Errors list which protocols were unavailable."
+    ),
+    alternatives=["get_wallet_positions", "get_liquidation_risk", "get_wallet_portfolio"],
     input_schema=GetDefiPositionsInput,
     output_schema=GetDefiPositionsOutput,
     implementation=get_defi_positions,

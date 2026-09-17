@@ -278,6 +278,20 @@ class Settings(BaseSettings):
         ge=0,
         description="Days telemetry run-start denominators are retained; 0 keeps them indefinitely.",
     )
+    funnel_telemetry_enabled: bool = Field(
+        default=False,
+        description="Count hits on public discovery surfaces as bounded hourly aggregates.",
+    )
+    funnel_counter_flush_interval_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description="Interval in seconds between discovery-counter flushes to Postgres.",
+    )
+    discovery_stage_counts_ttl_days: int = Field(
+        default=180,
+        ge=0,
+        description="Days discovery-stage aggregate counts are retained; 0 keeps them indefinitely.",
+    )
     labeling_enabled: bool = Field(
         default=False,
         description="Enable asynchronous prediction labeling work for registered definitions.",

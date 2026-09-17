@@ -190,6 +190,56 @@ def test_dynamic_mcp_defs_ignore_malformed_reputation():
     assert reg.to_mcp_tool_defs(reputation)[0]["description"] == _make_tool().description
 
 
+def test_dynamic_mcp_defs_include_guidance_in_description():
+    reg = ToolRegistry()
+    reg.register(
+        ToolDefinition(
+            name="guided_tool",
+            version="1.0.0",
+            description="A guided tool.",
+            tags=["test"],
+            use_when="Use when the task needs guidance.",
+            limitations="Only works on mainnet.",
+            alternatives=["other_tool", "another_tool"],
+            input_schema=_In,
+            output_schema=_Out,
+            implementation=_noop,
+        )
+    )
+
+    description = reg.to_mcp_tool_defs()[0]["description"]
+    assert description.startswith("A guided tool.")
+    assert "Use when: Use when the task needs guidance." in description
+    assert "Limitations: Only works on mainnet." in description
+    assert "Alternatives: other_tool, another_tool" in description
+    assert reg.to_mcp_tool_defs(reputation=None)[0]["description"] == description
+
+
+def test_dynamic_mcp_defs_rebuild_without_guidance_duplication():
+    reg = ToolRegistry()
+    reg.register(_make_tool(name="guided_tool", version="1.0.0"))
+    reg.register(
+        ToolDefinition(
+            name="guided_tool",
+            version="1.1.0",
+            description="A guided tool.",
+            tags=["test"],
+            use_when="Use when the task needs guidance.",
+            limitations="Only works on mainnet.",
+            alternatives=["other_tool"],
+            input_schema=_In,
+            output_schema=_Out,
+            implementation=_noop,
+        )
+    )
+
+    first = reg.to_mcp_tool_defs()[0]["description"]
+    # Re-deriving after a reputation-style refresh must not stack guidance sections.
+    second = reg.to_mcp_tool_defs()[0]["description"]
+    assert second == first
+    assert second.count("Use when:") == 1
+
+
 def test_public_exports_ignore_unknown_reputation():
     reg = ToolRegistry()
     reg.register(_make_tool())

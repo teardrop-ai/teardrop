@@ -221,6 +221,67 @@ class TestMachineFunnel:
         assert report.repeat_payer_gate is False
 
 
+@pytest.mark.anyio
+class TestDiscoveryFunnel:
+    async def test_aggregates_stage_counts_and_conversion(self):
+        from teardrop.usage import get_discovery_funnel
+
+        pool = _pool()
+
+        def _row(day, challenges, settled):
+            return {
+                "day": datetime(2026, 9, day, tzinfo=timezone.utc),
+                "agent_card_hits": 10,
+                "x402_discovery_hits": 8,
+                "mcp_server_card_hits": 6,
+                "catalog_hits": 5,
+                "quote_hits": 4,
+                "tools_list_hits": 3,
+                "mcp_402_challenges": challenges,
+                "settled_calls": settled,
+            }
+
+        pool.fetch = AsyncMock(return_value=[_row(16, 1, 0), _row(17, 1, 1)])
+        with patch.object(usage_module, "_pool", pool):
+            report = await get_discovery_funnel(14)
+
+        assert report.window_days == 14
+        assert report.agent_card_hits == 20
+        assert report.x402_discovery_hits == 16
+        assert report.mcp_server_card_hits == 12
+        assert report.catalog_hits == 10
+        assert report.quote_hits == 8
+        assert report.tools_list_hits == 6
+        assert report.mcp_402_challenges == 2
+        assert report.settled_calls == 1
+        assert report.challenge_to_settle_rate == 0.5
+        assert [day.date for day in report.series] == ["2026-09-16", "2026-09-17"]
+        assert report.series[0].settled_calls == 0
+        assert report.series[1].settled_calls == 1
+        sql = pool.fetch.await_args.args[0]
+        assert "discovery_stage_counts" in sql
+        assert "mcp_call_events" in sql
+        assert "GROUP BY" in sql
+
+    async def test_empty_window_has_empty_series_and_undefined_conversion(self):
+        from teardrop.usage import get_discovery_funnel
+
+        pool = _pool()
+        pool.fetch = AsyncMock(return_value=[])
+        with patch.object(usage_module, "_pool", pool):
+            report = await get_discovery_funnel(7)
+
+        assert report.challenge_to_settle_rate is None
+        assert report.series == []
+        assert report.mcp_402_challenges == 0
+
+    async def test_rejects_unbounded_window(self):
+        from teardrop.usage import get_discovery_funnel
+
+        with pytest.raises(ValueError, match="days must be between 1 and 90"):
+            await get_discovery_funnel(0)
+
+
 # ─── record_tool_call_events ──────────────────────────────────────────────────
 
 
