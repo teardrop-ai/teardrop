@@ -5,25 +5,29 @@
 
 from __future__ import annotations
 
+import inspect
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import teardrop.retention as retention_module
+from tests.retention_settings import retention_settings as _settings
 
 
-def _settings(**overrides: object) -> SimpleNamespace:
-    values: dict[str, object] = {
-        "checkpoint_ttl_days": 45,
-        "scheduled_run_results_ttl_days": 30,
-        "org_tool_execution_events_ttl_days": 90,
-        "telemetry_run_starts_ttl_days": 120,
-        "discovery_stage_counts_ttl_days": 180,
-        "retention_sweep_batch_size": 2,
-    }
-    values.update(overrides)
-    return SimpleNamespace(**values)
+def test_retention_stub_covers_all_settings_accesses():
+    """Fail-closed guard: every settings attribute the sweep module reads must
+    exist on the shared test stub, so adding a new setting without updating the
+    stub fails here instead of crashing the integration suite with AttributeError."""
+    source = inspect.getsource(retention_module)
+    accessed = set(re.findall(r"settings\.(\w+)", source))
+    accessed |= set(re.findall(r"getattr\(settings, [\"'](\w+)[\"']", source))
+
+    assert accessed, "expected retention module to read settings attributes"
+    stub = _settings()
+    missing = {name for name in accessed if not hasattr(stub, name)}
+    assert not missing, f"shared retention stub is missing settings: {sorted(missing)}"
 
 
 def _checkpoint_pool(thread_batches: list[list[dict[str, str]]]) -> tuple[MagicMock, MagicMock]:

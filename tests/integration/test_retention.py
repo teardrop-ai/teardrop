@@ -14,6 +14,7 @@ import pytest
 from migrations.runner import apply_pending
 from shared.db_pool import create_pool
 from teardrop.retention import close_retention_db, init_retention_db, retention_sweep_once
+from tests.retention_settings import retention_settings
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ async def retention_db_pool(docker_postgres: str):
 
 
 def _retention_settings() -> SimpleNamespace:
-    return SimpleNamespace(
+    return retention_settings(
         checkpoint_ttl_days=45,
         scheduled_run_results_ttl_days=30,
         org_tool_execution_events_ttl_days=90,
