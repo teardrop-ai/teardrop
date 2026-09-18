@@ -132,7 +132,9 @@ def test_to_langchain_tools_returns_list():
 
 def test_to_a2a_skills_shape():
     reg = ToolRegistry()
-    reg.register(_make_tool())
+    tool = _make_tool()
+    tool.examples = ["Check this test input."]
+    reg.register(tool)
     skills = reg.to_a2a_skills()
     assert len(skills) == 1
     skill = skills[0]
@@ -140,7 +142,15 @@ def test_to_a2a_skills_shape():
     assert "description" in skill
     assert "tags" in skill
     assert "version" in skill
+    assert skill["examples"] == ["Check this test input."]
     assert "reputation" not in skill
+
+
+def test_to_a2a_skills_omits_empty_examples():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+
+    assert "examples" not in reg.to_a2a_skills()[0]
 
 
 def test_public_exports_include_reputation_when_supplied():

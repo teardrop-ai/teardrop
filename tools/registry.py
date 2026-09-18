@@ -42,6 +42,10 @@ class ToolDefinition(BaseModel):
     version: str = Field(..., description="Semver string, e.g. '1.0.0'")
     description: str = Field(..., description="Human/agent-readable description")
     tags: list[str] = Field(default_factory=list, description="Categorisation tags")
+    examples: list[str] = Field(
+        default_factory=list,
+        description="Example prompts for A2A skill discovery.",
+    )
     use_when: str = Field(
         default="",
         description="Agent-commerce guidance: when an agent should choose this tool.",
@@ -206,6 +210,8 @@ class ToolRegistry:
                 "tags": tool.tags,
                 "version": tool.version,
             }
+            if tool.examples:
+                skill["examples"] = list(tool.examples)
             if tool.use_when:
                 skill["use_when"] = tool.use_when
             if tool.limitations:

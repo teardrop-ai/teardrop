@@ -1426,7 +1426,8 @@
             "default": "json",
             "enum": [
               "json",
-              "text"
+              "text",
+              "x"
             ],
             "title": "Callback Format",
             "type": "string"
@@ -1611,6 +1612,132 @@
           "items"
         ],
         "title": "CreditHistoryResponse",
+        "type": "object"
+      },
+      "DiscoveryFunnelResponse": {
+        "description": "Aggregate discovery-stage hit counts plus challenge-to-settle conversion.",
+        "properties": {
+          "agent_card_hits": {
+            "default": 0,
+            "title": "Agent Card Hits",
+            "type": "integer"
+          },
+          "catalog_hits": {
+            "default": 0,
+            "title": "Catalog Hits",
+            "type": "integer"
+          },
+          "challenge_to_settle_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Challenge To Settle Rate"
+          },
+          "mcp_402_challenges": {
+            "default": 0,
+            "title": "Mcp 402 Challenges",
+            "type": "integer"
+          },
+          "mcp_server_card_hits": {
+            "default": 0,
+            "title": "Mcp Server Card Hits",
+            "type": "integer"
+          },
+          "quote_hits": {
+            "default": 0,
+            "title": "Quote Hits",
+            "type": "integer"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveryStageDay"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "settled_calls": {
+            "default": 0,
+            "title": "Settled Calls",
+            "type": "integer"
+          },
+          "tools_list_hits": {
+            "default": 0,
+            "title": "Tools List Hits",
+            "type": "integer"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          },
+          "x402_discovery_hits": {
+            "default": 0,
+            "title": "X402 Discovery Hits",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days"
+        ],
+        "title": "DiscoveryFunnelResponse",
+        "type": "object"
+      },
+      "DiscoveryStageDay": {
+        "description": "One day of per-stage discovery hit counts (UTC day bucket).",
+        "properties": {
+          "agent_card_hits": {
+            "default": 0,
+            "title": "Agent Card Hits",
+            "type": "integer"
+          },
+          "catalog_hits": {
+            "default": 0,
+            "title": "Catalog Hits",
+            "type": "integer"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "mcp_402_challenges": {
+            "default": 0,
+            "title": "Mcp 402 Challenges",
+            "type": "integer"
+          },
+          "mcp_server_card_hits": {
+            "default": 0,
+            "title": "Mcp Server Card Hits",
+            "type": "integer"
+          },
+          "quote_hits": {
+            "default": 0,
+            "title": "Quote Hits",
+            "type": "integer"
+          },
+          "settled_calls": {
+            "default": 0,
+            "title": "Settled Calls",
+            "type": "integer"
+          },
+          "tools_list_hits": {
+            "default": 0,
+            "title": "Tools List Hits",
+            "type": "integer"
+          },
+          "x402_discovery_hits": {
+            "default": 0,
+            "title": "X402 Discovery Hits",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "title": "DiscoveryStageDay",
         "type": "object"
       },
       "EventDispatchResponse": {
@@ -2683,6 +2810,117 @@
         "title": "LogoutRequest",
         "type": "object"
       },
+      "MachineFunnelResponse": {
+        "properties": {
+          "anonymous_settled_calls": {
+            "default": 0,
+            "title": "Anonymous Settled Calls",
+            "type": "integer"
+          },
+          "converted_payers": {
+            "default": 0,
+            "title": "Converted Payers",
+            "type": "integer"
+          },
+          "failed_calls": {
+            "default": 0,
+            "title": "Failed Calls",
+            "type": "integer"
+          },
+          "machine_orgs_provisioned": {
+            "default": 0,
+            "title": "Machine Orgs Provisioned",
+            "type": "integer"
+          },
+          "org_bound_settled_calls": {
+            "default": 0,
+            "title": "Org Bound Settled Calls",
+            "type": "integer"
+          },
+          "repeat_payer_gate": {
+            "default": false,
+            "title": "Repeat Payer Gate",
+            "type": "boolean"
+          },
+          "repeat_payer_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repeat Payer Rate"
+          },
+          "repeat_payers": {
+            "default": 0,
+            "title": "Repeat Payers",
+            "type": "integer"
+          },
+          "settled_calls": {
+            "default": 0,
+            "title": "Settled Calls",
+            "type": "integer"
+          },
+          "settled_revenue_usdc": {
+            "default": 0,
+            "title": "Settled Revenue Usdc",
+            "type": "integer"
+          },
+          "settlement_attempts": {
+            "default": 0,
+            "title": "Settlement Attempts",
+            "type": "integer"
+          },
+          "settlement_failure_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Failure Rate"
+          },
+          "siwe_orgs_provisioned": {
+            "default": 0,
+            "title": "Siwe Orgs Provisioned",
+            "type": "integer"
+          },
+          "unique_anonymous_payers": {
+            "default": 0,
+            "title": "Unique Anonymous Payers",
+            "type": "integer"
+          },
+          "wallet_conversion_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallet Conversion Rate"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          },
+          "x402_orgs_provisioned": {
+            "default": 0,
+            "title": "X402 Orgs Provisioned",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_days"
+        ],
+        "title": "MachineFunnelResponse",
+        "type": "object"
+      },
       "MarketplaceAgentDirectoryResponse": {
         "properties": {
           "agents": {
@@ -2811,6 +3049,18 @@
           "org_slug": {
             "title": "Org Slug",
             "type": "string"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC timestamp when the organization first registered its A2A endpoint",
+            "title": "Registered At"
           },
           "reputation_score": {
             "anyOf": [
@@ -3080,6 +3330,49 @@
         "title": "MarketplaceCatalogResponse",
         "type": "object"
       },
+      "MarketplaceDelegationQuoteResponse": {
+        "properties": {
+          "currency": {
+            "const": "USDC",
+            "default": "USDC",
+            "title": "Currency",
+            "type": "string"
+          },
+          "effective_max_charge_usdc": {
+            "description": "Cap plus platform fee, in atomic USDC.",
+            "maximum": 100000000.0,
+            "minimum": 0.0,
+            "title": "Effective Max Charge Usdc",
+            "type": "integer"
+          },
+          "expires_at": {
+            "description": "ISO 8601 advisory expiry matching the active pricing-cache TTL.",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "max_cost_usdc": {
+            "description": "Global per-delegation cost cap in atomic USDC.",
+            "maximum": 100000000.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usdc",
+            "type": "integer"
+          },
+          "platform_fee_bps": {
+            "description": "Platform fee on delegations in basis points.",
+            "minimum": 0.0,
+            "title": "Platform Fee Bps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_cost_usdc",
+          "platform_fee_bps",
+          "effective_max_charge_usdc",
+          "expires_at"
+        ],
+        "title": "MarketplaceDelegationQuoteResponse",
+        "type": "object"
+      },
       "MarketplaceEarningEntry": {
         "properties": {
           "author_share_usdc": {
@@ -3270,7 +3563,7 @@
       "MarketplaceImportPreviewResponse": {
         "properties": {
           "blockers": {
-            "description": "Reasons publishing is blocked, e.g. 'requires_org_admin'.",
+            "description": "Reasons publishing is blocked, e.g. 'requires_org_machine'.",
             "items": {
               "type": "string"
             },
@@ -5470,7 +5763,8 @@
             "default": "json",
             "enum": [
               "json",
-              "text"
+              "text",
+              "x"
             ],
             "title": "Callback Format",
             "type": "string"
@@ -6950,7 +7244,8 @@
               {
                 "enum": [
                   "json",
-                  "text"
+                  "text",
+                  "x"
                 ],
                 "type": "string"
               },
@@ -7518,6 +7813,26 @@
         "summary": "Oauth Protected Resource Path",
         "tags": [
           "MCP"
+        ]
+      }
+    },
+    "/.well-known/registry-benefits": {
+      "get": {
+        "description": "Publish machine-readable benefits and requirements for A2A registration.",
+        "operationId": "registry_benefits__well_known_registry_benefits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Registry Benefits",
+        "tags": [
+          "System"
         ]
       }
     },
@@ -9096,6 +9411,109 @@
           }
         ],
         "summary": "Admin Telemetry Completeness",
+        "tags": [
+          "Admin",
+          "Admin / Usage"
+        ]
+      }
+    },
+    "/admin/telemetry/discovery-funnel": {
+      "get": {
+        "description": "Return aggregate discovery-stage hit counts and challenge-to-settle rate (admin only).",
+        "operationId": "admin_discovery_funnel_admin_telemetry_discovery_funnel_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Discovery Funnel",
+        "tags": [
+          "Admin",
+          "Admin / Usage"
+        ]
+      }
+    },
+    "/admin/telemetry/machine-funnel": {
+      "get": {
+        "operationId": "admin_machine_funnel_admin_telemetry_machine_funnel_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Machine Funnel",
         "tags": [
           "Admin",
           "Admin / Usage"
@@ -12179,6 +12597,28 @@
         ]
       }
     },
+    "/marketplace/delegation/quote": {
+      "get": {
+        "description": "Public: quote the deterministic default per-delegation charge (global cap plus platform fee).",
+        "operationId": "get_marketplace_delegation_quote_marketplace_delegation_quote_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceDelegationQuoteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Marketplace Delegation Quote",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
     "/marketplace/earnings": {
       "get": {
         "description": "Get paginated earnings history for the authenticated org.\n\nOptionally filter by ``tool_name`` to see earnings for a specific tool.",
@@ -12618,7 +13058,7 @@
     },
     "/marketplace/withdraw": {
       "post": {
-        "description": "Request a withdrawal of earnings to the settlement wallet.\n\nAdmin-only: moving funds out of the org balance is a financial control and\nmust not be available to ordinary members.",
+        "description": "Admins or machine-org SIWE owners withdraw to the configured settlement wallet.",
         "operationId": "request_marketplace_withdrawal_marketplace_withdraw_post",
         "requestBody": {
           "content": {

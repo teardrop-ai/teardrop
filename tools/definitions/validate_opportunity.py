@@ -476,6 +476,11 @@ TOOL = ToolDefinition(
     ),
     alternatives=["get_yield_rates", "get_protocol_tvl", "get_lending_rates", "assess_counterparty_risk"],
     tags=["defi", "yield", "risk", "validation", "opportunity", "liquidity"],
+    examples=[
+        "Validate whether this yield opportunity is sustainable before I deposit.",
+        "Compare this pool's advertised APY with its liquidity and economic risk.",
+        "Give me a proceed, caution, or reject verdict for this DeFi opportunity.",
+    ],
     input_schema=ValidateOpportunityInput,
     output_schema=ValidateOpportunityOutput,
     implementation=validate_opportunity,

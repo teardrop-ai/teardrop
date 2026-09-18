@@ -548,6 +548,11 @@ TOOL = ToolDefinition(
         "capability claims are read from its card and are not independently verified. Involves real payment."
     ),
     alternatives=["discover_agents", "web_search"],
+    examples=[
+        "Delegate this specialist research task to the agent at the supplied URL.",
+        "Ask this remote agent to analyze the opportunity within a 50000 micro-USDC budget.",
+        "Send this task to the selected A2A agent and return its final result.",
+    ],
     input_schema=DelegateToAgentInput,
     output_schema=DelegateToAgentOutput,
     annotations={

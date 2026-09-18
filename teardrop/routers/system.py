@@ -242,12 +242,22 @@ def _build_agent_card_content(
             "id": "task_planning",
             "name": "task_planning",
             "description": "Break complex tasks into actionable steps.",
+            "tags": ["planning", "orchestration", "workflow"],
+            "examples": [
+                "Plan a staged review of this DeFi opportunity before capital is deployed.",
+                "Break this counterparty investigation into evidence-gathering and decision steps.",
+            ],
         },
         *registry.to_a2a_skills(reputation),
         {
             "id": "a2ui_rendering",
             "name": "a2ui_rendering",
             "description": "Declarative UI component generation (table, form, text, button, etc.).",
+            "tags": ["a2ui", "ui", "structured-output"],
+            "examples": [
+                "Render these risk findings as a table with a clear verdict.",
+                "Create a review form for this proposed DeFi allocation.",
+            ],
         },
     ]
     if card_settings.event_triggers_enabled:

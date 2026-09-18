@@ -540,6 +540,11 @@ TOOL = ToolDefinition(
     ),
     alternatives=["get_wallet_approvals", "get_liquidation_risk", "get_wallet_positions"],
     tags=["risk", "counterparty", "security", "approvals", "liquidation", "web3"],
+    examples=[
+        "Assess the risk of sending funds to this EVM address.",
+        "Check whether this counterparty is safe before I grant a token approval.",
+        "Give me a decision-ready risk verdict for this wallet.",
+    ],
     input_schema=AssessCounterpartyRiskInput,
     output_schema=AssessCounterpartyRiskOutput,
     implementation=assess_counterparty_risk,

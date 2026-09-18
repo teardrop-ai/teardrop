@@ -204,6 +204,11 @@ TOOL = ToolDefinition(
     use_when="Use before delegate_to_agent when a specialist agent is needed but its URL is unknown.",
     limitations="Discovery is read-only and does not add an agent to the org allowlist; delegate_to_agent remains authoritative.",
     alternatives=["delegate_to_agent"],
+    examples=[
+        "Find an agent that can assess a DeFi counterparty.",
+        "Discover available specialist agents for yield analysis.",
+        "List remote agents I could delegate this task to.",
+    ],
     input_schema=DiscoverAgentsInput,
     output_schema=DiscoverAgentsOutput,
     annotations={"readOnlyHint": True},

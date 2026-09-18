@@ -133,7 +133,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
 | `FUNNEL_TELEMETRY_ENABLED` | Count hits on public discovery surfaces as bounded hourly aggregates (default: `false`) |
-| `FUNNEL_COUNTER_FLUSH_INTERVAL_SECONDS` | Interval between discovery-counter flushes to Postgres (default: `300`) |
+| `FUNNEL_COUNTER_FLUSH_INTERVAL_SECONDS` | Interval between discovery-counter flushes to Postgres (default: `3600`) |
 | `DISCOVERY_STAGE_COUNTS_TTL_DAYS` | Retain discovery-stage aggregate counts for this many days (default: `180`; `0` keeps them indefinitely) |
 | `LABELING_ENABLED` | Enable asynchronous prediction labeling for registered definitions (default: `false`) |
 | `LABELING_TICK_INTERVAL_SECONDS` | Labeling worker poll interval (default: `300`) |

@@ -104,6 +104,16 @@ async def test_agent_card_shape(api_client):
     assert body["supportedInterfaces"][1]["url"] == "http://test/message:send"
     assert body["defaultInputModes"] == ["text/plain", "application/json"]
     assert all("id" in skill for skill in body["skills"])
+    assert all(skill["tags"] for skill in body["skills"])
+    assert all(skill["examples"] for skill in body["skills"])
+    assert {skill["id"] for skill in body["skills"]} == {
+        "task_planning",
+        "assess_counterparty_risk",
+        "validate_opportunity",
+        "delegate_to_agent",
+        "discover_agents",
+        "a2ui_rendering",
+    }
     assert body["endpoints"]["a2a_message"] == "/message:send"
     assert body["endpoints"]["a2a_message_status"] == "/message:status/{task_id}"
     assert body["capabilities"]["asyncTasks"]["request_header"] == "Prefer: respond-async"
