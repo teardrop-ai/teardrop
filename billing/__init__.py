@@ -65,6 +65,7 @@ _REBUILD_REQUIREMENTS_IF_STALE_ORIG = _x402._rebuild_requirements_if_stale
 _VERIFY_PAYMENT_ORIG = _x402.verify_payment
 _SETTLE_PAYMENT_ORIG = _x402.settle_payment
 _CLEANUP_EXPIRED_PAYMENT_NONCES_ORIG = _x402.cleanup_expired_payment_nonces
+_RESERVE_PAYER_SPEND_ORIG = _x402.reserve_payer_spend
 _BUILD_USDC_TOPUP_REQUIREMENTS_ORIG = _x402.build_usdc_topup_requirements
 _BUILD_EXACT_PAYMENT_REQUIREMENTS_ORIG = _x402.build_exact_payment_requirements
 _VERIFY_AND_SETTLE_USDC_TOPUP_ORIG = _x402.verify_and_settle_usdc_topup
@@ -642,6 +643,11 @@ async def release_payment_nonce(payment_header: str) -> None:
     return await _call_async(_x402.release_payment_nonce, payment_header)
 
 
+async def reserve_payer_spend(payment_header: str, payer_address: str, amount_usdc: int, limit_usdc: int) -> bool:
+    """Reserve anonymous x402 spend against the payer's rolling limit."""
+    return await _call_async(_RESERVE_PAYER_SPEND_ORIG, payment_header, payer_address, amount_usdc, limit_usdc)
+
+
 def build_usdc_topup_requirements(amount_usdc: int) -> list:
     """Build x402 ``PaymentRequirements`` for an on-chain USDC credit topup of ``amount_usdc``."""
     return _call_sync(_BUILD_USDC_TOPUP_REQUIREMENTS_ORIG, amount_usdc)
@@ -799,6 +805,7 @@ __all__ = [
     "settle_payment",
     "cleanup_expired_payment_nonces",
     "release_payment_nonce",
+    "reserve_payer_spend",
     "build_402_headers",
     "build_402_response_body",
     "build_usdc_topup_requirements",

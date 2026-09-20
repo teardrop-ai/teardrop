@@ -25,6 +25,9 @@ async def test_agent_run_requires_auth(anon_client):
     """Requests without a Bearer token should receive 401."""
     resp = await anon_client.post("/agent/run", json={"message": "hi"})
     assert resp.status_code == 401
+    assert 'bootstrap_uri="/token"' in resp.headers["WWW-Authenticate"]
+    assert 'bootstrap_grant="x402"' in resp.headers["WWW-Authenticate"]
+    assert "grant_type=x402" in resp.json()["detail"]
 
 
 # ─── Billing gate — SIWE (x402) ──────────────────────────────────────────────

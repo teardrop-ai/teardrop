@@ -98,3 +98,33 @@ async def test_released_unsettled_header_can_be_verified_again(x402_pool, monkey
     assert retry.verified is True
     assert server.verify_payment.await_count == 3
     assert await x402_pool.fetchval("SELECT COUNT(*) FROM x402_payment_nonces") == 1
+
+
+@pytest.mark.asyncio
+async def test_payer_spend_reservation_is_atomic_idempotent_and_releasable(x402_pool, monkeypatch):
+    monkeypatch.setattr(x402, "_has_pool", lambda: True)
+    monkeypatch.setattr(x402, "_get_pool", lambda: x402_pool)
+    first_header = "payer-cap-payment-a"
+    second_header = "payer-cap-payment-b"
+    assert await x402._claim_payment_nonce(first_header) is True
+    assert await x402._claim_payment_nonce(second_header) is True
+
+    results = await asyncio.gather(
+        x402.reserve_payer_spend(first_header, "0xAbC", 60, 100),
+        x402.reserve_payer_spend(second_header, "0xabc", 60, 100),
+    )
+
+    assert sorted(results) == [False, True]
+    winning_header = first_header if results[0] else second_header
+    losing_header = second_header if results[0] else first_header
+    assert await x402.reserve_payer_spend(winning_header, "0xABC", 60, 100) is True
+    assert (
+        await x402_pool.fetchval(
+            "SELECT SUM(reserved_cost_usdc) FROM x402_payment_nonces WHERE LOWER(payer_address) = $1",
+            "0xabc",
+        )
+        == 60
+    )
+
+    await x402.release_payment_nonce(winning_header)
+    assert await x402.reserve_payer_spend(losing_header, "0xabc", 60, 100) is True

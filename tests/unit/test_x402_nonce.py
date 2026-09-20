@@ -118,3 +118,17 @@ async def test_cleanup_unparsable_result_returns_zero():
         patch.object(x402, "_get_pool", return_value=pool),
     ):
         assert await x402.cleanup_expired_payment_nonces() == 0
+
+
+async def test_payer_spend_reservation_fails_closed_without_pool():
+    with patch.object(x402, "_has_pool", return_value=False):
+        assert await x402.reserve_payer_spend("header", "0xabc", 10_000, 5_000_000) is False
+
+
+@pytest.mark.parametrize(
+    ("payer", "amount", "limit"),
+    [("", 1, 5_000_000), ("0xabc", -1, 5_000_000), ("0xabc", 1, 0)],
+)
+async def test_payer_spend_reservation_rejects_invalid_boundaries(payer, amount, limit):
+    with patch.object(x402, "_has_pool", return_value=True):
+        assert await x402.reserve_payer_spend("header", payer, amount, limit) is False

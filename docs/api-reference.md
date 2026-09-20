@@ -61,6 +61,8 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/org/credentials` | Bearer | List org M2M client credentials |
 | `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin or owning SIWE wallet for machine orgs) |
 
+Protected endpoints return a `401` challenge with `bootstrap_uri="/token"` and `bootstrap_grant="x402"` when bearer authentication is missing or invalid. Agents can follow that hint through payment-first bootstrap, then retry with the issued bearer token.
+
 ### Billing
 
 | Method | Path | Auth | Description |
@@ -86,6 +88,8 @@ Principal limits are optional and additive to org controls. The authenticated JW
 ### Payment-first bootstrap
 
 Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it returns `402` with the x402 `PaymentRequired` body and headers. Retry with a signed `Payment-Signature` or `X-Payment` header. The first successful response contains `access_token`, `org_id`, `client_id`, and a one-time `client_secret`; repeated payments for the same machine org reuse `client_id` and omit `client_secret`. No refresh token is issued. Use `GET /billing/topup/usdc/requirements?amount_usdc=...` followed by `POST /billing/topup/usdc` for larger balance-first top-ups. Human-owned wallets receive `409` and must use SIWE. The bootstrap payment is sized to the larger of the live run price and `CREDIT_MIN_RUN_RESERVE_USDC`, and becomes prepaid org credit after settlement. Lost credentials can be replaced through SIWE plus `POST /org/credentials/regenerate`.
+
+Anonymous MCP x402 calls are admitted against a per-payer rolling 24-hour reservation cap. Reservations begin before tool execution, remain replay-protected after settlement, and are released when execution does not reach settlement.
 
 ### Marketplace
 

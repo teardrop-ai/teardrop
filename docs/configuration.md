@@ -44,6 +44,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `MACHINE_PROVISIONING_ENABLED` | `true` to allow first-time SIWE wallet provisioning (default: `true`) |
 | `X402_ONBOARDING_ENABLED` | `true` to allow `POST /token` with `grant_type=x402` (default: `true`; requires `BILLING_ENABLED=true`) |
 | `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC` | Default 24-hour rolling prepaid-credit limit for machine-provisioned orgs (default: `5000000` = $5.00; must be positive; explicit org limits may be raised by an operator) |
+| `X402_PAYER_DAILY_SPEND_LIMIT_USDC` | 24-hour rolling reservation cap for anonymous x402 MCP calls per verified payer (default: `5000000` = $5.00; must be positive) |
 | `RATE_LIMIT_ORG_PROVISION_RPM` | Per-wallet rate limit for machine-org provisioning via SIWE and x402; new SIWE wallets also receive the same per-client-IP limit (default: `3`). |
 | `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |

@@ -503,6 +503,11 @@ class Settings(BaseSettings):
             "Applied when the org's org_credits row is first created."
         ),
     )
+    x402_payer_daily_spend_limit_usdc: int = Field(
+        default=5_000_000,
+        gt=0,
+        description="24h rolling spend cap for anonymous x402 payers, in atomic USDC.",
+    )
     rate_limit_org_provision_rpm: int = Field(
         default=3,
         ge=1,

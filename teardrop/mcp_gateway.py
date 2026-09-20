@@ -212,12 +212,18 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             return pending_debit
 
         # ── Forward to MCPServer ──────────────────────────────────────────
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            await self._release_x402_reservation(request)
+            raise
 
         # ── Post-response: settle billing ─────────────────────────────────
         if response.status_code == 200 and pending_debit is not None:
             execution_failed = await self._response_indicates_failure(response)
             response = await self._settle_billing(request, pending_debit, response, execution_failed=execution_failed)
+        elif pending_debit is not None:
+            await self._release_x402_reservation(request)
 
         return response
 
@@ -351,6 +357,20 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             return auth[7:].strip()
         return None
 
+    @staticmethod
+    async def _release_x402_reservation(request: Request) -> None:
+        if getattr(request.state, "mcp_x402_reserved", False) is not True:
+            return
+        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        if payment_header:
+            from billing import release_payment_nonce
+
+            try:
+                await release_payment_nonce(payment_header)
+            except Exception:
+                logger.warning("x402 MCP reservation release failed", exc_info=True)
+        request.state.mcp_x402_reserved = False
+
     async def _handle_x402_auth(self, request: Request) -> Response | None:
         """Handle x402 auth for unauthenticated callers.
 
@@ -460,6 +480,32 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # subscription gate and credit verification are credit-rail concepts and
         # do not apply to anonymous per-call x402 payments.
         if is_x402:
+            from billing import release_payment_nonce, reserve_payer_spend
+
+            x402_billing = request.state.x402_billing
+            payer = getattr(x402_billing, "payer", "")
+            payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+            if not isinstance(payer, str) or not payer.strip() or not payment_header:
+                if payment_header:
+                    await release_payment_nonce(payment_header)
+                return JSONResponse(
+                    status_code=402,
+                    content=_jsonrpc_error(req_id, -32000, "Verified payer identity is required."),
+                )
+            reserved = await reserve_payer_spend(
+                payment_header,
+                payer,
+                tool_cost,
+                settings.x402_payer_daily_spend_limit_usdc,
+            )
+            if not reserved:
+                await release_payment_nonce(payment_header)
+                return JSONResponse(
+                    status_code=429,
+                    content=_jsonrpc_error(req_id, -32029, "Anonymous x402 payer daily spend limit reached."),
+                    headers={"X-RateLimit-Scope": "x402-payer"},
+                )
+            request.state.mcp_x402_reserved = True
             request.state.mcp_call_event_id = str(uuid.uuid4())
             return (org_id, tool_cost, tool_name, req_id)
 
@@ -601,6 +647,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         if execution_failed:
             logger.info("mcp settle skipped (execution failed) org=%s tool=%s", org_id, tool_name)
+            await self._release_x402_reservation(request)
             return response
 
         if is_x402:

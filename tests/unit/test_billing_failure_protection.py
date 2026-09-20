@@ -11,6 +11,8 @@ Covers the two settle paths:
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -61,6 +63,30 @@ async def test_settle_billing_skips_debit_on_failed_execution():
     debit_mock.assert_not_called()
     settle_mock.assert_not_called()
     record_mock.assert_not_called()
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_releases_x402_reservation_on_failed_execution():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.headers = {"x-payment": "signed-payment"}
+    request.state = SimpleNamespace(
+        x402_billing=BillingResult(payer="0xabc"),
+        mcp_x402_reserved=True,
+    )
+    response = MagicMock()
+
+    with patch("billing.release_payment_nonce", new=AsyncMock()) as release_mock:
+        result = await gateway._settle_billing(
+            request,
+            (None, 100, "test_tool", "req-1"),
+            response,
+            execution_failed=True,
+        )
+
+    release_mock.assert_awaited_once_with("signed-payment")
+    assert request.state.mcp_x402_reserved is False
     assert result is response
 
 
@@ -182,10 +208,12 @@ async def test_response_indicates_failure_handles_unparseable_body():
 def _gate_request(body: bytes, *, is_x402: bool, org_id):
     request = MagicMock()
     request.method = "POST"
+    request.headers = {"x-payment": "signed-payment"}
     request.body = AsyncMock(return_value=body)
-    request.state = MagicMock()
-    request.state.mcp_org_id = org_id
-    request.state.x402_billing = MagicMock() if is_x402 else None
+    request.state = SimpleNamespace(
+        mcp_org_id=org_id,
+        x402_billing=BillingResult(payer="0xabc") if is_x402 else None,
+    )
     return request
 
 
@@ -203,18 +231,21 @@ async def test_billing_gate_x402_returns_pending_tuple():
     settings = MagicMock()
     settings.mcp_billing_enabled = True
     settings.marketplace_enabled = False
+    settings.x402_payer_daily_spend_limit_usdc = 5_000_000
 
     with (
         patch("teardrop.mcp_gateway.get_settings", return_value=settings),
         patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
         patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
         patch("billing.resolve_tool_cost", new=AsyncMock(return_value=250)),
+        patch("billing.reserve_payer_spend", new=AsyncMock(return_value=True)) as reserve_mock,
         patch("billing.verify_credit", new=AsyncMock()) as verify_mock,
     ):
         result = await gateway._billing_gate(request)
 
     assert result == (None, 250, "get_price", "req-1")
     assert isinstance(request.state.mcp_call_event_id, str)
+    reserve_mock.assert_awaited_once_with("signed-payment", "0xabc", 250, 5_000_000)
     # x402 callers are not credit-verified.
     verify_mock.assert_not_called()
 
@@ -229,18 +260,68 @@ async def test_billing_gate_x402_skips_subscription_gate():
     settings = MagicMock()
     settings.mcp_billing_enabled = True
     settings.marketplace_enabled = True
+    settings.x402_payer_daily_spend_limit_usdc = 5_000_000
 
     with (
         patch("teardrop.mcp_gateway.get_settings", return_value=settings),
         patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
         patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
         patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("billing.reserve_payer_spend", new=AsyncMock(return_value=True)),
         patch("marketplace.check_org_subscription", new=AsyncMock()) as sub_mock,
     ):
         result = await gateway._billing_gate(request)
 
     assert result == (None, 500, "acme/tool", "req-2")
     sub_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_x402_rejects_payer_over_daily_cap():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-cap","method":"tools/call","params":{"name":"get_price"}}'
+    request = _gate_request(body, is_x402=True, org_id=None)
+    settings = MagicMock(mcp_billing_enabled=True, marketplace_enabled=False)
+    settings.x402_payer_daily_spend_limit_usdc = 5_000_000
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("billing.reserve_payer_spend", new=AsyncMock(return_value=False)),
+        patch("billing.release_payment_nonce", new=AsyncMock()) as release_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result.status_code == 429
+    assert json.loads(result.body)["error"]["code"] == -32029
+    assert getattr(request.state, "mcp_call_event_id", None) is None
+    release_mock.assert_awaited_once_with("signed-payment")
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_x402_rejects_missing_verified_payer():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-payer","method":"tools/call","params":{"name":"get_price"}}'
+    request = _gate_request(body, is_x402=True, org_id=None)
+    request.state.x402_billing = BillingResult(payer="")
+    settings = MagicMock(mcp_billing_enabled=True, marketplace_enabled=False)
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("billing.reserve_payer_spend", new=AsyncMock()) as reserve_mock,
+        patch("billing.release_payment_nonce", new=AsyncMock()) as release_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result.status_code == 402
+    assert "payer identity" in json.loads(result.body)["error"]["message"].lower()
+    reserve_mock.assert_not_awaited()
+    release_mock.assert_awaited_once_with("signed-payment")
 
 
 @pytest.mark.asyncio

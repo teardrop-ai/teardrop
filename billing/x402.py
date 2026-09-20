@@ -413,6 +413,74 @@ async def release_payment_nonce(payment_header: str) -> None:
     )
 
 
+async def reserve_payer_spend(
+    payment_header: str,
+    payer_address: str,
+    amount_usdc: int,
+    limit_usdc: int,
+) -> bool:
+    """Atomically reserve anonymous x402 spend against a payer's rolling cap."""
+    payer_address = payer_address.strip().lower()
+    if not payer_address or amount_usdc < 0 or limit_usdc <= 0 or not _has_pool():
+        return False
+    if amount_usdc == 0:
+        return True
+
+    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    pool = _get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    payer_address,
+                )
+                claim = await conn.fetchrow(
+                    """
+                    SELECT payer_address, reserved_cost_usdc
+                    FROM x402_payment_nonces
+                    WHERE nonce_hash = $1
+                    FOR UPDATE
+                    """,
+                    nonce_hash,
+                )
+                if claim is None:
+                    return False
+
+                reserved_cost = int(claim["reserved_cost_usdc"])
+                reserved_payer = str(claim["payer_address"]).lower()
+                if reserved_cost > 0:
+                    return reserved_payer == payer_address and reserved_cost == amount_usdc
+
+                rolling_spend = await conn.fetchval(
+                    """
+                    SELECT COALESCE(SUM(reserved_cost_usdc), 0)
+                    FROM x402_payment_nonces
+                    WHERE LOWER(payer_address) = $1
+                      AND claimed_at >= NOW() - INTERVAL '24 hours'
+                    """,
+                    payer_address,
+                )
+                if int(rolling_spend or 0) + amount_usdc > limit_usdc:
+                    return False
+
+                reserved = await conn.fetchval(
+                    """
+                    UPDATE x402_payment_nonces
+                    SET payer_address = $2, reserved_cost_usdc = $3
+                    WHERE nonce_hash = $1 AND reserved_cost_usdc = 0
+                    RETURNING nonce_hash
+                    """,
+                    nonce_hash,
+                    payer_address,
+                    amount_usdc,
+                )
+                return reserved is not None
+    except Exception:
+        logger.warning("x402 payer spend reservation unavailable", exc_info=True)
+        return False
+
+
 async def cleanup_expired_payment_nonces(retention_hours: int = 24) -> int:
     """Delete payment-nonce claims older than ``retention_hours``.
 

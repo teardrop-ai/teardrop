@@ -22,6 +22,8 @@ from teardrop.config import get_settings
 logger = logging.getLogger(__name__)
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+_AUTH_CHALLENGE = 'Bearer realm="teardrop", bootstrap_uri="/token", bootstrap_grant="x402"'
+_AUTH_REQUIRED_DETAIL = "Missing authorization header. Bootstrap with POST /token using grant_type=x402."
 
 
 def create_access_token(subject: str, extra_claims: dict | None = None) -> str:
@@ -60,8 +62,8 @@ async def require_auth(
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail=_AUTH_REQUIRED_DETAIL,
+            headers={"WWW-Authenticate": _AUTH_CHALLENGE},
         )
     try:
         payload = decode_access_token(credentials.credentials)
@@ -69,13 +71,13 @@ async def require_auth(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={"WWW-Authenticate": _AUTH_CHALLENGE},
         )
     except jwt.InvalidTokenError as exc:
         logger.warning("Invalid JWT: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail=f"Invalid token. {_AUTH_REQUIRED_DETAIL}",
+            headers={"WWW-Authenticate": _AUTH_CHALLENGE},
         )
     return payload

@@ -98,6 +98,10 @@ async def test_require_auth_missing_header(test_settings):
     with pytest.raises(HTTPException) as exc_info:
         await require_auth(credentials=None)
     assert exc_info.value.status_code == 401
+    assert "grant_type=x402" in exc_info.value.detail
+    assert exc_info.value.headers == {
+        "WWW-Authenticate": 'Bearer realm="teardrop", bootstrap_uri="/token", bootstrap_grant="x402"'
+    }
 
 
 @pytest.mark.anyio
@@ -106,3 +110,8 @@ async def test_require_auth_invalid_token(test_settings):
     with pytest.raises(HTTPException) as exc_info:
         await require_auth(credentials=creds)
     assert exc_info.value.status_code == 401
+    assert "grant_type=x402" in exc_info.value.detail
+    assert "not.a.token" not in exc_info.value.detail
+    assert exc_info.value.headers == {
+        "WWW-Authenticate": 'Bearer realm="teardrop", bootstrap_uri="/token", bootstrap_grant="x402"'
+    }
