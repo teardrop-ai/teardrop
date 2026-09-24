@@ -50,6 +50,11 @@ if not _can_run or os.getenv("SKIP_INTEGRATION_TESTS"):
     )
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 @pytest.fixture(scope="session")
 def docker_postgres():
     """Provide a Postgres DSN for integration tests.

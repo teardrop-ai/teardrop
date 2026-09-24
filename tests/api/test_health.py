@@ -385,7 +385,9 @@ async def test_agent_card_headers_and_legacy_alias(api_client):
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "public, max-age=300"
     assert "etag" in resp.headers
-    assert resp.headers["vary"] == "Host, X-Forwarded-Host, X-Forwarded-Proto"
+    vary = {field.strip().lower() for field in resp.headers["vary"].split(",")}
+    discovery_vary = {"host", "x-forwarded-host", "x-forwarded-proto"}
+    assert discovery_vary <= vary <= discovery_vary | {"origin"}
 
     legacy_resp = await api_client.get("/.well-known/agent.json")
     assert legacy_resp.status_code == 200

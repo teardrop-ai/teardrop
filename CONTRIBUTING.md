@@ -74,6 +74,9 @@ pytest
 # Run unit + API suites in parallel across CPU cores (fast local feedback)
 pytest tests/unit/ tests/api/ -n auto --dist load -v
 
+# Run database-backed tests serially (requires Docker or DATABASE_URL)
+pytest tests/integration/ -n 0 -q -p no:cacheprovider
+
 # Run with coverage
 pytest tests/unit/ --cov=. --cov-fail-under=0 --cov-report=
 pytest tests/api/ --cov=. --cov-append --cov-report=term-missing
@@ -89,7 +92,9 @@ appends coverage from the unit and API suites before enforcing the threshold.
 > `tests/api` suites. Do **not** run `tests/integration` with `-n auto`: its
 > session-scoped fixture starts a Postgres container on a fixed port and
 > truncates shared tables, which conflicts across workers. Run integration
-> tests serially with `pytest tests/integration -n 0`.
+> tests serially with `pytest tests/integration -n 0`. If neither Docker nor
+> `DATABASE_URL` is available, integration tests are skipped; check the test
+> summary before treating a local `pytest` run as equivalent to CI.
 
 ---
 
