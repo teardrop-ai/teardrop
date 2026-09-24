@@ -526,6 +526,30 @@ async def test_mcp_app_real_handshake():
 
 
 @pytest.mark.asyncio
+async def test_mcp_tool_reputation_reaches_http_clients(monkeypatch):
+    from tools.mcp_server import build_mcp_app, create_mcp_server, refresh_mcp_tool_reputations
+
+    server = create_mcp_server()
+    monkeypatch.setattr(
+        "marketplace.reputation.get_public_reputation",
+        AsyncMock(return_value={"platform/calculate": {"reputation_score": 0.9, "sample_size": 0.5}}),
+    )
+    await refresh_mcp_tool_reputations(server)
+    mcp_app = build_mcp_app(server)
+
+    async with mcp_app.router.lifespan_context(mcp_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=mcp_app), base_url="http://test", headers={"Accept": "application/json"}
+        ) as client:
+            response = await client.post("/", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+
+    assert response.status_code == 200
+    tool = next(tool for tool in response.json()["result"]["tools"] if tool["name"] == "calculate")
+    assert "Observed quality: score=0.90, sample_size=0.5." in tool["description"]
+    assert tool["_meta"] == {"teardrop/reputation": {"reputation_score": 0.9, "sample_size": 0.5}}
+
+
+@pytest.mark.asyncio
 async def test_mounted_mcp_normalizes_no_slash_path():
     """POST /tools/mcp should hit the mounted MCP app, not /tools/{tool_id}."""
     from teardrop.mcp_gateway import MCPGatewayMiddleware

@@ -1023,6 +1023,8 @@ async def test_mcp_initialize(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_mcp_tools_list(api_client, monkeypatch):
+    from tools import registry
+
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
 
@@ -1036,10 +1038,23 @@ async def test_mcp_tools_list(api_client, monkeypatch):
         author_org_name="Acme",
         author_org_slug="acme",
     )
-    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_catalog", AsyncMock(return_value=[tool]))
+    unrated = tool.model_copy(update={"name": "new_tool", "qualified_name": "acme/new_tool"})
+    built_in = registry.get("calculate")
+    assert built_in is not None
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_catalog", AsyncMock(return_value=[tool, unrated]))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
-    monkeypatch.setattr("teardrop.routers.marketplace_mcp.registry.list_latest", MagicMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.registry.list_latest", MagicMock(return_value=[built_in]))
+    monkeypatch.setattr(
+        "marketplace.reputation.get_public_reputation",
+        AsyncMock(
+            return_value={
+                "acme/my_tool": {"reputation_score": 0.91, "success_rate": 0.96, "sample_size": 12},
+                "acme/new_tool": {"reputation_score": 0, "success_rate": 0, "sample_size": 0},
+                "platform/calculate": {"reputation_score": 0.85, "sample_size": 5},
+            }
+        ),
+    )
 
     import teardrop.config as config
 
@@ -1055,9 +1070,44 @@ async def test_mcp_tools_list(api_client, monkeypatch):
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["result"]["tools"]) == 1
+    assert len(data["result"]["tools"]) == 3
     assert data["result"]["tools"][0]["name"] == "acme/my_tool"
+    assert data["result"]["tools"][0]["description"] == (
+        "marketplace desc\n\nObserved quality: score=0.91, success=96.0%, sample_size=12."
+    )
+    assert data["result"]["tools"][0]["_meta"] == {
+        "teardrop/reputation": {"reputation_score": 0.91, "success_rate": 0.96, "sample_size": 12}
+    }
+    assert data["result"]["tools"][1]["description"] == "marketplace desc"
+    assert "_meta" not in data["result"]["tools"][1]
+    assert "Observed quality: score=0.85, sample_size=5." in data["result"]["tools"][2]["description"]
+    assert data["result"]["tools"][2]["_meta"] == {"teardrop/reputation": {"reputation_score": 0.85, "sample_size": 5}}
 
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_list_reputation_failure_does_not_log_secrets(api_client, monkeypatch, caplog):
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_catalog", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.registry.list_latest", MagicMock(return_value=[]))
+    monkeypatch.setattr(
+        "marketplace.reputation.get_public_reputation",
+        AsyncMock(side_effect=RuntimeError("sensitive-marker")),
+    )
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+    response = await api_client.post("/mcp/v1", json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["tools"] == []
+    assert "sensitive-marker" not in caplog.text
+    assert "sensitive-marker" not in response.text
     config.get_settings.cache_clear()
 
 

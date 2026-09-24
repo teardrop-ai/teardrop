@@ -260,6 +260,7 @@ from tools.mcp_server import build_mcp_app, refresh_mcp_tool_reputations  # noqa
 from tools.mcp_server import mcp as _mcp_server  # noqa: E402
 
 mcp_app = build_mcp_app(_mcp_server)
+_MCP_REPUTATION_REFRESH_SECONDS = 300
 
 
 @asynccontextmanager
@@ -267,7 +268,21 @@ async def _app_lifespan(app: FastAPI):
     async with lifespan(app):
         await refresh_mcp_tool_reputations(_mcp_server)
         async with _mcp_server.session_manager.run():
-            yield
+            refresh_task = asyncio.create_task(
+                _run_periodic(
+                    "MCP reputation refresh",
+                    lambda: refresh_mcp_tool_reputations(_mcp_server),
+                    _MCP_REPUTATION_REFRESH_SECONDS,
+                )
+            )
+            try:
+                yield
+            finally:
+                refresh_task.cancel()
+                try:
+                    await refresh_task
+                except asyncio.CancelledError:
+                    pass
 
 
 app = FastAPI(

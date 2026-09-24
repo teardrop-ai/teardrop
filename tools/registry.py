@@ -10,6 +10,7 @@ exports them as LangChain tools, A2A skills, and MCP definitions).
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -33,6 +34,93 @@ def _mcp_safe_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | N
     if schema.get("type") == "object":
         return schema
     return None
+
+
+# Namespaced `_meta` key for structured reputation. Follows the MCP `_meta`
+# key grammar (vendor-prefix/name), matching the x402 SDK's `x402/payment`.
+MCP_REPUTATION_META_KEY = "teardrop/reputation"
+
+# Numeric reputation fields surfaced to programmatic MCP clients. Kept in sync
+# with `marketplace.reputation._load_public_reputation` output keys.
+_REPUTATION_META_FIELDS = (
+    "reputation_score",
+    "success_rate",
+    "sample_size",
+    "confidence",
+    "freshness",
+    "average_latency_ms",
+    "unique_caller_count",
+)
+
+
+def _finite_reputation_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _has_reputation_signal(metrics: dict[str, Any] | None) -> bool:
+    """Whether metrics represent observed calls rather than an unrated tool.
+
+    ``marketplace.reputation`` emits all-zero rows for tools with no call
+    history (LEFT JOIN + COALESCE). Advertising ``score=0.00`` for a brand-new
+    tool would wrongly discourage selection, so both the description trailer and
+    the structured ``_meta`` block are suppressed until real signal exists.
+    """
+    if not metrics:
+        return False
+    for field in ("reputation_score", "sample_size", "reputation_sample_size"):
+        value = metrics.get(field)
+        if _finite_reputation_number(value) and value > 0:
+            return True
+    return False
+
+
+def build_reputation_meta(metrics: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Build the structured ``_meta`` block for a tool's reputation metrics.
+
+    Returns ``None`` when the tool is unrated or has no usable numeric metrics,
+    so callers omit the key entirely (MCP clients treat absent ``_meta`` as
+    "unrated" rather than zero).
+    """
+    if not _has_reputation_signal(metrics):
+        return None
+    structured: dict[str, Any] = {}
+    for field in _REPUTATION_META_FIELDS:
+        value = metrics.get(field)
+        if not _finite_reputation_number(value) or value < 0:
+            continue
+        if field == "unique_caller_count" and (not isinstance(value, int) or value < 5):
+            continue
+        structured[field] = value
+    if not structured:
+        return None
+    return {MCP_REPUTATION_META_KEY: structured}
+
+
+def format_mcp_quality_description(description: str, metrics: dict[str, Any] | None) -> str:
+    if not _has_reputation_signal(metrics):
+        return description
+    metrics = metrics or {}
+    quality_metrics: list[str] = []
+    score = metrics.get("reputation_score")
+    if _finite_reputation_number(score) and score >= 0:
+        quality_metrics.append(f"score={score:.2f}")
+    success_rate = metrics.get("success_rate")
+    if _finite_reputation_number(success_rate) and success_rate >= 0:
+        quality_metrics.append(f"success={success_rate:.1%}")
+    sample_size = metrics.get("reputation_sample_size", metrics.get("sample_size"))
+    if _finite_reputation_number(sample_size) and sample_size > 0:
+        quality_metrics.append(f"sample_size={sample_size:g}")
+    latency = metrics.get("average_latency_ms")
+    if _finite_reputation_number(latency) and latency >= 0:
+        quality_metrics.append(f"latency={latency:.0f}ms")
+    if quality_metrics:
+        return f"{description}\n\nObserved quality: {', '.join(quality_metrics)}."
+    return description
 
 
 class ToolDefinition(BaseModel):
@@ -223,7 +311,7 @@ class ToolRegistry:
                 if tool.superseded_by:
                     skill["superseded_by"] = tool.superseded_by
             metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if metrics:
+            if _has_reputation_signal(metrics):
                 skill["reputation"] = dict(metrics)
             skills.append(skill)
         return skills
@@ -262,7 +350,7 @@ class ToolRegistry:
             if tool.deprecated:
                 entry["deprecated"] = True
             metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if metrics:
+            if _has_reputation_signal(metrics):
                 entry["reputation"] = dict(metrics)
             tools.append(entry)
         return tools
@@ -296,7 +384,7 @@ class ToolRegistry:
                 else:
                     entry["outputSchema"] = tool.output_schema.model_json_schema()
             metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if metrics:
+            if _has_reputation_signal(metrics):
                 entry["reputation"] = dict(metrics)
             tools.append(entry)
         return tools
@@ -320,36 +408,10 @@ class ToolRegistry:
             if _mcp_safe_output_schema(raw_output_schema) is None:
                 output_model = None
 
-            description = tool.description
             metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if metrics:
-                quality_metrics: list[str] = []
-                if "reputation_score" in metrics:
-                    try:
-                        quality_metrics.append(f"score={float(metrics['reputation_score']):.2f}")
-                    except (TypeError, ValueError):
-                        pass
-                if "success_rate" in metrics:
-                    try:
-                        quality_metrics.append(f"success={float(metrics['success_rate']):.1%}")
-                    except (TypeError, ValueError):
-                        pass
-                if "reputation_sample_size" in metrics or "sample_size" in metrics:
-                    sample_size = metrics.get("reputation_sample_size", metrics.get("sample_size"))
-                    try:
-                        quality_metrics.append(f"sample_size={int(sample_size)}")
-                    except (TypeError, ValueError):
-                        pass
-                if "average_latency_ms" in metrics:
-                    try:
-                        quality_metrics.append(f"latency={float(metrics['average_latency_ms']):.0f}ms")
-                    except (TypeError, ValueError):
-                        pass
-                if quality_metrics:
-                    description = f"{description}\n\nObserved quality: {', '.join(quality_metrics)}."
+            description = format_mcp_quality_description(tool.description, metrics)
 
-            # MCP protocol has no per-tool metadata extension, so guidance travels
-            # inside description (same pattern as the reputation suffix above).
+            # Agent guidance stays in the description for LLM-facing clients.
             if tool.use_when:
                 description = f"{description}\n\nUse when: {tool.use_when}"
             if tool.limitations:
@@ -366,6 +428,7 @@ class ToolRegistry:
                     "output_schema": _mcp_safe_output_schema(raw_output_schema),
                     "output_model": output_model,
                     "annotations": tool.annotations or {"readOnlyHint": True},
+                    "meta": build_reputation_meta(metrics),
                     "implementation": tool.implementation,
                 }
             )

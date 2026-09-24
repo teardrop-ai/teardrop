@@ -167,6 +167,16 @@ def test_public_exports_include_reputation_when_supplied():
     assert mcp_tool["reputation"] == reputation["platform/test_tool"]
 
 
+def test_public_cards_do_not_rate_tools_with_no_observations():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {"platform/test_tool": {"reputation_score": 0, "sample_size": 0, "success_rate": 0}}
+
+    assert "reputation" not in reg.to_a2a_skills(reputation)[0]
+    assert "reputation" not in reg.to_a2a_tool_list(reputation)[0]
+    assert "reputation" not in reg.to_mcp_server_card_tools(reputation)[0]
+
+
 def test_dynamic_mcp_defs_include_reputation_in_description():
     reg = ToolRegistry()
     reg.register(_make_tool())
@@ -183,6 +193,100 @@ def test_dynamic_mcp_defs_include_reputation_in_description():
 
     assert "Observed quality: score=0.90, success=98.0%, sample_size=150, latency=210ms." in definition["description"]
     assert reg.to_mcp_tool_defs()[0]["description"] == _make_tool().description
+
+
+def test_dynamic_mcp_defs_include_structured_reputation_meta():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {
+        "platform/test_tool": {
+            "reputation_score": 0.9,
+            "success_rate": 0.98,
+            "sample_size": 150,
+            "confidence": 0.71,
+            "freshness": 1.0,
+            "average_latency_ms": 210,
+            "unique_caller_count": 7,
+        }
+    }
+
+    definition = reg.to_mcp_tool_defs(reputation)[0]
+
+    assert definition["meta"] == {
+        "teardrop/reputation": {
+            "reputation_score": 0.9,
+            "success_rate": 0.98,
+            "sample_size": 150,
+            "confidence": 0.71,
+            "freshness": 1.0,
+            "average_latency_ms": 210,
+            "unique_caller_count": 7,
+        }
+    }
+
+
+def test_dynamic_mcp_defs_omit_meta_without_reputation():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+
+    assert reg.to_mcp_tool_defs()[0]["meta"] is None
+    assert reg.to_mcp_tool_defs({"platform/other": {"reputation_score": 1.0}})[0]["meta"] is None
+
+
+def test_dynamic_mcp_defs_meta_ignores_non_numeric_fields():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {
+        "platform/test_tool": {
+            "reputation_score": "not-a-number",
+            "success_rate": None,
+            "sample_size": "invalid",
+            "average_latency_ms": {},
+        }
+    }
+
+    assert reg.to_mcp_tool_defs(reputation)[0]["meta"] is None
+
+
+def test_dynamic_mcp_defs_suppress_all_zero_reputation():
+    """Unrated tools (all-zero COALESCE rows) must not advertise score=0.00."""
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    reputation = {
+        "platform/test_tool": {
+            "reputation_score": 0.0,
+            "success_rate": 0.0,
+            "sample_size": 0.0,
+            "confidence": 0.0,
+            "freshness": 0.0,
+            "average_latency_ms": 0.0,
+        }
+    }
+
+    definition = reg.to_mcp_tool_defs(reputation)[0]
+
+    assert definition["meta"] is None
+    assert "Observed quality:" not in definition["description"]
+
+
+def test_dynamic_mcp_defs_keep_fractional_samples_and_private_caller_counts():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    definition = reg.to_mcp_tool_defs(
+        {"platform/test_tool": {"reputation_score": 0.8, "sample_size": 0.5, "unique_caller_count": 1}}
+    )[0]
+
+    assert "sample_size=0.5" in definition["description"]
+    assert definition["meta"] == {"teardrop/reputation": {"reputation_score": 0.8, "sample_size": 0.5}}
+
+
+def test_dynamic_mcp_defs_reject_nonfinite_metrics():
+    reg = ToolRegistry()
+    reg.register(_make_tool())
+    definition = reg.to_mcp_tool_defs({"platform/test_tool": {"reputation_score": float("nan"), "sample_size": float("inf")}})[0]
+
+    assert definition["meta"] is None
+    assert "Observed quality:" not in definition["description"]
 
 
 def test_dynamic_mcp_defs_ignore_malformed_reputation():

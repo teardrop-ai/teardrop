@@ -43,6 +43,16 @@ description, tags, version, input schema, and output schema. Live MCP
 `tools/list` responses include the same observed quality summary after startup,
 plus `use_when`, `limitations`, and `alternatives` guidance rendered into each
 tool description.
+The live server refreshes reputation approximately every five minutes while
+running; availability of new scores depends on the configured reputation rollup.
+Programmatic MCP clients also receive structured reputation in each tool's
+`_meta` under the namespaced key `teardrop/reputation` (fields:
+`reputation_score`, `success_rate`, `sample_size`, `confidence`, `freshness`,
+`average_latency_ms`, and privacy-thresholded `unique_caller_count`). The key is
+omitted entirely for unrated tools, so clients should treat its absence as
+"unrated" rather than zero. The authenticated marketplace MCP gateway
+(`POST /mcp/v1` `tools/list`) emits the same metadata and description summary
+for both platform and published org tools; `/tools/mcp` is the x402 endpoint.
 Every registered tool defines `use_when`, `limitations`, and `alternatives`
 guidance to help agents choose the right capability and avoid redundant calls;
 this contract is enforced by `tests/unit/test_tool_definition_standard.py`.

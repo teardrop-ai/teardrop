@@ -123,6 +123,7 @@ def _register_tools_with_mcp(
             description=description,
             title=tool_def.get("title"),
             annotations=tool_def.get("annotations"),
+            meta=tool_def.get("meta"),
         )(handler)
         logger.debug("MCP: registered tool %s", name)
 
@@ -134,7 +135,7 @@ async def refresh_mcp_tool_reputations(server: MCPServer) -> None:
     try:
         reputation = await get_public_reputation()
     except Exception:
-        logger.warning("MCP: reputation refresh unavailable", exc_info=True)
+        logger.warning("MCP: reputation refresh unavailable")
         return
 
     _register_tools_with_mcp(server, reputation=reputation, replace_existing=True)

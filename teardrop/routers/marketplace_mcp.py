@@ -51,6 +51,7 @@ from teardrop.dependencies import require_auth
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.executor import execute_tool
+from tools.registry import build_reputation_meta, format_mcp_quality_description
 
 logger = logging.getLogger(__name__)
 
@@ -257,24 +258,41 @@ async def mcp_jsonrpc_handler(
 
         catalog = await get_marketplace_catalog(overrides, default_cost)
 
-        tools_list = [
-            {
+        # Structured reputation for programmatic clients. Degrades to no `_meta`
+        # when the aggregate is unavailable; never blocks tool listing.
+        try:
+            from marketplace.reputation import get_public_reputation
+
+            reputation = await get_public_reputation()
+        except Exception:
+            logger.warning("MCP: reputation unavailable for tools/list")
+            reputation = {}
+
+        tools_list = []
+        for t in catalog:
+            metrics = reputation.get(t.qualified_name)
+            entry: dict[str, Any] = {
                 "name": t.qualified_name,
-                "description": t.marketplace_description,
+                "description": format_mcp_quality_description(t.marketplace_description, metrics),
                 "inputSchema": t.input_schema,
             }
-            for t in catalog
-        ]
+            meta = build_reputation_meta(metrics)
+            if meta is not None:
+                entry["_meta"] = meta
+            tools_list.append(entry)
 
         # Include built-in tools as well
         for bt in registry.list_latest():
-            tools_list.append(
-                {
-                    "name": bt.name,
-                    "description": bt.description,
-                    "inputSchema": bt.input_schema.model_json_schema(),
-                }
-            )
+            metrics = reputation.get(f"platform/{bt.name}")
+            entry = {
+                "name": bt.name,
+                "description": format_mcp_quality_description(bt.description, metrics),
+                "inputSchema": bt.input_schema.model_json_schema(),
+            }
+            meta = build_reputation_meta(metrics)
+            if meta is not None:
+                entry["_meta"] = meta
+            tools_list.append(entry)
 
         return JSONResponse(content=_jsonrpc_result(req_id, {"tools": tools_list}))
 
@@ -390,7 +408,8 @@ async def mcp_jsonrpc_handler(
 
         # ── Execute tool ──────────────────────────────────────────────
         if is_marketplace_tool:
-            assert tool_row is not None  # resolved above for marketplace tools
+            if tool_row is None:
+                return JSONResponse(content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"))
             result = await _execute_marketplace_tool(tool_row, arguments)
         else:
             # Built-in tool execution (tool_def resolved + validated above)

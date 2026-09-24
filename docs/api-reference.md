@@ -93,6 +93,8 @@ Anonymous MCP x402 calls are admitted against a per-payer rolling 24-hour reserv
 
 `/tools/mcp` accepts x402 over both transports. HTTP clients send `Payment-Signature`/`X-Payment` and receive a bare `402` with the `PAYMENT-REQUIRED` header. MCP clients (requests with `MCP-Protocol-Version` or an `Accept` that includes `text/event-stream`) receive a `200` JSON-RPC result with `isError: true` and the `PaymentRequired` object in `structuredContent`, then pay by retrying with `params._meta["x402/payment"]`. Settled `_meta` payments return the receipt in `result._meta["x402/payment-response"]`. Callers without x402 can instead use a Bearer token from `POST /token` for prepaid credits.
 
+The public `/tools/mcp` `tools/list` exposes platform-tool reputation as an `Observed quality:` description suffix for LLM clients and a structured `_meta["teardrop/reputation"]` object for programmatic clients. The authenticated, credit-backed marketplace gateway (`POST /mcp/v1` `tools/list`) uses the same format for platform and published org tools. Metrics include `reputation_score`, `success_rate`, `sample_size`, `confidence`, `freshness`, `average_latency_ms`, and privacy-thresholded `unique_caller_count`. Unrated tools omit the quality suffix and metadata; absence means "unrated", not zero. For a bulk index, use `GET /.well-known/reputation.json`.
+
 ### Marketplace
 
 | Method | Path | Auth | Description |
