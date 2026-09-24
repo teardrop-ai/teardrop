@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -122,10 +123,206 @@ async def test_mcp_x402_challenge_records_funnel_counter(monkeypatch, payment_he
 
         assert response is not None
         assert response.status_code == 402
-        assert sum(funnel_module._counters.values()) == 1
-        assert funnel_module.SURFACE_MCP_402_CHALLENGE in {surface for surface, _ in funnel_module._counters}
+        subtype = (
+            funnel_module.SURFACE_MCP_402_NO_PAYMENT if payment_header is None else funnel_module.SURFACE_MCP_402_PAYMENT_INVALID
+        )
+        assert sum(funnel_module._counters.values()) == 2
+        assert {surface for surface, _ in funnel_module._counters} == {
+            funnel_module.SURFACE_MCP_402_CHALLENGE,
+            subtype,
+        }
     finally:
         funnel_module.close_funnel_counters()
+
+
+# ── x402 MCP transport (params._meta payments, result-level payment-required) ──
+
+_BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+
+def _mcp_request(body: dict, headers: list[tuple[bytes, bytes]] | None = None) -> Request:
+    raw = json.dumps(body).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("test", 443),
+            "path": "/tools/mcp",
+            "headers": headers or [],
+        },
+        receive,
+    )
+
+
+def _real_402_body(monkeypatch):
+    from x402.schemas import PaymentRequirements
+
+    import billing
+
+    requirement = PaymentRequirements(
+        scheme="exact",
+        network="eip155:8453",
+        asset=_BASE_USDC,
+        amount="10000",
+        pay_to="0x" + "1" * 40,
+        max_timeout_seconds=300,
+        extra={"name": "USD Coin", "version": "2"},
+    )
+    original = billing.build_402_response_body
+    monkeypatch.setattr(billing, "build_402_response_body", lambda **kw: original(requirements=[requirement], **kw))
+
+
+def _tools_call(**params) -> dict:
+    return {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "calculate", "arguments": {}, **params}}
+
+
+def test_mcp_payment_meta_keys_match_x402_sdk():
+    from x402.mcp.types import MCP_PAYMENT_META_KEY, MCP_PAYMENT_RESPONSE_META_KEY
+
+    from teardrop import mcp_gateway
+
+    assert mcp_gateway._MCP_PAYMENT_META_KEY == MCP_PAYMENT_META_KEY
+    assert mcp_gateway._MCP_PAYMENT_RESPONSE_META_KEY == MCP_PAYMENT_RESPONSE_META_KEY
+
+
+def test_meta_payment_header_is_canonical():
+    from teardrop.mcp_gateway import _meta_payment_header
+
+    as_dict = _tools_call(_meta={"x402/payment": {"b": 1, "a": {"y": 2, "x": 1}}})
+    as_json = _tools_call(_meta={"x402/payment": json.dumps({"a": {"x": 1, "y": 2}, "b": 1}, indent=2)})
+
+    assert _meta_payment_header(as_dict) == _meta_payment_header(as_json)
+    assert json.loads(base64.b64decode(_meta_payment_header(as_dict))) == {"a": {"x": 1, "y": 2}, "b": 1}
+    assert _meta_payment_header(_tools_call()) is None
+    assert _meta_payment_header({"params": "not-a-dict"}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [[(b"accept", b"application/json, text/event-stream")], [(b"mcp-protocol-version", b"2025-06-18")]],
+)
+async def test_mcp_client_gets_result_level_payment_required(monkeypatch, headers):
+    from x402.mcp.types import MCPToolResult
+    from x402.mcp.utils import extract_payment_required_from_result
+
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    _real_402_body(monkeypatch)
+    response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(_mcp_request(_tools_call(), headers))
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["id"] == 7
+    result = body["result"]
+    assert result["isError"] is True
+    assert "POST /token" in result["content"][1]["text"]
+    payment_required = extract_payment_required_from_result(
+        MCPToolResult(
+            content=result["content"],
+            is_error=result["isError"],
+            structured_content=result["structuredContent"],
+        )
+    )
+    assert payment_required is not None
+    assert payment_required.accepts[0].network == "eip155:8453"
+    assert payment_required.accepts[0].amount == "10000"
+
+
+@pytest.mark.asyncio
+async def test_plain_http_client_keeps_http_402(monkeypatch):
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    _real_402_body(monkeypatch)
+    monkeypatch.setattr(billing, "build_402_headers", lambda **kwargs: {"PAYMENT-REQUIRED": "encoded"})
+    response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(
+        _mcp_request(_tools_call(), [(b"accept", b"application/json")])
+    )
+
+    assert response.status_code == 402
+    assert response.headers["payment-required"] == "encoded"
+    assert json.loads(response.body)["accepts"][0]["amount"] == "10000"
+
+
+@pytest.mark.asyncio
+async def test_meta_payment_is_verified_and_failure_uses_mcp_signal(monkeypatch):
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    _real_402_body(monkeypatch)
+    verify_mock = AsyncMock(return_value=SimpleNamespace(verified=False, error="Payment verification failed: bad"))
+    monkeypatch.setattr(billing, "verify_payment", verify_mock)
+    payment = {"x402Version": 2, "payload": {"signature": "0xabc"}}
+
+    response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(_mcp_request(_tools_call(_meta={"x402/payment": payment})))
+
+    assert json.loads(base64.b64decode(verify_mock.await_args.args[0])) == payment
+    assert response.status_code == 200
+    result = json.loads(response.body)["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error"] == "Payment verification failed: bad"
+
+
+@pytest.mark.asyncio
+async def test_verified_meta_payment_feeds_reservation_header(monkeypatch):
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    monkeypatch.setattr(
+        billing,
+        "verify_payment",
+        AsyncMock(return_value=SimpleNamespace(verified=True, payer="0xpayer")),
+    )
+    request = _mcp_request(_tools_call(_meta={"x402/payment": {"x402Version": 2}}))
+
+    assert await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(request) is None
+    assert request.state.mcp_auth_method == "x402"
+    assert MCPGatewayMiddleware._payment_header(request) == request.state.mcp_x402_payment
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_attaches_receipt_for_meta_payment(monkeypatch):
+    from starlette.responses import StreamingResponse
+    from x402.mcp.types import MCPToolResult
+    from x402.mcp.utils import extract_payment_response_from_meta
+
+    from billing import BillingResult
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    gateway = MCPGatewayMiddleware(FastAPI())
+    tool_body = {"jsonrpc": "2.0", "id": 7, "result": {"content": [{"type": "text", "text": "2"}], "isError": False}}
+    response = StreamingResponse(iter([json.dumps(tool_body).encode()]), media_type="application/json")
+    settled = BillingResult(
+        verified=True,
+        settled=True,
+        tx_hash="0xtx",
+        payer="0xpayer",
+        amount_usdc=10000,
+        payment_requirements=SimpleNamespace(network="eip155:8453"),
+    )
+    request = _mcp_request(_tools_call())
+    request.state.x402_billing = settled
+    request.state.mcp_x402_payment = "encoded-meta-payment"
+    monkeypatch.setattr("billing.settle_payment", AsyncMock(return_value=settled))
+    monkeypatch.setattr(gateway, "_record_mcp_outcome", lambda *args, **kwargs: None)
+    monkeypatch.setattr("teardrop.mcp_gateway.asyncio.create_task", lambda coro: coro.close())
+
+    result = await gateway._settle_billing(request, (None, 10000, "calculate", 7), response)
+
+    body = json.loads(result.body)
+    assert result.headers["content-length"] == str(len(result.body))
+    receipt = extract_payment_response_from_meta(MCPToolResult(content=body["result"]["content"], meta=body["result"]["_meta"]))
+    assert receipt is not None
+    assert receipt.success is True
+    assert receipt.transaction == "0xtx"
+    assert receipt.network == "eip155:8453"
+    assert body["result"]["content"][0]["text"] == "2"
 
 
 @pytest.mark.asyncio
@@ -157,8 +354,8 @@ async def test_jwks_returns_valid_key(test_settings):
 async def mcp_client(test_settings, monkeypatch):
     """AsyncClient with mcp_auth_enabled=True and no dep overrides."""
     monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
-    # Disable audience check so test tokens (which have no 'aud' claim) pass through.
-    monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
+    # Match render.yaml so unscoped /token JWTs are exercised against the production audience.
+    monkeypatch.setenv("MCP_AUTH_AUDIENCE", "teardrop-mcp")
     config.get_settings.cache_clear()
     from teardrop.main import app
 
@@ -235,6 +432,27 @@ async def test_auth_gate_passes_valid_token(mcp_client, test_jwt_token):
     )
     # MCPServer handles the request — may be 200 or a JSON-RPC error, but NOT 401.
     assert resp.status_code != 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("aud", "expected_401"), [("teardrop-mcp", False), ("other-app", True)])
+async def test_auth_gate_enforces_audience_on_scoped_tokens(mcp_client, test_settings, aud, expected_401):
+    from teardrop.auth import create_access_token
+
+    token = create_access_token("test-user-id", extra_claims={"org_id": "test-org-id", "aud": aud})
+    resp = await mcp_client.post(
+        "/tools/mcp",
+        content=json.dumps({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "calculate"}, "id": 1}),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    if expected_401:
+        assert resp.status_code == 401
+        assert "invalid_audience" in resp.headers.get("WWW-Authenticate", "")
+    else:
+        assert resp.status_code != 401
 
 
 @pytest.mark.asyncio

@@ -238,6 +238,8 @@ class TestDiscoveryFunnel:
                 "quote_hits": 4,
                 "tools_list_hits": 3,
                 "mcp_402_challenges": challenges,
+                "mcp_402_no_payment": challenges,
+                "mcp_402_payment_invalid": 0,
                 "settled_calls": settled,
             }
 
@@ -253,6 +255,8 @@ class TestDiscoveryFunnel:
         assert report.quote_hits == 8
         assert report.tools_list_hits == 6
         assert report.mcp_402_challenges == 2
+        assert report.mcp_402_no_payment == 2
+        assert report.mcp_402_payment_invalid == 0
         assert report.settled_calls == 1
         assert report.challenge_to_settle_rate == 0.5
         assert [day.date for day in report.series] == ["2026-09-16", "2026-09-17"]

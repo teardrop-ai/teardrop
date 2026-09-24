@@ -767,6 +767,22 @@ async def mcp_server_card(request: Request) -> Response:
         "resources": [],
         "prompts": [],
     }
+    if s.mcp_x402_enabled:
+        # Additive so registry consumers that only know bearer keep parsing the card.
+        content["authentication"]["schemes"].append("x402")
+        x402_block: dict[str, Any] = {
+            "enabled": True,
+            "network": s.x402_network,
+            "scheme": s.x402_scheme,
+            "discovery_url": f"{base_url}/.well-known/x402",
+            "mcp_tools_url": f"{base_url}/tools/mcp",
+        }
+        if s.x402_onboarding_enabled and s.billing_enabled and s.machine_provisioning_enabled:
+            x402_block["bootstrap"] = {
+                "grant_type": "x402",
+                "token_endpoint": f"{base_url}/token",
+            }
+        content["x402"] = x402_block
     if s.agent_card_icon_url:
         server_info["icons"] = [{"src": s.agent_card_icon_url}]
         content["iconUrl"] = s.agent_card_icon_url

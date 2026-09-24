@@ -99,7 +99,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `APP_BASE_URL` | Public URL of this deployment (used in email links, e.g. `https://api.teardrop.dev`) |
 | `MARKETPLACE_DEFAULT_REVENUE_SHARE_BPS` | Author revenue share in basis points (default: `7000` = 70% to author, 30% to platform). Hard-coded split; per-author overrides are not supported. |
 | `MCP_AUTH_ENABLED` | `true` to require authentication on the `/tools/mcp` MCP gateway |
-| `MCP_AUTH_AUDIENCE` | JWT audience for MCP gateway tokens (default: `teardrop-mcp`) |
+| `MCP_AUTH_AUDIENCE` | Audience that `aud`-scoped JWTs must name to use the MCP gateway; standard unscoped Teardrop tokens are accepted (default: `teardrop-mcp`, empty disables the check) |
 | `MCP_BILLING_ENABLED` | `true` to enable credit billing for MCP tool calls |
 | `MCP_X402_ENABLED` | `true` to accept x402 payments on the MCP gateway |
 | `MEMORY_ENABLED` | Enable persistent agent memory (default: `true`). Auto-disabled if `OPENAI_API_KEY` is unset. |

@@ -85,6 +85,30 @@ def test_wrong_issuer_raises(test_settings):
         )
 
 
+def test_audience_accepts_unscoped_token(test_settings):
+    token = create_access_token("user-123")
+    assert decode_access_token(token, audience="teardrop-mcp")["sub"] == "user-123"
+
+
+@pytest.mark.parametrize("aud", ["teardrop-mcp", ["teardrop-api", "teardrop-mcp"]])
+def test_audience_accepts_matching_scoped_token(test_settings, aud):
+    token = create_access_token("user-123", extra_claims={"aud": aud})
+    assert decode_access_token(token, audience="teardrop-mcp")["aud"] == aud
+
+
+@pytest.mark.parametrize("aud", ["other-app", ["other-app"]])
+def test_audience_rejects_mismatched_scoped_token(test_settings, aud):
+    token = create_access_token("user-123", extra_claims={"aud": aud})
+    with pytest.raises(jwt.InvalidAudienceError):
+        decode_access_token(token, audience="teardrop-mcp")
+
+
+def test_scoped_token_rejected_without_audience(test_settings):
+    token = create_access_token("user-123", extra_claims={"aud": "teardrop-mcp"})
+    with pytest.raises(jwt.InvalidAudienceError):
+        decode_access_token(token)
+
+
 @pytest.mark.anyio
 async def test_require_auth_valid_token(test_settings, test_jwt_token):
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=test_jwt_token)

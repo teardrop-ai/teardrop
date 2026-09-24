@@ -190,6 +190,18 @@ async def test_response_indicates_failure_no_error_returns_false():
 
 
 @pytest.mark.asyncio
+async def test_response_indicates_failure_detects_jsonrpc_error():
+    """JSON-RPC error envelopes (HTTP 200 in json_response mode) skip billing."""
+    response = MagicMock()
+
+    async def _iter():
+        yield b'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params"}}'
+
+    response.body_iterator = _iter()
+    assert await MCPGatewayMiddleware._response_indicates_failure(response) is True
+
+
+@pytest.mark.asyncio
 async def test_response_indicates_failure_handles_unparseable_body():
     """Unparseable bodies default to ``billing proceeds`` (returns False)."""
     response = MagicMock()

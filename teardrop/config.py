@@ -1057,7 +1057,9 @@ class Settings(BaseSettings):
     )
     mcp_auth_audience: str = Field(
         default="teardrop-mcp",
-        description="Expected JWT 'aud' claim for MCP tokens (security: prevents tokens from other apps)",
+        description=(
+            "Audience required of aud-scoped JWTs at /tools/mcp; unscoped Teardrop tokens are accepted. Empty disables the check."
+        ),
     )
     mcp_billing_enabled: bool = Field(
         default=False,

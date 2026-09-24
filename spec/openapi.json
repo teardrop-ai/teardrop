@@ -1643,6 +1643,16 @@
             "title": "Mcp 402 Challenges",
             "type": "integer"
           },
+          "mcp_402_no_payment": {
+            "default": 0,
+            "title": "Mcp 402 No Payment",
+            "type": "integer"
+          },
+          "mcp_402_payment_invalid": {
+            "default": 0,
+            "title": "Mcp 402 Payment Invalid",
+            "type": "integer"
+          },
           "mcp_server_card_hits": {
             "default": 0,
             "title": "Mcp Server Card Hits",
@@ -1706,6 +1716,16 @@
           "mcp_402_challenges": {
             "default": 0,
             "title": "Mcp 402 Challenges",
+            "type": "integer"
+          },
+          "mcp_402_no_payment": {
+            "default": 0,
+            "title": "Mcp 402 No Payment",
+            "type": "integer"
+          },
+          "mcp_402_payment_invalid": {
+            "default": 0,
+            "title": "Mcp 402 Payment Invalid",
             "type": "integer"
           },
           "mcp_server_card_hits": {
@@ -7691,7 +7711,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.6.0"
+    "version": "1.6.1"
   },
   "openapi": "3.1.0",
   "paths": {

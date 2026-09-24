@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -366,13 +367,37 @@ async def _rebuild_requirements_if_stale() -> None:
     )
 
 
+def _payment_nonce_hash(payment_header: str) -> str:
+    """Hash the signed authorization identity so any repackaging of one payment shares a nonce.
+
+    EVM payloads key on (payer, nonce), the on-chain uniqueness key, so unsigned
+    fields (``resource``, ``extensions``, extra keys) cannot mint a fresh claim.
+    Other schemes hash the canonical payload. Undecodable headers fall back to
+    the raw-header hash; the claim path only runs after a successful parse.
+    """
+    try:
+        from x402 import parse_payment_payload
+
+        payload = parse_payment_payload(base64.b64decode(payment_header))
+        auth = payload.payload.get("authorization") or payload.payload.get("permit2Authorization")
+        if isinstance(auth, dict) and auth.get("from") and auth.get("nonce"):
+            nonce = str(auth["nonce"]).strip()
+            nonce_value = int(nonce, 16) if nonce.lower().startswith("0x") else int(nonce)
+            key = f"evm:{str(auth['from']).strip().lower()}:{nonce_value}"
+        else:
+            key = payload.model_dump_json(by_alias=True, exclude_none=True)
+    except Exception:
+        return hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
 async def _claim_payment_nonce(payment_header: str) -> bool:
     """Atomically claim a payment header to block concurrent replays.
 
     Returns True if this is the first time the header is seen (caller may
     proceed), False if it was already claimed (reject).
 
-    The claim key is the SHA-256 of the raw header. On-chain settlement already
+    The claim key is ``_payment_nonce_hash`` of the header. On-chain settlement already
     prevents an EIP-3009 authorization from spending twice; this guard closes
     the narrower concurrent window where two in-flight requests with the same
     header both verify and execute a paid tool before either settles. If the
@@ -384,7 +409,7 @@ async def _claim_payment_nonce(payment_header: str) -> bool:
         logger.warning("x402 nonce store unavailable (no pool); skipping replay claim")
         return True
 
-    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    nonce_hash = _payment_nonce_hash(payment_header)
     pool = _get_pool()
     try:
         claimed = await pool.fetchval(
@@ -406,7 +431,7 @@ async def release_payment_nonce(payment_header: str) -> None:
     """Release a local replay claim when verification never reaches settlement."""
     if not _has_pool():
         return
-    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    nonce_hash = _payment_nonce_hash(payment_header)
     await _get_pool().execute(
         "DELETE FROM x402_payment_nonces WHERE nonce_hash = $1",
         nonce_hash,
@@ -426,7 +451,7 @@ async def reserve_payer_spend(
     if amount_usdc == 0:
         return True
 
-    nonce_hash = hashlib.sha256(payment_header.encode("utf-8")).hexdigest()
+    nonce_hash = _payment_nonce_hash(payment_header)
     pool = _get_pool()
     try:
         async with pool.acquire() as conn:
@@ -512,6 +537,7 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
     reqs = get_payment_requirements() if requirements is None else requirements
 
     if not reqs:
+        logger.warning("x402 verification skipped: no payment requirements configured")
         return BillingResult(error="No payment requirements configured")
 
     try:

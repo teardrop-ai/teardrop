@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,7 +31,8 @@ async def x402_pool(docker_postgres: str):
 
 
 def _configure_payment_boundary(monkeypatch, pool):
-    payload = MagicMock()
+    payload = MagicMock(payload={})
+    payload.model_dump_json.return_value = "signed-payment"
     requirement = MagicMock(scheme="exact")
     parser = MagicMock()
     parser.parse_payment_payload.return_value = payload
@@ -60,6 +61,7 @@ async def test_concurrent_verified_header_has_one_winner_and_one_settlement(x402
             x402.verify_payment(payment_header),
             x402.verify_payment(payment_header),
         )
+        nonce_hash = x402._payment_nonce_hash(payment_header)
 
     verified = [result for result in results if result.verified]
     rejected = [result for result in results if not result.verified]
@@ -71,7 +73,6 @@ async def test_concurrent_verified_header_has_one_winner_and_one_settlement(x402
     assert settled.tx_hash == "0xsettled"
     server.settle_payment.assert_awaited_once_with(payload, requirement)
 
-    nonce_hash = hashlib.sha256(payment_header.encode()).hexdigest()
     assert (
         await x402_pool.fetchval(
             "SELECT COUNT(*) FROM x402_payment_nonces WHERE nonce_hash = $1",
@@ -128,3 +129,32 @@ async def test_payer_spend_reservation_is_atomic_idempotent_and_releasable(x402_
 
     await x402.release_payment_nonce(winning_header)
     assert await x402.reserve_payer_spend(losing_header, "0xabc", 60, 100) is True
+
+
+@pytest.mark.asyncio
+async def test_reencoded_variant_of_same_payload_is_rejected(x402_pool, monkeypatch):
+    """A re-encoded (whitespace/key-order) copy of one signed payload claims once."""
+    from x402.schemas import PaymentPayload
+
+    _configure_payment_boundary(monkeypatch, x402_pool)
+    payload_dict = PaymentPayload(
+        payload={"signature": "0xsigned"},
+        accepted={
+            "scheme": "exact",
+            "network": "eip155:8453",
+            "asset": "0x" + "83" * 20,
+            "amount": "10000",
+            "pay_to": "0x" + "f2" * 20,
+            "max_timeout_seconds": 300,
+        },
+    ).model_dump(by_alias=True, exclude_none=True)
+    compact = base64.b64encode(json.dumps(payload_dict).encode()).decode()
+    spaced = base64.b64encode(json.dumps(payload_dict, indent=2).encode()).decode()
+
+    first = await x402.verify_payment(compact)
+    replay = await x402.verify_payment(spaced)
+
+    assert first.verified is True
+    assert replay.verified is False
+    assert replay.error == "Payment already used. Sign a new payment authorization."
+    assert await x402_pool.fetchval("SELECT COUNT(*) FROM x402_payment_nonces") == 1

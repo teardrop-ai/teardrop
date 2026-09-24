@@ -126,6 +126,8 @@ class DiscoveryStageDay(BaseModel):
     quote_hits: int = 0
     tools_list_hits: int = 0
     mcp_402_challenges: int = 0
+    mcp_402_no_payment: int = 0
+    mcp_402_payment_invalid: int = 0
     settled_calls: int = 0
 
 
@@ -140,6 +142,8 @@ class DiscoveryFunnelResponse(BaseModel):
     quote_hits: int = 0
     tools_list_hits: int = 0
     mcp_402_challenges: int = 0
+    mcp_402_no_payment: int = 0
+    mcp_402_payment_invalid: int = 0
     settled_calls: int = 0
     challenge_to_settle_rate: float | None = None
     series: list[DiscoveryStageDay] = Field(default_factory=list)
@@ -485,6 +489,8 @@ async def get_discovery_funnel(days: int = 7) -> DiscoveryFunnelResponse:
             COALESCE(SUM(count) FILTER (WHERE surface = 'quote'), 0)            AS quote_hits,
             COALESCE(SUM(count) FILTER (WHERE surface = 'tools_list'), 0)       AS tools_list_hits,
             COALESCE(SUM(count) FILTER (WHERE surface = 'mcp_402_challenge'), 0) AS mcp_402_challenges,
+            COALESCE(SUM(count) FILTER (WHERE surface = 'mcp_402_no_payment'), 0) AS mcp_402_no_payment,
+            COALESCE(SUM(count) FILTER (WHERE surface = 'mcp_402_payment_invalid'), 0) AS mcp_402_payment_invalid,
             COALESCE(settled.settled_calls, 0)                                   AS settled_calls
         FROM discovery_stage_counts
         LEFT JOIN settled ON settled.day = date_trunc('day', bucket_hour)
@@ -505,6 +511,8 @@ async def get_discovery_funnel(days: int = 7) -> DiscoveryFunnelResponse:
             quote_hits=int(row["quote_hits"]),
             tools_list_hits=int(row["tools_list_hits"]),
             mcp_402_challenges=int(row["mcp_402_challenges"]),
+            mcp_402_no_payment=int(row["mcp_402_no_payment"]),
+            mcp_402_payment_invalid=int(row["mcp_402_payment_invalid"]),
             settled_calls=int(row["settled_calls"]),
         )
         for row in rows
@@ -520,6 +528,8 @@ async def get_discovery_funnel(days: int = 7) -> DiscoveryFunnelResponse:
         quote_hits=sum(day.quote_hits for day in series),
         tools_list_hits=sum(day.tools_list_hits for day in series),
         mcp_402_challenges=challenges,
+        mcp_402_no_payment=sum(day.mcp_402_no_payment for day in series),
+        mcp_402_payment_invalid=sum(day.mcp_402_payment_invalid for day in series),
         settled_calls=settled_calls,
         challenge_to_settle_rate=(round(settled_calls / challenges, 4) if challenges else None),
         series=series,

@@ -26,6 +26,9 @@ SURFACE_CATALOG = "catalog"
 SURFACE_QUOTE = "quote"
 SURFACE_TOOLS_LIST = "tools_list"
 SURFACE_MCP_402_CHALLENGE = "mcp_402_challenge"
+# Subsets of mcp_402_challenge for anonymous x402 callers; credit-rail 402s count only in the total.
+SURFACE_MCP_402_NO_PAYMENT = "mcp_402_no_payment"
+SURFACE_MCP_402_PAYMENT_INVALID = "mcp_402_payment_invalid"
 
 VALID_SURFACES: frozenset[str] = frozenset(
     {
@@ -36,6 +39,8 @@ VALID_SURFACES: frozenset[str] = frozenset(
         SURFACE_QUOTE,
         SURFACE_TOOLS_LIST,
         SURFACE_MCP_402_CHALLENGE,
+        SURFACE_MCP_402_NO_PAYMENT,
+        SURFACE_MCP_402_PAYMENT_INVALID,
     }
 )
 

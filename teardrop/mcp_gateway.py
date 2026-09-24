@@ -11,6 +11,7 @@ Three layers, each behind a feature flag:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import uuid
@@ -63,6 +64,14 @@ _MCP_BAZAAR_OUTPUT_EXAMPLE = {
         "isError": False,
     },
 }
+# Mirrors x402.mcp.types so gateway startup never depends on importing x402.mcp.
+_MCP_PAYMENT_META_KEY = "x402/payment"
+_MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
+_MCP_PAYMENT_HINT = (
+    "Payment required. Pay per call with x402 by retrying with params._meta['x402/payment'] "
+    "built from structuredContent.accepts, or send 'Authorization: Bearer <token>' from POST /token "
+    "(grant_type=x402 bootstraps an org) to use prepaid credits."
+)
 
 
 class MCPPathNormalizer:
@@ -101,6 +110,53 @@ def _mcp_402_extensions() -> dict:
     )
     extension["bazaar"]["info"]["input"]["method"] = "POST"
     return extension
+
+
+def _wants_mcp_payment_signal(request: Request) -> bool:
+    # Streamable-HTTP MCP clients must accept SSE; plain HTTP x402 clients expect a bare 402.
+    return "mcp-protocol-version" in request.headers or "text/event-stream" in request.headers.get("accept", "").lower()
+
+
+async def _read_jsonrpc(request: Request) -> dict:
+    try:
+        data = json.loads(await request.body())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _meta_payment_header(data: dict) -> str | None:
+    """Encode an MCP ``_meta`` x402 payment as the base64 header form ``verify_payment`` expects."""
+    params = data.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    payment = meta.get(_MCP_PAYMENT_META_KEY) if isinstance(meta, dict) else None
+    if payment is None:
+        return None
+    if isinstance(payment, str):
+        try:
+            payment = json.loads(payment)
+        except ValueError:
+            return base64.b64encode(payment.encode("utf-8")).decode("ascii")
+    # Canonical form keeps the replay-nonce hash stable across key order and whitespace.
+    canonical = json.dumps(payment, sort_keys=True, separators=(",", ":"))
+    return base64.b64encode(canonical.encode("utf-8")).decode("ascii")
+
+
+def _mcp_payment_required(req_id: int | str | None, payment_required: dict) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [
+                    {"type": "text", "text": json.dumps(payment_required)},
+                    {"type": "text", "text": _MCP_PAYMENT_HINT},
+                ],
+                "structuredContent": payment_required,
+                "isError": True,
+            },
+        }
+    )
 
 
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
@@ -256,6 +312,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             if not body:
                 return False
             data = json.loads(body)
+            # json_response mode returns JSON-RPC errors (e.g. invalid params) as HTTP 200.
+            if isinstance(data, dict) and "error" in data:
+                return True
             # JSON-RPC tools/call result is {"result": {"isError": true|false, ...}}
             result = data.get("result") if isinstance(data, dict) else None
             if isinstance(result, dict) and result.get("isError") is True:
@@ -263,6 +322,34 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         except Exception:
             return False
         return False
+
+    @staticmethod
+    async def _attach_payment_receipt(response: Response, billing) -> Response:  # noqa: ANN001
+        """Add the x402 MCP ``x402/payment-response`` receipt to a settled tools/call result."""
+        from x402.schemas import SettleResponse
+
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+            chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        body = b"".join(chunks)
+        try:
+            receipt = SettleResponse(
+                success=True,
+                transaction=billing.tx_hash or "",
+                network=getattr(billing.payment_requirements, "network", ""),
+                payer=billing.payer or None,
+                amount=str(billing.amount_usdc),
+            ).model_dump(by_alias=True, exclude_none=True)
+            data = json.loads(body)
+            result = data["result"]
+            meta = result.get("_meta")
+            result["_meta"] = {**(meta if isinstance(meta, dict) else {}), _MCP_PAYMENT_RESPONSE_META_KEY: receipt}
+            body = json.dumps(data).encode("utf-8")
+        except Exception:
+            # Settlement already succeeded; a missing receipt must not fail the call.
+            logger.debug("x402 MCP payment receipt not attached", exc_info=True)
+        headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+        return Response(content=body, status_code=response.status_code, headers=headers)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -276,7 +363,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         if token:
             try:
-                payload = decode_access_token(token)
+                payload = decode_access_token(token, audience=settings.mcp_auth_audience or None)
             except jwt.ExpiredSignatureError:
                 return Response(
                     status_code=401,
@@ -284,20 +371,18 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                         "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="token_expired"',
                     },
                 )
+            except jwt.InvalidAudienceError:
+                return Response(
+                    status_code=401,
+                    headers={
+                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_audience"',
+                    },
+                )
             except jwt.InvalidTokenError:
                 return Response(
                     status_code=401,
                     headers={
                         "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_token"',
-                    },
-                )
-
-            # Optional audience check.
-            if settings.mcp_auth_audience and payload.get("aud") != settings.mcp_auth_audience:
-                return Response(
-                    status_code=401,
-                    headers={
-                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_audience"',
                     },
                 )
 
@@ -358,10 +443,23 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         return None
 
     @staticmethod
+    def _meta_payment(request: Request) -> str | None:
+        payment = getattr(request.state, "mcp_x402_payment", None)
+        return payment if isinstance(payment, str) and payment else None
+
+    @staticmethod
+    def _payment_header(request: Request) -> str | None:
+        return (
+            request.headers.get("payment-signature")
+            or request.headers.get("x-payment")
+            or MCPGatewayMiddleware._meta_payment(request)
+        )
+
+    @staticmethod
     async def _release_x402_reservation(request: Request) -> None:
         if getattr(request.state, "mcp_x402_reserved", False) is not True:
             return
-        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        payment_header = MCPGatewayMiddleware._payment_header(request)
         if payment_header:
             from billing import release_payment_nonce
 
@@ -374,42 +472,54 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
     async def _handle_x402_auth(self, request: Request) -> Response | None:
         """Handle x402 auth for unauthenticated callers.
 
-        Returns a Response on failure (402), or None on success (sets state).
+        Accepts payment from HTTP headers or the x402 MCP transport's
+        ``params._meta["x402/payment"]``. Returns a payment-required Response on
+        failure, or None on success (sets state).
         """
-        from billing import (
-            build_402_headers,
-            build_402_response_body,
-            verify_payment,
+        from billing import verify_payment
+        from teardrop.funnel_counters import (
+            SURFACE_MCP_402_CHALLENGE,
+            SURFACE_MCP_402_NO_PAYMENT,
+            SURFACE_MCP_402_PAYMENT_INVALID,
+            record_discovery_hit,
         )
-        from teardrop.funnel_counters import SURFACE_MCP_402_CHALLENGE, record_discovery_hit
 
-        payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+        data = await _read_jsonrpc(request)
+        payment_header = self._payment_header(request)
+        if not payment_header:
+            payment_header = _meta_payment_header(data)
+            if payment_header:
+                request.state.mcp_x402_payment = payment_header
+        mcp_signal = self._meta_payment(request) is not None or _wants_mcp_payment_signal(request)
         response_kwargs = {
             "resource": _mcp_402_resource(request),
             "extensions": _mcp_402_extensions(),
         }
         if not payment_header:
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
-            return JSONResponse(
-                status_code=402,
-                content=build_402_response_body(**response_kwargs),
-                headers=build_402_headers(**response_kwargs),
-            )
+            record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
+            return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         billing = await verify_payment(payment_header)
         if not billing.verified:
             response_kwargs["error"] = billing.error
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
-            return JSONResponse(
-                status_code=402,
-                content=build_402_response_body(**response_kwargs),
-                headers=build_402_headers(**response_kwargs),
-            )
+            record_discovery_hit(SURFACE_MCP_402_PAYMENT_INVALID)
+            return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing
         request.state.mcp_org_id = None
         request.state.mcp_auth_method = "x402"
         return None  # success — continue to billing / MCPServer
+
+    @staticmethod
+    def _x402_challenge(req_id: int | str | None, mcp_signal: bool, response_kwargs: dict) -> Response:
+        from billing import build_402_headers, build_402_response_body
+
+        body = build_402_response_body(**response_kwargs)
+        if mcp_signal:
+            return _mcp_payment_required(req_id, body)
+        return JSONResponse(status_code=402, content=body, headers=build_402_headers(**response_kwargs))
 
     async def _billing_gate(self, request: Request) -> tuple | Response | None:
         """Pre-request billing gate for ``tools/call`` requests.
@@ -484,7 +594,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
             x402_billing = request.state.x402_billing
             payer = getattr(x402_billing, "payer", "")
-            payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+            payment_header = self._payment_header(request)
             if not isinstance(payer, str) or not payer.strip() or not payment_header:
                 if payment_header:
                     await release_payment_nonce(payment_header)
@@ -680,6 +790,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             )
             if settled.tx_hash:
                 logger.info("x402 MCP settlement succeeded org=%s tool=%s tx_hash=%s", org_id, tool_name, settled.tx_hash)
+            if self._meta_payment(request) is not None:
+                response = await self._attach_payment_receipt(response, settled)
         else:
             # Phase 2: credit debit.
             from billing import debit_credit

@@ -23,7 +23,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `GET` | `/.well-known/reputation.json` | — | Aggregate quality metrics for active marketplace tools; caller counts are omitted below five distinct orgs |
 | `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators; advertises the `grant_type=x402` bootstrap entrypoint when enabled |
 | `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |
-| `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery |
+| `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery; advertises `bearer` + `x402` auth schemes and an `x402` capability block (network, scheme, discovery URL, bootstrap endpoint) when `MCP_X402_ENABLED` |
 | `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
 | `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
 | `GET` | `/docs` | — | Swagger UI |
@@ -89,7 +89,9 @@ Principal limits are optional and additive to org controls. The authenticated JW
 
 Send `POST /token` with `{"grant_type":"x402"}`. Without a payment header it returns `402` with the x402 `PaymentRequired` body and headers. Retry with a signed `Payment-Signature` or `X-Payment` header. The first successful response contains `access_token`, `org_id`, `client_id`, and a one-time `client_secret`; repeated payments for the same machine org reuse `client_id` and omit `client_secret`. No refresh token is issued. Use `GET /billing/topup/usdc/requirements?amount_usdc=...` followed by `POST /billing/topup/usdc` for larger balance-first top-ups. Human-owned wallets receive `409` and must use SIWE. The bootstrap payment is sized to the larger of the live run price and `CREDIT_MIN_RUN_RESERVE_USDC`, and becomes prepaid org credit after settlement. Lost credentials can be replaced through SIWE plus `POST /org/credentials/regenerate`.
 
-Anonymous MCP x402 calls are admitted against a per-payer rolling 24-hour reservation cap. Reservations begin before tool execution, remain replay-protected after settlement, and are released when execution does not reach settlement.
+Anonymous MCP x402 calls are admitted against a per-payer rolling 24-hour reservation cap. Reservations begin before tool execution, remain replay-protected after settlement, and are released when execution does not reach settlement. The replay guard keys on the signed authorization (payer + nonce), so re-encoded or repackaged copies of the same signed payment are rejected. Calls whose tool result is `isError` or a JSON-RPC `error` are not settled.
+
+`/tools/mcp` accepts x402 over both transports. HTTP clients send `Payment-Signature`/`X-Payment` and receive a bare `402` with the `PAYMENT-REQUIRED` header. MCP clients (requests with `MCP-Protocol-Version` or an `Accept` that includes `text/event-stream`) receive a `200` JSON-RPC result with `isError: true` and the `PaymentRequired` object in `structuredContent`, then pay by retrying with `params._meta["x402/payment"]`. Settled `_meta` payments return the receipt in `result._meta["x402/payment-response"]`. Callers without x402 can instead use a Bearer token from `POST /token` for prepaid credits.
 
 ### Marketplace
 
@@ -200,7 +202,7 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `GET` | `/admin/usage/{user_id}` | Admin | Usage for a specific user |
 | `GET` | `/admin/usage/org/{org_id}` | Admin | Usage for an org |
 | `GET` | `/admin/telemetry/machine-funnel` | Admin | Machine acquisition, MCP settlement, wallet-conversion, and repeat-payer metrics |
-| `GET` | `/admin/telemetry/discovery-funnel` | Admin | Aggregate discovery-stage hit counts (agent card, x402 discovery, catalog, quote, tools/list, 402 challenges), challenge-to-settle rate, and a per-day series for the window |
+| `GET` | `/admin/telemetry/discovery-funnel` | Admin | Aggregate discovery-stage hit counts (agent card, x402 discovery, catalog, quote, tools/list, 402 challenges, with anonymous x402 challenges split into `mcp_402_no_payment` and `mcp_402_payment_invalid`), challenge-to-settle rate, and a per-day series for the window |
 | `GET` | `/admin/billing/revenue` | Admin | Aggregated revenue summary |
 | `POST` | `/admin/credits/topup` | Admin | Add prepaid USDC credits to an org |
 | `POST` | `/admin/pricing/tools` | Admin | Create or update a per-tool pricing override |

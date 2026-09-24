@@ -41,15 +41,26 @@ def create_access_token(subject: str, extra_claims: dict | None = None) -> str:
     return jwt.encode(payload, settings.jwt_private_key, algorithm=settings.jwt_algorithm)
 
 
-def decode_access_token(token: str) -> dict:
-    """Decode and validate a JWT. Raises on any failure."""
+def decode_access_token(token: str, audience: str | None = None) -> dict:
+    """Decode and validate a JWT. Raises on any failure.
+
+    With ``audience``, unscoped tokens are accepted and ``aud``-scoped tokens must name it.
+    Without it, ``aud``-scoped tokens are rejected.
+    """
     settings = get_settings()
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         settings.jwt_public_key,
         algorithms=[settings.jwt_algorithm],
         issuer=settings.jwt_issuer,
+        options={"verify_aud": False} if audience else None,
     )
+    claimed = payload.get("aud")
+    if audience and claimed:
+        claimed_list = [claimed] if isinstance(claimed, str) else claimed
+        if not isinstance(claimed_list, list) or audience not in claimed_list:
+            raise jwt.InvalidAudienceError("Invalid audience")
+    return payload
 
 
 async def require_auth(
