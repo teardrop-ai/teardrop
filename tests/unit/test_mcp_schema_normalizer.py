@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from tools.shared import normalize_to_safe_schema_subset
+from tools.schema import normalize_to_safe_schema_subset
 
 
 def test_normalize_strips_unsupported_keywords_and_nullable_types() -> None:

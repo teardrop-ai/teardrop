@@ -254,8 +254,9 @@ def _build_marketplace_langchain_tool(
     from mcp_client.runtime import build_mcp_backed_tool
     from org_tools.runtime import _record_event
     from shared.webhook import WebhookCaller, WebhookCallError
+    from tools.crypto import decrypt_header_value
     from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
-    from tools.shared import build_pydantic_model, decrypt_header_value
+    from tools.schema import build_pydantic_model
 
     raw_schema = tool_row.get("input_schema", {})
     if isinstance(raw_schema, str):

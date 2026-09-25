@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Tool discovery, LangChain wrapping, and per-org aggregated tool building."""
+"""Tool discovery, LangChain wrapping, and per-org aggregated tool building.
+
+Owner map:
+  - Discovery:        discover_mcp_tools_with_schema, discover_mcp_tools, _mcp_tools_schema_hash,
+                      _track_mcp_schema_discovery
+  - Tool wrapping:    build_mcp_backed_tool (breaker + timeout + result extraction)
+  - Aggregation:      build_mcp_langchain_tools (per-org merged tool set)
+"""
 
 from __future__ import annotations
 
@@ -28,7 +35,7 @@ from mcp_client.cache import (
 from mcp_client.crud import record_mcp_server_schema_hash
 from mcp_client.session import _get_or_create_session
 from teardrop.config import get_settings
-from tools.shared import build_pydantic_model
+from tools.schema import build_pydantic_model
 
 McpServerLoader = OrgMcpServer | Callable[[], Awaitable[OrgMcpServer | None]]
 McpSuccessHandler = Callable[[int], Awaitable[None]] | None

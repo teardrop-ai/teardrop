@@ -23,7 +23,7 @@ from teardrop.config import get_settings
 from teardrop.dependencies import _require_org_id, require_auth, require_org_machine
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
-from tools.shared import normalize_to_safe_schema_subset
+from tools.schema import normalize_to_safe_schema_subset
 
 router = APIRouter()
 

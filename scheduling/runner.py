@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Execution helpers for unattended scheduled runs."""
+"""Execution helpers for unattended scheduled runs.
+
+Owner map:
+  - Run execution:      _run_and_record, execute_scheduled_run, execute_event_run
+  - Callback delivery:  _deliver_callback (SSRF-checked HTTPS POST)
+  - X broadcast sink:   _publish_x_broadcast, _x_post_text, _human_callback_text
+  - Labeling ingest:    _ingest_labeling_prediction
+"""
 
 from __future__ import annotations
 

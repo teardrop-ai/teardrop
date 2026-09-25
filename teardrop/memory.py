@@ -15,6 +15,15 @@ Provides:
 - store_run_decision()          — persist one decision-graph record per run
 - list_run_decisions()          — cursor-paginated decision listing
 - backfill_decision_outcome()   — attach a ground-truth outcome label
+
+Owner map (four concerns share this module):
+  - RAG store/recall:     store_memory, recall_memories, list_memories, count_memories,
+                          delete_memory, delete_all_org_memories, cleanup_expired_memories,
+                          has_memories_cached, _generate_embedding
+  - Decision graph:       store_run_decision, list_run_decisions, backfill_decision_outcome,
+                          _sanitize_slots_snapshot (run_decisions ML telemetry)
+  - Correction detection: detect_implicit_correction, _char_overlap_ratio
+  - Fact extraction:      extract_and_store_memories, _extract_facts_and_decision, _parse_decision
 """
 
 from __future__ import annotations

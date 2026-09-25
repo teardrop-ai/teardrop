@@ -7,6 +7,13 @@ instances that call the org's webhook with SSRF validation, IP pinning, timeout,
 response truncation, circuit-breaker enforcement, and an immutable audit trail.
 Also exposes JSON-Schema → Pydantic model helpers and webhook response
 normalisation.
+
+Owner map:
+  - Response shaping:   normalize_webhook_response
+  - Schema helpers:     validate_safe_schema_subset, _build_pydantic_model (wraps tools.schema)
+  - Tool building:      _build_langchain_tool (webhook + MCP-backed branches)
+  - Webhook failures:   _on_webhook_failure (breaker + audit + Sentry), _hash_webhook_host
+  - Per-org loading:    build_org_langchain_tools, _load_org_tools_uncached
 """
 
 from __future__ import annotations
@@ -32,10 +39,8 @@ from org_tools.base import (
 from org_tools.cache import get_org_tools_cached, invalidate_org_tools_cache
 from shared.webhook import WebhookCaller, WebhookCallError
 from tools.definitions.http_fetch import async_validate_url_with_ips, make_ssrf_safe_connector
-from tools.shared import build_pydantic_model
-from tools.shared import (
-    validate_safe_schema_subset as _validate_safe_schema_subset,
-)
+from tools.schema import build_pydantic_model
+from tools.schema import validate_safe_schema_subset as _validate_safe_schema_subset
 
 logger = logging.getLogger(__name__)
 

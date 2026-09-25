@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from shared.audit import insert_event_row
 from shared.db_pool import PgPool, Row, bind_pool, require_pool, unbind_pool
-from tools.shared import decrypt_header_value, encrypt_header_value
+from tools.crypto import decrypt_header_value, encrypt_header_value
 
 logger = logging.getLogger(__name__)
 
