@@ -25,7 +25,7 @@ def _registration():
 @pytest.mark.anyio
 async def test_agent_registration_requires_org_machine_or_admin(api_client, monkeypatch):
     set_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.set_agent_registration", set_mock)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -47,8 +47,8 @@ async def test_agent_registration_machine_credentials_success(anon_client, monke
 
     set_mock = AsyncMock(return_value=_registration())
     rate_limit = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.set_agent_registration", set_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", rate_limit)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -75,7 +75,7 @@ async def test_agent_registration_unscoped_machine_credentials_forbidden(anon_cl
     from teardrop.auth import create_access_token
 
     set_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.set_agent_registration", set_mock)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -102,8 +102,8 @@ async def test_agent_registration_machine_credentials_delete(anon_client, monkey
 
     delete_mock = AsyncMock()
     rate_limit = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.delete_agent_registration", delete_mock)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.delete_agent_registration", delete_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", rate_limit)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -128,8 +128,8 @@ async def test_agent_registration_machine_credentials_delete(anon_client, monkey
 async def test_agent_registration_admin_success(admin_api_client, monkeypatch):
     set_mock = AsyncMock(return_value=_registration())
     rate_limit = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.set_agent_registration", set_mock)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", rate_limit)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.set_agent_registration", set_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", rate_limit)
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -184,8 +184,8 @@ async def test_public_agent_directory_paginates_and_sets_cache_header(anon_clien
         },
     ]
     directory = AsyncMock(return_value={"generated_at": _NOW.isoformat(), "agents": agents})
-    monkeypatch.setattr("teardrop.routers.marketplace.get_agent_directory", directory)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.get_agent_directory", directory)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", AsyncMock())
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -268,8 +268,8 @@ async def test_public_agent_directory_sorts_reputation_and_binds_cursor(anon_cli
         },
     ]
     directory = AsyncMock(return_value={"generated_at": _NOW.isoformat(), "agents": agents})
-    monkeypatch.setattr("teardrop.routers.marketplace.get_agent_directory", directory)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.get_agent_directory", directory)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", AsyncMock())
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config
@@ -340,8 +340,8 @@ async def test_public_agent_directory_filters_staleness(anon_client, monkeypatch
         },
     ]
     directory = AsyncMock(return_value={"generated_at": _NOW.isoformat(), "agents": agents})
-    monkeypatch.setattr("teardrop.routers.marketplace.get_agent_directory", directory)
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.get_agent_directory", directory)
+    monkeypatch.setattr("teardrop.routers.marketplace_agents._enforce_rate_limit", AsyncMock())
     monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
 
     import teardrop.config as config

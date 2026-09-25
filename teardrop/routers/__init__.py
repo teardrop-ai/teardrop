@@ -24,6 +24,8 @@ def register_routers(app: FastAPI) -> None:
         billing,
         labeling,
         marketplace,
+        marketplace_agents,
+        marketplace_import,
         marketplace_mcp,
         system,
         usage,
@@ -55,3 +57,5 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(admin.router)
     app.include_router(marketplace_mcp.router)
     app.include_router(marketplace.router)
+    app.include_router(marketplace_import.router)
+    app.include_router(marketplace_agents.router)

@@ -6,6 +6,16 @@ Three layers, each behind a feature flag:
   Phase 1 – JWT auth gate  (mcp_auth_enabled)
   Phase 2 – Credit billing  (mcp_billing_enabled)
   Phase 3 – x402 on-chain   (mcp_x402_enabled)
+
+Owner map:
+  - module helpers:       x402 Bazaar discovery schema, 402 resource, JSON-RPC errors, _meta payment encoding
+  - MCPPathNormalizer:    bare-mount path rewrite (pure ASGI)
+  - MCPGatewayMiddleware:
+      dispatch                          public-discovery gate → auth → billing gate → call → settle
+      _authenticate / _enforce_org_rate_limit   JWT auth + per-org rate limit
+      _handle_x402_auth / _x402_challenge       x402 payment verification + 402 challenge
+      _billing_gate / _settle_billing           credit/x402 pre-check and post-call settlement
+      _record_mcp_outcome / _enqueue_mcp_recovery   telemetry + settlement retry enqueue
 """
 
 from __future__ import annotations

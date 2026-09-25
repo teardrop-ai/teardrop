@@ -17,6 +17,11 @@ live in ``billing``; this module orchestrates them but never reimplements the
 atomic-USDC accounting. The route handlers, request/response models, and run
 helpers were extracted verbatim from ``teardrop.app`` and are re-exported there
 for backward compatibility.
+
+Additional routes in this module:
+  - GET/POST/DELETE /agent/tool-exclusions   per-org persisted tool exclusions
+  - GET /agent/decisions                     run decision log
+  - PATCH /agent/runs/{run_id}/outcome       decision-outcome backfill
 """
 
 from __future__ import annotations

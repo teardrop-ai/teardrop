@@ -78,10 +78,10 @@ async def test_machine_import_rejects_foreign_server(api_client, monkeypatch, ma
     lookup = AsyncMock(return_value=None)
     discover = AsyncMock()
     create = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", lookup)
-    monkeypatch.setattr("teardrop.routers.marketplace.discover_mcp_tools", discover)
-    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create)
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", lookup)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.discover_mcp_tools", discover)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create)
     body = {"server_id": "foreign-server"}
     if operation == "publish":
         body["tools"] = [{"remote_tool_name": "remote_tool", "name": "remote_tool", "description": "Remote tool"}]
@@ -96,10 +96,10 @@ async def test_machine_import_rejects_foreign_server(api_client, monkeypatch, ma
 
 @pytest.mark.anyio
 async def test_preview_marketplace_import_member_returns_flags(api_client, monkeypatch, marketplace_enabled):
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(
             return_value=[
                 {
@@ -116,13 +116,13 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
             ]
         ),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.list_org_tools", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_current_pricing",
+        "teardrop.routers.marketplace_import.get_current_pricing",
         AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
     )
     # Member role + no author config → both blockers surfaced.
-    monkeypatch.setattr("teardrop.routers.marketplace.get_author_config", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_author_config", AsyncMock(return_value=None))
 
     resp = await api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
 
@@ -152,19 +152,19 @@ async def test_preview_marketplace_import_with_wallet_can_publish(api_client, mo
         return {"sub": "publisher", "org_id": "test-org-id", **principal}
 
     app.dependency_overrides[require_auth] = authenticated
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(return_value=[{"name": "t", "description": "d", "input_schema": {}, "output_schema": None}]),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.list_org_tools", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_current_pricing",
+        "teardrop.routers.marketplace_import.get_current_pricing",
         AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
     )
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_author_config",
+        "teardrop.routers.marketplace_import.get_author_config",
         AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", settlement_wallet="0x" + "a" * 40)),
     )
 
@@ -179,18 +179,18 @@ async def test_preview_marketplace_import_with_wallet_can_publish(api_client, mo
 @pytest.mark.anyio
 async def test_preview_marketplace_import_admin_missing_wallet(admin_api_client, monkeypatch, marketplace_enabled):
     """Admin role but no settlement wallet → settlement_wallet_missing blocker."""
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(return_value=[{"name": "t", "description": "d", "input_schema": {}, "output_schema": None}]),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.list_org_tools", AsyncMock(return_value=[]))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.get_current_pricing",
+        "teardrop.routers.marketplace_import.get_current_pricing",
         AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.get_author_config", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_author_config", AsyncMock(return_value=None))
 
     resp = await admin_api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
 
@@ -202,10 +202,10 @@ async def test_preview_marketplace_import_admin_missing_wallet(admin_api_client,
 
 @pytest.mark.anyio
 async def test_publish_marketplace_import_admin_partial_success(admin_api_client, monkeypatch, marketplace_enabled):
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(
             return_value=[
                 {"name": "remote_tool", "description": "First", "input_schema": {}, "output_schema": None},
@@ -213,9 +213,9 @@ async def test_publish_marketplace_import_admin_partial_success(admin_api_client
             ]
         ),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.create_org_tool",
+        "teardrop.routers.marketplace_import.create_org_tool",
         AsyncMock(
             side_effect=[
                 _created_tool("remote_tool"),
@@ -264,10 +264,10 @@ async def test_publish_marketplace_import_derives_missing_schemas(api_client, mo
         return {"sub": "publisher", "org_id": "test-org-id", **principal}
 
     app.dependency_overrides[require_auth] = authenticated
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(
             return_value=[
                 {
@@ -283,9 +283,9 @@ async def test_publish_marketplace_import_derives_missing_schemas(api_client, mo
             ]
         ),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.registry.get", MagicMock(return_value=None))
     create_mock = AsyncMock(return_value=_created_tool("remote_tool"))
-    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create_mock)
 
     resp = await api_client.post(
         "/marketplace/import/publish",
@@ -338,8 +338,8 @@ async def test_publish_marketplace_import_forbidden(api_client, monkeypatch, mar
     app.dependency_overrides[require_auth] = authenticated
     create_mock = AsyncMock()
     discover_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
-    monkeypatch.setattr("teardrop.routers.marketplace.discover_mcp_tools", discover_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.discover_mcp_tools", discover_mock)
 
     resp = await api_client.post(
         "/marketplace/import/publish",
@@ -364,15 +364,15 @@ async def test_publish_marketplace_import_forbidden(api_client, monkeypatch, mar
 
 @pytest.mark.anyio
 async def test_publish_marketplace_import_requires_author_config(admin_api_client, monkeypatch, marketplace_enabled):
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(return_value=[{"name": "remote_tool", "description": "First", "input_schema": {}, "output_schema": None}]),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.create_org_tool",
+        "teardrop.routers.marketplace_import.create_org_tool",
         AsyncMock(
             side_effect=ValueError(
                 "Cannot publish tool to marketplace — register a settlement wallet first via POST /marketplace/author-config"
@@ -414,15 +414,15 @@ async def test_publish_marketplace_import_requires_author_config(admin_api_clien
 async def test_publish_marketplace_import_errors_are_sanitized(
     admin_api_client, monkeypatch, marketplace_enabled, error, expected_status
 ):
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(return_value=[{"name": "remote_tool", "description": "First", "input_schema": {}, "output_schema": None}]),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.registry.get", MagicMock(return_value=None))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.create_org_tool",
+        "teardrop.routers.marketplace_import.create_org_tool",
         AsyncMock(side_effect=error),
     )
 
@@ -449,15 +449,15 @@ async def test_publish_marketplace_import_errors_are_sanitized(
 
 @pytest.mark.anyio
 async def test_publish_marketplace_import_name_collision(admin_api_client, monkeypatch, marketplace_enabled):
-    monkeypatch.setattr("teardrop.routers.marketplace._enforce_rate_limit", AsyncMock())
-    monkeypatch.setattr("teardrop.routers.marketplace.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
     monkeypatch.setattr(
-        "teardrop.routers.marketplace.discover_mcp_tools",
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
         AsyncMock(return_value=[{"name": "remote_tool", "description": "First", "input_schema": {}, "output_schema": None}]),
     )
-    monkeypatch.setattr("teardrop.routers.marketplace.registry.get", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr("teardrop.routers.marketplace_import.registry.get", MagicMock(return_value=MagicMock()))
     create_mock = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.marketplace.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create_mock)
 
     resp = await admin_api_client.post(
         "/marketplace/import/publish",

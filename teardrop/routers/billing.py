@@ -1,6 +1,16 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Usage reporting, pricing, invoices, credit history, and top-up (Stripe + USDC) routes."""
+"""Usage reporting, pricing, invoices, credit history, and top-up (Stripe + USDC) routes.
+
+Route map:
+  - Pricing:        GET /billing/pricing
+  - Ledger reads:   GET /billing/history, /billing/balance, /billing/invoices, /billing/invoice/{run_id},
+                    /billing/credit-history
+  - Stripe top-up:  POST /billing/topup/stripe, POST /billing/topup/webhook, GET /billing/topup/stripe/status
+  - USDC top-up:    GET /billing/topup/usdc/requirements, POST /billing/topup/usdc
+
+Money logic (debits, idempotency, x402 settlement) lives in ``billing``; these handlers only orchestrate.
+"""
 
 from __future__ import annotations
 

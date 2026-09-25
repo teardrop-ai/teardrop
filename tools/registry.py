@@ -5,6 +5,12 @@
 Provides ToolDefinition (the canonical way to declare a tool) and
 ToolRegistry (the singleton that holds all registered tools and
 exports them as LangChain tools, A2A skills, and MCP definitions).
+
+Owner map:
+  - reputation helpers:  build_reputation_meta, format_mcp_quality_description (MCP ``_meta`` + description trailer)
+  - ToolDefinition:      tool declaration model + LangChain conversion
+  - ToolRegistry:        register/deprecate/get, exporters (to_langchain_tools, to_a2a_skills,
+                         to_a2a_tool_list, to_mcp_server_card_tools, to_mcp_tool_defs)
 """
 
 from __future__ import annotations
