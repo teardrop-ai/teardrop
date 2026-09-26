@@ -29,6 +29,7 @@ def x402_client(test_settings, monkeypatch):
         from teardrop.mcp_gateway import MCPGatewayMiddleware
         from tools.mcp_server import build_mcp_app, create_mcp_server
 
+        monkeypatch.setattr(MCPGatewayMiddleware, "_x402_tool_requirements", AsyncMock(return_value=None))
         mcp = create_mcp_server()
         mounted_mcp_app = build_mcp_app(mcp)
         mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())

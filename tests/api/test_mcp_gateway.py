@@ -18,6 +18,15 @@ import teardrop.config as config  # ── JWKS endpoint ───────�
 from teardrop._meta import APP_VERSION
 
 
+@pytest.fixture(autouse=True)
+def _flat_x402_pricing(monkeypatch):
+    # Scoped per-tool pricing is covered in test_mcp_gateway_x402_settlement.py.
+    monkeypatch.setattr(
+        "teardrop.mcp_gateway.MCPGatewayMiddleware._x402_tool_requirements",
+        AsyncMock(return_value=None),
+    )
+
+
 def test_mcp_bazaar_extension_has_valid_flat_jsonrpc_schema():
     from x402.extensions.bazaar import validate_discovery_extension
 
@@ -86,7 +95,7 @@ async def test_mcp_x402_challenges_include_bazaar_in_body_and_headers(monkeypatc
         verify_mock.assert_not_awaited()
         assert body["error"] == "Payment required"
     else:
-        verify_mock.assert_awaited_once_with(payment_header)
+        verify_mock.assert_awaited_once_with(payment_header, None)
         assert body["error"] == "Invalid payment"
 
 

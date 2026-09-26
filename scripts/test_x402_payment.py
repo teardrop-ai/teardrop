@@ -93,12 +93,17 @@ def get_jwt_via_siwe(base_url: str, siwe_message: str, signature: str) -> str:
     return resp.json()["access_token"]
 
 
-def call_agent_run_no_payment(base_url: str, jwt: str) -> dict:
-    """Call /agent/run without payment → expect 402."""
+def call_agent_run_no_payment(base_url: str, jwt: str | None = None) -> dict:
+    """Call /agent/run without payment → expect 402.
+
+    Anonymous mode (jwt=None) omits the Authorization header so the billing
+    gate falls through to the x402 challenge instead of the credit rail.
+    """
+    headers = {"Authorization": f"Bearer {jwt}"} if jwt else {}
     resp = requests.post(
         f"{base_url}/agent/run",
         json={"message": "What is 2+2?", "thread_id": "test-1"},
-        headers={"Authorization": f"Bearer {jwt}"},
+        headers=headers,
     )
 
     if resp.status_code == 402:
@@ -237,14 +242,13 @@ def sign_upto_payment(
 
 def call_agent_run_with_payment(
     base_url: str,
-    jwt: str,
+    jwt: str | None,
     payment_signature: str,
 ) -> None:
     """Call /agent/run with signed payment → stream SSE events."""
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "X-PAYMENT": payment_signature,
-    }
+    headers = {"X-PAYMENT": payment_signature}
+    if jwt:
+        headers["Authorization"] = f"Bearer {jwt}"
 
     resp = requests.post(
         f"{base_url}/agent/run",
@@ -297,6 +301,82 @@ def call_agent_run_with_payment(
         print("\n⚠ No settlement event captured")
 
 
+def call_mcp_tool_no_payment(base_url: str, tool_name: str, arguments: dict) -> dict:
+    """Call /tools/mcp tools/call anonymously → expect an x402 challenge.
+
+    The gateway returns HTTP 402 for plain HTTP clients, or a 200 JSON-RPC
+    result with isError=True + structuredContent for MCP clients.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    resp = requests.post(
+        f"{base_url}/tools/mcp",
+        json=payload,
+        headers={"Accept": "application/json"},
+    )
+
+    if resp.status_code == 402:
+        print("✓ Got HTTP 402 Payment Required (expected)")
+        return {"status": 402, "headers": dict(resp.headers), "body": resp.json() if resp.text else {}}
+
+    if resp.status_code == 200:
+        body = resp.json() if resp.text else {}
+        result = body.get("result", {})
+        if result.get("isError") and result.get("structuredContent"):
+            print("✓ Got MCP payment-required envelope (isError + structuredContent)")
+            return {"status": 200, "headers": dict(resp.headers), "body": result["structuredContent"]}
+
+    print(f"✗ Expected 402 or MCP payment envelope, got {resp.status_code}")
+    print(resp.text)
+    sys.exit(1)
+
+
+def call_mcp_tool_with_payment(base_url: str, tool_name: str, arguments: dict, payment_signature: str) -> None:
+    """Call /tools/mcp tools/call with a signed payment → expect a settled result."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    resp = requests.post(
+        f"{base_url}/tools/mcp",
+        json=payload,
+        headers={"Accept": "application/json", "X-PAYMENT": payment_signature},
+    )
+
+    if resp.status_code != 200:
+        print(f"✗ Expected 200, got {resp.status_code}")
+        print(resp.text)
+        sys.exit(1)
+
+    body = resp.json() if resp.text else {}
+    result = body.get("result", {})
+    if result.get("isError"):
+        print("✗ Tool call returned isError after payment")
+        print(json.dumps(result, indent=2))
+        sys.exit(1)
+
+    print("✓ Got 200 OK (tool executed)")
+    print(f"   content: {json.dumps(result.get('content'))[:200]}")
+    receipt = (result.get("_meta") or {}).get("x402/payment-response")
+    if receipt:
+        print("\n🎉 x402/payment-response receipt:")
+        print(f"   transaction: {receipt.get('transaction')}")
+        print(f"   network: {receipt.get('network')}")
+        print(f"   payer: {receipt.get('payer')}")
+        print(f"   amount: {receipt.get('amount')}")
+        tx = receipt.get("transaction")
+        if tx:
+            print(f"   View: https://basescan.org/tx/{tx}")
+    else:
+        print("\n⚠ No x402/payment-response receipt attached")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test x402 payment flow")
     parser.add_argument("private_key", help="Hex private key (0x-prefixed)")
@@ -306,6 +386,21 @@ def main():
         choices=["exact", "upto"],
         default="exact",
         help="Payment scheme to use (default: exact)",
+    )
+    parser.add_argument(
+        "--anonymous",
+        action="store_true",
+        help="Skip SIWE and call /agent/run without a JWT to exercise the x402 rail",
+    )
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Test the anonymous x402 rail on /tools/mcp instead of /agent/run",
+    )
+    parser.add_argument(
+        "--tool",
+        default="get_token_price",
+        help="MCP tool name to call in --mcp mode (default: get_token_price)",
     )
     parser.add_argument(
         "--rpc-url",
@@ -335,6 +430,7 @@ def main():
     print(f"🌐 Domain: {domain}")
     print(f"🔗 Base URL: {base_url}")
     print(f"📋 Scheme: {scheme}")
+    print(f"🕶️  Anonymous: {args.anonymous}")
     print()
 
     # Upto: check Permit2 allowance before proceeding
@@ -352,26 +448,38 @@ def main():
         print(f"✓ Permit2 allowance: {allowance} atomic USDC")
         print()
 
-    # Step 1: Get nonce
-    print("→ Step 1: Getting SIWE nonce...")
-    nonce = get_nonce(base_url)
-    print(f"✓ Nonce: {nonce[:16]}...")
+    jwt = None
+    if args.mcp:
+        # /tools/mcp is the only surface that challenges anonymous callers.
+        print("→ Skipping SIWE (MCP gateway mode)")
+    elif args.anonymous:
+        # No JWT: the billing gate must fall through to the x402 challenge.
+        print("→ Skipping SIWE (anonymous x402 mode)")
+    else:
+        # Step 1: Get nonce
+        print("→ Step 1: Getting SIWE nonce...")
+        nonce = get_nonce(base_url)
+        print(f"✓ Nonce: {nonce[:16]}...")
 
-    # Step 2: Sign SIWE message
-    print("\n→ Step 2: Creating and signing SIWE message...")
-    siwe_msg = create_siwe_message(nonce, address, domain)
-    print(f"   SIWE message: {siwe_msg[:100]}...")
-    siwe_sig = sign_message(siwe_msg, private_key)
-    print("✓ Signed SIWE message")
+        # Step 2: Sign SIWE message
+        print("\n→ Step 2: Creating and signing SIWE message...")
+        siwe_msg = create_siwe_message(nonce, address, domain)
+        print(f"   SIWE message: {siwe_msg[:100]}...")
+        siwe_sig = sign_message(siwe_msg, private_key)
+        print("✓ Signed SIWE message")
 
-    # Step 3: Get JWT
-    print("\n→ Step 3: Exchanging SIWE for JWT...")
-    jwt = get_jwt_via_siwe(base_url, siwe_msg, siwe_sig)
-    print(f"✓ JWT: {jwt[:50]}...")
+        # Step 3: Get JWT
+        print("\n→ Step 3: Exchanging SIWE for JWT...")
+        jwt = get_jwt_via_siwe(base_url, siwe_msg, siwe_sig)
+        print(f"✓ JWT: {jwt[:50]}...")
 
-    # Step 4: Call /agent/run without payment
-    print("\n→ Step 4: Calling /agent/run (no payment)...")
-    payment_required = call_agent_run_no_payment(base_url, jwt)
+    # Step 4: Call the target endpoint without payment
+    if args.mcp:
+        print(f"\n→ Step 4: Calling /tools/mcp tools/call '{args.tool}' (no payment)...")
+        payment_required = call_mcp_tool_no_payment(base_url, args.tool, {"tokens": ["ETH"]})
+    else:
+        print("\n→ Step 4: Calling /agent/run (no payment)...")
+        payment_required = call_agent_run_no_payment(base_url, jwt)
     # x402 v2 uses 'accepts' key
     payment_requirements = payment_required["body"].get("accepts", [])
     if not payment_requirements:
@@ -399,9 +507,13 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    # Step 6: Call /agent/run with payment
-    print("\n→ Step 6: Calling /agent/run with signed payment...")
-    call_agent_run_with_payment(base_url, jwt, payment_sig)
+    # Step 6: Retry with the signed payment
+    if args.mcp:
+        print(f"\n→ Step 6: Calling /tools/mcp tools/call '{args.tool}' with signed payment...")
+        call_mcp_tool_with_payment(base_url, args.tool, {"tokens": ["ETH"]}, payment_sig)
+    else:
+        print("\n→ Step 6: Calling /agent/run with signed payment...")
+        call_agent_run_with_payment(base_url, jwt, payment_sig)
 
 
 if __name__ == "__main__":

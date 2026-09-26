@@ -276,6 +276,18 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         pending_debit = await self._billing_gate(request)
         if isinstance(pending_debit, Response):
             return pending_debit
+        if pending_debit is None and getattr(request.state, "x402_billing", None) is not None:
+            # A verified x402 payment must never execute without a settlement path.
+            logger.error("x402 MCP payment verified but billing gate is inactive; rejecting call")
+            payment_header = self._payment_header(request)
+            if payment_header:
+                from billing import release_payment_nonce
+
+                await release_payment_nonce(payment_header)
+            return JSONResponse(
+                status_code=503,
+                content=_jsonrpc_error(rpc_id, -32603, "Paid MCP execution is temporarily unavailable."),
+            )
 
         # ── Forward to MCPServer ──────────────────────────────────────────
         try:
@@ -501,16 +513,26 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             if payment_header:
                 request.state.mcp_x402_payment = payment_header
         mcp_signal = self._meta_payment(request) is not None or _wants_mcp_payment_signal(request)
+        try:
+            requirements = await self._x402_tool_requirements(data)
+        except Exception:
+            logger.warning("x402 MCP tool pricing unavailable", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content=_jsonrpc_error(data.get("id"), -32603, "Paid MCP pricing is temporarily unavailable."),
+            )
         response_kwargs = {
             "resource": _mcp_402_resource(request),
             "extensions": _mcp_402_extensions(),
         }
+        if requirements is not None:
+            response_kwargs["requirements"] = requirements
         if not payment_header:
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
-        billing = await verify_payment(payment_header)
+        billing = await verify_payment(payment_header, requirements)
         if not billing.verified:
             response_kwargs["error"] = billing.error
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
@@ -521,6 +543,29 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         request.state.mcp_org_id = None
         request.state.mcp_auth_method = "x402"
         return None  # success — continue to billing / MCPServer
+
+    @staticmethod
+    async def _resolve_tool_cost(tool_name: str) -> int:
+        from billing import get_current_pricing, get_tool_pricing_overrides, resolve_tool_cost
+
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_cost if pricing else 0
+        return await resolve_tool_cost(tool_name, overrides, default_cost, get_settings().marketplace_enabled)
+
+    @classmethod
+    async def _x402_tool_requirements(cls, data: dict) -> list | None:
+        """Exact requirements priced at the called tool's cost; None keeps the flat default."""
+        params = data.get("params")
+        tool_name = params.get("name") if isinstance(params, dict) else None
+        if not isinstance(tool_name, str) or not tool_name:
+            return None
+        tool_cost = await cls._resolve_tool_cost(tool_name)
+        if tool_cost <= 0:
+            return None
+        from billing import build_exact_payment_requirements
+
+        return build_exact_payment_requirements(tool_cost) or None
 
     @staticmethod
     def _x402_challenge(req_id: int | str | None, mcp_signal: bool, response_kwargs: dict) -> Response:
@@ -582,19 +627,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if not tool_name:
             return None
 
-        from billing import (
-            get_current_pricing,
-            get_tool_pricing_overrides,
-            is_promotional_credit,
-            resolve_tool_cost,
-            verify_credit,
-        )
+        from billing import is_promotional_credit, verify_credit
 
-        overrides = await get_tool_pricing_overrides()
-        pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_cost if pricing else 0
-
-        tool_cost = await resolve_tool_cost(tool_name, overrides, default_cost, settings.marketplace_enabled)
+        tool_cost = await self._resolve_tool_cost(tool_name)
 
         # x402 callers are billed via on-chain settlement after execution. The
         # subscription gate and credit verification are credit-rail concepts and
@@ -603,6 +638,10 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             from billing import release_payment_nonce, reserve_payer_spend
 
             x402_billing = request.state.x402_billing
+            authorized = int(getattr(getattr(x402_billing, "payment_requirements", None), "amount", 0) or 0)
+            if getattr(x402_billing, "scheme", "exact") == "exact" and authorized > 0:
+                # Exact settles the full authorized amount, so account for that, not the catalog price.
+                tool_cost = authorized
             payer = getattr(x402_billing, "payer", "")
             payment_header = self._payment_header(request)
             if not isinstance(payer, str) or not payer.strip() or not payment_header:
