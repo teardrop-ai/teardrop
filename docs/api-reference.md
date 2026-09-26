@@ -298,6 +298,30 @@ Dispatch concurrency is enforced cluster-wide through Postgres leases. Saturated
 | `GET` | `/agent/event-triggers/{id}/runs/{run_id}` | Bearer | Poll one run as an A2A task |
 | `POST` | `/agent/events/{trigger_token}` | Trigger secret | Dispatch a JSON event and receive `202 Accepted` with a run ID |
 
+### Labeling and Verified Outcomes
+
+Org-scoped prediction labeling. External submissions require `VOR_ENABLED=true`, a Bearer JWT containing `org_id`, and an EIP-191 `personal_sign` signature from a wallet linked to that org through `POST /wallets/link`. The signed text is:
+
+```text
+Teardrop VOR prediction v1
+org:{org_id}
+definition:{definition_key}@{definition_version}
+idempotency_key:{idempotency_key}
+payload_sha256:{sha256 of canonical JSON}
+```
+
+Canonical JSON is `json.dumps(predictions, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)`. A `401` response includes the server's `payload_sha256` so clients can diagnose canonicalization differences. The server assigns `prediction_at`; request bodies that include it are rejected. Reusing an idempotency key with the same payload returns `200`; a different payload returns `409`. Every earliest target window must close at least twice `VOR_ANCHOR_INTERVAL_SECONDS` after submission. Only EOA signatures are supported.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/labeling/definitions` | Bearer | List active labeling definitions |
+| `POST` | `/labeling/bindings` | Bearer | Bind a scheduled run to a definition |
+| `GET` | `/labeling/predictions` | Bearer | List the org's predictions |
+| `POST` | `/labeling/predictions` | Bearer + wallet signature | Commit a signed external prediction (free, rate-limited) |
+| `GET` | `/labeling/predictions/{id}/proof` | Bearer | Commitment leaf, salt, and RFC 6962 inclusion proof with its Base anchor (`pending`, `submitted`, or `anchored`) |
+| `GET` | `/labeling/results` | Bearer | List append-only labeling results |
+| `POST` | `/labeling/results/{target_id}/override` | Bearer | Append an external or manual result |
+
 ---
 
 ### Calling the agent (PowerShell)

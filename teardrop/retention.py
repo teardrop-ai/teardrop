@@ -117,6 +117,7 @@ _DELETE_LABELING_PREDICTIONS_SQL = """
         SELECT id
         FROM labeling_predictions
         WHERE created_at < NOW() - make_interval(days => $1)
+          AND leaf_sha256 IS NULL
         ORDER BY created_at, id
         LIMIT $2
         FOR UPDATE SKIP LOCKED

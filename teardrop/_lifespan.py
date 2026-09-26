@@ -36,6 +36,7 @@ from teardrop._background_tasks import (
     _retention_sweep_loop,
     _run_periodic,
     _settlement_retry_loop,
+    _vor_anchor_loop,
     _x402_nonce_cleanup_loop,
 )
 from teardrop.a2a_tasks import (
@@ -165,6 +166,10 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_event_dispatch_recovery_loop()))
         if settings.labeling_enabled:
             bg_tasks.append(asyncio.create_task(_labeling_loop()))
+        if settings.vor_enabled and settings.cdp_configured:
+            bg_tasks.append(asyncio.create_task(_vor_anchor_loop()))
+        elif settings.vor_enabled:
+            logger.warning("VOR_ENABLED=true but CDP credentials are not set; commitments will not be anchored")
         if settings.scheduled_runs_enabled:
             bg_tasks.append(
                 asyncio.create_task(

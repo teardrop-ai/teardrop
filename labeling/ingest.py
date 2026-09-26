@@ -16,6 +16,7 @@ from labeling.store import (
     get_definition,
     insert_prediction,
 )
+from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -113,5 +114,6 @@ async def ingest_scheduled_run_predictions(
         targets=targets if not parse_error else [],
         prediction_at=captured_at,
         parse_error=parse_error,
+        commit=get_settings().vor_enabled,
     )
     return prediction_id

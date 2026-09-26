@@ -55,7 +55,7 @@ Each graph invocation records its thread in `checkpoint_thread_activity` before 
 | Expired `siwe_login_sessions` | Deleted every retention pass because they can contain short-lived token material |
 | `usage_events`, `org_credit_ledger`, settlements, Stripe events, marketplace earnings/withdrawals, `a2a_inbound_events`, `x_broadcasts` | Immutable financial or audit records; never swept |
 | `tool_call_events`, `run_decisions` | Long-lived ML and routing telemetry; each row carries `source` (`api`, `schedule`, `trigger`, or `a2a`); never swept |
-| `labeling_predictions`, targets, and results | Structured ML labels; 365 days by default via `LABELING_RETENTION_DAYS`; never mixed with billing ledgers |
+| `labeling_predictions`, targets, and results | Structured ML labels; 365 days by default via `LABELING_RETENTION_DAYS`; never mixed with billing ledgers. Predictions with a commitment leaf, together with their targets and results, are never swept |
 
 Retention sweeps are batched, parameterized, and log per-table counts on every pass. The Sentry cron monitor covers failed or stalled sweeps. Setting a configurable TTL to `0` disables that table's cleanup.
 
@@ -68,6 +68,16 @@ Scheduled callbacks remain JSON by default for compatibility. Set a schedule's `
 The labeling worker is disabled by default and uses six shared Postgres tables: versioned definitions, schedule bindings, predictions, target items, deduplicated observations, and append-only results. It claims target items with `FOR UPDATE SKIP LOCKED` leases, batches compatible provider requests, retries unavailable observations with bounded backoff, and never changes billing, settlement, usage, or scheduled-run status. The three current task classes use thin parser/provider/scorer adapters over the same engine; new trusted adapters add no tables or worker loops.
 
 Prediction payloads are bounded JSON, definition versions are immutable, server timestamps define evaluation windows, and organization scope is enforced on bindings, predictions, targets, results, and private observation scopes. Existing JSON-plus-report prompts remain supported through a bounded JSON-prefix fallback while migrated prompts send the JSON through `record_predictions` and return only the report.
+
+### Verified-Outcome Commitments
+
+With `VOR_ENABLED=true`, every new accepted prediction receives a commitment leaf at insert. External submissions (`POST /labeling/predictions`) carry the agent's EIP-191 signature; scheduled-run predictions are platform-attested with an empty signer.
+
+- **Leaf:** `sha256(0x00 || canonical_json({...fields, "v": 1, "salt": salt}))`. Prediction fields are `prediction_id`, `org_id`, `signer`, `definition` (`key@version`), `payload_sha256`, and `prediction_at` (UTC ISO 8601 with microseconds). The random per-row salt prevents brute-forcing low-entropy payloads from disclosed hashes. Version `2` is reserved for execution receipts.
+- **Batches:** the anchor worker seals up to 4,096 unanchored leaves per batch into an RFC 6962 Merkle tree (`0x01` interior prefix, split at the largest power of two), then sends the 32-byte root as the `data` of a 0-value self-transaction from the CDP account `VOR_ANCHOR_CDP_ACCOUNT` on Base. Confirmation checks the transaction's input, sender, recipient, receipt status, and block timestamp. Re-sending a root is harmless, so dropped or reverted transactions are retried without manual reconciliation.
+- **Anchorable tables:** `commitment_batches` is source-agnostic. Any table with `leaf_sha256`, `commit_salt`, `anchor_batch_id`, `anchor_leaf_index`, and a guard trigger can register as an anchor source; see `labeling/commitments.py`.
+- **Immutability:** database triggers reject deletes and changes to committed prediction rows, allow anchor assignment once, and freeze a batch after confirmation. Retention never deletes committed predictions.
+- **Verification:** fetch `GET /labeling/predictions/{id}/proof`, recompute the leaf from `leaf_preimage`, `leaf_version`, and `salt`, verify `audit_path` against `merkle_root` (RFC 9162 section 2.1.3.2), and confirm with `eth_getTransactionByHash` that `input` equals `0x` + root and `from` equals `anchor_address`. Proofs are visible only to the owning organization.
 
 ---
 

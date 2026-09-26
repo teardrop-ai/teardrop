@@ -3,14 +3,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from labeling.commitments import LEAF_VERSION_PREDICTION, leaf_hash, new_salt, prediction_leaf_fields
 from labeling.contracts import Definition, Observation, ScoreResult, TargetDraft, canonical_json
 from shared.db_pool import PgPool, Row
 
 _pool: PgPool | None = None
+
+
+class PredictionConflictError(ValueError):
+    """An external idempotency key was reused with a different payload."""
 
 
 async def init_labeling_db(pool: PgPool) -> None:
@@ -158,12 +164,32 @@ async def insert_prediction(
     targets: Iterable[TargetDraft],
     prediction_at: datetime | None = None,
     parse_error: str = "",
+    signer_address: str | None = None,
+    signature: str | None = None,
+    commit: bool = False,
 ) -> tuple[str, bool]:
     encoded = canonical_json(predictions)
-    payload_hash = __import__("hashlib").sha256(encoded.encode("utf-8")).hexdigest()
+    payload_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     prediction_id = str(uuid.uuid4())
     status = "invalid" if parse_error else "accepted"
     created_at = prediction_at or datetime.now(timezone.utc)
+    salt: str | None = None
+    leaf: str | None = None
+    if commit and status == "accepted":
+        salt = new_salt()
+        leaf = leaf_hash(
+            LEAF_VERSION_PREDICTION,
+            prediction_leaf_fields(
+                prediction_id=prediction_id,
+                org_id=org_id,
+                signer_address=signer_address,
+                definition_key=definition.key,
+                definition_version=definition.version,
+                payload_sha256=payload_hash,
+                prediction_at=created_at,
+            ),
+            salt,
+        )
     target_rows = list(targets)
     pool = _get_pool()
     async with pool.acquire() as conn:
@@ -173,8 +199,10 @@ async def insert_prediction(
                 INSERT INTO labeling_predictions
                     (id, org_id, source_kind, source_id, run_id, schedule_id, binding_id,
                      definition_key, definition_version, predictions, payload_sha256,
-                     prediction_at, status, parse_error, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $12)
+                     prediction_at, status, parse_error, created_at,
+                     signer_address, signature, commit_salt, leaf_sha256)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $12,
+                        $15, $16, $17, $18)
                 ON CONFLICT (org_id, source_kind, source_id, definition_key, definition_version)
                 DO NOTHING
                 RETURNING id
@@ -193,13 +221,17 @@ async def insert_prediction(
                 created_at,
                 status,
                 parse_error[:2000],
+                signer_address,
+                signature,
+                salt,
+                leaf,
             )
             inserted = row is not None
             persisted_status = status
             if not inserted:
                 row = await conn.fetchrow(
                     """
-                    SELECT id, status
+                    SELECT id, status, payload_sha256
                     FROM labeling_predictions
                                         WHERE org_id = $1 AND source_kind = $2 AND source_id = $3
                                             AND definition_key = $4 AND definition_version = $5
@@ -212,6 +244,8 @@ async def insert_prediction(
                 )
             if row is None:
                 raise RuntimeError("Labeling prediction was not persisted")
+            if not inserted and source_kind == "external" and row["payload_sha256"] != payload_hash:
+                raise PredictionConflictError("Idempotency key was already used with a different payload")
             prediction_id = str(row["id"])
             if not inserted:
                 persisted_status = str(row["status"])
@@ -494,6 +528,23 @@ async def list_predictions(org_id: str, limit: int = 50) -> list[dict[str, Any]]
         max(1, min(limit, 100)),
     )
     return [dict(row) for row in rows]
+
+
+async def get_prediction_commitment(org_id: str, prediction_id: str) -> Row | None:
+    return await _get_pool().fetchrow(
+        """
+        SELECT p.id, p.org_id, p.signer_address, p.definition_key, p.definition_version,
+               p.payload_sha256, p.prediction_at, p.commit_salt, p.leaf_sha256,
+               p.anchor_batch_id, p.anchor_leaf_index,
+               b.merkle_root, b.leaf_count, b.chain_id, b.tx_hash, b.anchor_address,
+               b.block_number, b.anchored_at
+        FROM labeling_predictions p
+        LEFT JOIN commitment_batches b ON b.id = p.anchor_batch_id
+        WHERE p.id = $1 AND p.org_id = $2 AND p.leaf_sha256 IS NOT NULL
+        """,
+        prediction_id,
+        org_id,
+    )
 
 
 async def list_results(org_id: str, limit: int = 50) -> list[dict[str, Any]]:

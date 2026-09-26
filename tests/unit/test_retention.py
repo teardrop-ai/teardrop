@@ -30,6 +30,11 @@ def test_retention_stub_covers_all_settings_accesses():
     assert not missing, f"shared retention stub is missing settings: {sorted(missing)}"
 
 
+def test_labeling_retention_never_sweeps_committed_predictions():
+    sql = retention_module._DELETE_LABELING_PREDICTIONS_SQL
+    assert "leaf_sha256 IS NULL" in sql.split("FOR UPDATE", 1)[0]
+
+
 def _checkpoint_pool(thread_batches: list[list[dict[str, str]]]) -> tuple[MagicMock, MagicMock]:
     connection = MagicMock()
     connection.fetch = AsyncMock(side_effect=thread_batches)

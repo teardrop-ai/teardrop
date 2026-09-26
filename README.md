@@ -7,7 +7,7 @@
    ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
 ```
 
-Teardrop is a streaming AI agent API. You send it a message; it reasons using your configured LLM (Anthropic, OpenAI, Google, or OpenRouter), optionally calls tools, builds a structured UI component tree, and streams everything back as Server-Sent Events. It implements four open protocols simultaneously: **AG-UI** (streaming events), **A2A** (agent discoverability), **MCP** (tool serving), and **x402** (per-request payments in USDC on Base, no subscription required).
+Teardrop is a streaming API for applications and software agents to run tool-using AI workflows. Clients submit a message or task; Teardrop orchestrates a configured LLM (Anthropic, OpenAI, Google, or OpenRouter) and available tools, then streams structured results and UI events over Server-Sent Events (SSE). It supports **AG-UI** for streaming interaction, **A2A** for agent discovery and delegation, **MCP** for tool access, and optional **x402** pay-per-request USDC settlement on Base.
 
 ---
 
@@ -57,7 +57,9 @@ Organizations can schedule recurring, unattended agent runs with integrated cred
 
 Due runs are claimed with a row-locking query (`FOR UPDATE SKIP LOCKED`) and execute concurrently with per-run failure isolation, so multiple worker instances can scale horizontally. Results are archived under `scheduled_run_results` and can be dispatched to an HTTPS-only, SSRF-checked callback URL. Use `callback_format=text` for a plain-text mobile notification; JSON remains the default. Configure via `SCHEDULED_RUNS_*` settings (see [docs/configuration.md](docs/configuration.md)).
 
-Scheduled analysis prompts can call the internal `record_predictions` tool with their exact structured payload and return only the human-readable report. Teardrop labels those predictions asynchronously against future observations through the generalized labeling data plane; callbacks can therefore send clean reports to mobile notifications while structured values remain available for ML evaluation. See [docs/architecture.md](docs/architecture.md) and the `LABELING_*` settings in [docs/configuration.md](docs/configuration.md).
+Scheduled analysis prompts can call the internal `record_predictions` tool with their exact structured payload and return only a concise narrative report. Teardrop labels those predictions asynchronously against future observations through the generalized labeling data plane; callbacks can therefore deliver the report to downstream notification systems while structured values remain available for ML evaluation. See [docs/architecture.md](docs/architecture.md) and the `LABELING_*` settings in [docs/configuration.md](docs/configuration.md).
+
+With `VOR_ENABLED=true`, external agents can also commit wallet-signed predictions through `POST /labeling/predictions`. Teardrop timestamps each prediction on the server, batches commitments into Merkle trees anchored on Base, and returns inclusion proofs from `GET /labeling/predictions/{id}/proof`. See the `VOR_*` settings in [docs/configuration.md](docs/configuration.md).
 
 ### Event-Triggered (Reactive) Runs
 
@@ -320,7 +322,7 @@ In other words, BYOK does not eliminate the need for Teardrop credits or x402 se
 
 ## Model Benchmarks
 
-Teardrop continuously tracks operational metrics for every LLM deployed. These benchmarks help you make informed routing decisions.
+Teardrop continuously tracks operational metrics for every LLM deployed. These benchmarks inform model-routing decisions.
 
 ### Benchmarks endpoints
 

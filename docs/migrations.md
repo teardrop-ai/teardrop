@@ -120,3 +120,4 @@ python -m migrations.runner
 | `105_opportunity_validation_platform_tool.sql` | Registers `validate_opportunity` composite platform tool at $0.015 USDC |
 | `106_x_broadcast_sink.sql` | Adds X (Twitter) broadcast sink to `scheduled_runs` and durable `x_broadcasts` audit ledger |
 | `107_mcp_call_events.sql` | Adds immutable MCP settlement outcome events for machine-volume conversion and retention metrics |
+| `110_vor_commitments.sql` | Source-agnostic `commitment_batches`, signed/committed prediction columns, and triggers that make committed rows append-only and confirmed batches immutable |

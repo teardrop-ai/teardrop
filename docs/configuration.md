@@ -141,7 +141,11 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `LABELING_BATCH_SIZE` | Maximum target items claimed per labeling pass (default: `50`) |
 | `LABELING_MAX_PER_ORG` | Maximum concurrently leased labeling targets per organization (default: `10`) |
 | `LABELING_LEASE_SECONDS` | Target lease duration before another worker may reclaim it (default: `120`) |
-| `LABELING_RETENTION_DAYS` | Retain structured prediction labels for this many days (default: `365`; `0` keeps them indefinitely) |
+| `LABELING_RETENTION_DAYS` | Retain structured prediction labels for this many days (default: `365`; `0` keeps them indefinitely). Committed predictions are never swept |
+| `VOR_ENABLED` | Enable signed external prediction submission and commitment leaves for new accepted predictions (default: `false`). Anchoring also requires CDP credentials |
+| `VOR_ANCHOR_INTERVAL_SECONDS` | Commitment anchor cadence (default: `3600`, range `300`–`86400`); submissions need a target horizon of at least twice this value |
+| `VOR_ANCHOR_CDP_ACCOUNT` | CDP account that sends 0-value anchor transactions on the `CDP_NETWORK` chain (default: `td-vor-anchor`). Fund it with a small Base ETH balance for gas |
+| `RATE_LIMIT_VOR_SUBMIT_RPM` | Per-organization external prediction submissions per minute (default: `60`) |
 | `X_BROADCAST_ENABLED` | Enable automated publishing of completed scheduled runs to X (Twitter) (default: `false`) |
 | `X_BROADCAST_ORG_ID` | Operator organization ID authorized to configure X broadcast schedules (required when enabled; other orgs are rejected) |
 | `X_API_KEY` | X API consumer key / API key for OAuth 1.0a authentication (optional) |

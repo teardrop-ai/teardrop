@@ -214,6 +214,16 @@ async def get_wallet_by_address_any_chain(address: str) -> Wallet | None:
     return await _fetch_wallet_by_address(pool, address)
 
 
+async def is_wallet_linked_to_org(org_id: str, address: str) -> bool:
+    """Return whether *address* is linked to *org_id* on any chain."""
+    linked = await _get_pool().fetchval(
+        "SELECT 1 FROM wallets WHERE org_id = $1 AND LOWER(address) = LOWER($2) LIMIT 1",
+        org_id,
+        address,
+    )
+    return linked is not None
+
+
 async def get_provisioning_state_by_payment_ref(payment_ref: str) -> dict | None:
     """Return the immutable provisioning event and latest settlement outcome."""
     pool = _get_pool()

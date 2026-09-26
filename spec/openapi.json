@@ -5234,6 +5234,230 @@
         "title": "PossiblyDeliveredDelegationItem",
         "type": "object"
       },
+      "PredictionProofAnchor": {
+        "properties": {
+          "anchor_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Address"
+          },
+          "anchored_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchored At"
+          },
+          "audit_path": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Audit Path",
+            "type": "array"
+          },
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "block_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Number"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "leaf_index": {
+            "title": "Leaf Index",
+            "type": "integer"
+          },
+          "merkle_root": {
+            "title": "Merkle Root",
+            "type": "string"
+          },
+          "tree_size": {
+            "title": "Tree Size",
+            "type": "integer"
+          },
+          "tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Hash"
+          }
+        },
+        "required": [
+          "batch_id",
+          "leaf_index",
+          "tree_size",
+          "merkle_root",
+          "audit_path",
+          "chain_id",
+          "tx_hash",
+          "anchor_address",
+          "block_number",
+          "anchored_at"
+        ],
+        "title": "PredictionProofAnchor",
+        "type": "object"
+      },
+      "PredictionProofResponse": {
+        "properties": {
+          "anchor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PredictionProofAnchor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hash_algorithm": {
+            "const": "rfc6962-sha256",
+            "title": "Hash Algorithm",
+            "type": "string"
+          },
+          "leaf_preimage": {
+            "additionalProperties": true,
+            "title": "Leaf Preimage",
+            "type": "object"
+          },
+          "leaf_sha256": {
+            "title": "Leaf Sha256",
+            "type": "string"
+          },
+          "leaf_version": {
+            "title": "Leaf Version",
+            "type": "integer"
+          },
+          "prediction_id": {
+            "title": "Prediction Id",
+            "type": "string"
+          },
+          "salt": {
+            "title": "Salt",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "submitted",
+              "anchored"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prediction_id",
+          "status",
+          "hash_algorithm",
+          "leaf_version",
+          "leaf_preimage",
+          "salt",
+          "leaf_sha256",
+          "anchor"
+        ],
+        "title": "PredictionProofResponse",
+        "type": "object"
+      },
+      "PredictionSubmitRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "definition_key": {
+            "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$",
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "predictions": {
+            "additionalProperties": true,
+            "title": "Predictions",
+            "type": "object"
+          },
+          "signature": {
+            "pattern": "^0x[0-9a-fA-F]{130}$",
+            "title": "Signature",
+            "type": "string"
+          },
+          "signer_address": {
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "title": "Signer Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "definition_key",
+          "definition_version",
+          "idempotency_key",
+          "signer_address",
+          "signature",
+          "predictions"
+        ],
+        "title": "PredictionSubmitRequest",
+        "type": "object"
+      },
+      "PredictionSubmitResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload_sha256": {
+            "title": "Payload Sha256",
+            "type": "string"
+          },
+          "status": {
+            "const": "accepted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "payload_sha256",
+          "status",
+          "created"
+        ],
+        "title": "PredictionSubmitResponse",
+        "type": "object"
+      },
       "PricingRuleWithOverrides": {
         "properties": {
           "created_at": {
@@ -11784,6 +12008,111 @@
           }
         ],
         "summary": "Get Labeling Predictions",
+        "tags": [
+          "Labeling"
+        ]
+      },
+      "post": {
+        "description": "Commit a signed external prediction; the server assigns its timestamp.",
+        "operationId": "submit_labeling_prediction_labeling_predictions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictionSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay of an existing submission."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictionSubmitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Signature does not match the canonical payload."
+          },
+          "403": {
+            "description": "Signer wallet is not linked to the organization."
+          },
+          "409": {
+            "description": "Idempotency key was reused with a different payload."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Labeling Prediction",
+        "tags": [
+          "Labeling"
+        ]
+      }
+    },
+    "/labeling/predictions/{prediction_id}/proof": {
+      "get": {
+        "description": "Return the commitment leaf and, once sealed, its Merkle inclusion proof and anchor.",
+        "operationId": "get_labeling_prediction_proof_labeling_predictions__prediction_id__proof_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "prediction_id",
+            "required": true,
+            "schema": {
+              "title": "Prediction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictionProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Labeling Prediction Proof",
         "tags": [
           "Labeling"
         ]

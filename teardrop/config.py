@@ -324,6 +324,26 @@ class Settings(BaseSettings):
         ge=0,
         description="Days labeling predictions and results are retained; 0 keeps them indefinitely.",
     )
+    vor_enabled: bool = Field(
+        default=False,
+        description="Enable signed external prediction submission and Merkle commitments for new accepted predictions.",
+    )
+    vor_anchor_interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        description="Interval in seconds between commitment anchor passes; submissions need a horizon of twice this.",
+    )
+    vor_anchor_cdp_account: str = Field(
+        default="td-vor-anchor",
+        pattern=r"^[A-Za-z0-9-]{2,36}$",
+        description="CDP account name that sends 0-value anchor transactions; it must hold Base ETH for gas.",
+    )
+    rate_limit_vor_submit_rpm: int = Field(
+        default=60,
+        ge=1,
+        description="Per-organization external prediction submissions per minute.",
+    )
     agent_ui_generator_provider: str = Field(
         default="google",
         description="Provider for UI generation turns when no org-level BYOK config is set.",

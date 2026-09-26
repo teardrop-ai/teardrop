@@ -25,9 +25,9 @@ async def labeling_db_pool(docker_postgres: str):
     pool = await create_pool(docker_postgres, min_size=1, max_size=5, name="integration-labeling")
     await apply_pending(pool)
     await init_labeling_db(pool)
-    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations RESTART IDENTITY CASCADE")
+    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations, commitment_batches RESTART IDENTITY CASCADE")
     yield pool
-    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations RESTART IDENTITY CASCADE")
+    await pool.execute("TRUNCATE TABLE labeling_predictions, labeling_observations, commitment_batches RESTART IDENTITY CASCADE")
     await close_labeling_db()
     await pool.close()
 
@@ -97,3 +97,81 @@ async def test_labeling_prediction_claim_and_completion_are_idempotent(labeling_
         is False
     )
     assert await labeling_db_pool.fetchval("SELECT status FROM labeling_targets WHERE id = $1", claimed[0]["id"]) == "scored"
+
+
+@pytest.mark.asyncio
+async def test_committed_prediction_is_sealed_immutable_and_retained(labeling_db_pool):
+    from labeling.anchor import batch_leaves, seal_batch
+    from labeling.commitments import audit_path, merkle_root, verify_path
+    from shared.db_pool import CheckViolation
+    from teardrop.retention import _DELETE_LABELING_PREDICTIONS_SQL
+
+    definition = await get_definition("entry_timing", 1)
+    assert definition is not None
+    now = datetime.now(timezone.utc)
+    prediction_id, _ = await insert_prediction(
+        org_id="org-a",
+        source_kind="external",
+        source_id="key-a",
+        run_id="",
+        schedule_id="",
+        binding_id=None,
+        definition=definition,
+        predictions={"task_class": "entry_timing", "tokens": [{"id": "token-1"}]},
+        targets=[],
+        prediction_at=now - timedelta(days=400),
+        signer_address="0x" + "ab" * 20,
+        signature="0x" + "cd" * 65,
+        commit=True,
+    )
+
+    batch_id = await seal_batch(84532)
+    assert batch_id is not None
+    assert await seal_batch(84532) is None
+    row = await labeling_db_pool.fetchrow(
+        """
+        SELECT p.leaf_sha256, p.anchor_leaf_index, b.merkle_root, b.leaf_count
+        FROM labeling_predictions p JOIN commitment_batches b ON b.id = p.anchor_batch_id
+        WHERE p.id = $1
+        """,
+        prediction_id,
+    )
+    leaves = await batch_leaves(batch_id, row["leaf_count"])
+    assert merkle_root(leaves) == row["merkle_root"]
+    index = row["anchor_leaf_index"]
+    assert verify_path(row["leaf_sha256"], index, len(leaves), audit_path(leaves, index), row["merkle_root"])
+
+    with pytest.raises(CheckViolation):
+        await labeling_db_pool.execute(
+            "UPDATE labeling_predictions SET payload_sha256 = $2 WHERE id = $1", prediction_id, "0" * 64
+        )
+    with pytest.raises(CheckViolation):
+        await labeling_db_pool.execute("UPDATE labeling_predictions SET anchor_leaf_index = 99 WHERE id = $1", prediction_id)
+    with pytest.raises(CheckViolation):
+        await labeling_db_pool.execute("DELETE FROM labeling_predictions WHERE id = $1", prediction_id)
+    with pytest.raises(CheckViolation):
+        await labeling_db_pool.execute("UPDATE commitment_batches SET merkle_root = $2 WHERE id = $1", batch_id, "0" * 64)
+
+    assert await labeling_db_pool.fetchval(_DELETE_LABELING_PREDICTIONS_SQL, 1, 100) == 0
+    assert await labeling_db_pool.fetchval("SELECT COUNT(*) FROM labeling_predictions WHERE id = $1", prediction_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_external_prediction_requires_signature_and_leaf(labeling_db_pool):
+    from shared.db_pool import CheckViolation
+
+    definition = await get_definition("entry_timing", 1)
+    assert definition is not None
+    with pytest.raises(CheckViolation):
+        await insert_prediction(
+            org_id="org-a",
+            source_kind="external",
+            source_id="key-unsigned",
+            run_id="",
+            schedule_id="",
+            binding_id=None,
+            definition=definition,
+            predictions={"task_class": "entry_timing", "tokens": [{"id": "token-1"}]},
+            targets=[],
+            prediction_at=datetime.now(timezone.utc),
+        )

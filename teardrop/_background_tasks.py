@@ -16,6 +16,7 @@ from billing import (
     process_pending_settlements,
 )
 from billing.context import _get_pool
+from labeling.anchor import anchor_tick
 from labeling.worker import labeling_tick
 from marketplace import reputation_rollup_once
 from scheduling import recover_expired_event_dispatches
@@ -228,6 +229,12 @@ async def _labeling_iter() -> None:
         logger.info("Labeling worker: processed %d targets", processed)
 
 
+async def _vor_anchor_iter() -> None:
+    confirmed = await anchor_tick()
+    if confirmed:
+        logger.info("VOR anchor: confirmed %d commitment batch(es)", confirmed)
+
+
 async def _settlement_retry_loop() -> None:
     """Periodically retry failed settlements (runs as background task)."""
     await _run_periodic(
@@ -335,6 +342,16 @@ async def _labeling_loop() -> None:
         _labeling_iter,
         settings.labeling_tick_interval_seconds,
         monitor_slug="labeling-worker",
+    )
+
+
+async def _vor_anchor_loop() -> None:
+    """Periodically seal, anchor, and confirm commitment batches on Base."""
+    await _run_periodic(
+        "VOR anchor",
+        _vor_anchor_iter,
+        settings.vor_anchor_interval_seconds,
+        monitor_slug="vor-anchor",
     )
 
 

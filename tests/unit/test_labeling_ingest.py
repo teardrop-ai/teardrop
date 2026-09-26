@@ -42,6 +42,33 @@ async def test_structured_ingest_is_idempotent_and_uses_exact_payload(monkeypatc
     assert result == "prediction-1"
     assert insert.await_args.kwargs["predictions"] == payload
     assert insert.await_args.kwargs["source_id"] == "run-1"
+    assert insert.await_args.kwargs["commit"] is False
+
+
+@pytest.mark.anyio
+async def test_ingest_commits_when_vor_is_enabled(monkeypatch):
+    from types import SimpleNamespace
+
+    now = datetime.now(timezone.utc)
+    definition = Definition(key="example", version=1, prediction_schema={"type": "object"})
+    target = TargetDraft("root", {"value": 1}, now, now + timedelta(days=1), now + timedelta(days=1))
+    monkeypatch.setattr(ingest, "get_settings", lambda: SimpleNamespace(vor_enabled=True))
+    monkeypatch.setattr(ingest, "get_binding_for_schedule", AsyncMock(return_value=None))
+    monkeypatch.setattr(ingest, "get_active_definition", AsyncMock(return_value=definition))
+    monkeypatch.setattr(ingest, "resolve_parser", lambda *_: lambda *_: [target])
+    insert = AsyncMock(return_value=("prediction-1", True))
+    monkeypatch.setattr(ingest, "insert_prediction", insert)
+
+    await ingest.ingest_scheduled_run_predictions(
+        org_id="org-1",
+        schedule_id="schedule-1",
+        run_id="run-1",
+        tool_call_log=[],
+        output_text='{"task_class":"example"}',
+        prediction_at=now,
+    )
+
+    assert insert.await_args.kwargs["commit"] is True
 
 
 @pytest.mark.anyio
