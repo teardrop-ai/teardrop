@@ -109,12 +109,27 @@ async def test_settle_billing_debits_on_success():
     assert result is response
 
 
+def _assert_withheld(result, req_id: str) -> None:
+    body = json.loads(result.body)
+    assert result.status_code == 200
+    assert body["id"] == req_id
+    assert body["result"]["isError"] is True
+    assert "withheld" in body["result"]["structuredContent"]["error"]
+
+
+@pytest.fixture
+def _stub_402_body():
+    with patch("billing.build_402_response_body", side_effect=lambda **kw: {"x402Version": 2, "accepts": [], **kw}):
+        yield
+
+
 @pytest.mark.asyncio
-async def test_settle_billing_x402_rejected_skips_earnings():
+async def test_settle_billing_x402_rejected_skips_earnings(_stub_402_body):
     gateway = MCPGatewayMiddleware(app=MagicMock())
     request = MagicMock()
     request.state = MagicMock()
     request.state.x402_billing = MagicMock()
+    request.state.mcp_x402_challenge = (True, {})
     response = MagicMock()
     pending = ("org-1", 100, "acme/test_tool", "req-1")
 
@@ -131,7 +146,7 @@ async def test_settle_billing_x402_rejected_skips_earnings():
     settle_mock.assert_awaited_once()
     get_tool_mock.assert_not_called()
     record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
-    assert result is response
+    _assert_withheld(result, "req-1")
 
 
 @pytest.mark.asyncio
@@ -391,13 +406,14 @@ async def test_settle_billing_credit_debit_fail_enqueues_recovery():
 
 
 @pytest.mark.asyncio
-async def test_settle_billing_x402_exception_enqueues_recovery():
-    """An exception during x402 settlement must enqueue a recovery row."""
+async def test_settle_billing_x402_exception_withholds_result_without_recovery(_stub_402_body):
+    """A withheld result must never be retried into a charge."""
     gateway = MCPGatewayMiddleware(app=MagicMock())
     request = MagicMock()
     request.state = MagicMock()
     request.state.x402_billing = MagicMock()
     request.state.x402_billing.payment_payload = "b64-payload"
+    request.state.mcp_x402_challenge = (True, {})
     response = MagicMock()
     pending = ("org-1", 100, "acme/test_tool", "req-1")
 
@@ -408,23 +424,19 @@ async def test_settle_billing_x402_exception_enqueues_recovery():
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
-    enqueue_mock.assert_awaited_once()
-    args = enqueue_mock.await_args.args
-    assert args[3] == "x402"
-    assert args[4] == 100
-    assert enqueue_mock.await_args.kwargs["payment_payload"] == "b64-payload"
+    enqueue_mock.assert_not_called()
     record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
-    assert result is response
+    _assert_withheld(result, "req-1")
 
 
 @pytest.mark.asyncio
-async def test_settle_billing_x402_rejected_enqueues_recovery():
-    """A rejected x402 settlement must enqueue a recovery row."""
+async def test_settle_billing_x402_rejected_withholds_result_without_recovery(_stub_402_body):
     gateway = MCPGatewayMiddleware(app=MagicMock())
     request = MagicMock()
     request.state = MagicMock()
     request.state.x402_billing = MagicMock()
     request.state.x402_billing.payment_payload = None
+    request.state.mcp_x402_challenge = (True, {})
     response = MagicMock()
     pending = ("org-1", 100, "acme/test_tool", "req-1")
 
@@ -438,10 +450,9 @@ async def test_settle_billing_x402_rejected_enqueues_recovery():
     ):
         result = await gateway._settle_billing(request, pending, response, execution_failed=False)
 
-    enqueue_mock.assert_awaited_once()
-    assert enqueue_mock.await_args.args[3] == "x402"
+    enqueue_mock.assert_not_called()
     record_mock.assert_called_once_with(request, "org-1", "acme/test_tool", 100, "x402", "failed")
-    assert result is response
+    _assert_withheld(result, "req-1")
 
 
 @pytest.mark.asyncio

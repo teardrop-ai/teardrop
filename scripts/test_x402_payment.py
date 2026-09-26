@@ -24,11 +24,13 @@ Example:
 """
 
 import argparse
+import asyncio
 import base64
 import json
 import sys
 import warnings
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import requests
 from eth_account import Account
@@ -377,6 +379,67 @@ def call_mcp_tool_with_payment(base_url: str, tool_name: str, arguments: dict, p
         print("\n⚠ No x402/payment-response receipt attached")
 
 
+class _McpV2SessionForX402:
+    """Expose an MCP SDK v2 ClientSession through the MCP SDK v1 surface x402MCPSession reads."""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def initialize(self):
+        await self._session.initialize()
+
+    async def list_tools(self):
+        return await self._session.list_tools()
+
+    async def call_tool(self, name, arguments=None, read_timeout_seconds=None, meta=None):
+        result = await self._session.call_tool(
+            name,
+            arguments,
+            read_timeout_seconds=read_timeout_seconds.total_seconds() if read_timeout_seconds else None,
+            meta=meta,
+        )
+        return SimpleNamespace(
+            content=result.content,
+            isError=result.is_error,
+            structuredContent=result.structured_content,
+            meta=result.meta,
+        )
+
+
+async def pay_with_official_mcp_client(base_url: str, private_key: str, tool_name: str, arguments: dict) -> None:
+    """Call a paid tool via the official x402 MCP client, which pays in params._meta."""
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+    from x402 import x402Client
+    from x402.mcp import x402MCPSession
+    from x402.mechanisms.evm.exact import ExactEvmScheme
+
+    payment_client = x402Client()
+    payment_client.register("eip155:*", ExactEvmScheme(signer=Account.from_key(private_key)))
+
+    async with streamable_http_client(f"{base_url}/tools/mcp", terminate_on_close=False) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            mcp = x402MCPSession(_McpV2SessionForX402(session), payment_client)
+            await mcp.initialize()
+            await mcp.list_tools()
+            result = await mcp.call_tool(tool_name, arguments)
+
+    print(f"   payment_made={result.payment_made} is_error={result.is_error}")
+    for item in result.content:
+        print(f"   content: {getattr(item, 'text', item)!s:.200}")
+    receipt = result.payment_response
+    if result.is_error or receipt is None:
+        print("\n✗ No settled payment receipt")
+        sys.exit(1)
+    print("\n🎉 x402/payment-response receipt:")
+    print(f"   success: {receipt.success}")
+    print(f"   transaction: {receipt.transaction}")
+    print(f"   network: {receipt.network}")
+    print(f"   amount: {receipt.amount}")
+    if receipt.transaction:
+        print(f"   View: https://basescan.org/tx/{receipt.transaction}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test x402 payment flow")
     parser.add_argument("private_key", help="Hex private key (0x-prefixed)")
@@ -401,6 +464,11 @@ def main():
         "--tool",
         default="get_token_price",
         help="MCP tool name to call in --mcp mode (default: get_token_price)",
+    )
+    parser.add_argument(
+        "--mcp-client",
+        action="store_true",
+        help="Pay /tools/mcp through the official x402 MCP client (payment in params._meta)",
     )
     parser.add_argument(
         "--rpc-url",
@@ -432,6 +500,11 @@ def main():
     print(f"📋 Scheme: {scheme}")
     print(f"🕶️  Anonymous: {args.anonymous}")
     print()
+
+    if args.mcp_client:
+        print(f"→ Calling '{args.tool}' via the official x402 MCP client...")
+        asyncio.run(pay_with_official_mcp_client(base_url, private_key, args.tool, {"tokens": ["ETH"]}))
+        return
 
     # Upto: check Permit2 allowance before proceeding
     if scheme == "upto":

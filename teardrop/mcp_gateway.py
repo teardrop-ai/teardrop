@@ -31,12 +31,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
-from x402.extensions.bazaar import OutputConfig, declare_discovery_extension
+from x402.extensions.bazaar import (
+    DeclareMcpDiscoveryConfig,
+    OutputConfig,
+    declare_discovery_extension,
+    declare_mcp_discovery_extension,
+)
 
 from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
 from teardrop.public_url import public_base_url
+from tools.schema import flatten_embedded_json_schema
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +117,26 @@ def _mcp_402_resource(request: Request) -> dict[str, str]:
     }
 
 
-def _mcp_402_extensions() -> dict:
+def _tool_call_name(data: dict) -> str | None:
+    params = data.get("params")
+    name = params.get("name") if isinstance(params, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def _mcp_402_extensions(tool_name: str | None = None) -> dict:
+    from tools import registry
+
+    tool = registry.get(tool_name) if tool_name else None
+    if tool is not None:
+        # Bazaar keys MCP listings on (resource, toolName), so each tool gets its own entry.
+        return declare_mcp_discovery_extension(
+            DeclareMcpDiscoveryConfig(
+                tool_name=tool.name,
+                description=tool.description,
+                transport="streamable-http",
+                input_schema=flatten_embedded_json_schema(tool.input_schema.model_json_schema()),
+            )
+        )
     extension = declare_discovery_extension(
         input=_MCP_BAZAAR_INPUT_EXAMPLE,
         input_schema=_MCP_BAZAAR_INPUT_SCHEMA,
@@ -523,7 +548,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             )
         response_kwargs = {
             "resource": _mcp_402_resource(request),
-            "extensions": _mcp_402_extensions(),
+            "extensions": _mcp_402_extensions(_tool_call_name(data)),
         }
         if requirements is not None:
             response_kwargs["requirements"] = requirements
@@ -540,6 +565,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing
+        request.state.mcp_x402_challenge = (mcp_signal, response_kwargs)
         request.state.mcp_org_id = None
         request.state.mcp_auth_method = "x402"
         return None  # success — continue to billing / MCPServer
@@ -556,9 +582,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
     @classmethod
     async def _x402_tool_requirements(cls, data: dict) -> list | None:
         """Exact requirements priced at the called tool's cost; None keeps the flat default."""
-        params = data.get("params")
-        tool_name = params.get("name") if isinstance(params, dict) else None
-        if not isinstance(tool_name, str) or not tool_name:
+        tool_name = _tool_call_name(data)
+        if tool_name is None:
             return None
         tool_cost = await cls._resolve_tool_cost(tool_name)
         if tool_cost <= 0:
@@ -566,6 +591,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         from billing import build_exact_payment_requirements
 
         return build_exact_payment_requirements(tool_cost) or None
+
+    @staticmethod
+    def _x402_settlement_failed(request: Request, req_id: int | str | None) -> Response:
+        challenge = getattr(request.state, "mcp_x402_challenge", None)
+        mcp_signal, response_kwargs = challenge if isinstance(challenge, tuple) else (True, {})
+        return MCPGatewayMiddleware._x402_challenge(
+            req_id,
+            mcp_signal,
+            {**response_kwargs, "error": "Payment settlement failed; the tool result was withheld."},
+        )
 
     @staticmethod
     def _x402_challenge(req_id: int | str | None, mcp_signal: bool, response_kwargs: dict) -> Response:
@@ -800,7 +835,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         on-chain settlement — subscribers must not be charged for failed
         tool executions.
         """
-        org_id, tool_cost, tool_name, _req_id = pending
+        org_id, tool_cost, tool_name, req_id = pending
 
         is_x402 = getattr(request.state, "x402_billing", None) is not None
 
@@ -818,15 +853,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 settled = await settle_payment(billing, actual_cost_usdc=tool_cost)
             except Exception:
                 logger.warning("x402 MCP settlement failed", exc_info=True)
-                await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
-                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
-                return response  # Settlement failed — do not record phantom earnings
+                settled = None
 
-            if not settled.settled:
-                logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
-                await self._enqueue_mcp_recovery(org_id, tool_cost, "x402", billing)
+            if settled is None or not settled.settled:
+                if settled is not None:
+                    logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
                 self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
-                return response
+                # Facilitator /verify does not prove funds, so an unsettled payment must not release the result.
+                return self._x402_settlement_failed(request, req_id)
 
             self._record_mcp_outcome(
                 request,

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Literal
 
 from jsonschema import Draft7Validator
@@ -35,6 +36,56 @@ _SAFE_SCHEMA_KEYS: set[str] = {
 }
 
 _SAFE_SCHEMA_TYPES: set[str] = {"object", "string", "integer", "number", "boolean", "array"}
+
+
+def flatten_embedded_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Inline local refs so an embedded schema remains self-contained.
+
+    Pydantic emits ``$defs`` plus root-anchored ``$ref`` values. Once that
+    schema is nested inside another document (e.g. an x402 Bazaar extension),
+    those references no longer point at valid locations. Inline them before
+    embedding so the schema validates both locally and with external validators.
+    """
+
+    root = deepcopy(schema)
+    defs: dict[str, Any] = {}
+    for defs_key in ("$defs", "definitions"):
+        defs_value = root.pop(defs_key, None)
+        if isinstance(defs_value, dict):
+            defs.update(defs_value)
+
+    def _resolve(node: Any, seen: tuple[str, ...] = ()) -> Any:
+        if isinstance(node, list):
+            return [_resolve(item, seen) for item in node]
+        if not isinstance(node, dict):
+            return node
+
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            ref_name = ""
+            if ref.startswith("#/$defs/"):
+                ref_name = ref.rsplit("/", 1)[-1]
+            elif ref.startswith("#/definitions/"):
+                ref_name = ref.rsplit("/", 1)[-1]
+            if ref_name and ref_name in defs:
+                if ref_name in seen:
+                    raise ValueError(f"Recursive schema reference: {ref_name}")
+                resolved = _resolve(deepcopy(defs[ref_name]), seen + (ref_name,))
+                if isinstance(resolved, dict):
+                    for key, value in node.items():
+                        if key == "$ref":
+                            continue
+                        resolved[key] = _resolve(value, seen)
+                return resolved
+
+        flattened: dict[str, Any] = {}
+        for key, value in node.items():
+            if key in {"$defs", "definitions"}:
+                continue
+            flattened[key] = _resolve(value, seen)
+        return flattened
+
+    return _resolve(root)
 
 
 def _safe_empty_object_schema(description: str | None = None) -> dict[str, Any]:

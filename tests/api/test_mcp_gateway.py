@@ -44,6 +44,32 @@ def test_mcp_bazaar_extension_has_valid_flat_jsonrpc_schema():
     assert "$ref" not in json.dumps(body_schema)
 
 
+@pytest.mark.parametrize("tool_name", ["get_token_price", "calculate", "assess_counterparty_risk"])
+def test_mcp_bazaar_extension_declares_called_mcp_tool(tool_name):
+    from x402.extensions.bazaar import validate_discovery_extension
+    from x402.extensions.bazaar.facilitator import validate_discovery_extension_spec
+
+    from teardrop.mcp_gateway import _mcp_402_extensions
+
+    bazaar = _mcp_402_extensions(tool_name)["bazaar"]
+    mcp_input = bazaar["info"]["input"]
+
+    assert validate_discovery_extension(bazaar).valid
+    assert validate_discovery_extension_spec(bazaar).valid
+    assert mcp_input["type"] == "mcp"
+    assert mcp_input["toolName"] == tool_name
+    assert mcp_input["transport"] == "streamable-http"
+    assert mcp_input["inputSchema"]["type"] == "object"
+    assert "$ref" not in json.dumps(bazaar)
+    assert "$defs" not in json.dumps(bazaar)
+
+
+def test_mcp_bazaar_extension_falls_back_for_unknown_tool():
+    from teardrop.mcp_gateway import _mcp_402_extensions
+
+    assert _mcp_402_extensions("not_a_registered_tool")["bazaar"]["info"]["input"]["type"] == "http"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("payment_header", [None, "invalid-payment"])
 async def test_mcp_x402_challenges_include_bazaar_in_body_and_headers(monkeypatch, payment_header):

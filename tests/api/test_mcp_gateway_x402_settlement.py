@@ -123,6 +123,32 @@ async def test_verified_header_payment_settles_through_mounted_gateway(x402_gate
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Accept": "application/json", "X-PAYMENT": "signed-payment"}, 402),
+        ({"Accept": "application/json", "X-PAYMENT": "signed-payment", "mcp-protocol-version": "2025-11-25"}, 200),
+    ],
+)
+async def test_unsettled_payment_withholds_tool_result(x402_gateway_env, monkeypatch, headers, status):
+    import billing
+
+    mocks = _patch_billing(monkeypatch)
+    mocks.settle.return_value = billing.BillingResult(verified=True, settled=False, error="insufficient funds")
+
+    response = await _post_paid_call(headers)
+
+    assert response.status_code == status
+    body = response.json()
+    challenge = body if status == 402 else body["result"]["structuredContent"]
+    assert "withheld" in challenge["error"]
+    assert "result" not in body or body["result"]["isError"] is True
+    assert '"2"' not in response.text
+    mocks.release.assert_not_awaited()
+    assert mocks.record.await_args.args[6] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_verified_payment_is_released_when_billing_disabled(x402_gateway_env, monkeypatch):
     monkeypatch.setenv("MCP_BILLING_ENABLED", "false")
     config.get_settings.cache_clear()

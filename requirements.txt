@@ -26,8 +26,9 @@ web3>=7.0.0
 
 # ─── x402 (HTTP 402 payment protocol) ─────────────────────────────────────────
 # 2.8.0 (released 2026-04-17) added upto scheme (X402_SCHEME=upto) and Arbitrum support.
+# 2.24.0 is the verified floor for declare_mcp_discovery_extension (per-tool MCP Bazaar listings).
 # Upper bound: payment-critical; pin major to avoid silent breaking-change upgrades.
-x402[fastapi,evm]>=2.8.0,<3.0.0
+x402[fastapi,evm]>=2.24.0,<3.0.0
 
 # ─── Data Validation & Settings ────────────────────────────────────
 pydantic>=2.12.0
