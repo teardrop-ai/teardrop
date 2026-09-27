@@ -39,7 +39,7 @@ Platform tools are always available during agent runs, are not subscribable via 
 
 ### Marketplace Settlement & USDC Sweeping
 
-Organizations can monetize their agents via a Marketplace. Withdrawals claim pending author earnings before sending USDC through Coinbase Developer Platform (CDP) to the configured settlement wallet. Confirmed transfers become `settled`; confirmed on-chain reverts release the earnings. Submission errors and unavailable confirmations remain `in_flight` for manual reconciliation, with earnings held to prevent automatic repayment. Operators must establish the chain outcome before resetting an ambiguous withdrawal.
+Organizations can monetize their agents via a Marketplace. Withdrawals claim pending author earnings before sending USDC through Coinbase Developer Platform (CDP) to the configured settlement wallet. Confirmed transfers become `settled`; confirmed on-chain reverts release the earnings. Submission errors and unavailable confirmations remain `in_flight`, with earnings held to prevent automatic repayment. The sweep loop settles or releases `in_flight` withdrawals that recorded a transaction hash once that transaction is finalized and matches the claimed USDC transfer; operators must establish the chain outcome before resetting any other ambiguous withdrawal.
 
 Auto-sweep is configured via `MARKETPLACE_AUTO_SWEEP_ENABLED` and related `MARKETPLACE_*` settings (see [docs/configuration.md](docs/configuration.md)). Admin APIs: `POST /admin/marketplace/sweep` (manual sweep) and `GET /admin/marketplace/settlement-balance`.
 

@@ -18,9 +18,11 @@ import teardrop.users as users_module
 from marketplace import (
     complete_withdrawal,
     marketplace_sweep_once,
+    reconcile_in_flight_withdrawals_once,
     reset_withdrawal,
     set_author_config,
 )
+from marketplace.worker import _RECONCILE_MISMATCH_ERROR
 from shared.db_pool import PgPool, create_pool
 from teardrop.users import create_org
 
@@ -621,3 +623,100 @@ async def test_sweep_balance_warning_logged_on_low_balance(sweep_db_pool, caplog
 
     assert count == 1
     assert any("settlement wallet below threshold" in r.message and r.levelno == logging.ERROR for r in caplog.records)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("outcome", "withdrawal_status", "earning_status", "tx_hash_kept"),
+    [
+        ("confirmed", "settled", "settled", True),
+        ("reverted", "failed", "pending", False),
+        ("pending", "in_flight", "settled", True),
+        ("mismatch", "in_flight", "settled", True),
+    ],
+)
+async def test_reconcile_in_flight_withdrawal_with_tx_hash(
+    sweep_db_pool, outcome, withdrawal_status, earning_status, tx_hash_kept
+):
+    """Finalized chain outcomes resolve recorded in-flight claims; others stay queued."""
+    pool = sweep_db_pool
+    tx_hash = "0x" + "ab" * 32
+
+    org = await create_org(f"sweep-reconcile-{outcome}-org")
+    await set_author_config(org.id, settlement_wallet=_VALID_ADDR)
+    await _seed_org_with_earnings(pool, org.id, 500_000)
+
+    settings = MagicMock()
+    settings.marketplace_minimum_withdrawal_usdc = 100_000
+    settings.marketplace_max_sweep_retries = 5
+    settings.marketplace_withdrawal_cooldown_seconds = 0
+    settings.agent_wallet_enabled = True
+    settings.marketplace_settlement_cdp_account = "td-marketplace"
+    settings.marketplace_settlement_chain_id = 84532
+    settings.marketplace_tx_confirm_timeout_seconds = 5
+
+    check = AsyncMock(return_value=outcome)
+    with (
+        patch("marketplace.get_settings", return_value=settings),
+        patch("teardrop.agent_wallets.transfer_usdc", new=AsyncMock(return_value=tx_hash)),
+        patch("teardrop.agent_wallets.verify_usdc_transfer", new=AsyncMock(side_effect=TimeoutError("late"))),
+        patch("teardrop.agent_wallets.check_usdc_transfer", new=check),
+    ):
+        await marketplace_sweep_once()
+        resolved = await reconcile_in_flight_withdrawals_once()
+
+    assert resolved == (1 if outcome in {"confirmed", "reverted"} else 0)
+    check.assert_awaited_once_with(tx_hash, to_address=_VALID_ADDR, amount_usdc=500_000, chain_id=84532)
+    withdrawal = await pool.fetchrow(
+        """
+        SELECT id, status, tx_hash, settled_at, sweep_attempt_count, next_sweep_at, last_sweep_error
+        FROM tool_author_withdrawals WHERE org_id = $1
+        """,
+        org.id,
+    )
+    earning = await pool.fetchrow(
+        "SELECT status, withdrawal_id FROM tool_author_earnings WHERE org_id = $1",
+        org.id,
+    )
+    assert withdrawal["status"] == withdrawal_status
+    assert (withdrawal["tx_hash"] == tx_hash) is tx_hash_kept
+    assert earning["status"] == earning_status
+    assert earning["withdrawal_id"] == (None if outcome == "reverted" else withdrawal["id"])
+    if outcome == "confirmed":
+        assert withdrawal["settled_at"] is not None
+    if outcome == "reverted":
+        assert withdrawal["sweep_attempt_count"] == 1
+        assert withdrawal["next_sweep_at"] is not None
+        assert tx_hash in withdrawal["last_sweep_error"]
+    if outcome == "mismatch":
+        assert withdrawal["last_sweep_error"].startswith("Reconciliation mismatch")
+
+
+@pytest.mark.anyio
+async def test_reconcile_checks_new_rows_before_flagged_mismatches(sweep_db_pool):
+    """A full batch of older flagged mismatches must not starve a newer in-flight withdrawal."""
+    pool = sweep_db_pool
+    org = await create_org("reconcile-starvation-org")
+    for index in range(21):
+        await pool.execute(
+            """
+            INSERT INTO tool_author_withdrawals
+                (id, org_id, amount_usdc, wallet, status, tx_hash, last_sweep_error, created_at)
+            VALUES ($1, $2, 500000, $3, 'in_flight', $4, $5, NOW() - ($6 * INTERVAL '1 minute'))
+            """,
+            f"starve-{index:02}",
+            org.id,
+            _VALID_ADDR,
+            "0x" + format(index, "064x"),
+            "" if index == 20 else _RECONCILE_MISMATCH_ERROR,
+            21 - index,
+        )
+
+    settings = MagicMock(agent_wallet_enabled=True, marketplace_settlement_chain_id=84532)
+    check = AsyncMock(return_value="mismatch")
+    with patch("marketplace.get_settings", return_value=settings), patch("teardrop.agent_wallets.check_usdc_transfer", new=check):
+        assert await reconcile_in_flight_withdrawals_once() == 0
+
+    checked = [call.args[0] for call in check.await_args_list]
+    assert len(checked) == 20
+    assert checked[0] == "0x" + format(20, "064x")

@@ -306,3 +306,41 @@ async def reset_exhausted_settlement(settlement_id: str) -> bool | None:
         settlement_id,
     )
     return result == "UPDATE 1"
+
+
+async def rearm_exhausted_credit_settlements(org_id: str, cap_usdc: int) -> int:
+    """Re-queue an org's recent exhausted credit settlements, oldest first, up to ``cap_usdc`` total.
+
+    Best-effort: never raises, so callers can run it after a committed top-up.
+    """
+    if not org_id or cap_usdc <= 0:
+        return 0
+    try:
+        rows = await _get_pool().fetch(
+            """
+            WITH candidates AS (
+                SELECT id,
+                       SUM(amount_usdc) OVER (ORDER BY created_at, id) AS running_total
+                FROM pending_settlements
+                WHERE org_id = $1
+                  AND status = 'exhausted'
+                  AND billing_method = 'credit'
+                  AND created_at >= NOW() - INTERVAL '7 days'
+            )
+            UPDATE pending_settlements AS settlement
+            SET status = 'pending', retry_count = 0, next_retry_at = NOW()
+            FROM candidates
+            WHERE settlement.id = candidates.id
+              AND candidates.running_total <= $2
+              AND settlement.status = 'exhausted'
+            RETURNING settlement.id
+            """,
+            org_id,
+            cap_usdc,
+        )
+    except Exception:
+        logger.warning("Exhausted credit settlement rearm failed org_id=%s", org_id, exc_info=True)
+        return 0
+    if rows:
+        logger.info("Rearmed %d exhausted credit settlements after top-up org_id=%s", len(rows), org_id)
+    return len(rows)

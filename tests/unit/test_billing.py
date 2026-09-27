@@ -2048,15 +2048,19 @@ class TestCreditUsdcTopup:
 
     async def test_duplicate_tx_hash_returns_none(self):
         pool = self._make_pool(guard_returns_row=False)
-        with patch.object(billing_module, "_pool", pool):
+        rearm = AsyncMock(return_value=0)
+        with patch.object(billing_module, "_pool", pool), patch("billing.x402.rearm_exhausted_credit_settlements", rearm):
             result = await credit_usdc_topup("org-1", 1_000_000, "0xdupe")
         assert result is None
+        rearm.assert_not_awaited()
 
     async def test_new_topup_returns_new_balance(self):
         pool = self._make_pool(guard_returns_row=True, initial_balance=0)
-        with patch.object(billing_module, "_pool", pool):
+        rearm = AsyncMock(return_value=0)
+        with patch.object(billing_module, "_pool", pool), patch("billing.x402.rearm_exhausted_credit_settlements", rearm):
             result = await credit_usdc_topup("org-1", 1_000_000, "0xnewtx")
         assert result == 1_000_000  # initial 0 + 1_000_000
+        rearm.assert_awaited_once_with("org-1", 1_000_000)
 
     async def test_credit_ledger_insert_called(self):
         """Verify a ledger row with operation='topup' and reason 'usdc_onchain:' is inserted."""

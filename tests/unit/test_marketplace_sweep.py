@@ -20,6 +20,7 @@ from marketplace import (
     _sweep_backoff_seconds,
     _sweep_withdrawal_id,
     marketplace_sweep_once,
+    reconcile_in_flight_withdrawals_once,
 )
 
 _NOW = datetime.now(timezone.utc)
@@ -319,3 +320,205 @@ class TestMarketplaceSweepLoop:
         # Sleep was called 3 times, sweep_once was called at least twice
         assert sleep_call_count == 3
         assert sweep_call_count == 2
+
+    @pytest.mark.anyio
+    async def test_reconcile_failure_does_not_block_sweep(self, monkeypatch):
+        sleeps = 0
+
+        async def _fake_sleep(seconds: float) -> None:  # noqa: ARG001
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps >= 2:
+                raise asyncio.CancelledError
+
+        sweep = AsyncMock(return_value=0)
+        monkeypatch.setattr("marketplace.asyncio.sleep", _fake_sleep)
+        monkeypatch.setattr("marketplace.reconcile_in_flight_withdrawals_once", AsyncMock(side_effect=RuntimeError("rpc down")))
+        monkeypatch.setattr("marketplace.marketplace_sweep_once", sweep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _marketplace_sweep_loop()
+
+        sweep.assert_awaited_once()
+
+
+# ─── reconcile_in_flight_withdrawals_once ──────────────────────────────────────
+
+_TX = "0x" + "ab" * 32
+
+
+def _in_flight_row(**overrides) -> dict:
+    return {
+        "id": "wd-1",
+        "org_id": "org-1",
+        "wallet": _VALID_ADDR,
+        "tx_hash": _TX,
+        "sweep_attempt_count": 0,
+        "last_sweep_error": "Transaction submitted; confirmation unavailable",
+        "claimed_usdc": 400_000,
+        **overrides,
+    }
+
+
+def _reconcile_pool(rows: list[dict], *, pool_fetchval="wd-1", conn_fetchval="wd-1"):
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=conn_fetchval)
+    conn.execute = AsyncMock()
+    tx = AsyncMock()
+    tx.__aenter__ = AsyncMock(return_value=None)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+    acquire = AsyncMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=rows)
+    pool.fetchval = AsyncMock(return_value=pool_fetchval)
+    pool.execute = AsyncMock()
+    pool.acquire = MagicMock(return_value=acquire)
+    return pool, conn
+
+
+@pytest.fixture
+def reconcile_env(monkeypatch):
+    settings = MagicMock(agent_wallet_enabled=True, marketplace_settlement_chain_id=84532, marketplace_max_sweep_retries=5)
+    monkeypatch.setattr("marketplace.get_settings", lambda: settings)
+    check = AsyncMock(return_value="pending")
+    monkeypatch.setattr("teardrop.agent_wallets.check_usdc_transfer", check)
+
+    def _install(rows, **kwargs):
+        pool, conn = _reconcile_pool(rows, **kwargs)
+        monkeypatch.setattr("marketplace._pool", pool)
+        return pool, conn
+
+    return settings, check, _install
+
+
+class TestReconcileInFlightWithdrawals:
+    @pytest.mark.anyio
+    async def test_disabled_wallets_skip_without_db_access(self, reconcile_env):
+        settings, check, install = reconcile_env
+        settings.agent_wallet_enabled = False
+        pool, _ = install([_in_flight_row()])
+
+        assert await reconcile_in_flight_withdrawals_once() == 0
+        pool.fetch.assert_not_called()
+        check.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_selects_only_in_flight_rows_with_tx_hash(self, reconcile_env):
+        _, _, install = reconcile_env
+        pool, _ = install([])
+
+        await reconcile_in_flight_withdrawals_once()
+
+        sql = pool.fetch.call_args[0][0]
+        assert "w.status = 'in_flight'" in sql
+        assert "w.tx_hash <> ''" in sql
+        assert "e.status = 'settled'" in sql
+        assert "ORDER BY w.last_sweep_error = $2, w.created_at ASC" in sql
+        assert pool.fetch.call_args[0][1:] == (20, "Reconciliation mismatch: on-chain transaction does not match this withdrawal")
+
+    @pytest.mark.anyio
+    async def test_confirmed_settles_with_claimed_amount(self, reconcile_env):
+        _, check, install = reconcile_env
+        check.return_value = "confirmed"
+        pool, conn = install([_in_flight_row()])
+
+        assert await reconcile_in_flight_withdrawals_once() == 1
+
+        check.assert_awaited_once_with(_TX, to_address=_VALID_ADDR, amount_usdc=400_000, chain_id=84532)
+        sql, withdrawal_id, tx_hash = pool.fetchval.call_args[0]
+        assert "SET status = 'settled'" in sql
+        assert "status = 'in_flight' AND tx_hash = $2" in sql
+        assert (withdrawal_id, tx_hash) == ("wd-1", _TX)
+        conn.execute.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_confirmed_but_row_changed_is_not_counted(self, reconcile_env):
+        _, check, install = reconcile_env
+        check.return_value = "confirmed"
+        install([_in_flight_row()], pool_fetchval=None)
+
+        assert await reconcile_in_flight_withdrawals_once() == 0
+
+    @pytest.mark.anyio
+    async def test_reverted_releases_earnings_with_backoff(self, reconcile_env):
+        _, check, install = reconcile_env
+        check.return_value = "reverted"
+        pool, conn = install([_in_flight_row(sweep_attempt_count=1)])
+
+        assert await reconcile_in_flight_withdrawals_once() == 1
+
+        sql, withdrawal_id, tx_hash, attempt, error, backoff = conn.fetchval.call_args[0]
+        assert "SET status = 'failed'" in sql
+        assert "status = 'in_flight' AND tx_hash = $2" in sql
+        assert (withdrawal_id, tx_hash, attempt, backoff) == ("wd-1", _TX, 2, 240)
+        assert _TX in error
+        release_sql, release_id = conn.execute.call_args[0]
+        assert "SET status = 'pending', withdrawal_id = NULL" in release_sql
+        assert release_id == "wd-1"
+        pool.fetchval.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_reverted_at_retry_limit_exhausts(self, reconcile_env):
+        _, check, install = reconcile_env
+        check.return_value = "reverted"
+        _, conn = install([_in_flight_row(sweep_attempt_count=4)])
+
+        assert await reconcile_in_flight_withdrawals_once() == 1
+
+        assert "SET status = 'exhausted'" in conn.fetchval.call_args[0][0]
+        conn.execute.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_reverted_but_row_changed_keeps_earnings(self, reconcile_env):
+        _, check, install = reconcile_env
+        check.return_value = "reverted"
+        _, conn = install([_in_flight_row()], conn_fetchval=None)
+
+        assert await reconcile_in_flight_withdrawals_once() == 0
+        conn.execute.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_pending_makes_no_writes(self, reconcile_env):
+        _, _, install = reconcile_env
+        pool, conn = install([_in_flight_row()])
+
+        assert await reconcile_in_flight_withdrawals_once() == 0
+        pool.fetchval.assert_not_called()
+        pool.execute.assert_not_called()
+        pool.acquire.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_mismatch_flags_row_once_for_manual_review(self, reconcile_env, caplog):
+        _, check, install = reconcile_env
+        check.return_value = "mismatch"
+        pool, _ = install([_in_flight_row()])
+
+        assert await reconcile_in_flight_withdrawals_once() == 0
+
+        sql, withdrawal_id, tx_hash, error = pool.execute.call_args[0]
+        assert "SET last_sweep_error = $3" in sql
+        assert "status" not in sql.split("WHERE")[0]
+        assert (withdrawal_id, tx_hash) == ("wd-1", _TX)
+        assert "manual review required" in caplog.text
+        pool.fetchval.assert_not_called()
+        pool.acquire.assert_not_called()
+
+        pool.execute.reset_mock()
+        pool.fetch.return_value = [_in_flight_row(last_sweep_error=error)]
+        await reconcile_in_flight_withdrawals_once()
+        pool.execute.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_check_error_does_not_abort_other_rows(self, reconcile_env, caplog):
+        _, check, install = reconcile_env
+        check.side_effect = [RuntimeError("https://rpc.example/secret-key"), "confirmed"]
+        pool, _ = install([_in_flight_row(id="wd-1"), _in_flight_row(id="wd-2")])
+
+        assert await reconcile_in_flight_withdrawals_once() == 1
+
+        assert pool.fetchval.call_args[0][1] == "wd-2"
+        assert "secret-key" not in caplog.text

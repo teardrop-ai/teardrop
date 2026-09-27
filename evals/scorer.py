@@ -11,10 +11,16 @@ from shared.json_output import extract_first_json_object
 
 
 def score_exact(expected: str, actual: str) -> float:
+    """Return 1.0 on equality after stripping leading/trailing whitespace, else 0.0."""
     return 1.0 if expected.strip() == actual.strip() else 0.0
 
 
 def score_contains(expected_items: list[str], actual: str) -> float:
+    """Return the fraction of ``expected_items`` present (case-insensitive).
+
+    Partial credit is ``hits / len(expected_items)``; an empty expectation list
+    scores 1.0 (vacuously satisfied).
+    """
     if not expected_items:
         return 1.0
     lower = actual.lower()
@@ -23,6 +29,11 @@ def score_contains(expected_items: list[str], actual: str) -> float:
 
 
 def score_not_contains(excluded_items: list[str], actual: str) -> float:
+    """Return the fraction of ``excluded_items`` that are *absent* (case-insensitive).
+
+    This is a positive score: 1.0 means every excluded item is missing (good),
+    0.0 means all are present (bad). An empty list scores 1.0.
+    """
     if not excluded_items:
         return 1.0
     lower = actual.lower()
@@ -31,6 +42,12 @@ def score_not_contains(excluded_items: list[str], actual: str) -> float:
 
 
 def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
+    """Return 1.0 when the first JSON object in ``actual`` contains every top-level key.
+
+    Key presence only — nested shape and value types are not checked. Returns
+    0.0 when no JSON object can be extracted; an empty ``expected_shape`` scores 1.0
+    only when a JSON object is present.
+    """
     extracted = extract_first_json_object(actual)
     if extracted is None:
         return 0.0
@@ -43,6 +60,11 @@ def score_json_shape(expected_shape: dict[str, Any], actual: str) -> float:
 
 
 def score_contains_pattern(expected_patterns: list[str], actual: str) -> float:
+    """Return the fraction of regex ``expected_patterns`` that match ``actual``.
+
+    Patterns are applied with ``re.search`` (unanchored, case-sensitive) and
+    partial credit is ``hits / len(expected_patterns)``; an empty list scores 1.0.
+    """
     if not expected_patterns:
         return 1.0
     hits = sum(1 for pattern in expected_patterns if re.search(pattern, actual))
@@ -57,6 +79,12 @@ def score_task(
     expected_text_not_contains: list[str] | None = None,
     expected_json_shape: dict[str, Any] | None = None,
 ) -> float:
+    """Dispatch to a named scorer and combine it with the negative-constraint score.
+
+    The ``score_not_contains`` result is *multiplied* into every branch, so any
+    forbidden substring present in ``actual_text`` scales the final score toward
+    zero. Unknown ``scorer`` values fall back to ``contains``.
+    """
     negative_score = score_not_contains(expected_text_not_contains or [], actual_text)
 
     if scorer == "json_shape":

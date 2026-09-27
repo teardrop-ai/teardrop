@@ -18,6 +18,7 @@ from billing.context import (
 )
 from billing.credit import BillingCreditService
 from billing.models import BillingResult, atomic_usdc_to_price_str
+from billing.settlement import rearm_exhausted_credit_settlements
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,7 @@ async def handle_stripe_webhook(payload: bytes, sig_header: str) -> None:
         amount_usdc,
         event.id,
     )
+    await rearm_exhausted_credit_settlements(org_id, amount_usdc)
 
 
 async def get_stripe_session_status(session_id: str, org_id: str) -> dict[str, Any]:

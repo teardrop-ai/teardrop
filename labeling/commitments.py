@@ -83,10 +83,12 @@ def _node(left: str, right: str) -> str:
 
 
 def _split(size: int) -> int:
+    """Return the largest power of two strictly less than ``size`` (RFC 6962 split point)."""
     return 1 << ((size - 1).bit_length() - 1)
 
 
 def merkle_root(leaves: Sequence[str]) -> str:
+    """Return the RFC 6962 Merkle tree root over ``leaves`` (single leaf is its own root)."""
     if not leaves:
         raise ValueError("A Merkle tree requires at least one leaf")
     if len(leaves) == 1:
@@ -96,6 +98,7 @@ def merkle_root(leaves: Sequence[str]) -> str:
 
 
 def audit_path(leaves: Sequence[str], index: int) -> list[str]:
+    """Return the RFC 6962 inclusion-proof sibling hashes for ``leaves[index]``."""
     if not 0 <= index < len(leaves):
         raise IndexError("Leaf index is outside the tree")
     if len(leaves) == 1:

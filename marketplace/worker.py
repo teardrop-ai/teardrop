@@ -25,6 +25,9 @@ _REPUTATION_PRIOR_SUCCESSES = 4.0
 _REPUTATION_PRIOR_SAMPLE_SIZE = 5.0
 _REPUTATION_FRESHNESS_FLOOR = 0.75
 
+_RECONCILE_BATCH_LIMIT = 20
+_RECONCILE_MISMATCH_ERROR = "Reconciliation mismatch: on-chain transaction does not match this withdrawal"
+
 
 def _sweep_withdrawal_id(org_id: str, epoch_hour: int) -> str:
     """Derive a deterministic withdrawal ID for a sweep cycle."""
@@ -136,9 +139,10 @@ async def marketplace_sweep_once() -> int:
                 )
             elif result.status == "in_flight":
                 logger.warning(
-                    "marketplace_sweep: withdrawal requires manual reconciliation id=%s org=%s",
+                    "marketplace_sweep: withdrawal awaiting reconciliation id=%s org=%s tx_recorded=%s",
                     withdrawal_id,
                     org_id,
+                    bool(result.tx_hash),
                 )
             else:
                 row = await pool.fetchrow(
@@ -220,6 +224,148 @@ async def marketplace_sweep_once() -> int:
             logger.warning("marketplace_sweep: could not check settlement balance: %s", exc)
 
     return processed
+
+
+async def _release_reverted_withdrawal(row: Any, max_retries: int) -> bool:
+    withdrawal_id, tx_hash = row["id"], row["tx_hash"]
+    attempt = int(row["sweep_attempt_count"]) + 1
+    error = f"Transaction reverted on-chain tx={tx_hash}"
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if attempt >= max_retries:
+                released = await conn.fetchval(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'exhausted', tx_hash = '', settled_at = NULL,
+                        sweep_attempt_count = $3, last_sweep_error = $4, next_sweep_at = NULL
+                    WHERE id = $1 AND status = 'in_flight' AND tx_hash = $2
+                    RETURNING id
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                    attempt,
+                    error,
+                )
+            else:
+                released = await conn.fetchval(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'failed', tx_hash = '', settled_at = NULL,
+                        sweep_attempt_count = $3, last_sweep_error = $4,
+                        next_sweep_at = NOW() + ($5 * INTERVAL '1 second')
+                    WHERE id = $1 AND status = 'in_flight' AND tx_hash = $2
+                    RETURNING id
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                    attempt,
+                    error,
+                    _sweep_backoff_seconds(attempt),
+                )
+            if released is None:
+                return False
+            await conn.execute(
+                """
+                UPDATE tool_author_earnings
+                SET status = 'pending', withdrawal_id = NULL
+                WHERE withdrawal_id = $1 AND status = 'settled'
+                """,
+                withdrawal_id,
+            )
+    return True
+
+
+async def reconcile_in_flight_withdrawals_once() -> int:
+    """Resolve ``in_flight`` withdrawals whose recorded tx has reached finality.
+
+    Rows without a ``tx_hash`` stay in the operator queue: the transfer may have been
+    broadcast under a hash Teardrop never saw. Returns the number of rows resolved.
+    """
+    settings = get_settings()
+    if not settings.agent_wallet_enabled:
+        return 0
+    from teardrop.agent_wallets import check_usdc_transfer
+
+    pool = _get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT w.id, w.org_id, w.wallet, w.tx_hash, w.sweep_attempt_count, w.last_sweep_error,
+               COALESCE((
+                   SELECT SUM(e.author_share_usdc) FROM tool_author_earnings e
+                   WHERE e.withdrawal_id = w.id AND e.status = 'settled'
+               ), 0) AS claimed_usdc
+        FROM tool_author_withdrawals w
+        WHERE w.status = 'in_flight' AND w.tx_hash <> ''
+        -- Flagged mismatches never self-resolve; checking them last stops them starving newer rows.
+        ORDER BY w.last_sweep_error = $2, w.created_at ASC
+        LIMIT $1
+        """,
+        _RECONCILE_BATCH_LIMIT,
+        _RECONCILE_MISMATCH_ERROR,
+    )
+
+    resolved = 0
+    for row in rows:
+        withdrawal_id, tx_hash = row["id"], row["tx_hash"]
+        try:
+            outcome = await check_usdc_transfer(
+                tx_hash,
+                to_address=row["wallet"],
+                amount_usdc=int(row["claimed_usdc"]),
+                chain_id=settings.marketplace_settlement_chain_id,
+            )
+            if outcome == "confirmed":
+                settled_id = await pool.fetchval(
+                    """
+                    UPDATE tool_author_withdrawals
+                    SET status = 'settled', settled_at = NOW(), last_sweep_error = ''
+                    WHERE id = $1 AND status = 'in_flight' AND tx_hash = $2
+                    RETURNING id
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                )
+                if settled_id is not None:
+                    resolved += 1
+                    logger.info(
+                        "marketplace_reconcile: settled withdrawal_id=%s org=%s tx=%s",
+                        withdrawal_id,
+                        row["org_id"],
+                        tx_hash,
+                    )
+            elif outcome == "reverted":
+                if await _release_reverted_withdrawal(row, settings.marketplace_max_sweep_retries):
+                    resolved += 1
+                    logger.warning(
+                        "marketplace_reconcile: released reverted withdrawal_id=%s org=%s tx=%s",
+                        withdrawal_id,
+                        row["org_id"],
+                        tx_hash,
+                    )
+            elif outcome == "mismatch" and row["last_sweep_error"] != _RECONCILE_MISMATCH_ERROR:
+                await pool.execute(
+                    """
+                    UPDATE tool_author_withdrawals SET last_sweep_error = $3
+                    WHERE id = $1 AND status = 'in_flight' AND tx_hash = $2
+                    """,
+                    withdrawal_id,
+                    tx_hash,
+                    _RECONCILE_MISMATCH_ERROR,
+                )
+                logger.error(
+                    "marketplace_reconcile: on-chain mismatch withdrawal_id=%s org=%s tx=%s — manual review required",
+                    withdrawal_id,
+                    row["org_id"],
+                    tx_hash,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "marketplace_reconcile: check failed withdrawal_id=%s error_type=%s",
+                withdrawal_id,
+                type(exc).__name__,
+            )
+    return resolved
 
 
 async def reputation_rollup_once() -> int:
@@ -478,6 +624,14 @@ async def _marketplace_sweep_loop() -> None:
         except asyncio.CancelledError:
             logger.info("marketplace_sweep_loop: cancelled")
             raise
+        try:
+            reconciled = await reconcile_in_flight_withdrawals_once()
+            if reconciled:
+                logger.info("marketplace_sweep_loop: reconciled in-flight withdrawals=%d", reconciled)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("marketplace_sweep_loop: in-flight reconciliation failed")
         cancel_exc: BaseException | None = None
         try:
             if cron_monitor is not None:

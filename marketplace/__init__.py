@@ -102,6 +102,7 @@ _AUTO_DEACTIVATE_TOOL_FOR_HEALTH_ORIG = _withdrawals.auto_deactivate_tool_for_he
 _SWEEP_WITHDRAWAL_ID_ORIG = _worker._sweep_withdrawal_id
 _SWEEP_BACKOFF_SECONDS_ORIG = _worker._sweep_backoff_seconds
 _MARKETPLACE_SWEEP_ONCE_ORIG = _worker.marketplace_sweep_once
+_RECONCILE_IN_FLIGHT_WITHDRAWALS_ONCE_ORIG = _worker.reconcile_in_flight_withdrawals_once
 _MARKETPLACE_SWEEP_LOOP_ORIG = _worker._marketplace_sweep_loop
 _REPUTATION_ROLLUP_ONCE_ORIG = _worker.reputation_rollup_once
 
@@ -142,6 +143,7 @@ def _sync_to_modules() -> None:
     _worker.get_author_config = get_author_config
     _worker.process_withdrawal = process_withdrawal
     _worker.marketplace_sweep_once = marketplace_sweep_once
+    _worker.reconcile_in_flight_withdrawals_once = reconcile_in_flight_withdrawals_once
 
 
 def _sync_from_modules() -> None:
@@ -549,6 +551,11 @@ async def marketplace_sweep_once() -> int:
     return await _call_async(_MARKETPLACE_SWEEP_ONCE_ORIG)
 
 
+async def reconcile_in_flight_withdrawals_once() -> int:
+    """Settle or release ``in_flight`` withdrawals whose recorded tx reached finality."""
+    return await _call_async(_RECONCILE_IN_FLIGHT_WITHDRAWALS_ONCE_ORIG)
+
+
 async def reputation_rollup_once() -> int:
     """Recompute marketplace_tool_call_stats reputation/failure/latency aggregates
     from the tool_call_events ledger. Idempotent — safe to re-run. Returns the
@@ -620,6 +627,7 @@ __all__ = [
     "_sweep_withdrawal_id",
     "_sweep_backoff_seconds",
     "marketplace_sweep_once",
+    "reconcile_in_flight_withdrawals_once",
     "_marketplace_sweep_loop",
     "reputation_rollup_once",
 ]

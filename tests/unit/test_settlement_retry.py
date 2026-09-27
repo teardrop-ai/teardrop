@@ -149,3 +149,43 @@ async def test_process_pending_settlements_abandons_lost_claims_without_clobberi
     assert processed == 0
     # Crucial: pool.execute must NOT be called to update/exhaust/revert the lost row!
     pool.execute.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_rearm_exhausted_credit_settlements_is_scoped_and_capped():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[{"id": "settlement-1"}, {"id": "settlement-2"}])
+
+    with patch.object(settlement, "_get_pool", return_value=pool):
+        assert await settlement.rearm_exhausted_credit_settlements("org-1", 50_000) == 2
+
+    sql, *args = pool.fetch.await_args.args
+    assert args == ["org-1", 50_000]
+    assert "WHERE org_id = $1" in sql
+    assert "billing_method = 'credit'" in sql
+    assert "created_at >= NOW() - INTERVAL '7 days'" in sql
+    assert "ORDER BY created_at, id" in sql
+    assert "candidates.running_total <= $2" in sql
+    # Re-checked after the row lock so concurrent resets or top-ups cannot double-arm a row.
+    assert "AND settlement.status = 'exhausted'" in sql
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("org_id", "cap_usdc"), [("org-1", 0), ("org-1", -5), ("", 50_000)])
+async def test_rearm_exhausted_credit_settlements_skips_db_for_empty_inputs(org_id, cap_usdc):
+    pool = MagicMock()
+    pool.fetch = AsyncMock()
+
+    with patch.object(settlement, "_get_pool", return_value=pool):
+        assert await settlement.rearm_exhausted_credit_settlements(org_id, cap_usdc) == 0
+
+    pool.fetch.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_rearm_exhausted_credit_settlements_never_raises():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(side_effect=RuntimeError("db down"))
+
+    with patch.object(settlement, "_get_pool", return_value=pool):
+        assert await settlement.rearm_exhausted_credit_settlements("org-1", 50_000) == 0

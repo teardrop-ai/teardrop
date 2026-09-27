@@ -259,6 +259,32 @@ class TestHandleStripeWebhookDbOperations:
         ledger_sql = pool._conn.execute.call_args_list[1].args[0]
         assert "org_credit_ledger" in ledger_sql
 
+    async def test_fresh_topup_rearms_exhausted_credit_settlements(self):
+        event = _make_stripe_event(metadata={"org_id": "org-test-1", "amount_usdc": "50000000"})
+        pool = _pool_mock_for_webhook()
+        rearm = AsyncMock(return_value=1)
+        with (
+            patch("stripe.Webhook.construct_event", return_value=event),
+            patch.object(billing_module, "_pool", pool),
+            patch("billing.stripe.rearm_exhausted_credit_settlements", rearm),
+        ):
+            await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+
+        rearm.assert_awaited_once_with("org-test-1", 50_000_000)
+
+    async def test_duplicate_event_does_not_rearm(self):
+        event = _make_stripe_event()
+        pool = _pool_mock_for_webhook(event_row=None)
+        rearm = AsyncMock(return_value=0)
+        with (
+            patch("stripe.Webhook.construct_event", return_value=event),
+            patch.object(billing_module, "_pool", pool),
+            patch("billing.stripe.rearm_exhausted_credit_settlements", rearm),
+        ):
+            await handle_stripe_webhook(VALID_PAYLOAD, VALID_SIG)
+
+        rearm.assert_not_awaited()
+
     async def test_duplicate_event_id_is_silently_ignored(self):
         """ON CONFLICT DO NOTHING → fetchrow returns None → function returns early."""
         event = _make_stripe_event()

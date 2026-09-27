@@ -83,6 +83,8 @@ Protected endpoints return a `401` challenge with `bootstrap_uri="/token"` and `
 
 `GET /billing/balance` returns atomic USDC fields. For human orgs, a `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`). For machine-provisioned orgs, zero resolves to `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC`; an explicit org limit is preserved.
 
+A new Stripe or on-chain USDC top-up re-queues, best-effort, the org's credit charges from the last 7 days whose settlement retries were exhausted, oldest first, up to the top-up amount. Each recovered charge appears as a normal `debit` in `/billing/credit-history` and still honors pause and spend limits. Admin top-ups and x402 settlements are not re-queued. A re-queue failure is logged, does not undo the top-up, and is not retried; use a later top-up or the admin settlement reset.
+
 Principal limits are optional and additive to org controls. The authenticated JWT `sub` identifies the principal; absent configuration leaves org-level behavior unchanged. Every credit debit records that principal when available, including retried settlements. New credit-funded A2A debits are linked to their refund outbox row; a definitive non-delivery refund is an immutable reversal-linked top-up, and rolling org/principal spend totals exclude the reversed debit so the corresponding 24-hour cap headroom returns. Pre-migration refund rows without a debit link credit the balance but do not restore rolling-cap headroom.
 
 ### Payment-first bootstrap

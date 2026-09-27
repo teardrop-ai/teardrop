@@ -20,6 +20,7 @@ import sentry_sdk
 from billing.context import _bind_pool, _clear_pool, _get_pool, _has_pool, _reset_daily_spend_caches
 from billing.models import BillingResult, atomic_usdc_to_price_str
 from billing.pricing import get_current_pricing, get_live_pricing, reset_pricing_caches
+from billing.settlement import rearm_exhausted_credit_settlements
 from shared.db_pool import PgPool
 from teardrop.a2a_client import async_validate_url
 from teardrop.config import get_settings
@@ -803,6 +804,7 @@ async def credit_usdc_topup(org_id: str, amount_usdc: int, tx_hash: str) -> int 
         new_balance,
         tx_hash,
     )
+    await rearm_exhausted_credit_settlements(org_id, amount_usdc)
     return new_balance
 
 

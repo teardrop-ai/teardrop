@@ -13,6 +13,13 @@ import aiohttp
 
 @dataclass(slots=True)
 class WebhookCallResult:
+    """Raw outcome of a successful webhook call.
+
+    ``body`` is the undecoded response payload (already truncated to the
+    configured ``max_response_bytes``); ``content_type`` is the response header
+    value, which callers use to decide how to decode ``body``.
+    """
+
     status_code: int
     content_type: str
     body: bytes

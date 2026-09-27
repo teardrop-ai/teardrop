@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel
@@ -401,6 +402,89 @@ _FALLBACK_RPC: dict[int, str] = {
 
 _TX_POLL_INTERVAL = 2.0  # seconds between eth_getTransactionReceipt polls
 
+# Circle-issued native USDC contracts (lowercase).
+_USDC_CONTRACTS: dict[int, str] = {
+    8453: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    84532: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+}
+_ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+_ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
+_TX_HASH_PATTERN = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+UsdcTransferOutcome = Literal["confirmed", "reverted", "pending", "mismatch"]
+
+
+def _rpc_url_for_chain(chain_id: int) -> str:
+    rpc_url = get_settings().base_rpc_url or _FALLBACK_RPC.get(chain_id, "")
+    if not rpc_url:
+        raise ValueError(f"No RPC URL available for chain_id={chain_id}. Set BASE_RPC_URL for reliable transaction verification.")
+    return rpc_url
+
+
+async def _json_rpc(client: httpx.AsyncClient, url: str, method: str, params: list[Any]) -> Any:
+    resp = await client.post(url, json={"jsonrpc": "2.0", "method": method, "params": params, "id": 1})
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get("error"):
+        raise RuntimeError(f"RPC {method} returned an error")
+    return body.get("result")
+
+
+async def check_usdc_transfer(
+    tx_hash: str,
+    *,
+    to_address: str,
+    amount_usdc: int,
+    chain_id: int,
+) -> UsdcTransferOutcome:
+    """Classify a submitted USDC transfer without polling.
+
+    Returns ``pending`` until the receipt's block is canonical and at or below the
+    ``finalized`` head. ``confirmed`` requires a USDC ``Transfer`` log paying exactly
+    *amount_usdc* to *to_address*; ``reverted`` requires the reverted tx to be the
+    matching USDC ``transfer`` call. Anything else is ``mismatch``.
+    """
+    usdc = _USDC_CONTRACTS.get(chain_id)
+    if usdc is None:
+        raise ValueError(f"No USDC contract known for chain_id={chain_id}")
+    if not _TX_HASH_PATTERN.match(tx_hash) or not _EIP55_PATTERN_AW.match(to_address) or amount_usdc <= 0:
+        return "mismatch"
+
+    rpc_url = _rpc_url_for_chain(chain_id)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        receipt = await _json_rpc(client, rpc_url, "eth_getTransactionReceipt", [tx_hash])
+        if receipt is None or receipt.get("blockNumber") is None or not receipt.get("blockHash"):
+            return "pending"
+        finalized = await _json_rpc(client, rpc_url, "eth_getBlockByNumber", ["finalized", False])
+        if finalized is None or int(receipt["blockNumber"], 16) > int(finalized["number"], 16):
+            return "pending"
+        block = await _json_rpc(client, rpc_url, "eth_getBlockByNumber", [receipt["blockNumber"], False])
+        if block is None or str(block.get("hash", "")).lower() != str(receipt["blockHash"]).lower():
+            return "pending"
+
+        status = receipt.get("status")
+        if status == "0x0":
+            tx = await _json_rpc(client, rpc_url, "eth_getTransactionByHash", [tx_hash])
+            expected_input = _ERC20_TRANSFER_SELECTOR + to_address[2:].lower().rjust(64, "0") + format(amount_usdc, "064x")
+            if tx is not None and str(tx.get("to", "")).lower() == usdc and str(tx.get("input", "")).lower() == expected_input:
+                return "reverted"
+            return "mismatch"
+
+    if status != "0x1":
+        return "mismatch"
+    recipient = int(to_address, 16)
+    for log in receipt.get("logs") or []:
+        topics = log.get("topics") or []
+        if (
+            str(log.get("address", "")).lower() == usdc
+            and len(topics) == 3
+            and str(topics[0]).lower() == _ERC20_TRANSFER_TOPIC
+            and int(topics[2], 16) == recipient
+            and int(log.get("data") or "0x0", 16) == amount_usdc
+        ):
+            return "confirmed"
+    return "mismatch"
+
 
 async def verify_usdc_transfer(
     tx_hash: str,
@@ -433,11 +517,7 @@ async def verify_usdc_transfer(
     if timeout_seconds is None:
         timeout_seconds = settings.marketplace_tx_confirm_timeout_seconds
 
-    # Prefer operator-supplied URL; fall back to public endpoint.
-    base_rpc = settings.base_rpc_url
-    rpc_url = base_rpc if base_rpc else _FALLBACK_RPC.get(chain_id, "")
-    if not rpc_url:
-        raise ValueError(f"No RPC URL available for chain_id={chain_id}. Set BASE_RPC_URL for reliable transaction verification.")
+    rpc_url = _rpc_url_for_chain(chain_id)
 
     payload = {
         "jsonrpc": "2.0",
@@ -463,7 +543,7 @@ async def verify_usdc_transfer(
                     )
                     return confirmed
             except (httpx.HTTPError, KeyError, ValueError) as exc:
-                logger.debug("verify_usdc_transfer: poll error tx=%s: %s", tx_hash, exc)
+                logger.debug("verify_usdc_transfer: poll error tx=%s error_type=%s", tx_hash, type(exc).__name__)
 
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Transaction {tx_hash} not mined within {timeout_seconds}s on chain {chain_id}")

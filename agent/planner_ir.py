@@ -49,6 +49,12 @@ class Plan(BaseModel):
 
 
 def _lookup_path(root: Any, path: str | None) -> Any:
+    """Resolve a dotted ``path`` against ``root``.
+
+    Empty/``None`` path returns ``root``. Dict segments index by key and list
+    segments by integer index; a missing key, out-of-range index, or non-container
+    traversal raises ``KeyError`` (callers treat this as an unresolved reference).
+    """
     if path is None or path == "":
         return root
     cur = root

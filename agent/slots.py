@@ -21,12 +21,15 @@ def _as_json(payload: str) -> dict[str, Any] | None:
 
 
 def _wallet_key(payload: dict[str, Any]) -> str:
+    """Return the slot key for a wallet: ``"{chain_id}:{wallet}"`` when both are
+    present, else the lowercased wallet alone (or ``""`` when absent)."""
     wallet = str(payload.get("wallet_address") or "").lower()
     chain = payload.get("chain_id")
     return f"{chain}:{wallet}" if wallet and chain is not None else wallet
 
 
 def _write_get_wallet_portfolio(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge holdings into ``slots["balances"][wallet_key][SYMBOL]``."""
     key = _wallet_key(payload)
     if not key:
         return slots
@@ -50,6 +53,7 @@ def _write_get_wallet_portfolio(payload: dict[str, Any], slots: dict[str, Any]) 
 
 
 def _write_get_erc20_balance(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge a single token balance into ``slots["balances"][wallet_key][SYMBOL]``."""
     key = _wallet_key(payload)
     symbol = str(payload.get("token_symbol") or "").upper()
     if not key or not symbol:
@@ -66,6 +70,7 @@ def _write_get_erc20_balance(payload: dict[str, Any], slots: dict[str, Any]) -> 
 
 
 def _write_get_token_price(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge prices into ``slots["prices"]["by_symbol"][SYMBOL]`` and record ``vs_currency``."""
     prices = dict(slots.get("prices", {}))
     by_symbol = dict(prices.get("by_symbol", {}))
     for entry in payload.get("prices", []) or []:
@@ -87,6 +92,7 @@ def _write_get_token_price(payload: dict[str, Any], slots: dict[str, Any]) -> di
 
 
 def _write_get_defi_positions(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge per-protocol positions into ``slots["defi_positions"][wallet_key]``."""
     key = _wallet_key(payload)
     if not key:
         return slots
@@ -104,6 +110,7 @@ def _write_get_defi_positions(payload: dict[str, Any], slots: dict[str, Any]) ->
 
 
 def _write_get_lending_rates(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge rates into ``slots["rates"]["{protocol}:{chain_id}"]``."""
     rates = dict(slots.get("rates", {}))
     bucket = {
         "protocol": payload.get("protocol"),
@@ -119,6 +126,7 @@ def _write_get_lending_rates(payload: dict[str, Any], slots: dict[str, Any]) -> 
 
 
 def _write_get_protocol_tvl(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge TVL/fees/revenue metrics into ``slots["tvl"][protocol]`` (lowercased)."""
     protocol = str(payload.get("protocol") or "").strip().lower()
     if not protocol:
         return slots
@@ -141,6 +149,7 @@ def _write_get_protocol_tvl(payload: dict[str, Any], slots: dict[str, Any]) -> d
 
 
 def _write_assess_counterparty_risk(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge a risk verdict into ``slots["counterparty_risk"][wallet]`` (lowercased)."""
     wallet = str(payload.get("wallet_address") or "").lower()
     if not wallet:
         return slots
@@ -160,6 +169,7 @@ def _write_assess_counterparty_risk(payload: dict[str, Any], slots: dict[str, An
 
 
 def _write_validate_opportunity(payload: dict[str, Any], slots: dict[str, Any]) -> dict[str, Any]:
+    """Merge an opportunity verdict into ``slots["opportunity_validations"][pool_id]`` (lowercased)."""
     pool_id = str(payload.get("pool_id") or "").lower()
     if not pool_id:
         return slots

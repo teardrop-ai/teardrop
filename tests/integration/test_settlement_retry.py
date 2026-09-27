@@ -20,7 +20,7 @@ import teardrop.usage as usage_module
 import teardrop.users as user_module
 from billing import admin_topup_credit, get_credit_balance
 from billing.context import _bind_pool, _clear_pool
-from billing.settlement import SettlementClaimLostError, process_pending_settlements
+from billing.settlement import SettlementClaimLostError, process_pending_settlements, rearm_exhausted_credit_settlements
 from shared.db_pool import create_pool
 from teardrop.usage import UsageEvent, record_usage_event
 from teardrop.users import create_org
@@ -200,3 +200,53 @@ async def test_x402_row_reaches_exhausted_instead_of_looping(settlement_pool):
 
     # Terminal means terminal: the claim query must not pick it up again.
     assert await process_pending_settlements() == 0
+
+
+async def _insert_exhausted(pool, org_id: str, amount: int, *, billing_method: str = "credit", age: str = "1 hour"):
+    settlement_id = str(uuid.uuid4())
+    await pool.execute(
+        """
+        INSERT INTO pending_settlements
+            (id, usage_event_id, org_id, run_id, billing_method,
+             amount_usdc, retry_count, max_retries, next_retry_at, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 3, 3, NOW(), 'exhausted', NOW() - $7::INTERVAL)
+        """,
+        settlement_id,
+        str(uuid.uuid4()),
+        org_id,
+        f"run-{uuid.uuid4().hex[:8]}",
+        billing_method,
+        amount,
+        age,
+    )
+    return settlement_id
+
+
+async def test_topup_rearm_is_fifo_capped_windowed_and_credit_only(settlement_pool):
+    """Only recent credit debt that fits the top-up is re-queued, then debited exactly once."""
+    org = await create_org(f"rearm-org-{uuid.uuid4().hex[:8]}")
+    other_org = await create_org(f"rearm-other-{uuid.uuid4().hex[:8]}")
+    await admin_topup_credit(org.id, 60_000)
+
+    oldest = await _insert_exhausted(settlement_pool, org.id, 30_000, age="2 days")
+    over_cap = await _insert_exhausted(settlement_pool, org.id, 50_000, age="1 day")
+    x402_row = await _insert_exhausted(settlement_pool, org.id, 10_000, billing_method="x402")
+    stale = await _insert_exhausted(settlement_pool, org.id, 5_000, age="8 days")
+    foreign = await _insert_exhausted(settlement_pool, other_org.id, 1_000)
+
+    assert await rearm_exhausted_credit_settlements(org.id, 60_000) == 1
+
+    statuses = {sid: (await _settlement(settlement_pool, sid))["status"] for sid in (oldest, over_cap, x402_row, stale, foreign)}
+    assert statuses == {
+        oldest: "pending",
+        over_cap: "exhausted",
+        x402_row: "exhausted",
+        stale: "exhausted",
+        foreign: "exhausted",
+    }
+    assert (await _settlement(settlement_pool, oldest))["retry_count"] == 0
+
+    assert await process_pending_settlements() == 1
+    assert await process_pending_settlements() == 0
+    assert await get_credit_balance(org.id) == 30_000
+    assert (await _settlement(settlement_pool, oldest))["status"] == "settled"
