@@ -84,7 +84,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `DEBANK_API_KEY` | DeBank Cloud API key for DeBank-backed wallet tools (`get_wallet_positions`, `get_wallet_approvals`, and `get_wallet_history`) (optional; tools return a configuration error when unset) |
 | `TAVILY_API_KEY` | Tavily API key for the `web_search` tool (optional; web search disabled without it) |
 | `ETHEREUM_RPC_URL` | Ethereum mainnet JSON-RPC URL (required by Ethereum-based tools) |
-| `BASE_RPC_URL` | Base L2 JSON-RPC URL (required by Base-based tools and marketplace auto-sweep) |
+| `BASE_RPC_URL` | Base L2 JSON-RPC URL (required by Base-based tools and marketplace auto-sweep). Public verified-outcome tasks read historical state at finalized blocks, so this endpoint must be archive-capable when `VOR_ENABLED` and `LABELING_ENABLED` are set |
 | `LANGSMITH_TRACING` | Enable LangSmith tracing (default: `false`) |
 | `LANGSMITH_API_KEY` | LangSmith API key for tracing |
 | `LANGSMITH_PROJECT` | LangSmith project name (default: `teardrop`) |

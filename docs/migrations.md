@@ -121,3 +121,4 @@ python -m migrations.runner
 | `106_x_broadcast_sink.sql` | Adds X (Twitter) broadcast sink to `scheduled_runs` and durable `x_broadcasts` audit ledger |
 | `107_mcp_call_events.sql` | Adds immutable MCP settlement outcome events for machine-volume conversion and retention metrics |
 | `110_vor_commitments.sql` | Source-agnostic `commitment_batches`, signed/committed prediction columns, and triggers that make committed rows append-only and confirmed batches immutable |
+| `111_vor_scorecards.sql` | Makes labeling definitions immutable except `active`, guards committed targets/results/evidence against mutation, and pre-registers the public `oracle_deviation@1` task (Chainlink ETH/USD vs Uniswap v3 TWAP on Base) |

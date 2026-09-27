@@ -37,7 +37,7 @@ async def test_rpc_call_uses_chain_context_when_chain_id_passed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rpc_call_retries_rate_limit_in_outer_wrapper(monkeypatch):
+async def test_rpc_call_retries_rate_limit_in_outer_wrapper(monkeypatch, caplog):
     @asynccontextmanager
     async def _noop_rpc_sem():
         yield
@@ -55,13 +55,14 @@ async def test_rpc_call_retries_rate_limit_in_outer_wrapper(monkeypatch):
     async def _flaky():
         attempts["count"] += 1
         if attempts["count"] == 1:
-            raise Exception("429 too many requests")
+            raise Exception("429 too many requests at https://rpc.example/SECRET-KEY")
         return "ok"
 
     result = await web3_helpers.rpc_call(_flaky, timeout_seconds=1, chain_id=1)
 
     assert result == "ok"
     assert attempts["count"] == 2
+    assert "SECRET-KEY" not in caplog.text
 
 
 @pytest.mark.asyncio

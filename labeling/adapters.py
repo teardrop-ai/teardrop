@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from labeling.contracts import Definition, Observation, ObservationRequest, ScoreResult, TargetDraft, utc_datetime
+from labeling.onchain import OracleDeviationProvider, parse_oracle_rounds, score_oracle_deviation
 from labeling.registry import register_parser, register_provider, register_scorer
 from tools.definitions.get_protocol_tvl import get_protocol_tvl
 from tools.definitions.get_token_price import get_token_price
@@ -244,9 +245,12 @@ def register_builtin_adapters() -> None:
     register_parser("entry_timing", "1", parse_entry_timing)
     register_parser("eth_protocols", "1", parse_eth_protocols)
     register_parser("stablecoin_root", "1", parse_stablecoin_root)
+    register_parser("oracle_rounds", "1", parse_oracle_rounds)
     register_provider("token_price", "1", TokenPriceProvider())
     register_provider("protocol_fees", "1", ProtocolFeesProvider())
     register_provider("stablecoin_market", "1", StablecoinMarketProvider())
+    register_provider("oracle_deviation", "1", OracleDeviationProvider())
     register_scorer("entry_return", "1", score_entry_return)
     register_scorer("fee_direction", "1", score_fee_direction)
     register_scorer("stablecoin_spread", "1", score_stablecoin_spread)
+    register_scorer("oracle_deviation_brier", "1", score_oracle_deviation)

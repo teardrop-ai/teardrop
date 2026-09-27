@@ -182,3 +182,47 @@ async def test_external_replay_with_same_payload_is_idempotent(monkeypatch):
     _commit_connection(monkeypatch, [None, {"id": "prediction-1", "status": "accepted", "payload_sha256": same_hash}])
 
     assert await _insert_external() == ("prediction-1", False)
+
+
+def _override_connection(monkeypatch, *, status: str, committed: bool):
+    row = {"id": "target-1", "status": status, "scorer_key": "s", "scorer_version": "1", "committed": committed}
+    connection = _commit_connection(monkeypatch, [row])
+    connection.execute = AsyncMock()
+    return connection
+
+
+async def _override():
+    from labeling.contracts import ScoreResult
+
+    return await store.append_result_override(
+        target_id="target-1",
+        org_id="org-1",
+        result=ScoreResult(label="up", score=1, status="correct", source="manual"),
+    )
+
+
+@pytest.mark.anyio
+async def test_override_cannot_preempt_automatic_scoring_of_committed_target(monkeypatch):
+    connection = _override_connection(monkeypatch, status="pending", committed=True)
+
+    assert await _override() is False
+    connection.execute.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_override_of_scored_committed_target_only_appends(monkeypatch):
+    connection = _override_connection(monkeypatch, status="scored", committed=True)
+
+    assert await _override() is True
+    assert connection.execute.await_count == 1
+    assert "INSERT INTO labeling_results" in connection.execute.await_args.args[0]
+
+
+@pytest.mark.anyio
+async def test_override_of_uncommitted_target_updates_status(monkeypatch):
+    connection = _override_connection(monkeypatch, status="pending", committed=False)
+
+    assert await _override() is True
+    statements = [call.args[0] for call in connection.execute.await_args_list]
+    assert "UPDATE labeling_targets" in statements[0]
+    assert "INSERT INTO labeling_results" in statements[1]

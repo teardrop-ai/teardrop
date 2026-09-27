@@ -83,15 +83,23 @@ async def _process_claimed_rows(rows: list[Any]) -> int:
         provider = resolve_provider(definition.provider_key, definition.provider_version)
         try:
             observations = await provider.fetch_batch([item[3] for item in group], definition)
-        except Exception:
+        except Exception as exc:
             observations = {}
-            logger.warning("labeling provider batch failed provider=%s", definition.provider_key, exc_info=True)
+            logger.warning("labeling provider batch failed provider=%s error=%s", definition.provider_key, type(exc).__name__)
         for row, definition, target, request in group:
             observation = observations.get(request.request_sha256)
+            if observation is None and definition.config.get("public") is True:
+                await retry_target(
+                    str(row["id"]), str(row["lease_token"]), "observation unavailable", _retry_delay(int(row["attempts"]))
+                )
+                continue
             try:
                 if observation is None:
                     raise RuntimeError("observation unavailable")
-                observation_id = await store_observation(observation)
+                if definition.config.get("public") is True:
+                    observation_id = await store_observation(observation, require_identical=True)
+                else:
+                    observation_id = await store_observation(observation)
                 scorer = resolve_scorer(definition.scorer_key, definition.scorer_version)
                 score = scorer(target.item_payload, observation, definition)
                 if not isinstance(score, ScoreResult):

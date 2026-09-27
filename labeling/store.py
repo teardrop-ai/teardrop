@@ -329,7 +329,7 @@ async def claim_due_targets(limit: int, max_per_org: int, lease_seconds: int) ->
     return list(rows)
 
 
-async def store_observation(observation: Observation) -> str:
+async def store_observation(observation: Observation, *, require_identical: bool = False) -> str:
     observation_id = str(uuid.uuid4())
     request = observation.request
     encoded = canonical_json(observation.payload) if observation.payload is not None else None
@@ -359,7 +359,7 @@ async def store_observation(observation: Observation) -> str:
             return str(row["id"])
         existing = await conn.fetchrow(
             """
-            SELECT id FROM labeling_observations
+            SELECT id, payload, status FROM labeling_observations
             WHERE scope_key = $1 AND provider_key = $2 AND provider_version = $3 AND request_sha256 = $4
             """,
             request.scope_key,
@@ -369,6 +369,8 @@ async def store_observation(observation: Observation) -> str:
         )
     if existing is None:
         raise RuntimeError("Labeling observation was not persisted")
+    if require_identical and (existing["payload"] != observation.payload or existing["status"] != observation.status):
+        raise ValueError("Pinned observation conflicts with stored evidence")
     return str(existing["id"])
 
 
@@ -463,7 +465,8 @@ async def append_result_override(
         async with conn.transaction():
             row = await conn.fetchrow(
                 """
-                SELECT t.id, t.status, d.scorer_key, d.scorer_version
+                SELECT t.id, t.status, d.scorer_key, d.scorer_version,
+                       p.leaf_sha256 IS NOT NULL AS committed
                 FROM labeling_targets t
                 JOIN labeling_predictions p ON p.id = t.prediction_id
                 JOIN labeling_definitions d
@@ -477,21 +480,25 @@ async def append_result_override(
             )
             if row is None or row["status"] == "leased":
                 return False
-            await conn.execute(
-                """
-                UPDATE labeling_targets
-                SET status = CASE
-                        WHEN $2 IN ('correct', 'incorrect', 'neutral', 'inconclusive') THEN 'scored'
-                        WHEN $2 = 'unavailable' THEN 'unavailable'
-                        ELSE 'invalid'
-                    END,
-                    last_error = ''
-                WHERE id = $1 AND org_id = $3
-                """,
-                target_id,
-                result.status,
-                org_id,
-            )
+            # A committed target must keep its automatic scoring path; overrides only append.
+            if row["committed"] and row["status"] == "pending":
+                return False
+            if not row["committed"]:
+                await conn.execute(
+                    """
+                    UPDATE labeling_targets
+                    SET status = CASE
+                            WHEN $2 IN ('correct', 'incorrect', 'neutral', 'inconclusive') THEN 'scored'
+                            WHEN $2 = 'unavailable' THEN 'unavailable'
+                            ELSE 'invalid'
+                        END,
+                        last_error = ''
+                    WHERE id = $1 AND org_id = $3
+                    """,
+                    target_id,
+                    result.status,
+                    org_id,
+                )
             await conn.execute(
                 """
                 INSERT INTO labeling_results

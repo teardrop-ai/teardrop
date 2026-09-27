@@ -61,6 +61,8 @@ Scheduled analysis prompts can call the internal `record_predictions` tool with 
 
 With `VOR_ENABLED=true`, external agents can also commit wallet-signed predictions through `POST /labeling/predictions`. Teardrop timestamps each prediction on the server, batches commitments into Merkle trees anchored on Base, and returns inclusion proofs from `GET /labeling/predictions/{id}/proof`. See the `VOR_*` settings in [docs/configuration.md](docs/configuration.md).
 
+Pre-registered public tasks (currently `oracle_deviation@1`, which scores how far Chainlink ETH/USD drifts from a Uniswap v3 TWAP on Base) are scored from pinned, finalized on-chain reads. `GET /scorecards/...` publishes coverage-adjusted Brier scorecards without authentication; prediction payloads stay private.
+
 ### Event-Triggered (Reactive) Runs
 
 Beyond fixed intervals, organizations can register **event triggers** that run the agent in response to inbound webhooks (e.g. an on-chain event, a CRM update, a CI signal). An event trigger stores a prompt *template*; the inbound JSON payload is interpolated into it at dispatch time. Event triggers reuse the same execution core, credit billing, result history, and callback delivery as scheduled runs.

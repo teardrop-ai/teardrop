@@ -300,6 +300,11 @@ async def _confirm(client: httpx.AsyncClient, row: Row) -> bool:
     block = await _rpc(client, url, "eth_getBlockByNumber", [receipt["blockNumber"], False])
     if block is None:
         return False
+    finalized = await _rpc(client, url, "eth_getBlockByNumber", ["finalized", False])
+    if finalized is None or int(receipt["blockNumber"], 16) > int(finalized["number"], 16):
+        return False
+    if not receipt.get("blockHash") or receipt["blockHash"] != block.get("hash"):
+        return False
     anchored_at = datetime.fromtimestamp(int(block["timestamp"], 16), tz=timezone.utc)
     await _record_confirmation(batch_id, tx_hash, int(receipt["blockNumber"], 16), anchored_at)
     return True

@@ -120,7 +120,9 @@ class ObservationRequest:
 
     @property
     def request_sha256(self) -> str:
-        return hashlib.sha256(canonical_json(self.request).encode("utf-8")).hexdigest()
+        # as_of is part of the identity so later windows never reuse an earlier observation row.
+        keyed = {"request": self.request, "as_of": self.as_of.isoformat(timespec="microseconds")}
+        return hashlib.sha256(canonical_json(keyed).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

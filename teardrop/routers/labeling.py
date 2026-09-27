@@ -435,5 +435,8 @@ async def override_labeling_result(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Override source is invalid.")
     recorded = await append_result_override(target_id=target_id, org_id=org_id, result=body)
     if not recorded:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found or currently leased.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target not found, currently leased, or awaiting automatic scoring.",
+        )
     return JSONResponse(status_code=status.HTTP_201_CREATED, content={"status": "recorded"})

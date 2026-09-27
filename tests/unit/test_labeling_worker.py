@@ -11,10 +11,9 @@ import pytest
 from labeling import worker
 
 
-@pytest.mark.anyio
-async def test_planning_failure_at_retry_limit_becomes_unavailable(monkeypatch):
+def _row():
     now = datetime.now(timezone.utc)
-    row = {
+    return {
         "id": "target-1",
         "lease_token": "lease-1",
         "attempts": 5,
@@ -35,6 +34,11 @@ async def test_planning_failure_at_retry_limit_becomes_unavailable(monkeypatch):
         "scorer_version": "1",
         "config": {},
     }
+
+
+@pytest.mark.anyio
+async def test_planning_failure_at_retry_limit_becomes_unavailable(monkeypatch):
+    row = _row()
     provider = MagicMock()
     provider.plan.side_effect = ValueError("poison target")
     complete = AsyncMock(return_value=True)
@@ -50,3 +54,37 @@ async def test_planning_failure_at_retry_limit_becomes_unavailable(monkeypatch):
     result = complete.await_args.kwargs["result"]
     assert result.status == "unavailable"
     assert result.label == "unavailable"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("attempts", [5, 12])
+@pytest.mark.parametrize("raises", [False, True])
+async def test_public_observation_failure_remains_retryable_and_redacted(monkeypatch, caplog, attempts, raises):
+    from labeling.contracts import Observation, ObservationRequest, ScoreResult
+
+    row = {**_row(), "attempts": attempts, "config": {"public": True}}
+    request = ObservationRequest("provider", "1", {}, row["window_end"])
+    provider = MagicMock()
+    provider.plan.return_value = request
+    provider.fetch_batch = AsyncMock(return_value={})
+    if raises:
+        provider.fetch_batch.side_effect = OSError("https://rpc.example/SECRET-KEY")
+    complete = AsyncMock(return_value=True)
+    retry = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "resolve_provider", lambda *_: provider)
+    monkeypatch.setattr(worker, "complete_target", complete)
+    monkeypatch.setattr(worker, "retry_target", retry)
+
+    assert await worker._process_claimed_rows([row]) == 0
+
+    complete.assert_not_awaited()
+    retry.assert_awaited_once_with("target-1", "lease-1", "observation unavailable", worker._retry_delay(attempts))
+    assert "SECRET-KEY" not in caplog.text
+
+    provider.fetch_batch.side_effect = None
+    provider.fetch_batch.return_value = {request.request_sha256: Observation(request, {})}
+    monkeypatch.setattr(worker, "store_observation", AsyncMock(return_value="observation-1"))
+    monkeypatch.setattr(worker, "resolve_scorer", lambda *_: lambda *_: ScoreResult(label="lt25", status="correct", score=0.2))
+
+    assert await worker._process_claimed_rows([row]) == 1
+    assert complete.await_args.kwargs["observation_id"] == "observation-1"

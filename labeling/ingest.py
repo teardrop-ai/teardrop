@@ -93,6 +93,9 @@ async def ingest_scheduled_run_predictions(
     parse_error = ""
     targets: list[Any] = []
     try:
+        from labeling.adapters import register_builtin_adapters
+
+        register_builtin_adapters()
         validate_prediction(predictions, definition.prediction_schema)
         parser = resolve_parser(definition.parser_key, definition.parser_version)
         targets = list(parser(predictions, definition, captured_at))

@@ -194,13 +194,31 @@ async def test_confirm_records_block_and_timestamp(monkeypatch):
         monkeypatch,
         {
             "eth_getTransactionByHash": _TX_BODY,
-            "eth_getTransactionReceipt": {"status": "0x1", "blockNumber": "0x10"},
-            "eth_getBlockByNumber": {"timestamp": hex(int(_NOW.timestamp()))},
+            "eth_getTransactionReceipt": {"status": "0x1", "blockNumber": "0x10", "blockHash": "0x" + _ROOT},
+            "eth_getBlockByNumber": {"number": "0x10", "hash": "0x" + _ROOT, "timestamp": hex(int(_NOW.timestamp()))},
         },
     )
 
     assert await anchor._confirm(MagicMock(), _submitted()) is True
     confirm.assert_awaited_once_with("batch-1", _TX, 16, _NOW)
+    reset.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["unfinalized", "reorg", "missing_finalized"])
+async def test_confirm_waits_for_canonical_finalized_block(monkeypatch, failure):
+    reset, confirm = _patch_rpc(monkeypatch, {})
+    block_hash = "0x" + _ROOT
+    finalized = None if failure == "missing_finalized" else {"number": "0xf" if failure == "unfinalized" else "0x20"}
+    anchor._rpc.side_effect = [
+        _TX_BODY,
+        {"status": "0x1", "blockNumber": "0x10", "blockHash": block_hash},
+        {"hash": "0x" + "00" * 32 if failure == "reorg" else block_hash, "timestamp": hex(int(_NOW.timestamp()))},
+        finalized,
+    ]
+
+    assert await anchor._confirm(MagicMock(), _submitted()) is False
+    confirm.assert_not_awaited()
     reset.assert_not_awaited()
 
 

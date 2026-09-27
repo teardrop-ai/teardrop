@@ -72,6 +72,36 @@ async def test_ingest_commits_when_vor_is_enabled(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_ingest_registers_builtin_parsers_before_first_labeling_tick(monkeypatch):
+    from labeling import registry
+
+    monkeypatch.setattr(registry, "PARSERS", {})
+    definition = Definition(
+        key="stablecoin_yield_compare",
+        version=1,
+        prediction_schema={"type": "object"},
+        parser_key="stablecoin_root",
+        config={"horizon_seconds": 604800},
+    )
+    monkeypatch.setattr(ingest, "get_binding_for_schedule", AsyncMock(return_value=None))
+    monkeypatch.setattr(ingest, "get_active_definition", AsyncMock(return_value=definition))
+    insert = AsyncMock(return_value=("prediction-1", True))
+    monkeypatch.setattr(ingest, "insert_prediction", insert)
+
+    await ingest.ingest_scheduled_run_predictions(
+        org_id="org-1",
+        schedule_id="schedule-1",
+        run_id="run-1",
+        tool_call_log=[],
+        output_text='{"task_class":"stablecoin_yield_compare"}',
+        prediction_at=datetime.now(timezone.utc),
+    )
+
+    assert insert.await_args.kwargs["parse_error"] == ""
+    assert len(insert.await_args.kwargs["targets"]) == 1
+
+
+@pytest.mark.anyio
 async def test_legacy_ingest_falls_back_to_json_prefix(monkeypatch):
     now = datetime.now(timezone.utc)
     definition = Definition(key="example", version=1, prediction_schema={"type": "object"})

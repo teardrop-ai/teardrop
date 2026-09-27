@@ -982,6 +982,44 @@
         "title": "BillingPricingResponse",
         "type": "object"
       },
+      "CalibrationBin": {
+        "properties": {
+          "bin": {
+            "title": "Bin",
+            "type": "integer"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "lower": {
+            "title": "Lower",
+            "type": "number"
+          },
+          "mean_probability": {
+            "title": "Mean Probability",
+            "type": "number"
+          },
+          "observed_frequency": {
+            "title": "Observed Frequency",
+            "type": "number"
+          },
+          "upper": {
+            "title": "Upper",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bin",
+          "lower",
+          "upper",
+          "count",
+          "mean_probability",
+          "observed_frequency"
+        ],
+        "title": "CalibrationBin",
+        "type": "object"
+      },
       "CompleteWithdrawalRequest": {
         "properties": {
           "tx_hash": {
@@ -2618,6 +2656,47 @@
           "items"
         ],
         "title": "LabelingResultListResponse",
+        "type": "object"
+      },
+      "LeaderboardResponse": {
+        "properties": {
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_sha256": {
+            "title": "Definition Sha256",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScorecardItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "min_sample": {
+            "title": "Min Sample",
+            "type": "integer"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "definition_key",
+          "definition_version",
+          "definition_sha256",
+          "window_days",
+          "min_sample",
+          "items"
+        ],
+        "title": "LeaderboardResponse",
         "type": "object"
       },
       "LinkWalletRequest": {
@@ -6280,6 +6359,199 @@
           "status"
         ],
         "title": "ScoreResult",
+        "type": "object"
+      },
+      "ScorecardItem": {
+        "properties": {
+          "accuracy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accuracy"
+          },
+          "adjusted_brier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjusted Brier"
+          },
+          "calibration": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CalibrationBin"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calibration"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "mean_brier": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Brier"
+          },
+          "n_scored": {
+            "title": "N Scored",
+            "type": "integer"
+          },
+          "platform_attested": {
+            "title": "Platform Attested",
+            "type": "boolean"
+          },
+          "rounds_expected": {
+            "title": "Rounds Expected",
+            "type": "integer"
+          },
+          "rounds_submitted": {
+            "title": "Rounds Submitted",
+            "type": "integer"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          },
+          "unresolved": {
+            "title": "Unresolved",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "subject",
+          "platform_attested",
+          "eligible",
+          "n_scored",
+          "rounds_submitted",
+          "rounds_expected",
+          "coverage",
+          "unresolved",
+          "mean_brier",
+          "adjusted_brier",
+          "accuracy"
+        ],
+        "title": "ScorecardItem",
+        "type": "object"
+      },
+      "ScorecardResponse": {
+        "properties": {
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_sha256": {
+            "title": "Definition Sha256",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "item": {
+            "$ref": "#/components/schemas/ScorecardItem"
+          },
+          "min_sample": {
+            "title": "Min Sample",
+            "type": "integer"
+          },
+          "window_days": {
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "definition_key",
+          "definition_version",
+          "definition_sha256",
+          "window_days",
+          "min_sample",
+          "item"
+        ],
+        "title": "ScorecardResponse",
+        "type": "object"
+      },
+      "ScorecardTask": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "definition_key": {
+            "title": "Definition Key",
+            "type": "string"
+          },
+          "definition_sha256": {
+            "title": "Definition Sha256",
+            "type": "string"
+          },
+          "definition_version": {
+            "title": "Definition Version",
+            "type": "integer"
+          },
+          "prediction_schema": {
+            "additionalProperties": true,
+            "title": "Prediction Schema",
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition_key",
+          "definition_version",
+          "definition_sha256",
+          "prediction_schema",
+          "config"
+        ],
+        "title": "ScorecardTask",
+        "type": "object"
+      },
+      "ScorecardTaskListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ScorecardTask"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ScorecardTaskListResponse",
         "type": "object"
       },
       "SetAuthorConfigRequest": {
@@ -14465,6 +14737,168 @@
         "summary": "Register Via Invite",
         "tags": [
           "Auth"
+        ]
+      }
+    },
+    "/scorecards/tasks": {
+      "get": {
+        "description": "List pre-registered public tasks with a hash of each immutable definition.",
+        "operationId": "list_scorecard_tasks_scorecards_tasks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardTaskListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Scorecard Tasks",
+        "tags": [
+          "Scorecards"
+        ]
+      }
+    },
+    "/scorecards/{definition_key}/{definition_version}": {
+      "get": {
+        "description": "Rank subjects meeting the task's minimum sample by coverage-adjusted Brier score (lower is better).",
+        "operationId": "get_scorecard_leaderboard_scorecards__definition_key___definition_version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_key",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$",
+              "title": "Definition Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "definition_version",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Definition Version",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaderboardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scorecard Leaderboard",
+        "tags": [
+          "Scorecards"
+        ]
+      }
+    },
+    "/scorecards/{definition_key}/{definition_version}/{subject}": {
+      "get": {
+        "description": "One subject's scorecard; metrics and calibration are withheld below the minimum sample.",
+        "operationId": "get_subject_scorecard_scorecards__definition_key___definition_version___subject__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "definition_key",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$",
+              "title": "Definition Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "definition_version",
+            "required": true,
+            "schema": {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000,
+              "title": "Definition Version",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subject",
+            "required": true,
+            "schema": {
+              "pattern": "^(0x[0-9a-f]{40}|schedule:[A-Za-z0-9_-]{1,128})$",
+              "title": "Subject",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_days",
+            "required": false,
+            "schema": {
+              "default": 90,
+              "title": "Window Days",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Subject Scorecard",
+        "tags": [
+          "Scorecards"
         ]
       }
     },

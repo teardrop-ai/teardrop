@@ -173,13 +173,13 @@ async def close_web3_clients() -> None:
                 await provider.disconnect()
                 continue
         except Exception as exc:  # pragma: no cover — best-effort shutdown
-            logger.warning("Error disconnecting web3 provider: %s", exc)
+            logger.warning("Error disconnecting web3 provider: %s", type(exc).__name__)
         session = getattr(provider, "cached_session", None)
         if session is not None and not getattr(session, "closed", True):
             try:
                 await session.close()
             except Exception as exc:  # pragma: no cover — best-effort shutdown
-                logger.warning("Error closing web3 aiohttp session: %s", exc)
+                logger.warning("Error closing web3 aiohttp session: %s", type(exc).__name__)
 
 
 async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | None = None):
@@ -236,7 +236,7 @@ async def rpc_call(coro_fn, timeout_seconds: int | None = None, chain_id: int | 
                     attempt + 1,
                     _RETRY_MAX,
                     effective_cooldown,
-                    err_lower,
+                    type(exc).__name__,
                 )
                 continue
             raise

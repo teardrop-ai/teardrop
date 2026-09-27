@@ -320,7 +320,31 @@ Canonical JSON is `json.dumps(predictions, sort_keys=True, separators=(",", ":")
 | `POST` | `/labeling/predictions` | Bearer + wallet signature | Commit a signed external prediction (free, rate-limited) |
 | `GET` | `/labeling/predictions/{id}/proof` | Bearer | Commitment leaf, salt, and RFC 6962 inclusion proof with its Base anchor (`pending`, `submitted`, or `anchored`) |
 | `GET` | `/labeling/results` | Bearer | List append-only labeling results |
-| `POST` | `/labeling/results/{target_id}/override` | Bearer | Append an external or manual result |
+| `POST` | `/labeling/results/{target_id}/override` | Bearer | Append an external or manual result. On committed predictions an override is rejected until automatic scoring completes and never changes the target's status |
+
+### Public Scorecards
+
+Unauthenticated, IP rate-limited, cached for 300 seconds, and available only when `VOR_ENABLED=true`. Only definitions pre-registered with `config.public = true` are exposed; definitions are immutable except for `active`, and each response carries a `definition_sha256` of the full definition.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/scorecards/tasks` | Public task specs (schema, config, `definition_sha256`) |
+| `GET` | `/scorecards/{definition_key}/{definition_version}?window_days=30\|90\|365` | Leaderboard of subjects with at least `min_sample` scored predictions, ordered by `adjusted_brier` (lower is better) |
+| `GET` | `/scorecards/{definition_key}/{definition_version}/{subject}?window_days=...` | One subject's scorecard with 10-bin calibration; below `min_sample` only counts are returned |
+
+A subject is the lowercase signer wallet for signed submissions, or `schedule:{schedule_id}` for platform-attested scheduled runs (`platform_attested: true`). A prediction counts only if it is committed, its batch was included on Base before the target window closed and subsequently finalized, and it is the subject's first prediction for that round. Later submissions cannot replace an ineligible first prediction. Only the earliest automatic result with a pinned observation is used; overrides never affect public scores. `adjusted_brier` fills each missed round with the uniform-forecast score (`1 - 1/K`). Prediction payloads are never exposed.
+
+`window_days` measures scheduled settlement time (`window_end + finality`), allowing 30 settled daily rounds in a 30-day window. Coverage starts at the later of first participation and the window boundary; inactivity does not reset it. Known unavailable rounds are excluded task-wide, including for subjects who skipped them. Inactive subjects remain queryable with counts and withheld metrics when below `min_sample`.
+
+**`oracle_deviation@1`** — forecast `deviation_bps = |chainlink - twap| / twap * 10000` between the Chainlink ETH/USD feed and the 30-minute TWAP of the Uniswap v3 WETH/USDC 0.05% pool on Base at the end of the round. Submit five probabilities that sum to 1:
+
+```json
+{"deviation_bps": {"lt25": 0.4, "b25_50": 0.3, "b50_100": 0.2, "b100_200": 0.08, "gt200": 0.02}}
+```
+
+Rounds are UTC-day aligned: a prediction made at time `t` forecasts the round starting at the next day boundary and ending 24 hours later. Both ends are read at the first Base block with `timestamp >= T`, once that block is finalized. A Chainlink answer older than 1 hour at either end, or missing return data, makes the round `unavailable` and it is excluded from scoring.
+
+The benchmark compares USD and USDC quotes, so USDC depegs also affect the measured deviation. It is a descriptive reputation signal, not a guarantee against oracle/pool manipulation or a payment-release criterion.
 
 ---
 

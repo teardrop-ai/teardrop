@@ -36,6 +36,14 @@ def test_observation_scope_is_explicit():
     assert request.scope_key == "org:one"
 
 
+def test_observation_identity_includes_as_of():
+    as_of = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    first = ObservationRequest("provider", "1", {"id": "one"}, as_of)
+    assert first.request_sha256 == ObservationRequest("provider", "1", {"id": "one"}, as_of).request_sha256
+    later = ObservationRequest("provider", "1", {"id": "one"}, as_of + timedelta(days=1))
+    assert first.request_sha256 != later.request_sha256
+
+
 def test_score_result_rejects_pending_score_shape():
     with pytest.raises(ValueError, match="Non-scored"):
         ScoreResult(label="waiting", status="unavailable", score=0)
