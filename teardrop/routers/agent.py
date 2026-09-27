@@ -1,28 +1,6 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Agent run + tool-discovery routes (AG-UI streaming).
-
-This router owns the two externally-facing agent endpoints:
-
-* ``POST /agent/run`` — the AG-UI streaming endpoint (Server-Sent Events). It
-  runs the pre-graph billing gate, gathers run context concurrently, drives the
-  LangGraph stream, and performs post-run usage accounting, credit/x402
-  settlement, and marketplace earnings recording.
-* ``GET /agent/tools`` — lists the platform, org, and subscribed-marketplace
-  tools available to the authenticated org.
-
-SSE event formatting and the a2ui stream scrubber live in
-``teardrop.agent_stream``. Billing primitives (credit debit, x402 settlement)
-live in ``billing``; this module orchestrates them but never reimplements the
-atomic-USDC accounting. The route handlers, request/response models, and run
-helpers were extracted verbatim from ``teardrop.app`` and are re-exported there
-for backward compatibility.
-
-Additional routes in this module:
-  - GET/POST/DELETE /agent/tool-exclusions   per-org persisted tool exclusions
-  - GET /agent/decisions                     run decision log
-  - PATCH /agent/runs/{run_id}/outcome       decision-outcome backfill
-"""
+"""AG-UI streaming agent run route."""
 
 from __future__ import annotations
 
@@ -30,28 +8,16 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from agent.runtime_context import AgentRunContext, agent_run_context
 from agent.state import AgentState
-from billing import (
-    get_byok_platform_fee,
-    get_current_pricing,
-    get_invoice_by_run,
-    get_tool_pricing_overrides,
-)
-from marketplace import (
-    get_marketplace_catalog,
-    get_subscribed_tools_catalog,
-    record_marketplace_tool_usage_many,
-)
-from org_tools import list_org_tools
+from billing import get_byok_platform_fee
+from marketplace import record_marketplace_tool_usage_many
 from teardrop.agent_event_loop import stream_graph_events
 from teardrop.agent_post_run import (
     calculate_run_cost,
@@ -79,12 +45,29 @@ from teardrop.agent_stream import (
 from teardrop.agent_telemetry import _log_agent_memory
 from teardrop.concurrency import try_acquire_agent_run_slot
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_auth
+from teardrop.dependencies import require_auth
 from teardrop.llm_config import get_org_llm_config_cached
-from teardrop.memory import backfill_decision_outcome, list_run_decisions
 from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.retention import touch_checkpoint_thread
-from teardrop.tool_exclusions import add_org_tool_exclusion, list_org_tool_exclusions, remove_org_tool_exclusion
+from teardrop.routers.agent_decisions import (
+    AgentDecisionListResponse,  # noqa: F401
+    AgentDecisionRecord,  # noqa: F401
+    RunOutcomeRequest,  # noqa: F401
+    RunOutcomeResponse,  # noqa: F401
+    list_agent_decisions,  # noqa: F401
+    set_agent_run_outcome,  # noqa: F401
+)
+from teardrop.routers.agent_tools import (
+    AgentToolItem,  # noqa: F401
+    ToolExclusionActionResponse,  # noqa: F401
+    ToolExclusionListResponse,  # noqa: F401
+    ToolExclusionRemovedResponse,  # noqa: F401
+    ToolExclusionRequest,  # noqa: F401
+    create_agent_tool_exclusion,  # noqa: F401
+    delete_agent_tool_exclusion,  # noqa: F401
+    get_agent_tool_exclusions,  # noqa: F401
+    list_agent_tools,  # noqa: F401
+)
 from teardrop.usage import UsageEvent, record_telemetry_run_started, record_usage_event
 
 logger = logging.getLogger(__name__)
@@ -416,261 +399,3 @@ async def agent_run(
         yield _sse_event(_EV_DONE, {"run_id": run_id})
 
     return EventSourceResponse(_stream())
-
-
-# ─── /agent/tools ─────────────────────────────────────────────────────────────
-
-
-class AgentToolItem(BaseModel):
-    name: str
-    qualified_name: str
-    source: Literal["platform", "org", "marketplace"]
-    access_mode: Literal["included", "subscribed"]
-    display_name: str
-    description: str
-    cost_usdc: int
-    input_schema: dict[str, Any]
-
-
-@router.get("/agent/tools", tags=["Agent"], response_model=list[AgentToolItem])
-async def list_agent_tools(
-    payload: dict = Depends(require_auth),
-) -> JSONResponse:
-    """Return all tools available to the authenticated org's agent runs."""
-    org_id = _require_org_id(payload)
-    settings = get_settings()
-
-    tool_overrides = await get_tool_pricing_overrides()
-    pricing = await get_current_pricing()
-    default_cost = pricing.tool_call_cost if pricing else 0
-
-    if settings.marketplace_enabled:
-        platform_tools, org_tools, subscribed_tools = await asyncio.gather(
-            get_marketplace_catalog(tool_overrides, default_cost, org_slug="platform"),
-            list_org_tools(org_id),
-            get_subscribed_tools_catalog(org_id, tool_overrides, default_cost),
-        )
-    else:
-        org_tools = await list_org_tools(org_id)
-        platform_tools = []
-        subscribed_tools = []
-
-    tools: list[AgentToolItem] = []
-
-    for tool in platform_tools:
-        tools.append(
-            AgentToolItem(
-                name=tool.name,
-                qualified_name=tool.qualified_name,
-                source="platform",
-                access_mode="included",
-                display_name=tool.display_name or tool.name,
-                description=tool.marketplace_description or tool.description,
-                cost_usdc=tool.cost_usdc,
-                input_schema=tool.input_schema,
-            )
-        )
-
-    for tool in org_tools:
-        if not tool.is_active:
-            continue
-        qualified_name = f"org/{tool.name}"
-        cost_usdc = tool_overrides.get(qualified_name, tool_overrides.get(tool.name, 0))
-        tools.append(
-            AgentToolItem(
-                name=tool.name,
-                qualified_name=qualified_name,
-                source="org",
-                access_mode="included",
-                display_name=tool.name,
-                description=tool.description,
-                cost_usdc=cost_usdc,
-                input_schema=tool.input_schema,
-            )
-        )
-
-    for tool in subscribed_tools:
-        tools.append(
-            AgentToolItem(
-                name=tool.name,
-                qualified_name=tool.qualified_name,
-                source="marketplace",
-                access_mode="subscribed",
-                display_name=tool.display_name or tool.name,
-                description=tool.marketplace_description or tool.description,
-                cost_usdc=tool.cost_usdc,
-                input_schema=tool.input_schema,
-            )
-        )
-
-    return JSONResponse(content={"tools": [t.model_dump() for t in tools]})
-
-
-# ─── /agent/tool-exclusions ────────────────────────────────────────────────────
-# Durable, org-scoped "hide this tool from my agent" preference. Complements the
-# per-request ToolPolicy.exclude_names: persisted exclusions apply to every run
-# (including scheduled/event-triggered runs) without the caller resending them.
-# Advisory only — never referenced by billing/settlement.
-
-
-class ToolExclusionRequest(BaseModel):
-    tool_name: str = Field(
-        ...,
-        min_length=1,
-        max_length=200,
-        description="Internal tool name to exclude (unprefixed, e.g. 'web_search', not 'platform/web_search').",
-    )
-
-
-class ToolExclusionListResponse(BaseModel):
-    tool_names: list[str] = Field(..., description="Persisted tool exclusions for the authenticated org.")
-
-
-class ToolExclusionActionResponse(BaseModel):
-    status: Literal["added"] = Field(..., description="Outcome of the exclusion write.")
-    tool_name: str = Field(..., description="Normalized (unprefixed) tool name that was excluded.")
-
-
-class ToolExclusionRemovedResponse(BaseModel):
-    status: Literal["removed"]
-    tool_name: str = Field(..., description="Normalized (unprefixed) tool name that was removed.")
-
-
-@router.get("/agent/tool-exclusions", tags=["Agent"], response_model=ToolExclusionListResponse)
-async def get_agent_tool_exclusions(
-    payload: dict = Depends(require_auth),
-) -> JSONResponse:
-    """List the authenticated org's persisted tool exclusions."""
-    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
-    tool_names = await list_org_tool_exclusions(org_id)
-    return JSONResponse(content={"tool_names": tool_names})
-
-
-@router.post("/agent/tool-exclusions", tags=["Agent"], response_model=ToolExclusionActionResponse)
-async def create_agent_tool_exclusion(
-    body: ToolExclusionRequest,
-    payload: dict = Depends(require_auth),
-) -> JSONResponse:
-    """Persist a tool exclusion for the authenticated org."""
-    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
-    normalized = _normalize_exclusion_name(body.tool_name.strip())
-    try:
-        await add_org_tool_exclusion(org_id, normalized)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return JSONResponse(content={"status": "added", "tool_name": normalized})
-
-
-@router.delete("/agent/tool-exclusions/{tool_name}", tags=["Agent"], response_model=ToolExclusionRemovedResponse)
-async def delete_agent_tool_exclusion(
-    tool_name: str,
-    payload: dict = Depends(require_auth),
-) -> JSONResponse:
-    """Remove a persisted tool exclusion for the authenticated org."""
-    org_id = _require_org_id(payload, "No org_id in token — tool exclusions require an org-scoped credential.")
-    normalized = _normalize_exclusion_name(tool_name.strip())
-    removed = await remove_org_tool_exclusion(org_id, normalized)
-    if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tool exclusion not found.")
-    return JSONResponse(content={"status": "removed", "tool_name": normalized})
-
-
-# ─── /agent/decisions, /agent/runs/{run_id}/outcome ───────────────────────────
-# Decision-graph read + outcome-labeling surface. Read-only telemetry: these
-# routes never gate billing/settlement and never mutate usage_events.
-
-
-class RunOutcomeRequest(BaseModel):
-    rating: int = Field(..., ge=-1, le=1, description="-1 (bad outcome), 0 (neutral), or 1 (good outcome)")
-
-
-class AgentDecisionRecord(BaseModel):
-    id: str = Field(..., description="Decision record ID (UUID string).")
-    run_id: str = Field(..., description="Run this decision summarizes.")
-    task_class: str = Field(default="", description="Auto-classified task type; empty string if unclassified.")
-    action: str = Field(default="", description="Action the planner took.")
-    reasoning: str = Field(default="", description="Planner's stated reasoning for the action.")
-    confidence: float | None = Field(default=None, description="Planner confidence score, if recorded.")
-    tool_names: list[str] = Field(default_factory=list, description="Tools used while making this decision.")
-    outcome: int = Field(..., ge=-1, le=1, description="-1 (bad), 0 (neutral/unlabeled), or 1 (good).")
-    outcome_source: str = Field(default="", description="Origin of the outcome label (e.g. 'feedback'); empty if unlabeled.")
-    created_at: str = Field(..., description="ISO 8601 creation timestamp.")
-
-
-class AgentDecisionListResponse(BaseModel):
-    items: list[AgentDecisionRecord]
-    next_cursor: str | None = Field(
-        default=None, description="ISO datetime cursor for the next page; null when no more items remain."
-    )
-
-
-@router.get("/agent/decisions", tags=["Agent"], response_model=AgentDecisionListResponse)
-async def list_agent_decisions(
-    payload: dict = Depends(require_auth),
-    limit: int = Query(default=50, ge=1, le=200),
-    cursor: str | None = Query(default=None, description="ISO datetime cursor for pagination"),
-) -> JSONResponse:
-    """List stored decision records for the authenticated org (newest first, cursor-paginated).
-
-    Each record summarizes one agent run: the action taken, reasoning, task
-    classification, tools used, and — once labeled — an outcome rating. This
-    is the decision graph read surface; it is populated asynchronously after
-    ``POST /agent/run`` completes and may lag briefly behind the SSE stream.
-    """
-    org_id = _require_org_id(payload, "No org_id in token — decisions require an org-scoped credential.")
-
-    from shared.pagination import parse_cursor  # noqa: PLC0415
-
-    cursor_dt = parse_cursor(cursor)
-    rows = await list_run_decisions(org_id, limit, cursor_dt)
-    serialized = [
-        {
-            "id": r["id"],
-            "run_id": r["run_id"],
-            "task_class": r["task_class"],
-            "action": r["action"],
-            "reasoning": r["reasoning"],
-            "confidence": r["confidence"],
-            "tool_names": r["tool_names"],
-            "outcome": r["outcome"],
-            "outcome_source": r["outcome_source"],
-            "created_at": r["created_at"].isoformat(),
-        }
-        for r in rows
-    ]
-    next_cursor = serialized[-1]["created_at"] if serialized else None
-    return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
-
-
-class RunOutcomeResponse(BaseModel):
-    status: Literal["recorded"]
-
-
-@router.patch("/agent/runs/{run_id}/outcome", tags=["Agent"], response_model=RunOutcomeResponse)
-async def set_agent_run_outcome(
-    run_id: str,
-    body: RunOutcomeRequest,
-    payload: dict = Depends(require_auth),
-) -> JSONResponse:
-    """Label the ground-truth outcome (-1/0/1) of a past run — feeds the decision graph.
-
-    Ownership is verified the same way as marketplace tool feedback
-    (``submit_marketplace_tool_feedback``): the run must belong to the
-    authenticated user's own invoice history. The label is applied once —
-    resubmitting after a label already exists returns 404 rather than
-    silently overwriting it.
-    """
-    org_id = _require_org_id(payload, "No org_id in token — outcomes require an org-scoped credential.")
-    user_id = payload.get("sub", "")
-
-    invoice = await get_invoice_by_run(run_id, user_id)
-    if invoice is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found for this account.")
-
-    updated = await backfill_decision_outcome(run_id, org_id, body.rating, source="explicit")
-    if not updated:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No decision record found for this run, or its outcome was already set.",
-        )
-    return JSONResponse(content={"status": "recorded"})

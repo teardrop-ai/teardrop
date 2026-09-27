@@ -27,6 +27,38 @@ def test_teardrop_app_surface_still_resolves():
     assert require_admin is not None
 
 
+def test_agent_route_symbols_keep_legacy_imports():
+    from teardrop.app import AgentToolItem, list_agent_tools
+    from teardrop.routers import agent as legacy_agent
+    from teardrop.routers import agent_decisions, agent_tools
+
+    tool_symbols = (
+        "AgentToolItem",
+        "ToolExclusionActionResponse",
+        "ToolExclusionListResponse",
+        "ToolExclusionRemovedResponse",
+        "ToolExclusionRequest",
+        "create_agent_tool_exclusion",
+        "delete_agent_tool_exclusion",
+        "get_agent_tool_exclusions",
+        "list_agent_tools",
+    )
+    decision_symbols = (
+        "AgentDecisionListResponse",
+        "AgentDecisionRecord",
+        "RunOutcomeRequest",
+        "RunOutcomeResponse",
+        "list_agent_decisions",
+        "set_agent_run_outcome",
+    )
+
+    assert AgentToolItem is agent_tools.AgentToolItem
+    assert list_agent_tools is agent_tools.list_agent_tools
+    for module, symbols in ((agent_tools, tool_symbols), (agent_decisions, decision_symbols)):
+        for symbol in symbols:
+            assert getattr(legacy_agent, symbol) is getattr(module, symbol)
+
+
 def test_marketplace_facade_price_lookup_still_resolves():
     from marketplace import get_platform_tool_price
 

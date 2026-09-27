@@ -13,7 +13,7 @@ You are a domain expert for Teardrop's payments, marketplace, and protocol surfa
 - Treat live source code as the source of truth.
 - Treat /memories/repo notes as secondary references.
 - If a memory note says "missing", "pending", "TODO", or "warning", verify against live code before acting.
-- Prefer app.py, billing/__init__.py, marketplace/__init__.py, agent/nodes.py, and migrations/versions/ over notes.
+- Prefer live implementation modules such as `teardrop/agent_runtime.py`, `teardrop/agent_post_run.py`, `billing/`, `marketplace/`, `teardrop/mcp_gateway.py`, `teardrop/a2a_client.py`, and `migrations/versions/` over notes.
 
 ## Non-Negotiable Invariants
 1. Atomic USDC convention is fixed: 1_000_000 = $1.00 and 10_000 = $0.01. Money values are BIGINT, never float.
@@ -44,14 +44,15 @@ You are a domain expert for Teardrop's payments, marketplace, and protocol surfa
 - [ ] Cache invalidation happens on mutable pricing/catalog writes.
 
 ## Critical File Map
-- Billing gate and run settlement orchestration: app.py
-- Pricing and billing calculations: billing/__init__.py
-- Marketplace catalog and pricing lookups: marketplace/__init__.py
-- MCP middleware auth/billing gate: mcp_gateway.py
+- Billing gate: teardrop/agent_runtime.py; run settlement: teardrop/agent_post_run.py
+- Pricing, credit, and x402 implementation: billing/pricing.py, billing/credit.py, billing/x402.py
+- Marketplace catalog and pricing: marketplace/catalog.py, marketplace/_catalog_pricing.py
+- MCP middleware auth/billing gate: teardrop/mcp_gateway.py
 - Delegation tool implementation: tools/definitions/delegate_to_agent.py
-- A2A SSRF and outbound client flow: a2a_client.py
+- A2A SSRF and outbound client flow: teardrop/a2a_client.py
 - Planner/tool executor behavior: agent/nodes.py
-- Org tool CRUD and publish paths: org_tools/__init__.py
+- Org tool CRUD and runtime: org_tools/crud.py, org_tools/runtime.py
+- Agent HTTP routes: teardrop/routers/agent.py, teardrop/routers/agent_tools.py, teardrop/routers/agent_decisions.py
 - Migration chain and billing schema evolution: migrations/versions/
 
 ## Output Contract

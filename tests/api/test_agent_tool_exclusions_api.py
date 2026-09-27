@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.anyio
 async def test_get_tool_exclusions(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.routers.agent.list_org_tool_exclusions",
+        "teardrop.routers.agent_tools.list_org_tool_exclusions",
         AsyncMock(return_value=["web_search", "get_block"]),
     )
     resp = await api_client.get("/agent/tool-exclusions")
@@ -31,7 +31,7 @@ async def test_get_tool_exclusions_requires_auth(anon_client):
 @pytest.mark.anyio
 async def test_create_tool_exclusion(api_client, monkeypatch):
     mock_add = AsyncMock()
-    monkeypatch.setattr("teardrop.routers.agent.add_org_tool_exclusion", mock_add)
+    monkeypatch.setattr("teardrop.routers.agent_tools.add_org_tool_exclusion", mock_add)
 
     resp = await api_client.post("/agent/tool-exclusions", json={"tool_name": "platform/web_search"})
     assert resp.status_code == 200
@@ -45,7 +45,7 @@ async def test_create_tool_exclusion(api_client, monkeypatch):
 @pytest.mark.anyio
 async def test_create_tool_exclusion_rejects_quota_exceeded(api_client, monkeypatch):
     monkeypatch.setattr(
-        "teardrop.routers.agent.add_org_tool_exclusion",
+        "teardrop.routers.agent_tools.add_org_tool_exclusion",
         AsyncMock(side_effect=ValueError("Tool exclusion limit reached (50)")),
     )
     resp = await api_client.post("/agent/tool-exclusions", json={"tool_name": "web_search"})
@@ -60,7 +60,7 @@ async def test_create_tool_exclusion_rejects_empty_name(api_client):
 
 @pytest.mark.anyio
 async def test_delete_tool_exclusion(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.agent.remove_org_tool_exclusion", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.agent_tools.remove_org_tool_exclusion", AsyncMock(return_value=True))
     resp = await api_client.delete("/agent/tool-exclusions/web_search")
     assert resp.status_code == 200
     assert resp.json()["status"] == "removed"
@@ -68,6 +68,6 @@ async def test_delete_tool_exclusion(api_client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delete_tool_exclusion_not_found(api_client, monkeypatch):
-    monkeypatch.setattr("teardrop.routers.agent.remove_org_tool_exclusion", AsyncMock(return_value=False))
+    monkeypatch.setattr("teardrop.routers.agent_tools.remove_org_tool_exclusion", AsyncMock(return_value=False))
     resp = await api_client.delete("/agent/tool-exclusions/web_search")
     assert resp.status_code == 404

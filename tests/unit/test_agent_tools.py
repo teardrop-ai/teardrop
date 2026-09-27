@@ -110,7 +110,7 @@ async def test_get_subscribed_tools_catalog_default_price_fallback(monkeypatch):
 
 @pytest.mark.anyio
 async def test_list_agent_tools_org_default_cost_is_zero(monkeypatch):
-    from teardrop.routers.agent import list_agent_tools
+    from teardrop.routers.agent_tools import list_agent_tools
 
     org_tool = SimpleNamespace(
         is_active=True,
@@ -120,15 +120,15 @@ async def test_list_agent_tools_org_default_cost_is_zero(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "teardrop.routers.agent.get_settings",
+        "teardrop.routers.agent_tools.get_settings",
         lambda: SimpleNamespace(marketplace_enabled=False),
     )
-    monkeypatch.setattr("teardrop.routers.agent.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.agent_tools.get_tool_pricing_overrides", AsyncMock(return_value={}))
     monkeypatch.setattr(
-        "teardrop.routers.agent.get_current_pricing",
+        "teardrop.routers.agent_tools.get_current_pricing",
         AsyncMock(return_value=SimpleNamespace(tool_call_cost=3000)),
     )
-    monkeypatch.setattr("teardrop.routers.agent.list_org_tools", AsyncMock(return_value=[org_tool]))
+    monkeypatch.setattr("teardrop.routers.agent_tools.list_org_tools", AsyncMock(return_value=[org_tool]))
 
     response = await list_agent_tools(payload={"org_id": "org-1"})
     body = json.loads(response.body)

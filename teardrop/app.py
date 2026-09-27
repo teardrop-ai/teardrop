@@ -352,18 +352,15 @@ from teardrop.rate_limit import (  # noqa: E402
     _rate_counters,  # noqa: F401  test fixtures clear teardrop.main._rate_counters
 )
 
-# ─── Agent routes (POST /agent/run, GET /agent/tools) ─────────────────────────
-# The streaming agent endpoints live in teardrop.routers.agent. The public
-# handlers and request/response models are re-exported here so downstream SDK
-# code that imports ``from teardrop.main import ...`` keeps a stable surface.
+# ─── Agent route compatibility exports ───────────────────────────────────────
+# Public handlers and request models remain importable through teardrop.app/main.
 from teardrop.routers.agent import (  # noqa: E402,F401
     AgentRunRequest,
-    AgentToolItem,
     ToolPolicy,
     _normalize_exclusion_name,
     agent_run,
-    list_agent_tools,
 )
+from teardrop.routers.agent_tools import AgentToolItem, list_agent_tools  # noqa: E402,F401
 
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 # require_admin and _require_org_id are imported from teardrop.dependencies at
