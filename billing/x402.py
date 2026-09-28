@@ -153,10 +153,25 @@ async def init_billing(pool: PgPool) -> None:
                 type(exc).__name__,
             )
             continue
+        # /supported can advertise a scheme without the capability metadata the SDK needs (e.g. upto facilitatorAddress).
+        try:
+            _build_requirements(server, settings, treasuries, settings.x402_run_price)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "x402 facilitator skipped: cannot build requirements host=%s scheme=%s network=%s error_type=%s reason=%s",
+                _facilitator_host(facilitator_url),
+                settings.x402_scheme,
+                settings.x402_network,
+                type(exc).__name__,
+                exc,
+            )
+            continue
         initialized_servers.append(server)
 
     if not initialized_servers:
-        raise RuntimeError("No x402 facilitator could be initialized")
+        raise RuntimeError(
+            f"No x402 facilitator could be initialized for scheme={settings.x402_scheme} network={settings.x402_network}"
+        )
     _servers = initialized_servers
     _server = initialized_servers[0]
     _facilitator_failures = [0] * len(_servers)

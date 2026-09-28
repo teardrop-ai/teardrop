@@ -84,6 +84,62 @@ async def test_init_fails_closed_when_all_facilitators_are_blocked(monkeypatch):
         await x402.init_billing(MagicMock())
 
 
+_BASE = "eip155:8453"
+_FACILITATOR_ADDRESS = "0x" + "f" * 40
+
+
+def _facilitator_client(*kinds: tuple[str, dict | None]):
+    from x402.schemas import SupportedKind, SupportedResponse
+
+    response = SupportedResponse(
+        kinds=[SupportedKind(x402_version=2, scheme=scheme, network=_BASE, extra=extra) for scheme, extra in kinds]
+    )
+    return SimpleNamespace(get_supported=lambda: response)
+
+
+async def _init_upto_with(monkeypatch, clients: dict):
+    settings = _init_settings()
+    settings.x402_scheme = "upto"
+    monkeypatch.setattr(x402, "get_settings", lambda: settings)
+    monkeypatch.setattr(x402, "get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr(x402, "async_validate_url", AsyncMock(return_value=None))
+    monkeypatch.setattr(x402, "_bind_pool", MagicMock())
+    monkeypatch.setattr(x402, "_servers", [])
+    with patch("x402.http.HTTPFacilitatorClient", side_effect=lambda config: clients[config.url]):
+        await x402.init_billing(MagicMock())
+
+
+@pytest.mark.anyio
+async def test_init_upto_skips_facilitator_without_facilitator_address(monkeypatch):
+    compliant = _facilitator_client(("exact", None), ("upto", {"facilitatorAddress": _FACILITATOR_ADDRESS}))
+    clients = {
+        "https://one.example": _facilitator_client(("exact", None), ("upto", None)),
+        "https://two.example": compliant,
+    }
+
+    await _init_upto_with(monkeypatch, clients)
+
+    assert len(x402._servers) == 1
+    upto = [req for req in x402.get_payment_requirements() if req.scheme == "upto"]
+    assert len(upto) == 2
+    assert all(req.extra["facilitatorAddress"] == _FACILITATOR_ADDRESS for req in upto)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "kinds",
+    [
+        pytest.param((("exact", None),), id="upto-not-advertised"),
+        pytest.param((("exact", None), ("upto", None)), id="upto-missing-facilitator-address"),
+    ],
+)
+async def test_init_upto_fails_closed_when_no_facilitator_is_compliant(monkeypatch, kinds):
+    clients = {url: _facilitator_client(*kinds) for url in ("https://one.example", "https://two.example")}
+
+    with pytest.raises(RuntimeError, match="No x402 facilitator could be initialized for scheme=upto"):
+        await _init_upto_with(monkeypatch, clients)
+
+
 @pytest.mark.anyio
 async def test_verify_fails_over_on_transport_error(monkeypatch):
     first = MagicMock(verify_payment=AsyncMock(side_effect=OSError("secret transport detail")))
