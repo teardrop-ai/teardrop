@@ -618,3 +618,39 @@ class TestPromotionalCreditExclusions:
 
         assert result.task_state == "timeout"
         assert result.output_text == "Task timed out."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("author_price", "expected"), [(None, 1_000), (2_500, 2_500)])
+async def test_marketplace_earnings_use_global_tool_price(monkeypatch, author_price, expected):
+    """Default-priced tools earn on the global tool_call_cost, the amount billing charged."""
+    from types import SimpleNamespace
+
+    from teardrop import agent_runtime
+
+    model_rule_mock = AsyncMock(return_value=SimpleNamespace(tool_call_cost=500))
+    monkeypatch.setattr("billing.get_settings", lambda: SimpleNamespace(marketplace_enabled=True))
+    monkeypatch.setattr("billing.get_live_pricing_for_model", model_rule_mock)
+    monkeypatch.setattr("billing.get_live_pricing", AsyncMock(return_value=SimpleNamespace(tool_call_cost=1_000)))
+    monkeypatch.setattr("billing.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        agent_runtime, "get_marketplace_tool_by_name", AsyncMock(return_value={"org_id": "author-org", "name": "weather"})
+    )
+    monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(return_value=author_price))
+    earnings_mock = MagicMock(return_value=asyncio.sleep(0))
+    monkeypatch.setattr(agent_runtime, "record_tool_call_earnings", earnings_mock)
+
+    await agent_runtime._record_marketplace_earnings(
+        mp_by_name={"acme/weather": object()},
+        tool_names_used=["acme/weather"],
+        caller_org_id="caller-org",
+    )
+    await asyncio.sleep(0)
+
+    model_rule_mock.assert_not_awaited()
+    earnings_mock.assert_called_once_with(
+        author_org_id="author-org",
+        caller_org_id="caller-org",
+        tool_name="weather",
+        total_cost_usdc=expected,
+    )

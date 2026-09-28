@@ -400,12 +400,13 @@ class MarketplaceToolSummary(BaseModel):
     description: str = Field(..., description="Marketplace-facing description.")
     short_description: str = Field(..., description="Internal/short description.")
     input_schema: dict[str, Any]
-    cost_usdc: int
+    output_schema: dict[str, Any] | None = Field(default=None, description="JSON Schema of the tool result, when declared.")
+    cost_usdc: int = Field(..., description="Effective per-call price in atomic USDC, as billed.")
     tool_type: str
     category: str
     total_calls: int
-    reputation_score: float
-    success_rate: float
+    reputation_score: float | None = Field(..., description="Null when the tool is unrated.")
+    success_rate: float | None = Field(..., description="Posterior success estimate; null when the tool is unrated.")
     unique_caller_count: int | None = None
     health_status: str
     is_healthy: bool
@@ -459,6 +460,7 @@ def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
         "description": tool.marketplace_description,
         "short_description": tool.description,
         "input_schema": tool.input_schema,
+        "output_schema": tool.output_schema,
         "cost_usdc": tool.cost_usdc,
         "tool_type": tool.tool_type,
         "category": tool.category,

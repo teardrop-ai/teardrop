@@ -1835,6 +1835,7 @@ async def test_mcp_tools_call_verifies_author_price_before_execution(api_client,
         ),
     )
     verify_mock = AsyncMock(return_value=BillingResult(verified=True, billing_method="credit"))
+    monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(return_value=2_000_000))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.verify_credit", verify_mock)
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, 2_000_000)))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
@@ -1963,6 +1964,7 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
         "teardrop.routers.marketplace_mcp.verify_credit",
         AsyncMock(return_value=BillingResult(verified=True, billing_method="credit")),
     )
+    monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(return_value=1_000))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, 1_000)))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"ok": True}))
     mock_earnings = AsyncMock()
@@ -1992,5 +1994,170 @@ async def test_mcp_tools_call_records_author_earnings(api_client, monkeypatch):
         tool_name="my_tool",
         total_cost_usdc=1_000,
     )
+
+    config.get_settings.cache_clear()
+
+
+# ─── Price parity: catalog, quote, /mcp/v1 and /agent/run share resolve_tool_cost ──
+
+
+def _community_catalog_row() -> dict:
+    return {
+        "tool_id": None,
+        "name": "weather",
+        "qualified_name": "acme/weather",
+        "display_name": "weather",
+        "description": "Weather",
+        "marketplace_description": "Weather lookup",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object", "properties": {"temp_c": {"type": "number"}}},
+        "base_price_usdc": 1_000,
+        "author_org_name": "Acme",
+        "author_org_slug": "acme",
+        "tool_type": "community",
+        "category": "",
+        "total_calls": 0,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("listed_price", "expected"), [(None, 1_000), (0, 0), (5_000, 5_000)])
+async def test_price_parity_across_surfaces(api_client, monkeypatch, listed_price, expected):
+    """NULL = platform default, 0 = free, > 0 = author price — identical on every surface."""
+    from billing import PricingRule, calculate_run_cost_usdc
+
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    rule = PricingRule(id="rule-1", name="default", run_price_usdc=10_000, tool_call_cost=1_000)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[_community_catalog_row()])
+    monkeypatch.setattr("marketplace._pool", pool)
+    monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(return_value=listed_price))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    for module in ("teardrop.routers.marketplace", "teardrop.routers.marketplace_mcp", "billing"):
+        monkeypatch.setattr(f"{module}.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_current_pricing", AsyncMock(return_value=rule))
+    monkeypatch.setattr("teardrop.routers.marketplace.get_live_pricing", AsyncMock(return_value=rule))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=rule))
+    monkeypatch.setattr("billing.get_live_pricing", AsyncMock(return_value=rule))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.is_promotional_credit", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.get_marketplace_tool_by_name",
+        AsyncMock(return_value={"id": "t-1", "org_id": "author-org-id", "name": "weather"}),
+    )
+    verify_mock = AsyncMock(return_value=BillingResult(verified=True, billing_method="credit"))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.verify_credit", verify_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, expected)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp._execute_marketplace_tool", AsyncMock(return_value={"temp_c": 20}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_marketplace_tool_usage_many", AsyncMock())
+    earnings_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_tool_call_earnings", earnings_mock)
+
+    catalog = (await api_client.get("/marketplace/catalog")).json()["tools"][0]
+    quote = (await api_client.get("/marketplace/quote?tool=acme/weather")).json()
+    call = await api_client.post(
+        "/mcp/v1",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "acme/weather", "arguments": {}}},
+    )
+    run_cost = await calculate_run_cost_usdc({"billable_tool_calls": 1, "billable_tool_names": ["acme/weather"]})
+
+    assert catalog["cost_usdc"] == quote["price_usdc"] == verify_mock.await_args.args[1] == run_cost == expected
+    assert call.json()["result"]["isError"] is False
+    if expected > 0:
+        earnings_mock.assert_called_once_with(
+            author_org_id="author-org-id",
+            caller_org_id="test-org-id",
+            tool_name="weather",
+            total_cost_usdc=expected,
+        )
+    else:
+        earnings_mock.assert_not_called()
+    # Unrated tools publish null quality, not zero; declared output schemas are exposed.
+    assert catalog["reputation_score"] is None
+    assert catalog["success_rate"] is None
+    assert catalog["output_schema"] == _community_catalog_row()["output_schema"]
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_call_platform_alias_runs_builtin_at_platform_price(api_client, monkeypatch):
+    """platform/{name} from the REST catalog is callable and never hits the subscription gate."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("BILLING_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    pricing = MagicMock()
+    pricing.tool_call_cost = 1_000
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=pricing))
+    monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(return_value=7_000))
+    subscription_mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", subscription_mock)
+    verify_mock = AsyncMock(return_value=BillingResult(verified=True, billing_method="credit"))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.verify_credit", verify_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.debit_credit", AsyncMock(return_value=(True, 7_000)))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_mcp.execute_tool",
+        AsyncMock(return_value=SimpleNamespace(success=True, content='{"datetime": "2026-09-27T00:00:00+00:00"}')),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_marketplace_tool_usage_many", AsyncMock())
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/mcp/v1",
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "platform/get_datetime", "arguments": {}}},
+    )
+
+    assert resp.json()["result"]["isError"] is False
+    subscription_mock.assert_not_awaited()
+    assert verify_mock.await_args.args[1] == 7_000
+
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_list_lists_platform_tools_once_by_bare_name(api_client, monkeypatch):
+    from tools import registry
+
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    community = MarketplaceTool(
+        name="my_tool",
+        qualified_name="acme/my_tool",
+        description="desc",
+        marketplace_description="marketplace desc",
+        input_schema={"type": "object"},
+        cost_usdc=1000,
+        author_org_name="Acme",
+        author_org_slug="acme",
+    )
+    platform = community.model_copy(update={"name": "calculate", "qualified_name": "platform/calculate", "tool_type": "platform"})
+    built_in = registry.get("calculate")
+    assert built_in is not None
+    catalog_mock = AsyncMock(return_value=[community, platform])
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_marketplace_catalog", catalog_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.registry.list_latest", MagicMock(return_value=[built_in]))
+    monkeypatch.setattr("marketplace.reputation.get_public_reputation", AsyncMock(return_value={}))
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+
+    resp = await api_client.post("/mcp/v1", json={"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+
+    assert [t["name"] for t in resp.json()["result"]["tools"]] == ["acme/my_tool", "calculate"]
+    assert catalog_mock.await_args.kwargs["limit"] == 200
 
     config.get_settings.cache_clear()

@@ -23,6 +23,8 @@ from typing import Any
 from billing import (
     calculate_byok_orchestration_cost,
     calculate_run_cost_usdc,
+    calculate_tool_cost_usdc,
+    calculate_turns_token_cost_usdc,
     debit_credit,
     enqueue_failed_settlement,
     record_settlement,
@@ -129,42 +131,63 @@ async def fetch_usage_snapshot(
     return state_snapshot, usage_data
 
 
+def run_provider_model(llm_config: dict[str, Any] | None, settings: Any) -> tuple[str, str]:
+    """Return the provider/model whose pricing rule bills the run's tokens."""
+    if llm_config:
+        return llm_config["provider"], llm_config["model"]
+    return settings.agent_provider, settings.agent_model
+
+
+def _billable_tools(usage_data: dict[str, Any]) -> tuple[int, list[str]]:
+    tool_calls = int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)))
+    tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+    return tool_calls, list(tool_names) if isinstance(tool_names, list) else []
+
+
 async def calculate_run_cost(
     *,
     usage_data: dict[str, Any],
     llm_config: dict[str, Any] | None,
     settings: Any,
+    is_byok: bool = False,
+    org_llm_cfg: Any = None,
+    platform_fee: int = 0,
 ) -> int:
-    """Calculate usage-based cost from live pricing rule (never blocks the stream)."""
+    """Calculate what the caller owes for the run (never blocks the stream).
+
+    BYOK orgs pay their LLM provider directly, so they owe the orchestration fee
+    plus tool calls; the fee is per-token (floored at ``platform_fee``) when
+    ``byok_tier_pricing_enabled``, else flat. Other orgs owe tokens plus tools.
+    """
     cost_usdc = 0
     try:
-        _run_provider = llm_config["provider"] if llm_config else settings.agent_provider
-        _run_model = llm_config["model"] if llm_config else settings.agent_model
+        if is_byok:
+            if settings.byok_tier_pricing_enabled:
+                byok_fee = await calculate_byok_orchestration_cost(
+                    usage_data.get("tokens_in", 0),
+                    usage_data.get("tokens_out", 0),
+                    provider=(org_llm_cfg.provider if org_llm_cfg else "") or "",
+                    model=(org_llm_cfg.model if org_llm_cfg else "") or "",
+                )
+            else:
+                byok_fee = platform_fee
+            return byok_fee + await calculate_tool_cost_usdc(*_billable_tools(usage_data))
+
+        _run_provider, _run_model = run_provider_model(llm_config, settings)
         turns = usage_data.get("turns") if isinstance(usage_data, dict) else None
         if isinstance(turns, list) and turns:
-            token_cost_total = 0
-            for turn in turns:
-                if not isinstance(turn, dict):
-                    continue
-                turn_provider = str(turn.get("provider") or _run_provider)
-                turn_model = str(turn.get("model") or _run_model)
-                turn_usage = {
+            priced_turns = [
+                {
+                    "provider": str(turn.get("provider") or _run_provider),
+                    "model": str(turn.get("model") or _run_model),
                     "tokens_in": int(turn.get("tokens_in", 0)),
                     "tokens_out": int(turn.get("tokens_out", 0)),
-                    # Token-only per turn; tools are charged separately once per run.
-                    "billable_tool_calls": 0,
-                    "billable_tool_names": [],
                 }
-                token_cost_total += await calculate_run_cost_usdc(turn_usage, turn_provider, turn_model)
-
-            tool_usage = {
-                "tokens_in": 0,
-                "tokens_out": 0,
-                "billable_tool_calls": int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0))),
-                "billable_tool_names": usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-            }
-            tool_cost_total = await calculate_run_cost_usdc(tool_usage, _run_provider, _run_model)
-            cost_usdc = token_cost_total + tool_cost_total
+                for turn in turns
+                if isinstance(turn, dict)
+            ]
+            token_cost_total = await calculate_turns_token_cost_usdc(priced_turns)
+            cost_usdc = token_cost_total + await calculate_tool_cost_usdc(*_billable_tools(usage_data))
         else:
             cost_usdc = await calculate_run_cost_usdc(usage_data, _run_provider, _run_model)
     except Exception:
@@ -175,10 +198,7 @@ async def calculate_run_cost(
 async def dispatch_settlement(
     *,
     billing: Any,
-    is_byok: bool,
     settings: Any,
-    org_llm_cfg: Any,
-    usage_data: dict[str, Any],
     usage_event: Any,
     platform_fee: int,
     cost_usdc: int,
@@ -190,7 +210,8 @@ async def dispatch_settlement(
 ):
     """Credit debit or x402 settlement, yielding ``BILLING_SETTLEMENT`` frames.
 
-    Sets ``result["marketplace_stats_billable"]`` to ``True`` when a charge
+    ``cost_usdc`` is the caller charge from :func:`calculate_run_cost`. Sets
+    ``result["marketplace_stats_billable"]`` to ``True`` when a charge
     succeeded so the caller can record marketplace tool usage stats.
     """
     result["marketplace_stats_billable"] = False
@@ -200,29 +221,10 @@ async def dispatch_settlement(
     if not billing.verified:
         return
 
-    # Determine what to charge BYOK orgs.
-    # - byok_tier_pricing_enabled=True (migration 041 applied): per-token
-    #   orchestration cost floored at byok_platform_fee_usdc.
-    # - byok_tier_pricing_enabled=False (legacy / pre-migration): flat fee.
-    # Non-BYOK orgs always pay the full LLM cost.
-    if is_byok and settings.byok_tier_pricing_enabled:
-        _run_provider = (org_llm_cfg.provider if org_llm_cfg else "") or ""
-        _run_model = (org_llm_cfg.model if org_llm_cfg else "") or ""
-        debit_amount = await calculate_byok_orchestration_cost(
-            usage_data.get("tokens_in", 0),
-            usage_data.get("tokens_out", 0),
-            provider=_run_provider,
-            model=_run_model,
-        )
-    else:
-        # Legacy: flat fee for BYOK, full model cost for non-BYOK.
-        debit_amount = platform_fee if is_byok else cost_usdc
-
     if billing.billing_method == "credit":
-        # Debit actual run cost (or platform fee for BYOK) from org's prepaid balance.
         success, deducted_amount = await debit_credit(
             org_id,
-            debit_amount,
+            cost_usdc,
             reason=f"run:{run_id}",
             principal_id=principal_id or None,
         )
@@ -242,13 +244,13 @@ async def dispatch_settlement(
                 },
             )
         else:
-            await record_settlement(usage_event.id, debit_amount, "", "failed")
+            await record_settlement(usage_event.id, cost_usdc, "", "failed")
             await enqueue_failed_settlement(
                 usage_event.id,
                 org_id,
                 run_id,
                 "credit",
-                debit_amount,
+                cost_usdc,
                 principal_id=principal_id or None,
             )
             logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)

@@ -95,6 +95,14 @@ services:
       - key: X402_NETWORK
         value: "eip155:8453"
 
+      # Usage-based settlement: caller signs X402_UPTO_MAX_AMOUNT as a ceiling
+      # and is charged the actual run cost. Requires x402>=2.8.0.
+      - key: X402_SCHEME
+        value: "upto"
+
+      - key: X402_UPTO_MAX_AMOUNT
+        value: "$0.50"
+
       # ── Optional: LangSmith tracing ───────────────────────────────────────
       - key: LANGSMITH_TRACING
         value: "false"

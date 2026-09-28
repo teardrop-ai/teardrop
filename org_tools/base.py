@@ -81,7 +81,7 @@ class OrgTool(BaseModel):
     marketplace_description: str = ""
     category: str = ""
     tags: list[str] = Field(default_factory=list)
-    base_price_usdc: int = 0
+    base_price_usdc: int | None = None
     schema_hash: str = ""
     last_schema_changed_at: datetime | None = None
     created_at: datetime
@@ -189,7 +189,7 @@ def _row_to_org_tool(row: Row) -> OrgTool:
         marketplace_description=row.get("marketplace_description", ""),
         category=row.get("category", ""),
         tags=row.get("tags", []) or [],
-        base_price_usdc=row.get("base_price_usdc", 0),
+        base_price_usdc=row.get("base_price_usdc"),
         schema_hash=row.get("schema_hash") or "",
         last_schema_changed_at=row.get("last_schema_changed_at"),
         created_at=row["created_at"],

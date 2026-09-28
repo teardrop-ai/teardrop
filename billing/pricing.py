@@ -269,40 +269,74 @@ async def resolve_tool_cost(
     return default_cost
 
 
+async def calculate_tool_cost_usdc(tool_calls: int, tool_names: list[str]) -> int:
+    """Price billable tool calls against the global rule, the same default every catalog surface shows."""
+    if tool_calls <= 0 and not tool_names:
+        return 0
+    rule = await get_live_pricing()
+    default_cost = rule.tool_call_cost if rule is not None else 0
+    if not tool_names:
+        return tool_calls * default_cost
+
+    overrides = await get_tool_pricing_overrides()
+    marketplace_enabled = get_settings().marketplace_enabled
+    named_cost = 0
+    for name in tool_names:
+        named_cost += await resolve_tool_cost(name, overrides, default_cost, marketplace_enabled)
+    return named_cost + max(0, tool_calls - len(tool_names)) * default_cost
+
+
+def is_flat_rate(rule: PricingRule) -> bool:
+    """A rule with no per-unit rates charges ``run_price_usdc`` once per run."""
+    return rule.tokens_in_cost_per_1k <= 0 and rule.tokens_out_cost_per_1k <= 0 and rule.tool_call_cost <= 0
+
+
+def _per_unit_token_cost(rule: PricingRule, tokens_in: int, tokens_out: int) -> int:
+    return (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
+
+
+async def calculate_turns_token_cost_usdc(turns: list[dict]) -> int:
+    """Token cost of a run's LLM turns, each priced by its own provider/model rule.
+
+    Each distinct flat-rate rule is charged once per run, however many turns used it.
+    """
+    per_unit_cost = 0
+    flat_prices: dict[str, int] = {}
+    for turn in turns:
+        rule = await get_live_pricing_for_model(str(turn.get("provider", "")), str(turn.get("model", "")))
+        if rule is None:
+            continue
+        if is_flat_rate(rule):
+            flat_prices[rule.id] = rule.run_price_usdc
+        else:
+            per_unit_cost += _per_unit_token_cost(rule, int(turn.get("tokens_in", 0)), int(turn.get("tokens_out", 0)))
+    return per_unit_cost + sum(flat_prices.values())
+
+
 async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: str = "") -> int:
-    """Calculate the cost of a completed run in atomic USDC (6-decimal integer)."""
+    """Calculate the cost of a completed run in atomic USDC (6-decimal integer).
+
+    The provider/model rule prices tokens only; tool calls are priced by
+    :func:`calculate_tool_cost_usdc` so a model rule never changes a tool's price.
+    """
     if provider and model:
         rule = await get_live_pricing_for_model(provider, model)
     else:
         rule = await get_live_pricing()
-    if rule is None:
-        return 0
 
     tokens_in = int(usage_data.get("tokens_in", 0))
     tokens_out = int(usage_data.get("tokens_out", 0))
     tool_calls = int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)))
     tool_names: list[str] = usage_data.get("billable_tool_names") or usage_data.get("tool_names") or []
 
-    has_per_unit_rates = rule.tokens_in_cost_per_1k > 0 or rule.tokens_out_cost_per_1k > 0 or rule.tool_call_cost > 0
-
-    if not has_per_unit_rates:
-        # Flat-rate rule: every run costs run_price_usdc.
-        return rule.run_price_usdc
-
-    token_cost = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
-
-    if tool_names:
-        overrides = await get_tool_pricing_overrides()
-        marketplace_enabled = get_settings().marketplace_enabled
-        named_cost = 0
-        for name in tool_names:
-            named_cost += await resolve_tool_cost(name, overrides, rule.tool_call_cost, marketplace_enabled)
-        unnamed_calls = max(0, tool_calls - len(tool_names))
-        tool_cost = named_cost + unnamed_calls * rule.tool_call_cost
+    if rule is None:
+        token_cost = 0
+    elif is_flat_rate(rule):
+        token_cost = rule.run_price_usdc
     else:
-        tool_cost = tool_calls * rule.tool_call_cost
+        token_cost = _per_unit_token_cost(rule, tokens_in, tokens_out)
 
-    return token_cost + tool_cost
+    return token_cost + await calculate_tool_cost_usdc(tool_calls, tool_names)
 
 
 def reset_pricing_caches() -> None:

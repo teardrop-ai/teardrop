@@ -87,3 +87,108 @@ async def test_record_post_run_telemetry_skips_disabled_or_missing_state():
 
     tool_events.assert_not_awaited()
     memory_extraction.assert_not_awaited()
+
+
+_USAGE = {
+    "tokens_in": 4_000,
+    "tokens_out": 1_000,
+    "billable_tool_calls": 2,
+    "billable_tool_names": ["acme/weather", "calculate"],
+    "tool_names": ["acme/weather", "calculate", "failed_tool"],
+}
+
+
+@pytest.mark.anyio
+async def test_calculate_run_cost_prices_tools_once_independent_of_turn_models():
+    from teardrop import agent_post_run
+
+    token_cost = AsyncMock(return_value=100)
+    tool_cost = AsyncMock(return_value=3_500)
+    usage = {
+        **_USAGE,
+        "turns": [
+            {"provider": "openrouter", "model": "deepseek/x", "tokens_in": 4_000, "tokens_out": 1_000},
+            {"tokens_in": 1_000, "tokens_out": 0},
+            "not-a-turn",
+        ],
+    }
+    with (
+        patch.object(agent_post_run, "calculate_turns_token_cost_usdc", token_cost),
+        patch.object(agent_post_run, "calculate_tool_cost_usdc", tool_cost),
+    ):
+        cost = await agent_post_run.calculate_run_cost(
+            usage_data=usage, llm_config=None, settings=SimpleNamespace(agent_provider="anthropic", agent_model="claude-x")
+        )
+
+    assert cost == 3_600
+    tool_cost.assert_awaited_once_with(2, ["acme/weather", "calculate"])
+    token_cost.assert_awaited_once_with(
+        [
+            {"provider": "openrouter", "model": "deepseek/x", "tokens_in": 4_000, "tokens_out": 1_000},
+            {"provider": "anthropic", "model": "claude-x", "tokens_in": 1_000, "tokens_out": 0},
+        ]
+    )
+
+
+async def _drain(gen) -> None:
+    async for _ in gen:
+        pass
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("tier_enabled", "expected_fee"), [(False, 1_000), (True, 1_700)])
+async def test_byok_run_cost_is_orchestration_fee_plus_tools(tier_enabled, expected_fee):
+    from teardrop import agent_post_run
+
+    token_cost = AsyncMock(return_value=90_000)
+    tool_cost = AsyncMock(return_value=3_500)
+    with (
+        patch.object(agent_post_run, "calculate_run_cost_usdc", token_cost),
+        patch.object(agent_post_run, "calculate_tool_cost_usdc", tool_cost),
+        patch.object(agent_post_run, "calculate_byok_orchestration_cost", AsyncMock(return_value=1_700)),
+    ):
+        cost = await agent_post_run.calculate_run_cost(
+            usage_data=_USAGE,
+            llm_config=None,
+            settings=SimpleNamespace(byok_tier_pricing_enabled=tier_enabled),
+            is_byok=True,
+            org_llm_cfg=SimpleNamespace(provider="openai", model="gpt-x"),
+            platform_fee=1_000,
+        )
+
+    assert cost == expected_fee + 3_500
+    tool_cost.assert_awaited_once_with(2, ["acme/weather", "calculate"])
+    token_cost.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_x402_settles_the_run_charge():
+    from teardrop import agent_post_run
+
+    settle = AsyncMock(return_value=SimpleNamespace(settled=False, amount_usdc=0, tx_hash="", error="x"))
+    with (
+        patch.object(agent_post_run, "settle_payment", settle),
+        patch.object(agent_post_run, "record_settlement", AsyncMock()),
+        patch.object(agent_post_run, "enqueue_failed_settlement", AsyncMock()) as enqueue,
+    ):
+        await _drain(
+            agent_post_run.dispatch_settlement(
+                billing=SimpleNamespace(verified=True, billing_method="x402", payment_payload=None),
+                settings=SimpleNamespace(
+                    x402_scheme="upto",
+                    x402_upto_max_amount_atomic=0,
+                    x402_settlement_timeout_seconds=5,
+                ),
+                usage_event=SimpleNamespace(id="ue-1"),
+                platform_fee=1_000,
+                cost_usdc=4_500,
+                delegation_spend=0,
+                org_id="org-1",
+                principal_id="user-1",
+                run_id="run-1",
+                result={},
+            )
+        )
+
+    assert settle.await_args.kwargs["actual_cost_usdc"] == 4_500
+    assert enqueue.await_args.args[4] == 4_500

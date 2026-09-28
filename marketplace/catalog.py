@@ -164,6 +164,7 @@ async def get_marketplace_catalog(
                 ")"
             )
         where_sql = " AND ".join(where_clauses)
+        default_ref = _add_param(int(default_tool_cost))
         selects.append(
             f"""
             SELECT
@@ -174,7 +175,8 @@ async def get_marketplace_catalog(
                 t.description AS description,
                 COALESCE(NULLIF(t.marketplace_description, ''), t.description) AS marketplace_description,
                 t.input_schema AS input_schema,
-                t.base_price_usdc AS base_price_usdc,
+                t.output_schema AS output_schema,
+                COALESCE(t.base_price_usdc, {default_ref}::BIGINT) AS base_price_usdc,
                 o.name AS author_org_name,
                 o.slug AS author_org_slug,
                 'community' AS tool_type,
@@ -182,6 +184,7 @@ async def get_marketplace_catalog(
                 COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
                 COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score,
                 COALESCE(s.success_rate, 0)::NUMERIC AS success_rate,
+                COALESCE(s.reputation_sample_size, 0)::NUMERIC AS reputation_sample_size,
                 CASE WHEN s.unique_caller_count >= 5 THEN s.unique_caller_count END::BIGINT
                     AS unique_caller_count
             FROM org_tools t
@@ -220,6 +223,7 @@ async def get_marketplace_catalog(
                 p.description AS description,
                 COALESCE(NULLIF(p.marketplace_description, ''), p.description) AS marketplace_description,
                 '{{}}'::JSONB AS input_schema,
+                NULL::JSONB AS output_schema,
                 p.base_price_usdc AS base_price_usdc,
                 'Teardrop' AS author_org_name,
                 '{PLATFORM_SLUG}' AS author_org_slug,
@@ -228,6 +232,7 @@ async def get_marketplace_catalog(
                 COALESCE(s.total_calls, 0)::BIGINT AS total_calls,
                 COALESCE(s.reputation_score, 0)::NUMERIC AS reputation_score,
                 COALESCE(s.success_rate, 0)::NUMERIC AS success_rate,
+                COALESCE(s.reputation_sample_size, 0)::NUMERIC AS reputation_sample_size,
                 CASE WHEN s.unique_caller_count >= 5 THEN s.unique_caller_count END::BIGINT
                     AS unique_caller_count
             FROM marketplace_platform_tools p
@@ -279,24 +284,38 @@ async def get_marketplace_catalog(
         *params,
     )
 
+    from billing import resolve_tool_cost
+
     catalog: list[MarketplaceTool] = []
     for row in rows:
+        tool_type = str(_row_get(row, "tool_type", "community"))
         raw_schema = _row_get(row, "input_schema", {})
         if isinstance(raw_schema, str):
             raw_schema = _json.loads(raw_schema)
-        if not raw_schema and _row_get(row, "tool_type", "community") == "platform":
-            raw_schema = _platform_input_schema(str(row["name"]))
+        raw_output_schema = _row_get(row, "output_schema")
+        if isinstance(raw_output_schema, str):
+            raw_output_schema = _json.loads(raw_output_schema)
+        if tool_type == "platform":
+            platform_input_schema, raw_output_schema = _platform_schemas(str(row["name"]))
+            raw_schema = raw_schema or platform_input_schema
 
         qualified = str(row["qualified_name"])
         name = str(row["name"])
         base_price = int(_row_get(row, "base_price_usdc", 0) or 0)
-        cost = tool_overrides.get(qualified, tool_overrides.get(name, base_price or default_tool_cost))
+        # Billing resolves platform tools by bare name and community tools by qualified name.
+        cost = await resolve_tool_cost(
+            name if tool_type == "platform" else qualified,
+            tool_overrides,
+            default_tool_cost,
+            True,
+        )
         total_calls = int(_row_get(row, "total_calls", 0) or 0)
         reputation_score = float(_row_get(row, "reputation_score", 0) or 0)
         success_rate = float(_row_get(row, "success_rate", 0) or 0)
+        rated = reputation_score > 0 or float(_row_get(row, "reputation_sample_size", 0) or 0) > 0
         raw_unique_caller_count = _row_get(row, "unique_caller_count")
         unique_caller_count = int(raw_unique_caller_count) if raw_unique_caller_count is not None else None
-        health_status = await _tool_health_status(_row_get(row, "tool_id"), str(_row_get(row, "tool_type", "community")))
+        health_status = await _tool_health_status(_row_get(row, "tool_id"), tool_type)
 
         sort_key: Any
         if sort in {"price_asc", "price_desc"}:
@@ -317,13 +336,14 @@ async def get_marketplace_catalog(
                 marketplace_description=str(_row_get(row, "marketplace_description", "") or _row_get(row, "description", "")),
                 short_description=str(_row_get(row, "description", "")),
                 input_schema=raw_schema or {},
+                output_schema=raw_output_schema or None,
                 cost_usdc=cost,
                 author_org_name=str(_row_get(row, "author_org_name", "")),
                 author_org_slug=str(_row_get(row, "author_org_slug", "")),
-                tool_type=str(_row_get(row, "tool_type", "community")),
+                tool_type=tool_type,
                 total_calls=total_calls,
-                reputation_score=reputation_score,
-                success_rate=success_rate,
+                reputation_score=reputation_score if rated else None,
+                success_rate=success_rate if rated else None,
                 unique_caller_count=unique_caller_count,
                 health_status=health_status,
                 is_healthy=health_status == "healthy",
@@ -439,16 +459,19 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
         return get(key, default) if callable(get) else default
 
 
-def _platform_input_schema(tool_name: str) -> dict[str, Any]:
+def _platform_schemas(tool_name: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     try:
         from tools import registry
 
         tool_def = registry.get(tool_name)
         if tool_def is not None and hasattr(tool_def.input_schema, "model_json_schema"):
-            return tool_def.input_schema.model_json_schema()
+            output_schema = tool_def.output_schema
+            if output_schema is not None and not isinstance(output_schema, dict):
+                output_schema = output_schema.model_json_schema()
+            return tool_def.input_schema.model_json_schema(), output_schema
     except Exception:
         pass
-    return {}
+    return {}, None
 
 
 async def _tool_health_status(tool_id: Any, tool_type: str) -> str:

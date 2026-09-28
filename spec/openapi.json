@@ -1354,11 +1354,18 @@
             "title": "Auth Header Value"
           },
           "base_price_usdc": {
-            "default": 0,
-            "maximum": 100000000.0,
-            "minimum": 0.0,
-            "title": "Base Price Usdc",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Atomic USDC per call; null = platform default, 0 = free.",
+            "title": "Base Price Usdc"
           },
           "category": {
             "default": "",
@@ -3906,11 +3913,18 @@
       "MarketplaceImportPublishToolRequest": {
         "properties": {
           "base_price_usdc": {
-            "default": 0,
-            "maximum": 100000000.0,
-            "minimum": 0.0,
-            "title": "Base Price Usdc",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Atomic USDC per call; null = platform default, 0 = free.",
+            "title": "Base Price Usdc"
           },
           "category": {
             "default": "",
@@ -3994,8 +4008,15 @@
       "MarketplaceImportPublishedTool": {
         "properties": {
           "base_price_usdc": {
-            "title": "Base Price Usdc",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Price Usdc"
           },
           "id": {
             "title": "Id",
@@ -4192,6 +4213,7 @@
             "type": "string"
           },
           "cost_usdc": {
+            "description": "Effective per-call price in atomic USDC, as billed.",
             "title": "Cost Usdc",
             "type": "integer"
           },
@@ -4221,13 +4243,34 @@
             "title": "Name",
             "type": "string"
           },
+          "output_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON Schema of the tool result, when declared.",
+            "title": "Output Schema"
+          },
           "qualified_name": {
             "title": "Qualified Name",
             "type": "string"
           },
           "reputation_score": {
-            "title": "Reputation Score",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the tool is unrated.",
+            "title": "Reputation Score"
           },
           "short_description": {
             "description": "Internal/short description.",
@@ -4235,8 +4278,16 @@
             "type": "string"
           },
           "success_rate": {
-            "title": "Success Rate",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Posterior success estimate; null when the tool is unrated.",
+            "title": "Success Rate"
           },
           "tool_name": {
             "title": "Tool Name",
@@ -4926,8 +4977,15 @@
       "OrgToolResponse": {
         "properties": {
           "base_price_usdc": {
-            "title": "Base Price Usdc",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Price Usdc"
           },
           "category": {
             "title": "Category",
@@ -7618,6 +7676,7 @@
                 "type": "null"
               }
             ],
+            "description": "Send null to revert to the platform default price.",
             "title": "Base Price Usdc"
           },
           "category": {
@@ -8207,7 +8266,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "1.8.0"
+    "version": "2.0.0"
   },
   "openapi": "3.1.0",
   "paths": {

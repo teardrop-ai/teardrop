@@ -77,13 +77,14 @@ class MarketplaceTool(BaseModel):
     marketplace_description: str
     short_description: str = ""
     input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
     cost_usdc: int
     author_org_name: str
     author_org_slug: str
     tool_type: Literal["platform", "community"] = "community"
     total_calls: int = 0
-    reputation_score: float = 0.0
-    success_rate: float = 0.0
+    reputation_score: float | None = None
+    success_rate: float | None = None
     unique_caller_count: int | None = None
     health_status: MarketplaceHealthStatus = "healthy"
     is_healthy: bool = True

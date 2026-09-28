@@ -16,18 +16,18 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Generate dependency audit report
+      - name: Generate dependency audit report and enforce severity gate
         run: |
-          python scripts/audit_dependencies.py --ignore-advisory GHSA-537c-gmf6-5ccf --json > dependency-audit-report.json
-
-      - name: Fail on high or critical vulnerabilities
-        run: |
-          python scripts/audit_dependencies.py --ignore-advisory GHSA-537c-gmf6-5ccf --fail-on-critical --txt
+          python scripts/audit_dependencies.py --ignore-advisory GHSA-537c-gmf6-5ccf --json-output dependency-audit-report.json --txt --fail-on-critical
 
       - name: Upload dependency audit report
         uses: actions/upload-artifact@v4

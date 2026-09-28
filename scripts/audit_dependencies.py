@@ -268,17 +268,19 @@ def query_osv_batch(packages: Sequence[dict[str, str]]) -> list[list[dict[str, A
     mapped_results: list[list[dict[str, Any]]] = []
     for result in results:
         vulns = result.get("vulns", []) if isinstance(result, dict) else []
-        mapped_results.append(
-            [
-                compact_vulnerability(
-                    vulnerability_cache.setdefault(vulnerability["id"], fetch_osv_vulnerability(vulnerability["id"]))
-                    if isinstance(vulnerability, dict) and vulnerability.get("id")
-                    else vulnerability
-                )
-                for vulnerability in vulns
-                if isinstance(vulnerability, dict)
-            ]
-        )
+        mapped_vulnerabilities: list[dict[str, Any]] = []
+        for vulnerability in vulns:
+            if not isinstance(vulnerability, dict):
+                continue
+
+            vulnerability_id = vulnerability.get("id")
+            if vulnerability_id:
+                if vulnerability_id not in vulnerability_cache:
+                    vulnerability_cache[vulnerability_id] = fetch_osv_vulnerability(vulnerability_id)
+                vulnerability = vulnerability_cache[vulnerability_id]
+
+            mapped_vulnerabilities.append(compact_vulnerability(vulnerability))
+        mapped_results.append(mapped_vulnerabilities)
     return mapped_results
 
 
@@ -396,6 +398,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Path to a dependency manifest. Defaults to requirements.txt, requirements-dev.txt, and pyproject.toml.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the full report as JSON.")
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Write the full JSON report to this path instead of stdout.",
+    )
     parser.add_argument("--txt", action="store_true", help="Emit a human-readable text summary.")
     parser.add_argument(
         "--fail-on-critical",
@@ -423,7 +430,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"dependency audit failed: {exc}", file=sys.stderr)
         return 2
 
-    if emit_json:
+    if args.json_output is not None:
+        try:
+            args.json_output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"dependency audit report write failed: {exc}", file=sys.stderr)
+            return 2
+    elif emit_json:
         print(json.dumps(report, indent=2, sort_keys=True))
     if args.txt:
         print_text_report(report, ignore_advisories=args.ignore_advisories)

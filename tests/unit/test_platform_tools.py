@@ -25,6 +25,14 @@ from marketplace import (
 # ─── get_marketplace_catalog with platform tools ─────────────────────────────
 
 
+def _patch_listed_prices(monkeypatch, rows):
+    """Serve each row's listed price through the resolver's cached price getters."""
+    platform = {r["name"]: r["base_price_usdc"] for r in rows if r["tool_type"] == "platform"}
+    community = {r["qualified_name"]: r["base_price_usdc"] for r in rows if r["tool_type"] == "community"}
+    monkeypatch.setattr("marketplace.get_platform_tool_price", AsyncMock(side_effect=platform.get))
+    monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(side_effect=community.get))
+
+
 class TestGetMarketplaceCatalogWithPlatformTools:
     @pytest.mark.anyio
     async def test_empty_org_tools_returns_platform_tools(self, monkeypatch):
@@ -67,6 +75,7 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         ]
         mock_pool.fetch = AsyncMock(return_value=platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
+        _patch_listed_prices(monkeypatch, platform_rows)
 
         catalog = await get_marketplace_catalog()
 
@@ -88,6 +97,16 @@ class TestGetMarketplaceCatalogWithPlatformTools:
         assert by_name["platform/web_search"].reputation_score == 0.91
         assert by_name["platform/web_search"].success_rate == 0.96
         assert by_name["platform/web_search"].unique_caller_count == 7
+        # No call history: unrated, not zero.
+        assert by_name["platform/http_fetch"].reputation_score is None
+        assert by_name["platform/http_fetch"].success_rate is None
+        # Platform output schemas come from the tool registry.
+        from tools import registry
+
+        http_fetch_def = registry.get("http_fetch")
+        assert http_fetch_def is not None
+        if http_fetch_def.output_schema is not None:
+            assert by_name["platform/http_fetch"].output_schema is not None
 
     @pytest.mark.anyio
     async def test_platform_tools_merged_with_org_tools(self, monkeypatch):
@@ -246,7 +265,81 @@ class TestGetMarketplaceCatalogSearch:
         sql = mock_pool.fetch.call_args.args[0]
         args = mock_pool.fetch.call_args.args[1:]
         assert "ILIKE" not in sql
-        assert args == (100,)
+        # Community default price, then limit.
+        assert args == (0, 100)
+
+    @pytest.mark.anyio
+    async def test_catalog_price_sort_coalesces_null_author_price(self, monkeypatch):
+        """NULL author prices sort and paginate at the platform default, never as SQL NULL."""
+        mock_pool = MagicMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        await get_marketplace_catalog(default_tool_cost=1000, sort="price_asc")
+
+        sql = mock_pool.fetch.call_args.args[0]
+        assert "COALESCE(t.base_price_usdc, $1::BIGINT) AS base_price_usdc" in sql
+        assert mock_pool.fetch.call_args.args[1] == 1000
+
+
+# ─── get_org_tool_price_by_qualified_name ────────────────────────────────────
+
+
+class TestGetOrgToolPrice:
+    @pytest.fixture(autouse=True)
+    async def _clear_cache(self):
+        from marketplace import _invalidate_all_org_tool_price_cache
+
+        await _invalidate_all_org_tool_price_cache()
+        yield
+        await _invalidate_all_org_tool_price_cache()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("row", "expected"),
+        [({"base_price_usdc": None}, None), ({"base_price_usdc": 0}, 0), ({"base_price_usdc": 2500}, 2500), (None, None)],
+    )
+    async def test_price_tri_state(self, monkeypatch, row, expected):
+        from marketplace import get_org_tool_price_by_qualified_name
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value=row)
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_org_tool_price_by_qualified_name("acme/weather") == expected
+
+    @pytest.mark.anyio
+    async def test_null_price_is_cached(self, monkeypatch):
+        """Platform-default (NULL) prices must not hit the DB on every billing call."""
+        from marketplace import get_org_tool_price_by_qualified_name
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(return_value={"base_price_usdc": None})
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_org_tool_price_by_qualified_name("acme/weather") is None
+        assert await get_org_tool_price_by_qualified_name("acme/weather") is None
+        assert mock_pool.fetchrow.call_count == 1
+
+    @pytest.mark.anyio
+    async def test_invalidate_forces_refetch_of_new_price(self, monkeypatch):
+        from marketplace import _invalidate_all_org_tool_price_cache, get_org_tool_price_by_qualified_name
+
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(side_effect=[{"base_price_usdc": 2500}, {"base_price_usdc": None}])
+        monkeypatch.setattr("marketplace._pool", mock_pool)
+
+        assert await get_org_tool_price_by_qualified_name("acme/weather") == 2500
+        await _invalidate_all_org_tool_price_cache()
+        assert await get_org_tool_price_by_qualified_name("acme/weather") is None
+
+    def test_redis_encoding_round_trips_and_uses_v2_key(self):
+        from marketplace._catalog_pricing import _get_org_tool_price_cache
+
+        cache = _get_org_tool_price_cache("acme/weather")
+        assert cache._redis_key == "teardrop:org_tool_price:v2:acme/weather"
+        for value in [(None,), (0,), (2500,)]:
+            assert cache._deserialize(cache._serialize(value)) == value
 
 
 # ─── get_platform_tool_price ─────────────────────────────────────────────────
@@ -541,6 +634,7 @@ class TestWeb3MarketplaceToolsMigration046:
         mock_pool = MagicMock()
         mock_pool.fetch = AsyncMock(return_value=platform_rows)
         monkeypatch.setattr("marketplace._pool", mock_pool)
+        _patch_listed_prices(monkeypatch, platform_rows)
 
         catalog = await get_marketplace_catalog()
 
@@ -676,6 +770,15 @@ class TestWeb3MarketplaceToolsMigration046:
         )
         cost = await resolve_tool_cost("acme/my__tool", {}, default_cost=1000, marketplace_enabled=True)
         assert cost == 3500
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(("listed", "expected"), [(None, 1000), (0, 0), (2500, 2500)])
+    async def test_resolve_tool_cost_community_price_tri_state(self, monkeypatch, listed, expected):
+        """NULL = platform default, 0 = free, > 0 = author price."""
+        from billing import resolve_tool_cost
+
+        monkeypatch.setattr("marketplace.get_org_tool_price_by_qualified_name", AsyncMock(return_value=listed))
+        assert await resolve_tool_cost("acme/weather", {}, default_cost=1000, marketplace_enabled=True) == expected
 
     # ── Regression: excluded tools remain free ────────────────────────────
 

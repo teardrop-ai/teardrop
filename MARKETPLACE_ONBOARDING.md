@@ -230,13 +230,16 @@ curl -X POST https://api.teardrop.ai/tools \
 
 ```
 
-> **`base_price_usdc`** — the amount standard callers pay per invocation. The platform
-> applies a **70 / 30 revenue split**: 70% to you, 30% to Teardrop.
+> **`base_price_usdc`** — the amount standard callers pay per invocation. Omit it (or send
+> `null`) to use the platform default per-call rate; `0` makes the tool free; any positive
+> value is your price. Send `"base_price_usdc": null` in `PATCH /tools/{id}` to revert to the
+> platform default. The platform
+> applies a **70 / 30 revenue split**: 70% to you, 30% to Teardrop. Free calls create no earnings.
 > 
 > **BYOK orgs** (Bring Your Own Key) may pay a different orchestration fee if `BYOK_TIER_PRICING_ENABLED=true` on the platform (seeded by migration 041). BYOK orgs always pay your `base_price_usdc` plus any applicable BYOK orchestration fees to Teardrop.
 > This split is fixed; per-author overrides are not supported.
 >
-> **Pricing consistency across call paths:** `base_price_usdc` is honored for marketplace calls from `/agent/run`, `/mcp/v1`, and `/tools/mcp`. When an admin override exists, precedence is: exact qualified name override, then bare tool name override, then author `base_price_usdc`, then the global default tool-call cost.
+> **Pricing consistency across call paths:** every surface — `GET /marketplace/catalog`, `GET /marketplace/quote`, `/agent/run`, `/mcp/v1`, and `/tools/mcp` — resolves the price with the same rule: exact qualified name override, then bare tool name override, then author `base_price_usdc` (`0` = free), then the global default tool-call cost when the price is unset.
 
 ---
 

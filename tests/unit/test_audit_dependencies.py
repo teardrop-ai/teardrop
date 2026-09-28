@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 
 import pytest
@@ -136,10 +137,18 @@ def test_query_osv_batch_rejects_malformed_response(monkeypatch):
 
 
 def test_query_osv_batch_hydrates_vulnerability_details(monkeypatch):
+    detail_requests = []
+
     def fake_request_json(url, data=None, timeout=10):
         if url == "https://api.osv.dev/v1/querybatch":
-            return {"results": [{"vulns": [{"id": "GHSA-5rvq-cxj2-64vf"}]}]}
+            return {
+                "results": [
+                    {"vulns": [{"id": "GHSA-5rvq-cxj2-64vf"}]},
+                    {"vulns": [{"id": "GHSA-5rvq-cxj2-64vf"}]},
+                ]
+            }
         if url == "https://api.osv.dev/v1/vulns/GHSA-5rvq-cxj2-64vf":
+            detail_requests.append(url)
             return {
                 "id": "GHSA-5rvq-cxj2-64vf",
                 "summary": "Multipart header parsing issue.",
@@ -162,23 +171,26 @@ def test_query_osv_batch_hydrates_vulnerability_details(monkeypatch):
 
     monkeypatch.setattr(audit, "request_json", fake_request_json)
 
-    results = audit.query_osv_batch([{"name": "python-multipart", "version": "0.0.22"}])
-
-    assert results == [
+    results = audit.query_osv_batch(
         [
-            {
-                "id": "GHSA-5rvq-cxj2-64vf",
-                "summary": "Multipart header parsing issue.",
-                "severity": "HIGH",
-                "aliases": [],
-                "fixed_versions": ["0.0.30"],
-                "reference_urls": ["https://github.com/advisories/GHSA-5rvq-cxj2-64vf"],
-            }
+            {"name": "python-multipart", "version": "0.0.22"},
+            {"name": "another-package", "version": "1.0.0"},
         ]
-    ]
+    )
+
+    expected_vulnerability = {
+        "id": "GHSA-5rvq-cxj2-64vf",
+        "summary": "Multipart header parsing issue.",
+        "severity": "HIGH",
+        "aliases": [],
+        "fixed_versions": ["0.0.30"],
+        "reference_urls": ["https://github.com/advisories/GHSA-5rvq-cxj2-64vf"],
+    }
+    assert results == [[expected_vulnerability], [expected_vulnerability]]
+    assert detail_requests == ["https://api.osv.dev/v1/vulns/GHSA-5rvq-cxj2-64vf"]
 
 
-def test_main_returns_expected_exit_codes(monkeypatch, capsys):
+def test_main_returns_expected_exit_codes(monkeypatch, capsys, tmp_path):
     high_report = {
         "summary": {
             "total_packages": 1,
@@ -213,6 +225,12 @@ def test_main_returns_expected_exit_codes(monkeypatch, capsys):
 
     assert audit.main(["--txt", "--fail-on-critical"]) == 1
     assert "Dependency audit: 1 packages" in capsys.readouterr().out
+
+    report_path = tmp_path / "dependency-audit-report.json"
+    assert audit.main(["--json-output", str(report_path), "--txt", "--fail-on-critical"]) == 1
+    captured = capsys.readouterr()
+    assert "Dependency audit: 1 packages" in captured.out
+    assert json.loads(report_path.read_text(encoding="utf-8")) == high_report
 
     def fail_build(_manifests, ignore_advisories=None):
         raise audit.AuditError("broken")

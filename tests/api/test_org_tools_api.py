@@ -259,6 +259,48 @@ async def test_update_tool_no_fields(api_client):
     assert resp.status_code == 422
 
 
+@pytest.mark.anyio
+async def test_create_tool_omitted_price_is_platform_default(api_client, monkeypatch):
+    create_mock = AsyncMock(return_value=_TOOL)
+    monkeypatch.setattr("teardrop.routers.org.tools.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
+
+    resp = await api_client.post("/tools", json=_CREATE_BODY)
+
+    assert resp.status_code == 201
+    assert create_mock.await_args.kwargs["base_price_usdc"] is None
+    assert resp.json()["base_price_usdc"] is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("price", [None, 0, 2500])
+async def test_update_tool_forwards_explicit_price(api_client, monkeypatch, price):
+    """Explicit null reverts to the platform default; 0 is free; > 0 is the author price."""
+    update_mock = AsyncMock(return_value=OrgTool(**{**_TOOL.model_dump(), "base_price_usdc": price}))
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", update_mock)
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+
+    resp = await api_client.patch("/tools/tool-abc", json={"base_price_usdc": price})
+
+    assert resp.status_code == 200
+    assert update_mock.await_args.kwargs["base_price_usdc"] == price
+    assert resp.json()["base_price_usdc"] == price
+
+
+@pytest.mark.anyio
+async def test_update_tool_omitted_price_is_not_forwarded(api_client, monkeypatch):
+    updated = OrgTool(**{**_TOOL.model_dump(), "description": "Updated desc"})
+    update_mock = AsyncMock(return_value=updated)
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", update_mock)
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+
+    resp = await api_client.patch("/tools/tool-abc", json={"description": "Updated desc"})
+
+    assert resp.status_code == 200
+    assert "base_price_usdc" not in update_mock.await_args.kwargs
+
+
 # ─── DELETE /tools/{tool_id} ─────────────────────────────────────────────────
 
 

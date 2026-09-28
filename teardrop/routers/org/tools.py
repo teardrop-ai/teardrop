@@ -76,7 +76,9 @@ class CreateOrgToolRequest(BaseModel):
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory = ""
     tags: list[str] = Field(default_factory=list, max_length=20)
-    base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
+    base_price_usdc: int | None = Field(
+        default=None, ge=0, le=100_000_000, description="Atomic USDC per call; null = platform default, 0 = free."
+    )
 
     @field_validator("tags")
     @classmethod
@@ -97,7 +99,9 @@ class UpdateOrgToolRequest(BaseModel):
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
-    base_price_usdc: int | None = Field(default=None, ge=0, le=100_000_000)
+    base_price_usdc: int | None = Field(
+        default=None, ge=0, le=100_000_000, description="Send null to revert to the platform default price."
+    )
 
     @field_validator("tags")
     @classmethod
@@ -123,7 +127,7 @@ class OrgToolResponse(BaseModel):
     marketplace_description: str
     category: str
     tags: list[str]
-    base_price_usdc: int
+    base_price_usdc: int | None
     created_at: str
     updated_at: str
 
@@ -372,12 +376,13 @@ async def patch_tool(
         "marketplace_description",
         "category",
         "tags",
-        "base_price_usdc",
     )
     for field_name in _updatable:
         val = getattr(body, field_name, None)
         if val is not None:
             kwargs[field_name] = val
+    if "base_price_usdc" in body.model_fields_set:
+        kwargs["base_price_usdc"] = body.base_price_usdc
 
     if not kwargs:
         raise HTTPException(

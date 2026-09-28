@@ -122,3 +122,4 @@ python -m migrations.runner
 | `107_mcp_call_events.sql` | Adds immutable MCP settlement outcome events for machine-volume conversion and retention metrics |
 | `110_vor_commitments.sql` | Source-agnostic `commitment_batches`, signed/committed prediction columns, and triggers that make committed rows append-only and confirmed batches immutable |
 | `111_vor_scorecards.sql` | Makes labeling definitions immutable except `active`, guards committed targets/results/evidence against mutation, and pre-registers the public `oracle_deviation@1` task (Chainlink ETH/USD vs Uniswap v3 TWAP on Base) |
+| `112_org_tool_price_default_null.sql` | Makes `org_tools.base_price_usdc` tri-state (`NULL` = platform default, `0` = free, `> 0` = author price); backfills legacy `0` to `NULL` once, so re-runs keep explicit `0` |

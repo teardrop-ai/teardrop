@@ -35,11 +35,10 @@ from billing import (
     BillingResult,
     build_402_headers,
     build_402_response_body,
+    calculate_tool_cost_usdc,
     get_credit_balance,
     get_current_pricing,
-    get_tool_pricing_overrides,
     is_promotional_credit,
-    resolve_tool_cost,
     verify_credit,
     verify_payment,
 )
@@ -47,7 +46,12 @@ from marketplace import get_marketplace_tool_by_name, record_marketplace_tool_us
 from mcp_client import build_mcp_langchain_tools
 from org_tools import build_org_langchain_tools
 from teardrop.agent_event_loop import _coerce_stream_text
-from teardrop.agent_post_run import calculate_run_cost, dispatch_settlement, fetch_usage_snapshot, record_post_run_telemetry
+from teardrop.agent_post_run import (
+    calculate_run_cost,
+    dispatch_settlement,
+    fetch_usage_snapshot,
+    record_post_run_telemetry,
+)
 from teardrop.concurrency import limit_agent_runs
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import resolve_llm_config
@@ -394,6 +398,9 @@ async def run_agent_once(
         usage_data=usage_data,
         llm_config=ctx.llm_config,
         settings=runtime_settings,
+        is_byok=is_byok,
+        org_llm_cfg=org_llm_cfg,
+        platform_fee=platform_fee,
     )
 
     usage_event = UsageEvent(
@@ -437,10 +444,7 @@ async def run_agent_once(
     delegation_spend = usage_data.get("delegation_spend_usdc", 0)
     async for _ignored in dispatch_settlement(
         billing=billing,
-        is_byok=is_byok,
         settings=runtime_settings,
-        org_llm_cfg=org_llm_cfg,
-        usage_data=usage_data,
         usage_event=usage_event,
         platform_fee=platform_fee,
         cost_usdc=cost_usdc,
@@ -662,17 +666,13 @@ async def _record_marketplace_earnings(
     if not (mp_by_name and tool_names_used):
         return
     try:
-        overrides = await get_tool_pricing_overrides()
-        pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_cost if pricing else 0
-        marketplace_enabled = get_settings().marketplace_enabled
-
         for tname in tool_names_used:
             if tname in mp_by_name and "/" in tname:
                 t_slug, t_bare = tname.split("/", 1)
                 t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
                 if t_row:
-                    t_cost = await resolve_tool_cost(tname, overrides, default_cost, marketplace_enabled)
+                    # Same function that priced the call in the caller's charge.
+                    t_cost = await calculate_tool_cost_usdc(1, [tname])
                     author_oid = t_row.get("org_id")
                     if author_oid and t_cost > 0:
                         asyncio.create_task(

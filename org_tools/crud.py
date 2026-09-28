@@ -48,7 +48,7 @@ async def create_org_tool(
     marketplace_description: str = "",
     category: str = "",
     tags: list[str] | None = None,
-    base_price_usdc: int = 0,
+    base_price_usdc: int | None = None,
     mcp_server_id: str | None = None,
     mcp_tool_name: str | None = None,
 ) -> OrgTool:
@@ -196,7 +196,7 @@ async def update_org_tool(
     marketplace_description: str | None = None,
     category: str | None = None,
     tags: list[str] | None = None,
-    base_price_usdc: int | None = None,
+    base_price_usdc: int | None = ...,  # type: ignore[assignment]
 ) -> OrgTool | None:
     """Partial-update a tool.  Returns updated OrgTool or None if not found."""
     pool = _get_pool()
@@ -250,7 +250,7 @@ async def update_org_tool(
         _add("category", category)
     if tags is not None:
         _add("tags", normalize_marketplace_tags(tags))
-    if base_price_usdc is not None:
+    if base_price_usdc is not ...:
         _add("base_price_usdc", base_price_usdc)
 
     # Handle auth header updates (sentinel ... means "not provided")
@@ -278,7 +278,7 @@ async def update_org_tool(
     if (
         publish_as_mcp is not None
         or is_active is not None
-        or base_price_usdc is not None
+        or base_price_usdc is not ...
         or category is not None
         or marketplace_description is not None
         or tags is not None

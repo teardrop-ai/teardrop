@@ -54,6 +54,8 @@ _UPSERT_TOOL_PRICING_OVERRIDE_ORIG = _pricing.upsert_tool_pricing_override
 _DELETE_TOOL_PRICING_OVERRIDE_ORIG = _pricing.delete_tool_pricing_override
 _RESOLVE_TOOL_COST_ORIG = _pricing.resolve_tool_cost
 _CALCULATE_RUN_COST_USDC_ORIG = _pricing.calculate_run_cost_usdc
+_CALCULATE_TOOL_COST_USDC_ORIG = _pricing.calculate_tool_cost_usdc
+_CALCULATE_TURNS_TOKEN_COST_USDC_ORIG = _pricing.calculate_turns_token_cost_usdc
 
 _INIT_BILLING_ORIG = _x402.init_billing
 _CLOSE_BILLING_ORIG = _x402.close_billing
@@ -564,6 +566,16 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
     return await _call_async(_CALCULATE_RUN_COST_USDC_ORIG, usage_data, provider, model)
 
 
+async def calculate_tool_cost_usdc(tool_calls: int, tool_names: list[str]) -> int:
+    """Compute atomic-USDC cost of billable tool calls; independent of the run's model rule."""
+    return await _call_async(_CALCULATE_TOOL_COST_USDC_ORIG, tool_calls, tool_names)
+
+
+async def calculate_turns_token_cost_usdc(turns: list[dict]) -> int:
+    """Compute atomic-USDC token cost of per-model turns; flat-rate rules charge once per run."""
+    return await _call_async(_CALCULATE_TURNS_TOKEN_COST_USDC_ORIG, turns)
+
+
 # x402 API
 async def init_billing(pool: PgPool) -> None:
     """Initialise billing state (DB pool, x402 facilitator, pricing caches) at startup."""
@@ -825,6 +837,8 @@ __all__ = [
     "delete_tool_pricing_override",
     "resolve_tool_cost",
     "calculate_run_cost_usdc",
+    "calculate_tool_cost_usdc",
+    "calculate_turns_token_cost_usdc",
     # history and invoices
     "record_settlement",
     "verify_settlement_on_chain",

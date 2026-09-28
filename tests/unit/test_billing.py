@@ -150,6 +150,62 @@ class TestCalculateRunCostUsdc:
             cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 1_000, "tool_calls": 0})
         assert cost == 300
 
+    async def test_model_rule_prices_tokens_but_not_tools(self):
+        """Tool calls use the global tool_call_cost even when the model rule sets its own."""
+        global_rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100, tool_call_cost=1_000)
+        model_rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=40, tool_call_cost=500)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=global_rule)),
+            patch("billing.get_live_pricing_for_model", new=AsyncMock(return_value=model_rule)),
+        ):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 2_000, "tokens_out": 0, "billable_tool_calls": 2}, "openrouter", "deepseek/x"
+            )
+        assert cost == 2 * 40 + 2 * 1_000
+
+    async def test_flat_rate_rule_still_bills_author_priced_tools(self):
+        rule = _make_rule(run_price_usdc=10_000)
+        with (
+            patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
+            patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new=AsyncMock(return_value=2_500)),
+            patch("billing.get_settings", return_value=MagicMock(marketplace_enabled=True)),
+        ):
+            cost = await calculate_run_cost_usdc({"billable_tool_calls": 1, "billable_tool_names": ["acme/weather"]})
+        assert cost == 10_000 + 2_500
+
+
+@pytest.mark.anyio
+class TestCalculateTurnsTokenCost:
+    async def test_flat_rate_rule_charged_once_across_turns(self):
+        from billing import calculate_turns_token_cost_usdc
+
+        flat = _make_rule(id="flat", run_price_usdc=10_000)
+        turns = [{"provider": "p", "model": "m", "tokens_in": 5_000, "tokens_out": 1_000}] * 5
+        with patch("billing.get_live_pricing_for_model", new=AsyncMock(return_value=flat)):
+            assert await calculate_turns_token_cost_usdc(turns) == 10_000
+
+    async def test_mixed_flat_and_per_unit_turns(self):
+        from billing import calculate_turns_token_cost_usdc
+
+        flat = _make_rule(id="flat", run_price_usdc=10_000)
+        per_unit = _make_rule(id="metered", run_price_usdc=0, tokens_in_cost_per_1k=100, tokens_out_cost_per_1k=200)
+        rules = {"flat-model": flat, "metered-model": per_unit}
+        turns = [
+            {"provider": "p", "model": "flat-model", "tokens_in": 9_000, "tokens_out": 9_000},
+            {"provider": "p", "model": "metered-model", "tokens_in": 2_000, "tokens_out": 1_000},
+            {"provider": "p", "model": "flat-model", "tokens_in": 9_000, "tokens_out": 9_000},
+            {"provider": "p", "model": "metered-model", "tokens_in": 1_000, "tokens_out": 0},
+        ]
+        with patch("billing.get_live_pricing_for_model", new=AsyncMock(side_effect=lambda _provider, model, **_: rules[model])):
+            assert await calculate_turns_token_cost_usdc(turns) == 10_000 + (2 * 100 + 200) + 100
+
+    async def test_no_rule_costs_nothing(self):
+        from billing import calculate_turns_token_cost_usdc
+
+        with patch("billing.get_live_pricing_for_model", new=AsyncMock(return_value=None)):
+            assert await calculate_turns_token_cost_usdc([{"provider": "p", "model": "m", "tokens_in": 5_000}]) == 0
+
 
 # ─── verify_credit ────────────────────────────────────────────────────────────
 

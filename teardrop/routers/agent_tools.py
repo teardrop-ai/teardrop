@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from billing import get_current_pricing, get_tool_pricing_overrides
+from billing import get_current_pricing, get_tool_pricing_overrides, resolve_tool_cost
 from marketplace import get_marketplace_catalog, get_subscribed_tools_catalog
 from org_tools import list_org_tools
 from teardrop.agent_schemas import _normalize_exclusion_name
@@ -76,7 +76,7 @@ async def list_agent_tools(
         if not tool.is_active:
             continue
         qualified_name = f"org/{tool.name}"
-        cost_usdc = tool_overrides.get(qualified_name, tool_overrides.get(tool.name, 0))
+        cost_usdc = await resolve_tool_cost(tool.name, tool_overrides, default_cost, settings.marketplace_enabled)
         tools.append(
             AgentToolItem(
                 name=tool.name,

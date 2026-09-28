@@ -43,7 +43,9 @@ class MarketplaceImportPublishToolRequest(BaseModel):
     output_schema: dict | None = Field(default=None, description="Confirmed Draft 7 schema for tool outputs")
     marketplace_description: str | None = Field(default=None, max_length=1000)
     category: MarketplaceCategory = ""
-    base_price_usdc: int = Field(default=0, ge=0, le=100_000_000)
+    base_price_usdc: int | None = Field(
+        default=None, ge=0, le=100_000_000, description="Atomic USDC per call; null = platform default, 0 = free."
+    )
 
 
 class MarketplaceImportPublishRequest(BaseModel):
@@ -101,7 +103,7 @@ class MarketplaceImportPublishedTool(BaseModel):
     publish_as_mcp: bool
     mcp_server_id: str | None = None
     mcp_tool_name: str | None = None
-    base_price_usdc: int
+    base_price_usdc: int | None
 
 
 class MarketplaceImportPublishCreatedItem(BaseModel):

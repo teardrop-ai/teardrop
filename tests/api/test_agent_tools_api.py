@@ -152,7 +152,8 @@ async def test_agent_tools_pricing_override_applied_for_org_tool(api_client, mon
     monkeypatch.setenv("MARKETPLACE_ENABLED", "false")
     config.get_settings.cache_clear()
 
-    monkeypatch.setattr("teardrop.routers.agent_tools.get_tool_pricing_overrides", AsyncMock(return_value={"org/my_tool": 777}))
+    # Billing resolves org webhook tools by bare name, so only that override key applies.
+    monkeypatch.setattr("teardrop.routers.agent_tools.get_tool_pricing_overrides", AsyncMock(return_value={"my_tool": 777}))
     monkeypatch.setattr(
         "teardrop.routers.agent_tools.get_current_pricing", AsyncMock(return_value=MagicMock(tool_call_cost=1000))
     )

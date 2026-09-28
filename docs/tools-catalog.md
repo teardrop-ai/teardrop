@@ -52,7 +52,8 @@ Programmatic MCP clients also receive structured reputation in each tool's
 omitted entirely for unrated tools, so clients should treat its absence as
 "unrated" rather than zero. The authenticated marketplace MCP gateway
 (`POST /mcp/v1` `tools/list`) emits the same metadata and description summary
-for both platform and published org tools; `/tools/mcp` is the x402 endpoint.
+for both platform and published org tools; platform tools appear once, by bare
+name, and `tools/call` also accepts `platform/{tool_name}`. `/tools/mcp` is the x402 endpoint.
 Every registered tool defines `use_when`, `limitations`, and `alternatives`
 guidance to help agents choose the right capability and avoid redundant calls;
 this contract is enforced by `tests/unit/test_tool_definition_standard.py`.
@@ -64,7 +65,8 @@ no env-var setup instructions or human-workflow assumptions; configuration
 guidance lives in [configuration.md](configuration.md).
 
 Marketplace discovery adds a commerce-facing `marketplace_description`,
-intent tags, price, health, and aggregate reputation. Browse these through
+intent tags, the billed price, health, declared `output_schema`, and aggregate
+reputation (`null` when unrated). Browse these through
 `GET /marketplace/catalog`, `GET /marketplace/llms.txt`, and
 `GET /.well-known/reputation.json`. Community publishers can manage intent
 tags through the authenticated org-tool API; tags are normalized and bounded

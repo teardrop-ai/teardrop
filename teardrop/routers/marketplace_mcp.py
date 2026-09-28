@@ -36,9 +36,11 @@ from billing import (
     get_current_pricing,
     get_tool_pricing_overrides,
     is_promotional_credit,
+    resolve_tool_cost,
     verify_credit,
 )
 from marketplace import (
+    PLATFORM_SLUG,
     check_org_subscription,
     get_marketplace_catalog,
     get_marketplace_tool_by_name,
@@ -256,7 +258,7 @@ async def mcp_jsonrpc_handler(
         pricing = await get_current_pricing()
         default_cost = pricing.tool_call_cost if pricing else 0
 
-        catalog = await get_marketplace_catalog(overrides, default_cost)
+        catalog = await get_marketplace_catalog(overrides, default_cost, limit=200)
 
         # Structured reputation for programmatic clients. Degrades to no `_meta`
         # when the aggregate is unavailable; never blocks tool listing.
@@ -270,6 +272,9 @@ async def mcp_jsonrpc_handler(
 
         tools_list = []
         for t in catalog:
+            # Platform rows duplicate the bare-named registry entries appended below.
+            if t.tool_type == "platform":
+                continue
             metrics = reputation.get(t.qualified_name)
             entry: dict[str, Any] = {
                 "name": t.qualified_name,
@@ -301,6 +306,8 @@ async def mcp_jsonrpc_handler(
         params = body.get("params", {})
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
+        # Catalog qualified names for platform tools map to the always-included built-in.
+        tool_name = tool_name.removeprefix(f"{PLATFORM_SLUG}/") if isinstance(tool_name, str) else ""
 
         if not tool_name:
             return JSONResponse(content=_jsonrpc_error(req_id, -32602, "Missing tool name"))
@@ -344,14 +351,9 @@ async def mcp_jsonrpc_handler(
         pricing = await get_current_pricing()
         default_cost = pricing.tool_call_cost if pricing else 0
 
-        # Price resolution: admin override (qualified) > admin override (bare) > author price > default
-        tool_cost = overrides.get(tool_name, overrides.get(actual_tool_name, default_cost))
+        # Same resolver as /agent/run, /tools/mcp and the public catalog; settled before verify_credit.
+        tool_cost = await resolve_tool_cost(tool_name, overrides, default_cost, True)
 
-        # ── Resolve marketplace tool + final price BEFORE the billing gate ──
-        # The author's base_price_usdc may exceed the default cost, so the row
-        # must be fetched and the price settled before verify_credit; otherwise
-        # the preflight would approve the wrong (lower) amount and the tool
-        # would execute against a balance that cannot cover the real cost.
         result: Any
         author_org_id: str | None = None
         tool_row: dict | None = None
@@ -363,10 +365,6 @@ async def mcp_jsonrpc_handler(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
                 )
             author_org_id = tool_row.get("org_id")
-            # Refine cost with author base_price_usdc if no admin override exists
-            author_price = tool_row.get("base_price_usdc", 0)
-            if tool_name not in overrides and actual_tool_name not in overrides and author_price:
-                tool_cost = author_price
 
         # ── Validate built-in tool arguments BEFORE the billing gate ──
         # Built-in tools are invoked through their raw implementation coroutine

@@ -280,6 +280,9 @@ async def agent_run(
             usage_data=usage_data,
             llm_config=llm_config,
             settings=settings,
+            is_byok=is_byok,
+            org_llm_cfg=_org_llm_cfg,
+            platform_fee=platform_fee,
         )
 
         logger.info(
@@ -342,10 +345,7 @@ async def agent_run(
         _settlement_result: dict[str, Any] = {}
         async for _sse in dispatch_settlement(
             billing=billing,
-            is_byok=is_byok,
             settings=settings,
-            org_llm_cfg=_org_llm_cfg,
-            usage_data=usage_data,
             usage_event=usage_event,
             platform_fee=platform_fee,
             cost_usdc=cost_usdc,

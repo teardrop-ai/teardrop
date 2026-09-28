@@ -16,6 +16,8 @@ BILLING_IMPORT_SURFACE = [
     "build_usdc_topup_requirements",
     "calculate_byok_orchestration_cost",
     "calculate_run_cost_usdc",
+    "calculate_tool_cost_usdc",
+    "calculate_turns_token_cost_usdc",
     "close_billing",
     "create_stripe_embedded_session",
     "credit_usdc_topup",

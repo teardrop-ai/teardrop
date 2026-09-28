@@ -158,6 +158,8 @@ async def get_subscribed_tools_catalog(
         org_id,
     )
 
+    from billing import resolve_tool_cost
+
     catalog: list[MarketplaceTool] = []
     for r in rows:
         raw_schema = r["input_schema"]
@@ -165,8 +167,7 @@ async def get_subscribed_tools_catalog(
             raw_schema = json.loads(raw_schema)
 
         qualified = f"{r['org_slug']}/{r['name']}"
-        author_price = r.get("base_price_usdc", 0)
-        cost = tool_overrides.get(qualified, tool_overrides.get(r["name"], author_price or default_tool_cost))
+        cost = await resolve_tool_cost(qualified, tool_overrides, default_tool_cost, True)
 
         catalog.append(
             MarketplaceTool(

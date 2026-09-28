@@ -1029,6 +1029,42 @@ class TestUpdateOrgTool:
         subscription_calls = [c for c in pool.execute.call_args_list if "org_marketplace_subscriptions" in str(c)]
         assert len(subscription_calls) == 0
 
+    @pytest.mark.parametrize("price", [None, 0, 2500])
+    async def test_explicit_price_is_written_and_invalidates_price_cache(self, monkeypatch, price):
+        """None reverts to the platform default; the cached price must not survive the write."""
+        pool = MagicMock()
+        row = self._make_row()
+        pool.fetchrow = AsyncMock(side_effect=[row, dict(row, base_price_usdc=price)])
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        invalidate_mock = AsyncMock()
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_marketplace_cache", invalidate_mock)
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
+
+        result = await org_tools_module.update_org_tool("tool-1", "org-1", actor_id="u-1", base_price_usdc=price)
+
+        assert result is not None
+        assert result.base_price_usdc == price
+        update_sql, *update_params = pool.fetchrow.await_args_list[1].args
+        assert "base_price_usdc = $1" in update_sql
+        assert update_params[0] == price
+        invalidate_mock.assert_awaited_once()
+
+    async def test_omitted_price_is_not_written(self, monkeypatch):
+        pool = MagicMock()
+        row = self._make_row()
+        pool.fetchrow = AsyncMock(side_effect=[row, dict(row, description="New")])
+        monkeypatch.setattr(org_tools_module.base, "_pool", pool)
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_org_tools_cache", AsyncMock())
+        invalidate_mock = AsyncMock()
+        monkeypatch.setattr(org_tools_module.crud, "invalidate_marketplace_cache", invalidate_mock)
+        monkeypatch.setattr(org_tools_module.crud, "_record_event", AsyncMock())
+
+        await org_tools_module.update_org_tool("tool-1", "org-1", actor_id="u-1", description="New")
+
+        assert "base_price_usdc" not in pool.fetchrow.await_args_list[1].args[0]
+        invalidate_mock.assert_not_awaited()
+
 
 # ─── get_org_tools_cached ────────────────────────────────────────────────────
 

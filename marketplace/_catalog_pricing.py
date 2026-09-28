@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+
 from marketplace.context import _get_pool
 from teardrop.cache import TTLCache
 
@@ -12,7 +14,8 @@ _ORG_TOOL_PRICE_TTL_SECONDS = 60
 _PLATFORM_SLUG = "platform"
 
 _platform_tool_caches: dict[str, TTLCache[int | None]] = {}
-_org_tool_price_caches: dict[str, TTLCache[int | None]] = {}
+# Boxed as (price,) because TTLCache never stores None and NULL (platform default) must be cacheable.
+_org_tool_price_caches: dict[str, TTLCache[tuple[int | None]]] = {}
 
 
 async def _load_platform_tool_price(tool_name: str) -> int | None:
@@ -40,7 +43,7 @@ def _get_platform_tool_cache(tool_name: str) -> TTLCache[int | None]:
     return _platform_tool_caches[tool_name]
 
 
-async def _load_org_tool_price(qualified_name: str) -> int | None:
+async def _load_org_tool_price(qualified_name: str) -> tuple[int | None] | None:
     org_slug, tool_name = qualified_name.split("/", 1)
     pool = _get_pool()
     row = await pool.fetchrow(
@@ -58,18 +61,19 @@ async def _load_org_tool_price(qualified_name: str) -> int | None:
     )
     if row is None:
         return None
-    return int(row["base_price_usdc"])
+    price = row["base_price_usdc"]
+    return (None if price is None else int(price),)
 
 
-def _get_org_tool_price_cache(qualified_name: str) -> TTLCache[int | None]:
+def _get_org_tool_price_cache(qualified_name: str) -> TTLCache[tuple[int | None]]:
     if qualified_name not in _org_tool_price_caches:
         _org_tool_price_caches[qualified_name] = TTLCache(
             name=f"org_tool_price:{qualified_name}",
-            redis_key=f"teardrop:org_tool_price:{qualified_name}",
+            redis_key=f"teardrop:org_tool_price:v2:{qualified_name}",
             ttl_seconds_fn=lambda: _ORG_TOOL_PRICE_TTL_SECONDS,
             loader=lambda: _load_org_tool_price(qualified_name),
-            serialize=lambda v: str(v),
-            deserialize=lambda raw: int(raw),
+            serialize=lambda v: json.dumps(v[0]),
+            deserialize=lambda raw: (json.loads(raw),),
             stale_default=None,
         )
     return _org_tool_price_caches[qualified_name]
@@ -95,7 +99,7 @@ async def get_platform_tool_price(tool_name: str) -> int | None:
 
 
 async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | None:
-    """Return base_price_usdc for a qualified marketplace tool, or None."""
+    """Return the author price for a qualified marketplace tool; None = unlisted or platform default."""
     if "/" not in qualified_name:
         return None
 
@@ -105,4 +109,5 @@ async def get_org_tool_price_by_qualified_name(qualified_name: str) -> int | Non
     if org_slug == _PLATFORM_SLUG:
         return None
 
-    return await _get_org_tool_price_cache(qualified_name).get()
+    cached = await _get_org_tool_price_cache(qualified_name).get()
+    return cached[0] if cached else None
