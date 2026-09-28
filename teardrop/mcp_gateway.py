@@ -581,16 +581,15 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
     @classmethod
     async def _x402_tool_requirements(cls, data: dict) -> list | None:
-        """Exact requirements priced at the called tool's cost; None keeps the flat default."""
-        tool_name = _tool_call_name(data)
-        if tool_name is None:
-            return None
-        tool_cost = await cls._resolve_tool_cost(tool_name)
-        if tool_cost <= 0:
-            return None
-        from billing import build_exact_payment_requirements
+        """Exact requirements priced at the called tool's cost, or the flat exact default."""
+        from billing import build_exact_payment_requirements, get_payment_requirements
 
-        return build_exact_payment_requirements(tool_cost) or None
+        tool_name = _tool_call_name(data)
+        tool_cost = await cls._resolve_tool_cost(tool_name) if tool_name is not None else 0
+        if tool_cost > 0:
+            return build_exact_payment_requirements(tool_cost) or None
+        # Never offer upto on MCP: it needs a one-time Permit2 approval most MCP payers lack.
+        return [req for req in get_payment_requirements() if getattr(req, "scheme", "exact") == "exact"] or None
 
     @staticmethod
     def _x402_settlement_failed(request: Request, req_id: int | str | None) -> Response:

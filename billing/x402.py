@@ -690,7 +690,8 @@ def build_usdc_topup_requirements(amount_usdc: int) -> list:
     requirements = []
     for treasury in _effective_treasury_addresses(settings):
         config = ResourceConfig(
-            scheme=settings.x402_scheme,
+            # Fixed-amount top-ups stay on EIP-3009 exact; upto would force a Permit2 approval.
+            scheme="exact",
             network=settings.x402_network,
             pay_to=treasury,
             price=atomic_usdc_to_price_str(amount_usdc),

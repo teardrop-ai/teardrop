@@ -141,6 +141,23 @@ async def test_init_upto_fails_closed_when_no_facilitator_is_compliant(monkeypat
 
 
 @pytest.mark.anyio
+async def test_usdc_topup_stays_exact_eip3009_when_scheme_is_upto(monkeypatch):
+    # Mirrors Dexter's Base /supported, which advertises permit2 on exact.
+    dexter = _facilitator_client(
+        ("exact", {"assetTransferMethod": "permit2", "minPaymentAmountAtomic": "1509"}),
+        ("upto", {"facilitatorAddress": _FACILITATOR_ADDRESS}),
+    )
+    await _init_upto_with(monkeypatch, {"https://one.example": dexter, "https://two.example": dexter})
+
+    topup = x402.build_usdc_topup_requirements(1_000_000)
+
+    assert len(topup) == 2
+    assert all(req.scheme == "exact" and req.amount == "1000000" for req in topup)
+    assert all("assetTransferMethod" not in (req.extra or {}) for req in topup)
+    assert all("facilitatorAddress" not in (req.extra or {}) for req in topup)
+
+
+@pytest.mark.anyio
 async def test_verify_fails_over_on_transport_error(monkeypatch):
     first = MagicMock(verify_payment=AsyncMock(side_effect=OSError("secret transport detail")))
     second = MagicMock(verify_payment=AsyncMock(return_value=SimpleNamespace(is_valid=True, payer="0xabc")))

@@ -644,7 +644,7 @@ async def test_mcp_server_card(api_client, test_settings):
         x402 = body["x402"]
         assert x402["enabled"] is True
         assert x402["network"] == test_settings.x402_network
-        assert x402["scheme"] == test_settings.x402_scheme
+        assert x402["scheme"] == "exact"
         assert x402["discovery_url"] == "http://test/.well-known/x402"
         assert x402["mcp_tools_url"] == "http://test/tools/mcp"
         assert x402["bootstrap"]["grant_type"] == "x402"

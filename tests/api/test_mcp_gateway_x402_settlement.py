@@ -108,6 +108,21 @@ async def test_challenge_is_priced_at_tool_cost(x402_gateway_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_zero_cost_challenge_never_offers_upto(x402_gateway_env, monkeypatch):
+    import billing
+
+    mocks = _patch_billing(monkeypatch, tool_cost=0)
+    upto = SimpleNamespace(scheme="upto", network="eip155:8453", amount="100000")
+    exact = SimpleNamespace(scheme="exact", network="eip155:8453", amount="10000")
+    monkeypatch.setattr(billing, "get_payment_requirements", lambda: [upto, exact])
+
+    response = await _post_paid_call({"Accept": "application/json"})
+
+    assert response.status_code == 402
+    assert mocks.body["requirements"] == [exact]
+
+
+@pytest.mark.asyncio
 async def test_verified_header_payment_settles_through_mounted_gateway(x402_gateway_env, monkeypatch):
     mocks = _patch_billing(monkeypatch)
 

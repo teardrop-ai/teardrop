@@ -773,7 +773,8 @@ async def mcp_server_card(request: Request) -> Response:
         x402_block: dict[str, Any] = {
             "enabled": True,
             "network": s.x402_network,
-            "scheme": s.x402_scheme,
+            # MCP calls and x402 bootstrap only accept exact, whatever X402_SCHEME says.
+            "scheme": "exact",
             "discovery_url": f"{base_url}/.well-known/x402",
             "mcp_tools_url": f"{base_url}/tools/mcp",
         }

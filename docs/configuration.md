@@ -54,7 +54,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `X402_PAY_TO_ADDRESS` | Primary treasury wallet (USDC recipient) |
 | `X402_TREASURY_ADDRESSES` | JSON array of EVM treasury addresses advertised in payment requirements. Empty uses `X402_PAY_TO_ADDRESS`. |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
-| `X402_SCHEME` | Payment scheme: `exact` (default) or `upto` (usage-based via Permit2) |
+| `X402_SCHEME` | Payment scheme: `exact` (default, EIP-3009, no approval) or `upto` (usage-based; payers need a one-time Permit2 USDC approval). MCP tool calls, USDC top-ups, and x402 bootstrap always use `exact`. |
 | `X402_UPTO_MAX_AMOUNT` | Max ceiling per run for upto scheme (default: `$0.50`) |
 | `SIWE_DOMAIN` | Your public domain (e.g. `api.teardrop.dev`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
