@@ -123,3 +123,5 @@ python -m migrations.runner
 | `110_vor_commitments.sql` | Source-agnostic `commitment_batches`, signed/committed prediction columns, and triggers that make committed rows append-only and confirmed batches immutable |
 | `111_vor_scorecards.sql` | Makes labeling definitions immutable except `active`, guards committed targets/results/evidence against mutation, and pre-registers the public `oracle_deviation@1` task (Chainlink ETH/USD vs Uniswap v3 TWAP on Base) |
 | `112_org_tool_price_default_null.sql` | Makes `org_tools.base_price_usdc` tri-state (`NULL` = platform default, `0` = free, `> 0` = author price); backfills legacy `0` to `NULL` once, so re-runs keep explicit `0` |
+| `113_a2a_self_serve_allowlist.sql` | Adds `a2a_allowed_agents.source` (`admin` / `self_serve`) with a constraint forcing self-serve rows to x402, no JWT forwarding, and a positive cap; adds the append-only `a2a_allowed_agent_events` log |
+| `114_a2a_treasury_outflow_index.sql` | Partial index on `a2a_delegation_refund_outbox.delivery_started_at` for the rolling 24h treasury outflow cap |

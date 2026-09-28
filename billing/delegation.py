@@ -172,34 +172,132 @@ class BillingDelegationService:
         )
         return success
 
-    async def mark_delegation_possibly_delivered(self, org_id: str, delegation_id: str) -> bool:
-        """Claim the ambiguous delivery state before an x402 retry is sent."""
+    async def mark_delegation_possibly_delivered(
+        self,
+        org_id: str,
+        delegation_id: str,
+        charge_usdc: int | None = None,
+    ) -> bool:
+        """Claim the ambiguous delivery state before an x402 retry is sent.
+
+        When *charge_usdc* is below the pre-debit, the difference is credited back in the
+        same transaction so the held amount matches the signed payment plus fee.
+        """
+        pool = self._get_pool()
         try:
-            pool = self._get_pool()
-            result = await pool.execute(
-                """
-                UPDATE a2a_delegation_refund_outbox
-                SET delivery_status = 'possibly_delivered',
-                    delivery_started_at = COALESCE(delivery_started_at, NOW()),
-                    delivery_error = ''
-                WHERE id = $1 AND org_id = $2
-                  AND status IN ('pending', 'refund_requested')
-                  AND delivery_status = 'not_attempted'
-                """,
-                delegation_id,
-                org_id,
-            )
-            if result == "UPDATE 1":
-                return True
-            delivery_status = await pool.fetchval(
-                "SELECT delivery_status FROM a2a_delegation_refund_outbox WHERE id = $1 AND org_id = $2",
-                delegation_id,
-                org_id,
-            )
-            return delivery_status in {"possibly_delivered", "confirmed"}
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        """
+                        SELECT outbox.status, outbox.delivery_status, outbox.run_id, outbox.amount_usdc,
+                               debit.principal_id
+                        FROM a2a_delegation_refund_outbox AS outbox
+                        LEFT JOIN org_credit_ledger AS debit
+                            ON debit.id = outbox.debit_ledger_id AND debit.org_id = outbox.org_id
+                        WHERE outbox.id = $1 AND outbox.org_id = $2
+                        FOR UPDATE OF outbox
+                        """,
+                        delegation_id,
+                        org_id,
+                    )
+                    if row is None:
+                        return False
+                    delivery_status = str(row["delivery_status"])
+                    if delivery_status in {"possibly_delivered", "confirmed"}:
+                        return True
+                    if delivery_status != "not_attempted" or str(row["status"]) not in {"pending", "refund_requested"}:
+                        return False
+
+                    held_usdc = int(row["amount_usdc"])
+                    if charge_usdc is not None:
+                        if charge_usdc <= 0 or charge_usdc > held_usdc:
+                            logger.error(
+                                "Refusing delegation delivery: charge %s outside pre-debit %s org=%s delegation=%s",
+                                charge_usdc,
+                                held_usdc,
+                                org_id,
+                                delegation_id,
+                            )
+                            return False
+                    final_charge_usdc = charge_usdc if charge_usdc is not None else held_usdc
+
+                    # Serialize signers so concurrent delegations cannot jointly exceed the treasury cap.
+                    await conn.execute("SELECT pg_advisory_xact_lock(hashtext('a2a_treasury_daily_outflow'))")
+                    signed_24h_usdc = await conn.fetchval(
+                        """
+                        SELECT COALESCE(SUM(amount_usdc), 0)
+                        FROM a2a_delegation_refund_outbox
+                        WHERE delivery_started_at >= NOW() - INTERVAL '24 hours'
+                        """
+                    )
+                    outflow_cap_usdc = int(self._get_settings().a2a_treasury_daily_outflow_cap_usdc)
+                    if int(signed_24h_usdc or 0) + final_charge_usdc > outflow_cap_usdc:
+                        logger.error(
+                            "Refusing delegation delivery: treasury 24h outflow cap reached (%s + %s > %s) org=%s",
+                            signed_24h_usdc,
+                            final_charge_usdc,
+                            outflow_cap_usdc,
+                            org_id,
+                        )
+                        return False
+
+                    if final_charge_usdc < held_usdc:
+                        await self._credit_delegation_adjustment_locked(
+                            conn, org_id, delegation_id, row, held_usdc - final_charge_usdc
+                        )
+
+                    await conn.execute(
+                        """
+                        UPDATE a2a_delegation_refund_outbox
+                        SET delivery_status = 'possibly_delivered',
+                            delivery_started_at = COALESCE(delivery_started_at, NOW()),
+                            delivery_error = '',
+                            amount_usdc = $3
+                        WHERE id = $1 AND org_id = $2
+                        """,
+                        delegation_id,
+                        org_id,
+                        final_charge_usdc,
+                    )
         except Exception:
             logger.exception("Failed to mark delegation delivery ambiguous org=%s delegation=%s", org_id, delegation_id)
             return False
+        return True
+
+    async def _credit_delegation_adjustment_locked(
+        self,
+        conn: PgConnection,
+        org_id: str,
+        delegation_id: str,
+        row,
+        amount_usdc: int,
+    ) -> None:
+        """Return the unsigned part of a pre-debit; not a reversal, so rolling caps stay conservative."""
+        credit_row = await conn.fetchrow(
+            """
+            UPDATE org_credits
+            SET balance_usdc = balance_usdc + $2, updated_at = NOW()
+            WHERE org_id = $1
+            RETURNING balance_usdc
+            """,
+            org_id,
+            amount_usdc,
+        )
+        if credit_row is None:
+            raise RuntimeError("Credit account is missing for delegation adjustment")
+        await conn.execute(
+            """
+            INSERT INTO org_credit_ledger
+                (id, org_id, operation, amount_usdc, balance_usdc_after, reason, principal_id, created_at)
+            VALUES ($1, $2, 'topup', $3, $4, $5, $6, NOW())
+            """,
+            str(uuid.uuid4()),
+            org_id,
+            amount_usdc,
+            int(credit_row["balance_usdc"]),
+            f"a2a:adjust delegation={delegation_id} run={row['run_id']}",
+            row.get("principal_id"),
+        )
 
     async def _complete_refund_locked(self, conn: PgConnection, org_id: str, delegation_id: str, row) -> bool:
         """Apply a refund while the caller owns the outbox row lock."""
@@ -514,7 +612,7 @@ class BillingDelegationService:
         pool = self._get_pool()
         rows = await pool.fetch(
             """
-            SELECT outbox.id, outbox.org_id, event.task_status, outbox.delivery_status
+            SELECT outbox.id, outbox.org_id, event.task_status, event.cost_usdc, outbox.delivery_status
             FROM a2a_delegation_refund_outbox AS outbox
                 LEFT JOIN a2a_delegation_events AS event
                     ON event.id = outbox.id AND event.org_id = outbox.org_id
@@ -536,7 +634,7 @@ class BillingDelegationService:
         for row in rows:
             if row.get("delivery_status") == "possibly_delivered" or row.get("task_status") == "possibly_delivered":
                 continue
-            if row["task_status"] == "completed":
+            if row["task_status"] == "completed" and row.get("cost_usdc") != 0:
                 resolved = await self.cancel_delegation_refund(row["org_id"], row["id"])
             else:
                 await self.request_delegation_refund(row["org_id"], row["id"])

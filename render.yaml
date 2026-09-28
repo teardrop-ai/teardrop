@@ -99,6 +99,19 @@ services:
       - key: X402_SCHEME
         value: "exact"
 
+      # ── Optional: outbound A2A delegation (set values in the dashboard) ──
+      # The treasury key signs seller payments; use a pre-funded hot wallet
+      # separate from X402_PAY_TO_ADDRESS. Daily outflow is capped by
+      # A2A_TREASURY_DAILY_OUTFLOW_CAP_USDC (code default $5).
+      - key: A2A_DELEGATION_ENABLED
+        sync: false
+
+      - key: A2A_DELEGATION_BILLING_ENABLED
+        sync: false
+
+      - key: X402_TREASURY_PRIVATE_KEY
+        sync: false
+
       # ── Optional: LangSmith tracing ───────────────────────────────────────
       - key: LANGSMITH_TRACING
         value: "false"

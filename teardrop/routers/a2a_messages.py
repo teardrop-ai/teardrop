@@ -27,6 +27,7 @@ from billing import (
     build_402_headers,
     build_402_response_body,
     build_exact_payment_requirements,
+    build_payment_response_headers,
     get_byok_platform_fee,
 )
 from billing.context import _get_pool
@@ -62,6 +63,7 @@ _A2A_INBOUND_EVENT_INSERT_SQL = (
     " settlement_tx, billing_method, duration_ms, error)"
     " VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
 )
+_SETTLEMENT_WITHHELD = "Payment settlement failed; the task result was withheld."
 
 router = APIRouter()
 
@@ -178,6 +180,11 @@ def _a2a_402_kwargs(
     if requirements is not None:
         kwargs["requirements"] = requirements
     return kwargs
+
+
+def _x402_result_withheld(billing: BillingResult, result: Any) -> bool:
+    # Facilitator /verify does not guarantee settlement, so paid output waits for a settled tx.
+    return billing.verified and billing.billing_method == "x402" and result.task_state == "completed" and not result.settlement_tx
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -609,11 +616,12 @@ async def _run_async_inbound_task(
         )
         output_text = "Task failed." if result.task_state == "timeout" else result.output_text
         error = result.output_text if result.task_state != "completed" else ""
+        withheld = _x402_result_withheld(billing, result)
         await _finish_async_task(
             task=claimed,
-            task_state=result.task_state,
-            output_text=output_text,
-            error=error,
+            task_state="rejected_payment" if withheld else result.task_state,
+            output_text=_SETTLEMENT_WITHHELD if withheld else output_text,
+            error=_SETTLEMENT_WITHHELD if withheld else error,
             billing=billing,
             usage_event_id=result.usage_event.id,
             cost_usdc=result.usage_event.cost_usdc,
@@ -1001,6 +1009,7 @@ async def message_send(request: Request) -> JSONResponse:
             headers={"Retry-After": "1"},
         ) from exc
 
+    withheld = _x402_result_withheld(billing, result)
     await _record_inbound_event(
         run_id=run_id,
         usage_event_id=result.usage_event.id,
@@ -1011,19 +1020,39 @@ async def message_send(request: Request) -> JSONResponse:
         auth_method=audit_auth_method,
         context_id=body.context_id,
         task_id=resolved_task_id,
-        task_state=result.task_state,
+        task_state="rejected_payment" if withheld else result.task_state,
         cost_usdc=result.usage_event.cost_usdc,
         settlement_amount_usdc=result.settlement_amount_usdc,
         settlement_tx=result.settlement_tx,
         billing_method=billing.billing_method if billing.verified else "",
         duration_ms=result.duration_ms,
-        error=result.output_text if result.task_state != "completed" else "",
+        error=_SETTLEMENT_WITHHELD if withheld else (result.output_text if result.task_state != "completed" else ""),
     )
 
-    return _build_task_response(
+    if withheld:
+        response_kwargs = _a2a_402_kwargs(request, error=_SETTLEMENT_WITHHELD, requirements=intro_requirements)
+        try:
+            _402_body = build_402_response_body(**response_kwargs)
+            _402_hdrs = build_402_headers(**response_kwargs)
+        except RuntimeError:
+            _402_body = {"error": _SETTLEMENT_WITHHELD}
+            _402_hdrs = {}
+        return JSONResponse(status_code=402, content=_402_body, headers=_402_hdrs)
+
+    response = _build_task_response(
         request_body=body,
         task_id=resolved_task_id,
         task_state=result.response_state,
         output_text="Task failed." if result.task_state == "timeout" else result.output_text,
         rpc_id=rpc_id,
     )
+    if billing.verified and billing.billing_method == "x402" and result.settlement_tx:
+        response.headers.update(
+            build_payment_response_headers(
+                tx_hash=result.settlement_tx,
+                network=getattr(billing.payment_requirements, "network", "") or settings.x402_network,
+                payer=billing.payer,
+                amount_usdc=result.settlement_amount_usdc,
+            )
+        )
+    return response

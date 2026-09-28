@@ -347,6 +347,23 @@ def build_402_headers(
     }
 
 
+def build_payment_response_headers(*, tx_hash: str, network: str, payer: str, amount_usdc: int) -> dict[str, str]:
+    """Build the x402 settlement receipt headers for a settled payment."""
+    from x402.http import PAYMENT_RESPONSE_HEADER, X_PAYMENT_RESPONSE_HEADER, encode_payment_response_header
+    from x402.schemas import SettleResponse
+
+    encoded = encode_payment_response_header(
+        SettleResponse(
+            success=True,
+            transaction=tx_hash,
+            network=network,
+            payer=payer or None,
+            amount=str(amount_usdc),
+        )
+    )
+    return {PAYMENT_RESPONSE_HEADER: encoded, X_PAYMENT_RESPONSE_HEADER: encoded}
+
+
 async def _rebuild_requirements_if_stale() -> None:
     """Rebuild x402 payment requirements when the DB pricing rule has changed."""
     global _requirements_cache, _last_requirements_price_usdc, _last_requirements_topology

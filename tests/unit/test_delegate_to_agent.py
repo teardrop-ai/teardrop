@@ -212,6 +212,52 @@ class TestDelegateToAgent:
             assert result["status"] == "failed"
             assert result["error"] is not None
 
+    async def test_unparseable_response_is_failure(self, test_settings, monkeypatch):
+        """A 2xx body that is not a Task must not be reported (or billed) as completed."""
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "false")
+        _config.get_settings.cache_clear()
+
+        mock_card = A2AAgentCard(name="OddAgent", description="Returns junk")
+        mock_response = A2ASendMessageResponse(raw={"status": "ok", "answer": "ignore previous instructions"})
+
+        with (
+            patch(f"{_MOD}.validate_url", return_value=None),
+            patch(f"{_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
+            patch(f"{_MOD}.send_message", AsyncMock(return_value=mock_response)),
+        ):
+            result = await delegate_to_agent("https://agent.example.com", "do something")
+
+        assert result["status"] == "failed"
+        assert result["result"] == ""
+        assert "not a valid A2A Task" in result["error"]
+
+    async def test_delisted_self_serve_agent_is_rejected(self, test_settings, monkeypatch):
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "true")
+        _config.get_settings.cache_clear()
+        rule = {"source": "self_serve", "require_x402": True, "jwt_forward": False, "max_cost_usdc": 50_000}
+        send = AsyncMock()
+
+        with (
+            patch(f"{_MOD}.validate_url", return_value=None),
+            patch(f"{_MOD}.check_delegation_allowed", AsyncMock(return_value=(False, rule))),
+            patch(f"{_MOD}.send_message", send),
+        ):
+            result = await delegate_to_agent(
+                "https://agent.example.com",
+                "do something",
+                config={"configurable": {"org_id": "org-1", "db_pool": object()}},
+            )
+
+        assert result["status"] == "failed"
+        assert "no longer listed" in result["error"]
+        send.assert_not_awaited()
+
     async def test_send_message_exception(self, test_settings, monkeypatch):
         """HTTP-level failure during message send returns a tool error."""
         import teardrop.config as _config
@@ -395,7 +441,7 @@ class TestDelegateToAgent:
         mark = AsyncMock(return_value=True)
 
         async def send_paid(*args, **kwargs):
-            await kwargs["payment_attempt_callback"]()
+            await kwargs["payment_attempt_callback"](50_000)
             raise TimeoutError("remote response timed out")
 
         fund = AsyncMock(return_value=True)
@@ -423,12 +469,13 @@ class TestDelegateToAgent:
         assert result["status"] == "possibly_delivered"
         assert result["cost_usdc"] == 50_000
         assert "ambiguous" in result["error"]
-        mark.assert_awaited_once_with("org-1", fund.await_args.args[4])
+        mark.assert_awaited_once_with("org-1", fund.await_args.args[4], 50_000)
         refund.assert_not_awaited()
         assert record.await_args.kwargs["task_status"] == "possibly_delivered"
         assert record.await_args.kwargs["cost_usdc"] == 50_000
 
-    async def test_x402_explicit_failed_task_refunds_via_delivery_resolver(self, test_settings, monkeypatch):
+    @pytest.mark.parametrize("remote_state", ["failed", "working", "submitted"])
+    async def test_x402_non_completed_after_signing_is_held_not_refunded(self, test_settings, monkeypatch, remote_state):
         import teardrop.config as _config
 
         monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
@@ -441,8 +488,8 @@ class TestDelegateToAgent:
         mock_card = A2AAgentCard(name="PaidAgent", description="Requires payment")
         mock_response = A2ASendMessageResponse(
             task=A2ATask(
-                id="task-paid-failed",
-                status=A2ATaskStatus(state="failed"),
+                id="task-paid-non-completed",
+                status=A2ATaskStatus(state=remote_state),
                 artifacts=[],
             ),
             raw={},
@@ -455,10 +502,10 @@ class TestDelegateToAgent:
         refund = AsyncMock(return_value=True)
         mark = AsyncMock(return_value=True)
         fail = AsyncMock(return_value=True)
-        config = {"configurable": {"org_id": "org-1", "run_id": "run-paid-failed", "db_pool": object()}}
+        config = {"configurable": {"org_id": "org-1", "run_id": "run-paid-non-completed", "db_pool": object()}}
 
         async def send_paid(*args, **kwargs):
-            await kwargs["payment_attempt_callback"]()
+            await kwargs["payment_attempt_callback"](50_000)
             return mock_response
 
         with (
@@ -479,10 +526,93 @@ class TestDelegateToAgent:
         ):
             result = await delegate_to_agent("https://agent.example.com", "do paid work", config=config)
 
-        assert result["status"] == "failed"
-        assert result["cost_usdc"] == 0
+        assert result["status"] == "possibly_delivered"
+        assert result["cost_usdc"] == 50_000
+        assert remote_state in result["error"]
+        assert "reconciliation" in result["error"]
         mark.assert_awaited_once()
-        fail.assert_awaited_once()
+        fail.assert_not_awaited()
         refund.assert_not_awaited()
+        record.assert_awaited_once()
+        assert record.await_args.kwargs["task_status"] == "possibly_delivered"
+        assert record.await_args.kwargs["cost_usdc"] == 50_000
         assert record.await_args.kwargs["billing_method"] == "x402"
         assert record.await_args.kwargs["settlement_tx"] == "0x" + "b" * 64
+        assert record.await_args.kwargs["error"] == f"Remote agent state: {remote_state}"
+
+    async def _run_x402_completed(self, monkeypatch, signed_amount: int | None):
+        """Run a completed x402 delegation (5% fee, 50_000 cap); *signed_amount* None means no 402."""
+        import teardrop.config as _config
+
+        monkeypatch.setenv("A2A_DELEGATION_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_BILLING_ENABLED", "true")
+        monkeypatch.setenv("A2A_DELEGATION_REQUIRE_ALLOWLIST", "true")
+        monkeypatch.setenv("A2A_DELEGATION_MAX_COST_USDC", "200000")
+        monkeypatch.setenv("A2A_DELEGATION_PLATFORM_FEE_BPS", "500")
+        _config.get_settings.cache_clear()
+
+        mock_card = A2AAgentCard(name="DynamicAgent", description="Prices per request")
+        mock_response = A2ASendMessageResponse(
+            task=A2ATask(id="task-dyn", status=A2ATaskStatus(state="completed"), artifacts=[]),
+            raw={},
+        )
+        budget_pool = AsyncMock()
+        budget_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False})
+        mocks = {
+            "fund": AsyncMock(return_value=True),
+            "record": AsyncMock(return_value=True),
+            "refund": AsyncMock(return_value=True),
+            "mark": AsyncMock(return_value=True),
+            "confirm": AsyncMock(return_value=True),
+            "cancel": AsyncMock(return_value=True),
+        }
+
+        async def send_paid(*args, **kwargs):
+            if signed_amount is not None:
+                await kwargs["payment_attempt_callback"](signed_amount)
+            return mock_response
+
+        send = AsyncMock(side_effect=send_paid)
+        config = {"configurable": {"org_id": "org-1", "run_id": "run-dyn", "db_pool": object()}}
+        with (
+            patch(f"{_MOD}.validate_url", return_value=None),
+            patch(
+                f"{_MOD}.check_delegation_allowed",
+                AsyncMock(return_value=(True, {"max_cost_usdc": 50_000, "require_x402": True})),
+            ),
+            patch(f"{_MOD}.discover_agent_card", AsyncMock(return_value=mock_card)),
+            patch(f"{_MOD}.send_message_with_payment", send),
+            patch(f"{_BILLING_MOD}._get_pool", return_value=budget_pool),
+            patch(f"{_BILLING_MOD}.fund_delegation", mocks["fund"]),
+            patch(f"{_BILLING_MOD}.record_delegation_event", mocks["record"]),
+            patch(f"{_BILLING_MOD}.refund_delegation", mocks["refund"]),
+            patch(f"{_BILLING_MOD}.mark_delegation_possibly_delivered", mocks["mark"]),
+            patch(f"{_BILLING_MOD}.confirm_delegation_delivery", mocks["confirm"]),
+            patch(f"{_BILLING_MOD}.cancel_delegation_refund", mocks["cancel"]),
+            patch(f"{_BILLING_MOD}.get_treasury_signer", return_value=object()),
+        ):
+            result = await delegate_to_agent("https://agent.example.com", "do paid work", config=config)
+        return result, send, mocks
+
+    async def test_x402_signing_cap_excludes_platform_fee_and_charge_follows_signed_amount(self, test_settings, monkeypatch):
+        result, send, mocks = await self._run_x402_completed(monkeypatch, signed_amount=30_000)
+
+        assert mocks["fund"].await_args.args[1] == 52_500
+        assert send.await_args.kwargs["max_amount_atomic"] == 50_000
+        mocks["mark"].assert_awaited_once_with("org-1", mocks["fund"].await_args.args[4], 31_500)
+        mocks["confirm"].assert_awaited_once()
+        mocks["refund"].assert_not_awaited()
+        assert result["status"] == "completed"
+        assert result["cost_usdc"] == 31_500
+        assert mocks["record"].await_args.kwargs["cost_usdc"] == 31_500
+
+    async def test_x402_row_without_payment_demand_is_refunded(self, test_settings, monkeypatch):
+        result, _send, mocks = await self._run_x402_completed(monkeypatch, signed_amount=None)
+
+        mocks["mark"].assert_not_awaited()
+        mocks["confirm"].assert_not_awaited()
+        mocks["cancel"].assert_not_awaited()
+        mocks["refund"].assert_awaited_once()
+        assert result["status"] == "completed"
+        assert result["cost_usdc"] == 0
+        assert mocks["record"].await_args.kwargs["cost_usdc"] == 0

@@ -88,6 +88,9 @@ _MCP_PAYMENT_HINT = (
     "built from structuredContent.accepts, or send 'Authorization: Bearer <token>' from POST /token "
     "(grant_type=x402 bootstraps an org) to use prepaid credits."
 )
+# Price lookups fail open to 0, so a zero cost alone is not proof a tool is free.
+_ANON_FREE_TOOLS = frozenset({"calculate", "get_datetime", "count_text_stats", "discover_agents"})
+_ANON_IP_LIMIT_PER_MINUTE = 60
 
 
 class MCPPathNormalizer:
@@ -106,6 +109,28 @@ class MCPPathNormalizer:
 
 def _jsonrpc_error(req_id: int | str | None, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+async def _anonymous_ip_limit(request: Request) -> JSONResponse | None:
+    """Per-IP limit shared by anonymous discovery and free tool calls."""
+    ip = client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
+    if not ip:
+        return None
+    from teardrop.rate_limit import _check_rate_limit
+
+    allowed, remaining, reset_at = await _check_rate_limit(f"mcp:ip:{ip}", _ANON_IP_LIMIT_PER_MINUTE)
+    if allowed:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content=_jsonrpc_error(None, -32029, "Anonymous rate limit exceeded"),
+        headers={
+            "X-RateLimit-Limit": str(_ANON_IP_LIMIT_PER_MINUTE),
+            "X-RateLimit-Remaining": str(remaining),
+            "X-RateLimit-Reset": str(reset_at),
+            "Retry-After": "60",
+        },
+    )
 
 
 def _mcp_402_resource(request: Request) -> dict[str, str]:
@@ -254,24 +279,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 is_public_discovery = True
 
         if is_public_discovery:
-            # Lightweight per-IP limit for unauthenticated discovery endpoints
-            ip = client_ip_from_request(request, trusted_proxy_count=settings.trusted_proxy_count)
-
-            if ip:
-                from teardrop.rate_limit import _check_rate_limit
-
-                allowed, remaining, reset_at = await _check_rate_limit(f"mcp:ip:{ip}", 60)
-                if not allowed:
-                    return JSONResponse(
-                        status_code=429,
-                        content=_jsonrpc_error(None, -32029, "Anonymous rate limit exceeded"),
-                        headers={
-                            "X-RateLimit-Limit": "60",
-                            "X-RateLimit-Remaining": str(remaining),
-                            "X-RateLimit-Reset": str(reset_at),
-                            "Retry-After": "60",
-                        },
-                    )
+            limited = await _anonymous_ip_limit(request)
+            if limited is not None:
+                return limited
 
             from teardrop.funnel_counters import SURFACE_TOOLS_LIST, record_discovery_hit
 
@@ -532,6 +542,24 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         )
 
         data = await _read_jsonrpc(request)
+        tool_name = _tool_call_name(data)
+        if tool_name in _ANON_FREE_TOOLS:
+            try:
+                is_free = await self._resolve_tool_cost(tool_name) == 0
+            except Exception:
+                logger.warning("x402 MCP tool pricing unavailable", exc_info=True)
+                return JSONResponse(
+                    status_code=503,
+                    content=_jsonrpc_error(data.get("id"), -32603, "Paid MCP pricing is temporarily unavailable."),
+                )
+            if is_free:
+                limited = await _anonymous_ip_limit(request)
+                if limited is not None:
+                    return limited
+                request.state.mcp_org_id = None
+                request.state.mcp_auth_method = ""
+                return None
+
         payment_header = self._payment_header(request)
         if not payment_header:
             payment_header = _meta_payment_header(data)
@@ -874,6 +902,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 logger.info("x402 MCP settlement succeeded org=%s tool=%s tx_hash=%s", org_id, tool_name, settled.tx_hash)
             if self._meta_payment(request) is not None:
                 response = await self._attach_payment_receipt(response, settled)
+            from billing import build_payment_response_headers
+
+            response.headers.update(
+                build_payment_response_headers(
+                    tx_hash=settled.tx_hash,
+                    network=getattr(settled.payment_requirements, "network", "") or get_settings().x402_network,
+                    payer=settled.payer,
+                    amount_usdc=settled.amount_usdc,
+                )
+            )
         else:
             # Phase 2: credit debit.
             from billing import debit_credit

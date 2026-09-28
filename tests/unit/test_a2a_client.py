@@ -21,10 +21,12 @@ from teardrop.a2a_client import (
     _agent_card_cache,
     _extract_payment_response_transaction,
     _is_ip_blocked,
+    _parse_send_response,
     _sign_x402_payment,
     async_validate_url,
     check_delegation_allowed,
     discover_agent_card,
+    exact_payment_offer_amounts,
     extract_result_text,
     send_message,
     send_message_with_payment,
@@ -398,6 +400,32 @@ class TestSendMessage:
         with pytest.raises(ValueError, match="SSRF"):
             await send_message("https://10.0.0.1", "Task")
 
+    @pytest.mark.parametrize(
+        ("body", "expected_state"),
+        [
+            ({"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}}}, "completed"),
+            ({"jsonrpc": "2.0", "result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_FAILED"}}}}, "failed"),
+            ({"id": "t1", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}, "input-required"),
+            ({"id": "t1", "status": {"state": "working"}}, "working"),
+        ],
+    )
+    def test_parse_v1_task_shapes(self, body, expected_state):
+        response = _parse_send_response(body)
+        assert response.task is not None
+        assert response.task.status.state == expected_state
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"message": {"role": "agent", "parts": [{"text": "hi"}]}},
+            {"jsonrpc": "2.0", "error": {"code": -32600, "message": "bad"}},
+            {"status": "ok"},
+            ["not", "an", "object"],
+        ],
+    )
+    def test_parse_unrecognized_body_has_no_task(self, body):
+        assert _parse_send_response(body).task is None
+
     async def test_total_timeout_covers_remote_exchange(self):
         async def slow_post(*args, **kwargs):
             await asyncio.sleep(0.05)
@@ -431,8 +459,8 @@ class TestSendMessageWithPayment:
         }
         events: list[str] = []
 
-        async def payment_attempt_callback():
-            events.append("callback")
+        async def payment_attempt_callback(amount):
+            events.append(f"callback:{amount}")
 
         async def post(*args, **kwargs):
             if len(events) == 0:
@@ -442,7 +470,7 @@ class TestSendMessageWithPayment:
 
         with (
             patch("teardrop.a2a_client.validate_url", return_value=None),
-            patch("teardrop.a2a_client._sign_x402_payment", return_value="signed-payment"),
+            patch("teardrop.a2a_client._sign_x402_payment", return_value=("signed-payment", 90)),
             patch(
                 "x402.http.decode_payment_response_header",
                 return_value=SimpleNamespace(transaction="0x" + "a" * 64),
@@ -464,9 +492,10 @@ class TestSendMessageWithPayment:
                 payment_attempt_callback=payment_attempt_callback,
             )
 
-        assert events == ["callback", "paid-post"]
+        assert events == ["callback:90", "paid-post"]
         assert response.task is not None
         assert response.settlement_tx == "0x" + "a" * 64
+        assert response.payment_amount_usdc == 90
 
     def test_invalid_payment_transaction_is_discarded(self):
         response = httpx.Response(
@@ -634,6 +663,91 @@ class TestSignX402Payment:
         assert signed is None
         client_cls.assert_not_called()
 
+    def test_rejects_upto_offer(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(accepts=[{"scheme": "upto", "network": "base", "amount": "50"}])
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync") as client_cls,
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is None
+        client_cls.assert_not_called()
+
+    def test_signs_only_cheapest_exact_offer_within_cap(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        cheapest = {"scheme": "exact", "network": "base", "amount": "60"}
+        payment_required = MagicMock(
+            accepts=[
+                {"scheme": "upto", "network": "base", "amount": "10"},
+                {"scheme": "exact", "network": "base", "amount": "80"},
+                cheapest,
+                {"scheme": "exact", "network": "base", "amount": "120"},
+            ]
+        )
+        payload = MagicMock()
+        payload.model_dump.return_value = {"payload": {"signed": True}, "x402Version": 2}
+        client = MagicMock()
+        client.create_payment_payload.return_value = payload
+
+        with (
+            patch("x402.http.decode_payment_required_header", return_value=payment_required),
+            patch("x402.x402ClientSync", return_value=client),
+            patch("x402.mechanisms.evm.exact.ExactEvmScheme", return_value="exact-scheme"),
+        ):
+            signed = _sign_x402_payment(
+                response,
+                signer=object(),
+                max_amount_atomic=100,
+                allowed_networks=frozenset({"base"}),
+            )
+
+        assert signed is not None
+        assert signed[1] == 60
+        payment_required.model_copy.assert_called_once_with(update={"accepts": [cheapest]})
+        client.create_payment_payload.assert_called_once_with(payment_required.model_copy.return_value)
+
+    def test_exact_offer_amounts_filters_scheme_network_and_amount(self):
+        response = httpx.Response(
+            402,
+            headers={"PAYMENT-REQUIRED": "spec-header"},
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        payment_required = MagicMock(
+            accepts=[
+                {"scheme": "exact", "network": "base", "amount": "90"},
+                {"scheme": "upto", "network": "base", "amount": "10"},
+                {"scheme": "exact", "network": "polygon", "amount": "5"},
+                {"scheme": "exact", "network": "base", "amount": "0"},
+                {"scheme": "exact", "network": "base", "amount": "40"},
+            ]
+        )
+        with patch("x402.http.decode_payment_required_header", return_value=payment_required):
+            assert exact_payment_offer_amounts(response, "base") == [40, 90]
+
+    def test_exact_offer_amounts_empty_when_undecodable(self):
+        response = httpx.Response(
+            402,
+            content=b"not json",
+            request=httpx.Request("POST", "https://agent.example.com/message:send"),
+        )
+        assert exact_payment_offer_amounts(response, "base") == []
+
 
 # ─── Extract Result Text ─────────────────────────────────────────────────────
 
@@ -734,3 +848,24 @@ class TestCheckDelegationAllowed:
         allowed, result = await check_delegation_allowed("org-1", "https://no-jwt.example.com", self._pool(row))
         assert allowed is True
         assert result["jwt_forward"] is False
+
+    async def test_lookup_matches_raw_and_canonical_url(self):
+        pool = self._pool(None)
+        await check_delegation_allowed("org-1", "https://Agent.Example.com:443/", pool)
+        assert pool.fetchrow.await_args.args[2] == ["https://Agent.Example.com:443", "https://agent.example.com"]
+
+    async def test_delisted_self_serve_row_is_not_allowed(self):
+        row = _FakeRecord(
+            id="rule-3",
+            agent_url="https://gone.example.com",
+            label=None,
+            max_cost_usdc=50_000,
+            require_x402=True,
+            jwt_forward=False,
+            source="self_serve",
+            created_at=None,
+            listing_active=False,
+        )
+        allowed, result = await check_delegation_allowed("org-1", "https://gone.example.com", self._pool(row))
+        assert allowed is False
+        assert result["source"] == "self_serve"

@@ -61,6 +61,8 @@ _GET_PLATFORM_TOOL_PRICE_ORIG = _catalog_pricing.get_platform_tool_price
 _GET_ORG_TOOL_PRICE_BY_QUALIFIED_NAME_ORIG = _catalog_pricing.get_org_tool_price_by_qualified_name
 
 _SET_AGENT_REGISTRATION_ORIG = _agents.set_agent_registration
+_PREVIEW_AGENT_REGISTRATION_ORIG = _agents.preview_agent_registration
+_PROBE_AGENT_REGISTRATION_ORIG = _agents.probe_agent_registration
 _GET_AGENT_REGISTRATION_ORIG = _agents.get_agent_registration
 _DELETE_AGENT_REGISTRATION_ORIG = _agents.delete_agent_registration
 _GET_AGENT_DIRECTORY_ORIG = _agents.get_agent_directory
@@ -195,6 +197,16 @@ async def get_author_config(org_id: str) -> AuthorConfig | None:
 async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
     """Validate and publish an org's A2A endpoint."""
     return await _call_async(_SET_AGENT_REGISTRATION_ORIG, org_id, agent_url)
+
+
+async def preview_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Dry-run agent registration and return the same verdict as ``set_agent_registration``."""
+    return await _call_async(_PREVIEW_AGENT_REGISTRATION_ORIG, org_id, agent_url)
+
+
+async def probe_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Run registration checks plus one unpaid, unbilled message probe."""
+    return await _call_async(_PROBE_AGENT_REGISTRATION_ORIG, org_id, agent_url)
 
 
 async def get_agent_registration(org_id: str) -> dict[str, Any] | None:

@@ -3054,6 +3054,81 @@
         "title": "MarketplaceAgentDirectoryResponse",
         "type": "object"
       },
+      "MarketplaceAgentRegistrationCheck": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "warn",
+              "fail"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "detail"
+        ],
+        "title": "MarketplaceAgentRegistrationCheck",
+        "type": "object"
+      },
+      "MarketplaceAgentRegistrationPreviewResponse": {
+        "properties": {
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The error PUT would return; null when registrable.",
+            "title": "Detail"
+          },
+          "price_per_task_usdc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Per Task Usdc"
+          },
+          "registrable": {
+            "title": "Registrable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registrable"
+        ],
+        "title": "MarketplaceAgentRegistrationPreviewResponse",
+        "type": "object"
+      },
       "MarketplaceAgentRegistrationRequest": {
         "properties": {
           "agent_url": {
@@ -3095,6 +3170,38 @@
           "updated_at"
         ],
         "title": "MarketplaceAgentRegistrationResponse",
+        "type": "object"
+      },
+      "MarketplaceAgentRegistrationTestResponse": {
+        "properties": {
+          "agent_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Url"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/MarketplaceAgentRegistrationCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "passed",
+          "checks"
+        ],
+        "title": "MarketplaceAgentRegistrationTestResponse",
         "type": "object"
       },
       "MarketplaceAgentSummary": {
@@ -4789,6 +4896,12 @@
           "require_x402": {
             "title": "Require X402",
             "type": "boolean"
+          },
+          "source": {
+            "default": "admin",
+            "description": "admin or self_serve",
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -4837,6 +4950,12 @@
           "require_x402": {
             "title": "Require X402",
             "type": "boolean"
+          },
+          "source": {
+            "default": "admin",
+            "description": "admin or self_serve",
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -4860,7 +4979,7 @@
           },
           "jwt_forward": {
             "default": false,
-            "description": "Forward caller JWT as Authorization header to this agent",
+            "description": "Forward caller JWT as Authorization header (org admins only)",
             "title": "Jwt Forward",
             "type": "boolean"
           },
@@ -4878,13 +4997,14 @@
           },
           "max_cost_usdc": {
             "default": 0,
-            "description": "Per-delegation cost cap in atomic USDC (0 = global default)",
+            "description": "Per-delegation cost cap in atomic USDC (0 = global default, or the self-serve maximum for members)",
+            "minimum": 0.0,
             "title": "Max Cost Usdc",
             "type": "integer"
           },
           "require_x402": {
             "default": false,
-            "description": "Require x402 payment for this agent",
+            "description": "Require x402 payment for this agent (always true for members)",
             "title": "Require X402",
             "type": "boolean"
           }
@@ -8266,7 +8386,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8484,7 +8604,7 @@
         ]
       },
       "post": {
-        "description": "Add a trusted A2A agent to the authenticated org's allowlist.\n\nRestricted to org admins: an allowlist entry exposes an arbitrary URL to the\nagent's delegate_to_agent tool (and, with jwt_forward, replays the caller's\nJWT to that endpoint), so registration is a privileged org-configuration\naction rather than a member-level one.",
+        "description": "Add a trusted A2A agent to the authenticated org's allowlist.\n\nOrg admins may add any URL with any settings. Other members may add only an\nagent listed in the marketplace registry; those rows are forced to x402-only\npayment, no JWT forwarding, and a cap within the global delegation limit.",
         "operationId": "add_a2a_agent_a2a_agents_post",
         "requestBody": {
           "content": {
@@ -8531,7 +8651,7 @@
     },
     "/a2a/agents/{agent_id}": {
       "delete": {
-        "description": "Remove an A2A agent from the authenticated org's allowlist (org admins only).",
+        "description": "Remove an A2A agent from the org's allowlist (members may remove only self-serve entries).",
         "operationId": "delete_a2a_agent_a2a_agents__agent_id__delete",
         "parameters": [
           {
@@ -12738,6 +12858,100 @@
           }
         ],
         "summary": "Set Marketplace Agent Registration",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
+    "/marketplace/agent-registration/preview": {
+      "post": {
+        "description": "Dry-run agent registration: same validation verdict as PUT, with a fresh card fetch and no writes.",
+        "operationId": "preview_marketplace_agent_registration_marketplace_agent_registration_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketplaceAgentRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAgentRegistrationPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Marketplace Agent Registration",
+        "tags": [
+          "Marketplace"
+        ]
+      }
+    },
+    "/marketplace/agent-registration/test": {
+      "post": {
+        "description": "Check an agent endpoint with one unpaid, unbilled message. Priced agents must answer 402; nothing is signed.",
+        "operationId": "check_marketplace_agent_registration_marketplace_agent_registration_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketplaceAgentRegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketplaceAgentRegistrationTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check Marketplace Agent Registration",
         "tags": [
           "Marketplace"
         ]

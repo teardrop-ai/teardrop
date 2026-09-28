@@ -207,12 +207,14 @@ async def dispatch_settlement(
     principal_id: str,
     run_id: str,
     result: dict[str, Any],
+    enqueue_x402_retry: bool = True,
 ):
     """Credit debit or x402 settlement, yielding ``BILLING_SETTLEMENT`` frames.
 
     ``cost_usdc`` is the caller charge from :func:`calculate_run_cost`. Sets
     ``result["marketplace_stats_billable"]`` to ``True`` when a charge
     succeeded so the caller can record marketplace tool usage stats.
+    Callers that withhold unsettled x402 results pass ``enqueue_x402_retry=False``.
     """
     result["marketplace_stats_billable"] = False
     result["settlement_amount_usdc"] = 0
@@ -328,14 +330,15 @@ async def dispatch_settlement(
                     )
         else:
             await record_settlement(usage_event.id, 0, "", "failed")
-            await enqueue_failed_settlement(
-                usage_event.id,
-                org_id,
-                run_id,
-                "x402",
-                cost_usdc,
-                payment_payload=str(billing.payment_payload) if billing.payment_payload else None,
-            )
+            if enqueue_x402_retry:
+                await enqueue_failed_settlement(
+                    usage_event.id,
+                    org_id,
+                    run_id,
+                    "x402",
+                    cost_usdc,
+                    payment_payload=str(billing.payment_payload) if billing.payment_payload else None,
+                )
             logger.warning(
                 "Settlement failed run_id=%s: %s",
                 run_id,

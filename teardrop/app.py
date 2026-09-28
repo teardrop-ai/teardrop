@@ -311,6 +311,10 @@ app.add_middleware(
         "Retry-After",
         "Location",
         "WWW-Authenticate",
+        "PAYMENT-REQUIRED",
+        "X-PAYMENT-REQUIRED",
+        "PAYMENT-RESPONSE",
+        "X-PAYMENT-RESPONSE",
     ],
 )
 

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage
+from x402.http import decode_payment_response_header
 
 from billing import BillingResult
 
@@ -111,6 +112,9 @@ def _async_task(**overrides) -> SimpleNamespace:
 
 async def _noop_dispatch_settlement(*_args, **kwargs):
     kwargs["result"]["marketplace_stats_billable"] = False
+    billing = kwargs["billing"]
+    if billing.verified and billing.billing_method == "x402":
+        kwargs["result"]["settlement_tx"] = "0xsettled"
     if False:
         yield None
 
@@ -377,6 +381,50 @@ async def test_message_send_anonymous_x402_success_returns_task(anon_client, tes
     assert audit_kwargs["billing_method"] == "x402"
     assert audit_kwargs["caller_address"] == "0xabc"
     assert usage_event_mock.await_args.args[0].source == "a2a"
+    receipt = decode_payment_response_header(resp.headers["payment-response"])
+    assert receipt.transaction == "0xsettled"
+    assert receipt.network == test_settings.x402_network
+
+
+@pytest.mark.anyio
+async def test_message_send_unsettled_x402_withholds_result(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings)
+    dispatch_kwargs: dict = {}
+
+    async def _unsettled_dispatch(*_args, **kwargs):
+        dispatch_kwargs.update(kwargs)
+        kwargs["result"]["marketplace_stats_billable"] = False
+        if False:
+            yield None
+
+    audit_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr("teardrop.agent_runtime.dispatch_settlement", _unsettled_dispatch)
+    monkeypatch.setattr("teardrop.routers.a2a_messages._record_inbound_event", audit_mock)
+    monkeypatch.setattr(
+        "billing.verify_payment",
+        AsyncMock(return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc"))),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.build_402_response_body",
+        lambda **kwargs: {"error": kwargs["error"], "accepts": [], "x402Version": 2},
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda **kwargs: {"PAYMENT-REQUIRED": "abc"})
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"X-PAYMENT": "signed-payment"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+
+    assert resp.status_code == 402
+    assert "withheld" in resp.json()["error"]
+    assert "payment-response" not in resp.headers
+    assert "A2A result" not in resp.text
+    assert dispatch_kwargs["enqueue_x402_retry"] is False
+    audit_kwargs = audit_mock.await_args.kwargs
+    assert audit_kwargs["task_state"] == "rejected_payment"
+    assert audit_kwargs["billing_method"] == "x402"
+    assert "withheld" in audit_kwargs["error"]
 
 
 @pytest.mark.anyio
@@ -738,6 +786,49 @@ async def test_async_worker_verifies_payment_only_after_claim(anon_client, test_
     audit_mock.assert_awaited_once()
     assert audit_mock.await_args.kwargs["settlement_amount_usdc"] == 123
     assert audit_mock.await_args.kwargs["settlement_tx"] == "0xsettled"
+
+
+@pytest.mark.anyio
+async def test_async_worker_unsettled_x402_withholds_result(anon_client, test_settings, monkeypatch):
+    _patch_success_path(monkeypatch, test_settings, billing_enabled=True)
+    enqueue_mock = AsyncMock(return_value=True)
+    finish_mock = AsyncMock(return_value=_async_task(task_state="rejected_payment"))
+    run_mock = AsyncMock(
+        return_value=SimpleNamespace(
+            task_state="completed",
+            output_text="A2A result",
+            duration_ms=12,
+            usage_event=SimpleNamespace(id="usage-1", cost_usdc=123),
+            settlement_amount_usdc=0,
+            settlement_tx="",
+        )
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.create_inbound_task", AsyncMock(return_value=(_async_task(), True)))
+    monkeypatch.setattr("teardrop.routers.a2a_messages.enqueue_inbound_task", enqueue_mock)
+    monkeypatch.setattr(
+        "teardrop.routers.a2a_messages.claim_inbound_task", AsyncMock(return_value=_async_task(task_state="running"))
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.mark_inbound_task_billing_method", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.a2a_messages.finish_inbound_task", finish_mock)
+    monkeypatch.setattr(
+        "billing.verify_payment",
+        AsyncMock(return_value=BillingResult(verified=True, payment_payload=SimpleNamespace(payer="0xabc"))),
+    )
+    monkeypatch.setattr("teardrop.routers.a2a_messages.run_agent_once", run_mock)
+
+    resp = await anon_client.post(
+        "/message:send",
+        headers={"Prefer": "respond-async", "X-PAYMENT": "signed-payment"},
+        json={"message": {"role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
+    )
+    await enqueue_mock.await_args.args[1]()
+
+    assert resp.status_code == 202
+    finish_kwargs = finish_mock.await_args.kwargs
+    assert finish_kwargs["task_state"] == "rejected_payment"
+    assert "withheld" in finish_kwargs["output_text"]
+    assert "A2A result" not in finish_kwargs["output_text"]
+    assert finish_kwargs["billing_method"] == "x402"
 
 
 @pytest.mark.anyio

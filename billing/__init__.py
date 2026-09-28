@@ -30,6 +30,7 @@ import billing.x402 as _x402
 from billing.credit import BillingCreditService
 from billing.delegation import BillingDelegationService
 from billing.models import BillingResult, PricingRule, ToolPricingOverride, atomic_usdc_to_price_str
+from billing.x402 import build_payment_response_headers
 from shared.db_pool import PgConnection, PgPool
 from teardrop.cache import get_redis
 from teardrop.config import get_settings
@@ -430,9 +431,9 @@ async def fund_delegation(
     )
 
 
-async def mark_delegation_possibly_delivered(org_id: str, delegation_id: str) -> bool:
-    """Hold a delegation in the ambiguous delivery state before a paid retry."""
-    return await _get_delegation_service().mark_delegation_possibly_delivered(org_id, delegation_id)
+async def mark_delegation_possibly_delivered(org_id: str, delegation_id: str, charge_usdc: int | None = None) -> bool:
+    """Hold a delegation in the ambiguous delivery state before a paid retry, trimming the hold to *charge_usdc*."""
+    return await _get_delegation_service().mark_delegation_possibly_delivered(org_id, delegation_id, charge_usdc)
 
 
 async def confirm_delegation_delivery(org_id: str, delegation_id: str, settlement_tx: str = "") -> bool:
@@ -820,6 +821,7 @@ __all__ = [
     "reserve_payer_spend",
     "build_402_headers",
     "build_402_response_body",
+    "build_payment_response_headers",
     "build_usdc_topup_requirements",
     "build_exact_payment_requirements",
     "verify_and_settle_usdc_topup",

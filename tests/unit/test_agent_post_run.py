@@ -192,3 +192,35 @@ async def test_x402_settles_the_run_charge():
 
     assert settle.await_args.kwargs["actual_cost_usdc"] == 4_500
     assert enqueue.await_args.args[4] == 4_500
+
+
+@pytest.mark.anyio
+async def test_x402_failure_skips_retry_when_result_is_withheld():
+    from teardrop import agent_post_run
+
+    settle = AsyncMock(return_value=SimpleNamespace(settled=False, amount_usdc=0, tx_hash="", error="x"))
+    result: dict = {}
+    with (
+        patch.object(agent_post_run, "settle_payment", settle),
+        patch.object(agent_post_run, "record_settlement", AsyncMock()) as record,
+        patch.object(agent_post_run, "enqueue_failed_settlement", AsyncMock()) as enqueue,
+    ):
+        await _drain(
+            agent_post_run.dispatch_settlement(
+                billing=SimpleNamespace(verified=True, billing_method="x402", payment_payload=None),
+                settings=SimpleNamespace(x402_scheme="exact", x402_settlement_timeout_seconds=5),
+                usage_event=SimpleNamespace(id="ue-1"),
+                platform_fee=0,
+                cost_usdc=10_000,
+                delegation_spend=0,
+                org_id="",
+                principal_id="",
+                run_id="run-1",
+                result=result,
+                enqueue_x402_retry=False,
+            )
+        )
+
+    record.assert_awaited_once_with("ue-1", 0, "", "failed")
+    enqueue.assert_not_awaited()
+    assert result["settlement_tx"] == ""

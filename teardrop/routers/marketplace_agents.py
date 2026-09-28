@@ -9,7 +9,7 @@ URL validation (SSRF) for registered agent URLs lives in ``marketplace.agents``.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -21,6 +21,8 @@ from marketplace import (
     delete_agent_registration,
     get_agent_directory,
     get_agent_registration,
+    preview_agent_registration,
+    probe_agent_registration,
     set_agent_registration,
 )
 from teardrop.config import get_settings
@@ -42,6 +44,25 @@ class MarketplaceAgentRegistrationResponse(BaseModel):
     agent_url: str
     created_at: str
     updated_at: str
+
+
+class MarketplaceAgentRegistrationPreviewResponse(BaseModel):
+    registrable: bool
+    detail: str | None = Field(default=None, description="The error PUT would return; null when registrable.")
+    agent_url: str | None = None
+    price_per_task_usdc: int | None = None
+
+
+class MarketplaceAgentRegistrationCheck(BaseModel):
+    name: str
+    status: Literal["pass", "warn", "fail"]
+    detail: str
+
+
+class MarketplaceAgentRegistrationTestResponse(BaseModel):
+    passed: bool
+    agent_url: str | None = None
+    checks: list[MarketplaceAgentRegistrationCheck]
 
 
 class MarketplaceAgentSummary(BaseModel):
@@ -103,6 +124,52 @@ async def set_marketplace_agent_registration(
             "updated_at": registration["updated_at"].isoformat(),
         }
     )
+
+
+@router.post(
+    "/marketplace/agent-registration/preview",
+    tags=["Marketplace"],
+    response_model=MarketplaceAgentRegistrationPreviewResponse,
+)
+async def preview_marketplace_agent_registration(
+    body: MarketplaceAgentRegistrationRequest,
+    payload: dict = Depends(require_org_machine),
+) -> JSONResponse:
+    """Dry-run agent registration: same validation verdict as PUT, with a fresh card fetch and no writes."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id = _require_org_id(payload)
+    await _enforce_rate_limit(
+        f"a2a_registration:{org_id}",
+        s.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for A2A agent registration.",
+    )
+    return JSONResponse(content=await preview_agent_registration(org_id, body.agent_url))
+
+
+@router.post(
+    "/marketplace/agent-registration/test",
+    tags=["Marketplace"],
+    response_model=MarketplaceAgentRegistrationTestResponse,
+)
+async def check_marketplace_agent_registration(
+    body: MarketplaceAgentRegistrationRequest,
+    payload: dict = Depends(require_org_machine),
+) -> JSONResponse:
+    """Check an agent endpoint with one unpaid, unbilled message. Priced agents must answer 402; nothing is signed."""
+    s = get_settings()
+    if not s.marketplace_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Marketplace disabled.")
+
+    org_id = _require_org_id(payload)
+    await _enforce_rate_limit(
+        f"a2a_registration_test:{org_id}",
+        s.rate_limit_auth_rpm,
+        detail="Rate limit exceeded for A2A agent registration tests.",
+    )
+    return JSONResponse(content=await probe_agent_registration(org_id, body.agent_url))
 
 
 @router.get(

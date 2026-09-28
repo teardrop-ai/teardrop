@@ -835,6 +835,14 @@ class Settings(BaseSettings):
         default="",
         description="Hex-encoded private key for the platform treasury wallet (signs outbound x402 payments)",
     )
+    a2a_treasury_daily_outflow_cap_usdc: int = Field(
+        default=5_000_000,
+        ge=0,
+        description=(
+            "Rolling 24h cap on treasury-signed x402 delegation payments, in atomic USDC including the "
+            "platform fee (default $5). 0 blocks all treasury-signed payments."
+        ),
+    )
 
     # ── CDP Agent Wallets (per-org managed wallets via Coinbase Developer Platform) ─
     agent_wallet_enabled: bool = Field(

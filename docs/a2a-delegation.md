@@ -11,7 +11,7 @@ Teardrop agents can delegate specialist tasks to remote A2A-compliant agents and
 
 The public `/.well-known/agent-card.json` advertises the `/tools/mcp` gateway under `endpoints.mcp_tools`. When `MARKETPLACE_ENABLED=true`, it also includes `capabilities.marketplace`, `endpoints.marketplace_catalog`, `endpoints.marketplace_authors`, and `endpoints.marketplace_quote` so external clients can discover the paid marketplace catalog, its active author index, and current effective prices without hard-coding Teardrop-specific URLs. The quote endpoint accepts a qualified tool name, returns an atomic-USDC price with an advisory expiry bounded by the active pricing-cache TTL, and does not reserve or authorize payment. The author catalog is the complete active published inventory for an `org_slug`; `/agent/tools` remains the authenticated current-org inventory. The author index is a catalog metadata surface, not a directory of remote A2A URLs; `delegate_to_agent` still requires an explicit URL and the normal SSRF, allowlist, and budget controls. Its additive `capabilities.marketplace.registration` metadata identifies `/tools` for agent-owned tool registration and `/marketplace/author-config` for payout setup; SIWE sessions are restricted to their own wallet, while organization admins retain treasury-wallet control. MCP import publishing accepts organization admins or org-bound machine credentials.
 
-When `MARKETPLACE_ENABLED=true`, an organization may separately opt into the public A2A Agent Endpoint Registry. `PUT /marketplace/agent-registration` accepts an organization admin or an org-bound client-credentials token and validates an HTTPS base URL through the SSRF guard, fetches its `/.well-known/agent-card.json`, and requires the client-compatible `/message:send` endpoint. Unscoped config-based client credentials remain rejected. Registration is one row per organization and idempotently replaces that organization's previous URL; `GET` returns the authenticated organization's registration and `DELETE` accepts the same admin or org-machine authorization. This registry is discoverability only: it does not add the endpoint to an organization's delegation allowlist, and publication does not provide cryptographic cross-domain ownership proof. MCP tool publishing uses the same admin-or-org-machine authorization. The A2A client sends to the registered base URL plus `/message:send`.
+When `MARKETPLACE_ENABLED=true`, an organization may separately opt into the public A2A Agent Endpoint Registry. `PUT /marketplace/agent-registration` accepts an organization admin or an org-bound client-credentials token and validates an HTTPS base URL through the SSRF guard, fetches its `/.well-known/agent-card.json`, and requires the client-compatible `/message:send` endpoint. Unscoped config-based client credentials remain rejected. Registration is one row per organization and idempotently replaces that organization's previous URL; `GET` returns the authenticated organization's registration and `DELETE` accepts the same admin or org-machine authorization. `POST /marketplace/agent-registration/preview` is a dry run with the same authorization: it returns `{registrable, detail, agent_url, price_per_task_usdc}` where `detail` is exactly the error `PUT` would return, and writes nothing. `POST /marketplace/agent-registration/test` runs the same checks plus one unpaid, unbilled `/message:send` probe and returns pass/warn/fail `checks`; a priced agent must answer `402` with a decodable `exact` offer on `X402_NETWORK` at or below its advertised price, and Teardrop never signs during the test. Registration, preview, and test always fetch a fresh card, bypassing the card cache. This registry is discoverability only: registering does not add the endpoint to any allowlist, although it makes the endpoint eligible for member self-serve allowlisting (see [Allowlist & Budget Control](#allowlist--budget-control)); publication does not provide cryptographic cross-domain ownership proof. MCP tool publishing uses the same admin-or-org-machine authorization. The A2A client sends to the registered base URL plus `/message:send`.
 
 `GET /marketplace/agents` exposes only registered endpoints. It supports `q`, `limit` (1-200), and an opaque slug cursor. Directory reputation is derived from outbound delegation events using a 14-day recency decay and a Beta(4,1) prior. It is shown only after five distinct calling organizations; the caller's own traffic, locally caused failures, and `possibly_delivered` outcomes are excluded. Legacy events whose failure origin is `unknown` remain in the derived denominator because they cannot be reliably reclassified. These metrics are advisory trust signals, not ownership, identity, payment, or service-level attestations.
 
@@ -108,13 +108,28 @@ A2A_INBOUND_TASK_TTL_DAYS=7
 A2A_INBOUND_INTRO_PRICE_USDC=0
 
 # For x402 delegations (optional):
-X402_TREASURY_PRIVATE_KEY=0x...      # Treasury wallet private key (hex-encoded)
+X402_TREASURY_PRIVATE_KEY=0x...      # Treasury hot wallet private key (hex-encoded)
+A2A_TREASURY_DAILY_OUTFLOW_CAP_USDC=5000000 # Rolling 24h cap on signed payments incl. fee ($5; 0 blocks signing)
 ```
 
-Outbound x402 challenges are accepted only on `X402_NETWORK` and only when the
-integer atomic amount is at or below the effective delegation cap (the per-agent
-cap after the platform fee). Missing, malformed, or over-cap requirements are
-rejected before the treasury signs a payment.
+Outbound x402 challenges are accepted only for the `exact` scheme on
+`X402_NETWORK`, with a positive integer amount at or below the signing bound:
+the advertised `price_per_task_usdc` when present, otherwise the per-agent cap.
+The bound excludes the platform fee, so a seller can never collect the fee.
+`upto` offers are rejected because the seller could settle any amount up to the
+signed maximum. When several offers qualify, Teardrop signs only the cheapest.
+
+The pre-debit is `apply_platform_fee(bound)`. When the treasury signs a smaller
+offer, the hold is trimmed to `apply_platform_fee(signed amount)` in the same
+transaction that records the delivery attempt, and the difference is returned
+as an `a2a:adjust` top-up (not a reversal, so rolling 24-hour caps still count
+the original debit). An `x402` allowlist row whose remote completes without
+ever answering `402` is refunded in full and recorded with `cost_usdc=0`.
+
+Before sending a signed payment, Teardrop takes a transaction-scoped advisory
+lock and refuses the payment if the fee-inclusive amounts signed in the last
+24 hours plus this charge would exceed `A2A_TREASURY_DAILY_OUTFLOW_CAP_USDC`;
+the unsent delegation is then refunded.
 
 ### Advertised Task Price
 
@@ -127,10 +142,20 @@ fails before any debit, x402 attempt, or audit mutation with
 `error_type=advertised_price_exceeds_cap`; callers should select another agent or
 configure a compatible cap. A valid lower price is charged with the existing
 platform fee and checked again against the live org/principal budget before
-funding. A missing or malformed field preserves the existing cap-based behavior:
-a non-integer, zero, negative, or out-of-range value is ignored rather than
+funding. A missing or malformed field falls back to the per-agent cap as the
+signing bound, and the `402` challenge sets the actual charge. A non-integer,
+zero, negative, or out-of-range value is ignored rather than
 failing card discovery, so a remote cannot make itself undelegatable — or raise
 its own price — through this field.
+
+### Remote Responses
+
+`/message:send` replies are parsed as a Task in the legacy shape, a JSON-RPC
+`result` envelope, or the A2A 1.0 `{"task": ...}` shape. A2A 1.0
+`TASK_STATE_*` values map to their legacy equivalents (for example
+`TASK_STATE_COMPLETED` to `completed`). Any 2xx body that is not a Task is a
+failure: it is never billed as completed, and its raw content is not returned
+to the planner.
 
 ---
 
@@ -139,6 +164,8 @@ its own price — through this field.
 External agents can call Teardrop directly over `POST /message:send`.
 
 - Anonymous callers may pay per request with x402 by retrying the call with `X-PAYMENT` after an initial `402 Payment Required` response. The challenge now uses the standard `PAYMENT-REQUIRED` header and also serves `X-PAYMENT-REQUIRED` as a legacy compatibility alias.
+- An x402-paid task that completes but does not settle returns `402` (or ends `rejected_payment` for async tasks) and the result is withheld. That settlement is not retried, so the payer is never charged later for an undelivered result.
+- A settled synchronous x402 call returns the settlement receipt in the `PAYMENT-RESPONSE` header (with a legacy `X-PAYMENT-RESPONSE` alias).
 - Operators may set `A2A_INBOUND_INTRO_PRICE_USDC` to a positive atomic-USDC amount to advertise and verify an exact-price offer for anonymous inbound A2A calls only. The default `0` leaves the global x402 pricing rule unchanged; authenticated credit billing and `/agent/run` are unaffected.
 - Unpaid anonymous probes receive the `402 Payment Required` challenge before request-body validation, which keeps registry validators compatible with empty or malformed probe payloads.
 - The `402` body is a full x402 v2 `PaymentRequired` payload with top-level `resource`, `accepts`, and `extensions`. On `POST /message:send`, `extensions.bazaar` advertises the A2A request and response shape for registries.
@@ -166,7 +193,17 @@ Trigger lifecycle, dispatch, secret rejection, and settlement metadata are writt
 
 ## Allowlist & Budget Control
 
-Organisations must explicitly add remote agents to their allowlist before delegating to them:
+Organisations must explicitly add remote agents to their allowlist before delegating to them.
+Org admins may add any URL with any settings. Other members, including org-bound
+machine credentials, may add only an agent listed in the A2A Agent Endpoint
+Registry by another organization. Those `source=self_serve` rows are forced to
+`require_x402=true` and `jwt_forward=false`, and their `max_cost_usdc` defaults
+to (and may not exceed) the largest cap whose fee-inclusive pre-debit fits
+`A2A_DELEGATION_MAX_COST_USDC`. Orgs still on promotional onboarding credit
+cannot self-serve. A database constraint enforces the row shape, registry
+membership is re-checked at every delegation (a delisted agent's self-serve row
+stops working), and members may delete only self-serve rows. Every allowlist
+create and delete from `/a2a/agents` is appended to `a2a_allowed_agent_events`.
 
 The default `A2A_DELEGATION_REQUIRE_ALLOWLIST=true` also requires authenticated
 organisation runtime context. Direct tool invocation without `org_id` and the
@@ -194,8 +231,8 @@ Invoke-RestMethod -Uri "http://localhost:8000/a2a/agents" `
 
 | Setting | Billing Method | When to Use |
 |---------|---|---|
-| `require_x402=false` | Org prepaid credits | Default: instant, requires upfront org credit balance |
-| `require_x402=true` | x402 on-chain (USDC) | Agent requires on-chain payment; uses treasury wallet to sign |
+| `require_x402=false` | Org prepaid credits | Admin-only: the caller is charged the price or cap plus fee; the remote agent is not paid by Teardrop |
+| `require_x402=true` | Org credits, treasury pays x402 (USDC) | Default for self-serve rows: the treasury signs the seller's `exact` offer and the caller is charged that amount plus fee |
 
 ---
 
@@ -208,7 +245,8 @@ Credit-funded delegations create a durable refund record in
 funding rows, the outbox stores the debit ledger ID, and a completed refund is
 an immutable top-up linked to that debit by `reverses_ledger_id`. Successful
 delegations cancel the pending record. Dispatch failures and non-completed
-remote tasks request a refund; the compensating top-up and ledger linkage are
+remote tasks request a refund unless an x402 payment was already signed (see
+below); the compensating top-up and ledger linkage are
 written atomically. Rolling org and principal spend aggregates exclude the
 reversed debit, so refunded headroom is available again under both 24-hour
 caps. Refund rows created before migration 103 may not have a debit link;
@@ -217,9 +255,12 @@ rolling-cap headroom. A background retry worker reconciles requested refunds
 and pending rows with deterministic delegation event IDs after process
 failure, without double-crediting a repeated refund attempt.
 
-When an x402 payment header has been signed and the paid retry begins but the
-remote outcome cannot be determined, the delegation is recorded as
-`possibly_delivered`. Its pre-debit remains held and the refund worker skips it;
+When an x402 payment header has been signed and the paid retry begins, any
+outcome other than a `completed` task (timeout, transport error, or a remote
+`failed`, `working`, or other non-completed state) is recorded as
+`possibly_delivered`. The seller can settle a signed payment regardless of the
+state it reports, so Teardrop never auto-refunds after signing. The pre-debit
+remains held and the refund worker skips it;
 Teardrop never automatically re-dispatches an ambiguous task. An administrator
 must inspect the remote task or payment record and resolve it explicitly:
 

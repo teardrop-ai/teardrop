@@ -448,6 +448,113 @@ class TestDelegationRefundOutbox:
         request.assert_awaited_once_with("org-1", "failed-id")
         complete.assert_awaited_once_with("org-1", "failed-id")
 
+    async def test_worker_refunds_zero_cost_completion_instead_of_cancelling(self):
+        pool = MagicMock()
+        pool.fetch = AsyncMock(return_value=[{"id": "free-id", "org_id": "org-1", "task_status": "completed", "cost_usdc": 0}])
+        service = self._service(pool)
+        cancel = AsyncMock(return_value=True)
+        request = AsyncMock(return_value=True)
+        complete = AsyncMock(return_value=True)
+        with (
+            patch.object(service, "cancel_delegation_refund", cancel),
+            patch.object(service, "request_delegation_refund", request),
+            patch.object(service, "complete_delegation_refund", complete),
+        ):
+            processed = await service.process_delegation_refund_outbox()
+
+        assert processed == 1
+        cancel.assert_not_awaited()
+        complete.assert_awaited_once_with("org-1", "free-id")
+
+    def _mark_conn(self, pool, outbox_row, balance_row=None, signed_24h_usdc=0):
+        conn = MagicMock()
+        conn.fetchrow = AsyncMock(side_effect=[outbox_row, balance_row])
+        conn.fetchval = AsyncMock(return_value=signed_24h_usdc)
+        conn.execute = AsyncMock()
+        conn.transaction = MagicMock(return_value=_AsyncContext(conn))
+        pool.acquire = MagicMock(return_value=_AsyncContext(conn))
+        return conn
+
+    def _mark_service(self, pool, outflow_cap_usdc=5_000_000):
+        settings = MagicMock(a2a_treasury_daily_outflow_cap_usdc=outflow_cap_usdc)
+        return BillingDelegationService(
+            get_pool=lambda: pool,
+            get_settings=lambda: settings,
+            get_daily_debit_spend=AsyncMock(),
+            debit_credit=AsyncMock(),
+            get_live_pricing_for_model=AsyncMock(),
+        )
+
+    async def test_mark_delivery_trims_hold_to_signed_charge(self):
+        pool = MagicMock()
+        conn = self._mark_conn(
+            pool,
+            {
+                "status": "pending",
+                "delivery_status": "not_attempted",
+                "run_id": "run-1",
+                "amount_usdc": 52_500,
+                "principal_id": "principal-1",
+            },
+            {"balance_usdc": 70_000},
+        )
+
+        assert await self._mark_service(pool).mark_delegation_possibly_delivered("org-1", "delegation-1", 31_500) is True
+
+        lock_call, ledger_call, outbox_call = conn.execute.call_args_list
+        assert "pg_advisory_xact_lock" in lock_call.args[0]
+        assert "org_credit_ledger" in ledger_call.args[0]
+        assert "reverses_ledger_id" not in ledger_call.args[0]
+        assert ledger_call.args[3:5] == (21_000, 70_000)
+        assert ledger_call.args[-1] == "principal-1"
+        assert "possibly_delivered" in outbox_call.args[0]
+        assert outbox_call.args[-1] == 31_500
+
+    async def test_mark_delivery_rejects_charge_above_hold(self):
+        pool = MagicMock()
+        conn = self._mark_conn(
+            pool,
+            {"status": "pending", "delivery_status": "not_attempted", "run_id": "run-1", "amount_usdc": 10_000},
+        )
+
+        assert await self._mark_service(pool).mark_delegation_possibly_delivered("org-1", "delegation-1", 10_001) is False
+        conn.execute.assert_not_awaited()
+
+    async def test_mark_delivery_refuses_when_treasury_cap_would_be_exceeded(self):
+        pool = MagicMock()
+        conn = self._mark_conn(
+            pool,
+            {"status": "pending", "delivery_status": "not_attempted", "run_id": "run-1", "amount_usdc": 10_000},
+            signed_24h_usdc=4_995_000,
+        )
+
+        service = self._mark_service(pool, outflow_cap_usdc=5_000_000)
+        assert await service.mark_delegation_possibly_delivered("org-1", "delegation-1", 5_001) is False
+        assert len(conn.execute.call_args_list) == 1
+        assert "pg_advisory_xact_lock" in conn.execute.call_args_list[0].args[0]
+
+    async def test_mark_delivery_allows_charge_exactly_at_treasury_cap(self):
+        pool = MagicMock()
+        conn = self._mark_conn(
+            pool,
+            {"status": "pending", "delivery_status": "not_attempted", "run_id": "run-1", "amount_usdc": 5_000},
+            signed_24h_usdc=4_995_000,
+        )
+
+        service = self._mark_service(pool, outflow_cap_usdc=5_000_000)
+        assert await service.mark_delegation_possibly_delivered("org-1", "delegation-1", 5_000) is True
+        assert "possibly_delivered" in conn.execute.call_args_list[-1].args[0]
+
+    async def test_mark_delivery_is_idempotent_once_claimed(self):
+        pool = MagicMock()
+        conn = self._mark_conn(
+            pool,
+            {"status": "pending", "delivery_status": "possibly_delivered", "run_id": "run-1", "amount_usdc": 10_000},
+        )
+
+        assert await self._mark_service(pool).mark_delegation_possibly_delivered("org-1", "delegation-1", 5_000) is True
+        conn.execute.assert_not_awaited()
+
     async def test_worker_skips_possibly_delivered_rows(self):
         pool = MagicMock()
         pool.fetch = AsyncMock(

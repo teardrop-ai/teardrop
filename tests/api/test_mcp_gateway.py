@@ -213,7 +213,7 @@ def _real_402_body(monkeypatch):
 
 
 def _tools_call(**params) -> dict:
-    return {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "calculate", "arguments": {}, **params}}
+    return {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "get_token_price", "arguments": {}, **params}}
 
 
 def test_mcp_payment_meta_keys_match_x402_sdk():

@@ -12,7 +12,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from marketplace.agents import _build_agent_cursor, _decode_agent_cursor, _load_agent_directory, set_agent_registration
+from marketplace.agents import (
+    _build_agent_cursor,
+    _decode_agent_cursor,
+    _load_agent_directory,
+    preview_agent_registration,
+    probe_agent_registration,
+    set_agent_registration,
+)
 from teardrop.a2a_client import A2AAgentCard
 
 
@@ -124,6 +131,102 @@ async def test_set_agent_registration_rejects_message_endpoint_on_other_host(mon
         await set_agent_registration("org-1", "https://agent.example.com")
 
     pool.fetchrow.assert_not_awaited()
+
+
+def _patch_valid_card(monkeypatch, card: A2AAgentCard | None = None, *, owner_org_id=None) -> tuple[MagicMock, AsyncMock]:
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=owner_org_id)
+    pool.fetchrow = AsyncMock()
+    discover = AsyncMock(return_value=card or _a2a_card())
+    monkeypatch.setattr("marketplace.agents._get_pool", lambda: pool)
+    monkeypatch.setattr("marketplace.agents.async_validate_url", AsyncMock(return_value=None))
+    monkeypatch.setattr("marketplace.agents.discover_agent_card", discover)
+    return pool, discover
+
+
+@pytest.mark.anyio
+async def test_preview_agent_registration_bypasses_cache_and_never_writes(monkeypatch):
+    card = A2AAgentCard(name="Priced", endpoints={"a2a_message": "/message:send"}, price_per_task_usdc=10_000)
+    pool, discover = _patch_valid_card(monkeypatch, card)
+
+    result = await preview_agent_registration("org-1", "HTTPS://AGENT.EXAMPLE.COM/")
+
+    assert result == {
+        "registrable": True,
+        "detail": None,
+        "agent_url": "https://agent.example.com",
+        "price_per_task_usdc": 10_000,
+    }
+    assert discover.await_args.kwargs["bypass_cache"] is True
+    pool.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_preview_agent_registration_matches_put_verdicts(monkeypatch):
+    _patch_valid_card(monkeypatch, owner_org_id="other-org")
+    taken = await preview_agent_registration("org-1", "https://agent.example.com")
+    assert taken["registrable"] is False
+    assert taken["detail"] == "Agent endpoint is already registered by another organization."
+
+    insecure = await preview_agent_registration("org-1", "http://agent.example.com")
+    assert insecure["registrable"] is False
+    assert "HTTPS" in insecure["detail"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("offers", "expected_status", "passed"),
+    [([10_000], "pass", True), ([8_000, 12_000], "warn", True), ([12_000], "fail", False), ([], "fail", False)],
+)
+async def test_probe_priced_agent_checks_unpaid_402_offer(monkeypatch, offers, expected_status, passed):
+    card = A2AAgentCard(name="Priced", endpoints={"a2a_message": "/message:send"}, price_per_task_usdc=10_000)
+    _patch_valid_card(monkeypatch, card)
+    probe = AsyncMock(return_value=MagicMock(status_code=402))
+    monkeypatch.setattr("teardrop.a2a_client.probe_message_endpoint", probe)
+    monkeypatch.setattr("teardrop.a2a_client.exact_payment_offer_amounts", MagicMock(return_value=offers))
+    monkeypatch.setattr("teardrop.a2a_client._sign_x402_payment", MagicMock(side_effect=AssertionError("signed")))
+
+    result = await probe_agent_registration("org-1", "https://agent.example.com")
+
+    assert result["passed"] is passed
+    assert result["checks"][-1]["name"] == "payment"
+    assert result["checks"][-1]["status"] == expected_status
+    probe.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("body", "passed"),
+    [
+        ({"id": "t1", "status": {"state": "completed"}}, True),
+        ({"id": "t1", "status": {"state": "working"}}, False),
+        ({"ok": True}, False),
+    ],
+)
+async def test_probe_unpriced_agent_requires_completed_task(monkeypatch, body, passed):
+    _patch_valid_card(monkeypatch)
+    response = MagicMock(status_code=200)
+    response.json.return_value = body
+    monkeypatch.setattr("teardrop.a2a_client.probe_message_endpoint", AsyncMock(return_value=response))
+
+    result = await probe_agent_registration("org-1", "https://agent.example.com")
+
+    assert result["passed"] is passed
+    assert result["checks"][-1]["name"] == "message"
+
+
+@pytest.mark.anyio
+async def test_probe_priced_agent_without_402_warns(monkeypatch):
+    card = A2AAgentCard(name="Priced", endpoints={"a2a_message": "/message:send"}, price_per_task_usdc=10_000)
+    _patch_valid_card(monkeypatch, card)
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"id": "t1", "status": {"state": "completed"}}
+    monkeypatch.setattr("teardrop.a2a_client.probe_message_endpoint", AsyncMock(return_value=response))
+
+    result = await probe_agent_registration("org-1", "https://agent.example.com")
+
+    assert result["passed"] is True
+    assert [check["status"] for check in result["checks"]] == ["pass", "pass", "warn"]
 
 
 @pytest.mark.anyio

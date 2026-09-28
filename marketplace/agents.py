@@ -78,8 +78,8 @@ def _card_has_message_endpoint(card: A2AAgentCard, agent_url: str) -> bool:
     return False
 
 
-async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
-    """Validate and idempotently publish an org's A2A endpoint."""
+async def _validate_agent_registration(org_id: str, agent_url: str) -> tuple[str, A2AAgentCard]:
+    """Return the canonical URL and a freshly fetched card, or raise ValueError with the PUT verdict."""
     normalized_url = _normalize_agent_url(agent_url)
     if await async_validate_url(normalized_url):
         raise ValueError("Agent endpoint failed SSRF validation.")
@@ -90,6 +90,7 @@ async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
             normalized_url,
             timeout=min(10, int(settings.a2a_delegation_timeout_seconds)),
             cache_ttl=int(settings.a2a_agent_card_cache_ttl_seconds),
+            bypass_cache=True,
         )
     except Exception as exc:
         logger.warning(
@@ -101,6 +102,12 @@ async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
 
     if not _card_has_message_endpoint(card, normalized_url):
         raise ValueError("Agent endpoint does not advertise a compatible A2A message endpoint.")
+    return normalized_url, card
+
+
+async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Validate and idempotently publish an org's A2A endpoint."""
+    normalized_url, _card = await _validate_agent_registration(org_id, agent_url)
 
     now = datetime.now(timezone.utc)
     try:
@@ -122,7 +129,7 @@ async def set_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
             now,
         )
     except UniqueViolation:
-        raise ValueError("Agent endpoint is already registered by another organization.") from None
+        raise ValueError(_REGISTERED_ELSEWHERE_DETAIL) from None
 
     if row is None:
         raise RuntimeError("Agent registration was not persisted.")
@@ -141,6 +148,109 @@ async def get_agent_registration(org_id: str) -> dict[str, Any] | None:
 async def delete_agent_registration(org_id: str) -> None:
     await _get_pool().execute("DELETE FROM a2a_agent_registry WHERE org_id = $1", org_id)
     await _AGENT_DIRECTORY_CACHE.invalidate()
+
+
+_REGISTERED_ELSEWHERE_DETAIL = "Agent endpoint is already registered by another organization."
+_PROBE_MESSAGE = "Teardrop registration test: reply with a one-line confirmation."
+_PROBE_TIMEOUT_SECONDS = 30
+
+
+async def preview_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Dry-run ``set_agent_registration``: same validation verdict, nothing persisted."""
+    try:
+        normalized_url, card = await _validate_agent_registration(org_id, agent_url)
+    except ValueError as exc:
+        return {"registrable": False, "detail": str(exc), "agent_url": None, "price_per_task_usdc": None}
+
+    owner_org_id = await _get_pool().fetchval("SELECT org_id FROM a2a_agent_registry WHERE agent_url = $1", normalized_url)
+    if owner_org_id is not None and owner_org_id != org_id:
+        return {
+            "registrable": False,
+            "detail": _REGISTERED_ELSEWHERE_DETAIL,
+            "agent_url": normalized_url,
+            "price_per_task_usdc": None,
+        }
+    return {
+        "registrable": True,
+        "detail": None,
+        "agent_url": normalized_url,
+        "price_per_task_usdc": card.price_per_task_usdc,
+    }
+
+
+def _check_payment_offer(offers: list[int], price_usdc: int | None, network: str) -> tuple[str, str]:
+    if not offers:
+        return "fail", f"402 response has no decodable exact offer on {network}; Teardrop will not pay it."
+    cheapest = offers[0]
+    if price_usdc is None:
+        return "pass", f"Cheapest exact offer is {cheapest} atomic USDC; callers need an allowlist cap at least this high."
+    if price_usdc in offers:
+        return "pass", f"Exact offer matches the advertised price ({price_usdc} atomic USDC)."
+    if cheapest < price_usdc:
+        return "warn", f"Cheapest exact offer ({cheapest}) is below the advertised price ({price_usdc}); callers pay the offer."
+    return "fail", f"Every exact offer exceeds the advertised price ({price_usdc} atomic USDC); Teardrop will not sign it."
+
+
+async def probe_agent_registration(org_id: str, agent_url: str) -> dict[str, Any]:
+    """Run the registration checks plus one unpaid, unbilled message probe. Never signs a payment."""
+    from teardrop.a2a_client import _parse_send_response, exact_payment_offer_amounts, probe_message_endpoint
+
+    checks: list[dict[str, str]] = []
+    try:
+        normalized_url, card = await _validate_agent_registration(org_id, agent_url)
+    except ValueError as exc:
+        checks.append({"name": "agent_card", "status": "fail", "detail": str(exc)})
+        return {"passed": False, "agent_url": None, "checks": checks}
+    checks.append({"name": "agent_card", "status": "pass", "detail": "Agent card is valid and advertises /message:send."})
+
+    settings = get_settings()
+    price_usdc = card.price_per_task_usdc
+    timeout = min(_PROBE_TIMEOUT_SECONDS, int(settings.a2a_delegation_timeout_seconds))
+    try:
+        resp = await probe_message_endpoint(normalized_url, _PROBE_MESSAGE, timeout=timeout)
+    except TimeoutError:
+        checks.append({"name": "message", "status": "fail", "detail": f"No response within {timeout} s."})
+    except Exception as exc:
+        checks.append({"name": "message", "status": "fail", "detail": f"Request failed ({type(exc).__name__})."})
+    else:
+        if resp.status_code == 402:
+            offers = exact_payment_offer_amounts(resp, settings.x402_network)
+            status, detail = _check_payment_offer(offers, price_usdc, settings.x402_network)
+            checks.append({"name": "payment", "status": status, "detail": detail})
+        elif 200 <= resp.status_code < 300:
+            try:
+                parsed = _parse_send_response(resp.json())
+            except ValueError:
+                parsed = None
+            if parsed is None or parsed.task is None:
+                checks.append({"name": "message", "status": "fail", "detail": "2xx response is not a valid A2A Task."})
+            elif parsed.task.status.state != "completed":
+                state = parsed.task.status.state[:40]
+                checks.append(
+                    {
+                        "name": "message",
+                        "status": "fail",
+                        "detail": f"Task state is {state!r}; Teardrop requires a synchronous completed task.",
+                    }
+                )
+            else:
+                checks.append({"name": "message", "status": "pass", "detail": "Unpaid call returned a completed task."})
+            if price_usdc is not None:
+                checks.append(
+                    {
+                        "name": "payment",
+                        "status": "warn",
+                        "detail": "Card advertises a price but the endpoint did not require payment; callers are not charged.",
+                    }
+                )
+        else:
+            checks.append({"name": "message", "status": "fail", "detail": f"Unexpected HTTP status {resp.status_code}."})
+
+    return {
+        "passed": all(check["status"] != "fail" for check in checks),
+        "agent_url": normalized_url,
+        "checks": checks,
+    }
 
 
 async def _load_agent_directory() -> dict[str, Any]:

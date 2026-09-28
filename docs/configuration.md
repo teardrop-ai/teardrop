@@ -50,7 +50,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
 | `ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS` | Poll interval for retrying failed onboarding-credit grants (default: `60`) |
 | `X402_FACILITATOR_URL` | Primary x402 facilitator URL (default: `https://x402.org/facilitator`) |
-| `X402_FACILITATOR_URLS` | Ordered JSON array of credential-free HTTPS facilitator URLs; verification fails over on transport errors. Empty uses `X402_FACILITATOR_URL`. |
+| `X402_FACILITATOR_URLS` | Ordered JSON array of credential-free HTTPS facilitator URLs; verification fails over on transport errors. Empty uses `X402_FACILITATOR_URL`. Only list facilitators whose `/verify` rejects unfunded payers; check with `python scripts/probe_x402_facilitators.py --urls ...` before changing this value. |
 | `X402_PAY_TO_ADDRESS` | Primary treasury wallet (USDC recipient) |
 | `X402_TREASURY_ADDRESSES` | JSON array of EVM treasury addresses advertised in payment requirements. Empty uses `X402_PAY_TO_ADDRESS`. |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
@@ -131,6 +131,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `A2A_INBOUND_TASK_TTL_DAYS` | Retain terminal asynchronous inbound A2A task projections for this many days (default: `7`; `0` keeps them indefinitely) |
 | `A2A_INBOUND_TASK_LEASE_SECONDS` | Lease duration before an inactive process's asynchronous inbound A2A task may be recovered (default: `60`) |
 | `A2A_INBOUND_TASK_RECOVERY_INTERVAL_SECONDS` | Interval for recovering expired asynchronous inbound A2A task leases (default: `30`) |
+| `A2A_TREASURY_DAILY_OUTFLOW_CAP_USDC` | Rolling 24h cap on treasury-signed x402 delegation payments in atomic USDC, including the platform fee (default: `5000000` = $5; `0` blocks all treasury-signed payments) |
 | `ORG_TOOL_EXECUTION_EVENTS_TTL_DAYS` | Retain executed/failed org-tool events for this many days (default: `90`; `0` keeps them indefinitely) |
 | `TELEMETRY_RUN_STARTS_TTL_DAYS` | Retain run-source completeness denominators for this many days (default: `120`; `0` keeps them indefinitely) |
 | `FUNNEL_TELEMETRY_ENABLED` | Count hits on public discovery surfaces as bounded hourly aggregates (default: `false`) |

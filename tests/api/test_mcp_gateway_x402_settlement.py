@@ -11,16 +11,17 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from x402.http import decode_payment_response_header
 
 import teardrop.config as config
 
 
-def _tools_call() -> dict:
+def _tools_call(tool_name: str = "calculate") -> dict:
     return {
         "jsonrpc": "2.0",
         "id": 9,
         "method": "tools/call",
-        "params": {"name": "calculate", "arguments": {"expression": "1+1"}},
+        "params": {"name": tool_name, "arguments": {"expression": "1+1"}},
     }
 
 
@@ -83,7 +84,7 @@ def _patch_billing(monkeypatch, *, tool_cost: int = 2_000):
     return mocks
 
 
-async def _post_paid_call(headers: dict[str, str]):
+async def _post_paid_call(headers: dict[str, str], tool_name: str = "calculate"):
     from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
     from tools.mcp_server import build_mcp_app, create_mcp_server
 
@@ -94,7 +95,7 @@ async def _post_paid_call(headers: dict[str, str]):
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            return await client.post("/tools/mcp", json=_tools_call(), headers=headers)
+            return await client.post("/tools/mcp", json=_tools_call(tool_name), headers=headers)
 
 
 @pytest.mark.asyncio
@@ -116,10 +117,37 @@ async def test_zero_cost_challenge_never_offers_upto(x402_gateway_env, monkeypat
     exact = SimpleNamespace(scheme="exact", network="eip155:8453", amount="10000")
     monkeypatch.setattr(billing, "get_payment_requirements", lambda: [upto, exact])
 
-    response = await _post_paid_call({"Accept": "application/json"})
+    response = await _post_paid_call({"Accept": "application/json"}, tool_name="delegate_to_agent")
 
     assert response.status_code == 402
     assert mocks.body["requirements"] == [exact]
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_zero_cost_tool_runs_free_for_anonymous_callers(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=0)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _post_paid_call({"Accept": "application/json", "X-PAYMENT": "signed-payment"})
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    mocks.verify.assert_not_awaited()
+    mocks.settle.assert_not_awaited()
+    mocks.record.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_free_tool_is_ip_rate_limited(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=0)
+    limiter = AsyncMock(return_value=(False, 0, 123))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", limiter)
+
+    response = await _post_paid_call({"Accept": "application/json"})
+
+    assert response.status_code == 429
+    assert limiter.await_args.args[0].startswith("mcp:ip:")
+    mocks.verify.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -130,6 +158,9 @@ async def test_verified_header_payment_settles_through_mounted_gateway(x402_gate
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
+    receipt = decode_payment_response_header(response.headers["payment-response"])
+    assert (receipt.transaction, receipt.amount, receipt.network) == ("0xtx", "2000", "eip155:8453")
+    assert response.headers["x-payment-response"] == response.headers["payment-response"]
     mocks.verify.assert_awaited_once_with("signed-payment", mocks.scoped)
     mocks.settle.assert_awaited_once()
     assert mocks.settle.await_args.kwargs["actual_cost_usdc"] == 2_000
@@ -154,6 +185,7 @@ async def test_unsettled_payment_withholds_tool_result(x402_gateway_env, monkeyp
     response = await _post_paid_call(headers)
 
     assert response.status_code == status
+    assert "payment-response" not in response.headers
     body = response.json()
     challenge = body if status == 402 else body["result"]["structuredContent"]
     assert "withheld" in challenge["error"]

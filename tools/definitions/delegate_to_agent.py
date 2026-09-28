@@ -175,6 +175,7 @@ async def delegate_to_agent(
     use_x402 = False
     delegation_cap_usdc = settings.a2a_delegation_max_cost_usdc
     estimated_cost = delegation_cap_usdc
+    not_allowed_error = f"Agent {agent_url} is not in your organisation's allowed agents list. Add it via POST /a2a/agents first."
 
     # ── Allowlist check (independent of billing) ─────────────────────────
     if org_id and db_pool:
@@ -191,14 +192,17 @@ async def delegate_to_agent(
                 "error": "Unable to verify the delegation allowlist. Try again later.",
                 "cost_usdc": 0,
             }
+        if agent_rule is not None and not allowed:
+            not_allowed_error = (
+                f"Agent {agent_url} is no longer listed in the marketplace registry, "
+                "so its self-serve allowlist entry is inactive."
+            )
         if not allowed and settings.a2a_delegation_require_allowlist:
             return {
                 "agent_name": "unknown",
                 "status": "failed",
                 "result": "",
-                "error": (
-                    f"Agent {agent_url} is not in your organisation's allowed agents list. Add it via POST /a2a/agents first."
-                ),
+                "error": not_allowed_error,
                 "cost_usdc": 0,
             }
 
@@ -220,9 +224,7 @@ async def delegate_to_agent(
                 "agent_name": "unknown",
                 "status": "failed",
                 "result": "",
-                "error": (
-                    f"Agent {agent_url} is not in your organisation's allowed agents list. Add it via POST /a2a/agents first."
-                ),
+                "error": not_allowed_error,
                 "cost_usdc": 0,
             }
 
@@ -232,6 +234,9 @@ async def delegate_to_agent(
 
         estimated_cost = apply_platform_fee(delegation_cap_usdc)
         use_x402 = bool(agent_rule and agent_rule.get("require_x402"))
+
+    # Upper bound for a signed x402 amount; the platform fee is charged on top, never paid out.
+    signing_cap_usdc = delegation_cap_usdc
 
     # ── Discover agent card ───────────────────────────────────────────────
     from teardrop.a2a_client import discover_agent_card, extract_result_text, send_message
@@ -270,6 +275,7 @@ async def delegate_to_agent(
                 }
 
             estimated_cost = apply_platform_fee(advertised_price_usdc)
+            signing_cap_usdc = advertised_price_usdc
 
         budget_err = await check_delegation_budget(
             org_id,
@@ -290,7 +296,7 @@ async def delegate_to_agent(
     # post-execution debit failure (e.g. a concurrent debit draining the
     # balance below the non-locking budget snapshot) cannot yield a free
     # delegation. The charge is refunded below if dispatch fails or the remote
-    # does not complete.
+    # does not complete, unless an x402 payment was already signed.
     cost_usdc = 0
     delegation_id = str(uuid.uuid4()) if billing_enabled else ""
     if billing_enabled:
@@ -331,13 +337,15 @@ async def delegate_to_agent(
 
     payment_attempted = False
 
-    async def _on_payment_attempt() -> None:
-        nonlocal payment_attempted
-        from billing import mark_delegation_possibly_delivered
+    async def _on_payment_attempt(signed_amount_usdc: int) -> None:
+        nonlocal payment_attempted, cost_usdc
+        from billing import apply_platform_fee, mark_delegation_possibly_delivered
 
-        if not await mark_delegation_possibly_delivered(org_id, delegation_id):
+        charge_usdc = apply_platform_fee(signed_amount_usdc)
+        if not await mark_delegation_possibly_delivered(org_id, delegation_id, charge_usdc):
             raise RuntimeError("Could not persist the x402 delivery state before dispatch.")
         payment_attempted = True
+        cost_usdc = charge_usdc
 
     async def _send_remote_message() -> Any:
         if use_x402:
@@ -351,7 +359,7 @@ async def delegate_to_agent(
                 signer=signer,
                 timeout=settings.a2a_delegation_timeout_seconds,
                 auth_header=auth_header_to_forward,
-                max_amount_atomic=estimated_cost,
+                max_amount_atomic=signing_cap_usdc,
                 allowed_networks=frozenset({settings.x402_network}),
                 payment_attempt_callback=_on_payment_attempt,
             )
@@ -423,24 +431,29 @@ async def delegate_to_agent(
         }
 
     # ── Extract result ────────────────────────────────────────────────────
-    task_state = "completed"
-    if response.task:
+    if response.task is None:
+        task_state = "failed"
+        state_error = "Remote agent returned a response that is not a valid A2A Task."
+        result_text = ""
+    else:
         task_state = response.task.status.state
-
-    result_text = extract_result_text(response)
+        state_error = f"Remote agent state: {task_state}"
+        result_text = extract_result_text(response)
     settlement_tx = getattr(response, "settlement_tx", "")
 
     # ── Post-delegation audit (charge already taken pre-dispatch) ──────────
     if billing_enabled and task_state == "completed":
         from billing import cancel_delegation_refund, record_delegation_event, refund_delegation
 
+        # An x402 row whose remote never demanded payment owes nothing; the worker refunds cost-0 completions.
+        unpaid_x402 = use_x402 and not payment_attempted
         audit_recorded = await record_delegation_event(
             org_id=org_id,
             run_id=run_id,
             agent_url=recorded_agent_url,
             agent_name=card.name,
             task_status=task_state,
-            cost_usdc=cost_usdc,
+            cost_usdc=0 if unpaid_x402 else cost_usdc,
             billing_method="x402" if use_x402 else "credit",
             settlement_tx=settlement_tx,
             task_type=task_type,
@@ -475,7 +488,7 @@ async def delegate_to_agent(
                 "error": "Delegation audit could not be recorded; pre-debit refunded.",
                 "cost_usdc": 0,
             }
-        if use_x402:
+        if use_x402 and payment_attempted:
             from billing import confirm_delegation_delivery
 
             if not await confirm_delegation_delivery(org_id, delegation_id, settlement_tx):
@@ -484,10 +497,41 @@ async def delegate_to_agent(
                     org_id,
                     delegation_id,
                 )
+        elif unpaid_x402:
+            refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+            cost_usdc = 0
+            if not refund_completed:
+                logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)
         elif not await cancel_delegation_refund(org_id, delegation_id):
             logger.error("delegate_to_agent: completion cancel queued for retry org=%s delegation=%s", org_id, delegation_id)
+    elif billing_enabled and use_x402 and payment_attempted:
+        # The seller holds a signed payment it can settle regardless of the reported state,
+        # so a refund here would be paid out of the treasury; hold for operator reconciliation.
+        from billing import record_delegation_event
+
+        await record_delegation_event(
+            org_id=org_id,
+            run_id=run_id,
+            agent_url=recorded_agent_url,
+            agent_name=card.name,
+            task_status="possibly_delivered",
+            cost_usdc=cost_usdc,
+            billing_method="x402",
+            settlement_tx=settlement_tx,
+            error=state_error,
+            task_type=task_type,
+            delegation_id=delegation_id,
+            failure_origin="remote",
+        )
+        return {
+            "agent_name": card.name,
+            "status": "possibly_delivered",
+            "result": result_text,
+            "error": f"{state_error} x402 payment was signed; operator reconciliation is required before refunding.",
+            "cost_usdc": cost_usdc,
+        }
     elif billing_enabled:
-        # Remote agent did not complete — refund the pre-debit.
+        # Remote agent did not complete and no payment was signed — refund the pre-debit.
         from billing import record_delegation_event, refund_delegation
 
         await record_delegation_event(
@@ -499,21 +543,12 @@ async def delegate_to_agent(
             cost_usdc=0,
             billing_method="x402" if use_x402 else "credit",
             settlement_tx=settlement_tx,
-            error=f"Remote agent state: {task_state}",
+            error=state_error,
             task_type=task_type,
             delegation_id=delegation_id,
             failure_origin="remote",
         )
-        if use_x402 and payment_attempted:
-            from billing import fail_delegation_delivery
-
-            refund_completed = await fail_delegation_delivery(
-                org_id,
-                delegation_id,
-                f"Remote agent state: {task_state}",
-            )
-        else:
-            refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
+        refund_completed = await refund_delegation(org_id, cost_usdc, run_id, delegation_id)
         cost_usdc = 0
         if not refund_completed:
             logger.error("delegate_to_agent: refund queued for retry org=%s delegation=%s", org_id, delegation_id)
@@ -522,7 +557,7 @@ async def delegate_to_agent(
         "agent_name": card.name,
         "status": task_state,
         "result": result_text,
-        "error": None if task_state in ("completed",) else f"Remote agent state: {task_state}",
+        "error": None if task_state == "completed" else state_error,
         "cost_usdc": cost_usdc,
     }
 
