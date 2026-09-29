@@ -17,7 +17,6 @@ async def test_promotional_credit_cannot_execute_marketplace_tool(api_client, te
     monkeypatch.setattr(test_settings, "billing_enabled", True)
     monkeypatch.setattr(test_settings, "onboarding_credit_enabled", True)
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.get_settings", lambda: test_settings)
-    monkeypatch.setattr("teardrop.routers.marketplace_mcp.check_org_subscription", AsyncMock(return_value=True))
     monkeypatch.setattr("teardrop.routers.marketplace_mcp.is_promotional_credit", AsyncMock(return_value=True))
     execute_mock = AsyncMock()
     debit_mock = AsyncMock()

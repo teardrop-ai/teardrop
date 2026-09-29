@@ -153,9 +153,10 @@ curl -X POST https://api.teardrop.ai/marketplace/import/publish \
 Imported tools are published immediately as ordinary marketplace listings. This
 MCP import publish operation remains organization-admin-only. Agents can
 register their own webhook-backed tools with `POST /tools` after configuring
-their SIWE-owned settlement wallet. Buyers
-subscribe to them exactly the same way they subscribe to webhook-backed community
-tools; the backing transport is transparent to the buyer.
+their SIWE-owned settlement wallet. Buyers call them over `POST /mcp/v1` without
+a subscription, exactly like webhook-backed community tools; the backing transport
+is transparent to the buyer. Calling your own tool there is rejected; use the
+unbilled test routes below.
 
 ### 3A.4 Test a Tool Before Publishing (Optional but Recommended)
 
@@ -196,7 +197,7 @@ schema mismatches before your listing goes live.
 Create your webhook-backed tool via `POST /tools`.  The `input_schema` field
 must be a valid JSON Schema object describing the tool's parameters. Published
 marketplace tools also need an `output_schema` so callers and SDKs can render the
-result contract before subscribing.
+result contract before calling.
 
 ```bash
 curl -X POST https://api.teardrop.ai/tools \
@@ -268,13 +269,13 @@ If you used the MCP import flow in Step 3A, this patch step is not required beca
 `POST /marketplace/import/publish` already created a published marketplace tool row.
 
 > Soft-deleting (`DELETE /tools/<id>`) a published tool automatically
-> deactivates all subscriber subscriptions so callers are not left with
-> a broken reference.
+> removes it from every org's pinned (`/marketplace/subscriptions`) tools so
+> `/agent/run` callers are not left with a broken reference.
 
 ### Health & Auto-Deactivation
 
 Teardrop monitors the health of every published marketplace tool and protects
-both you and your subscribers from misbehaving upstream endpoints:
+both you and your callers from misbehaving upstream endpoints:
 
 - **Failed calls are not billed.** When a webhook or MCP-backed tool times out,
   returns invalid data, returns HTTP 4xx/5xx, or fails credential handling,
@@ -282,9 +283,9 @@ both you and your subscribers from misbehaving upstream endpoints:
   that call.
 - **Automatic deactivation (circuit breaker).** If the backing webhook or MCP
   server tool fails 5 or more times within a 10-minute window, the listing is automatically
-  deactivated and removed from the marketplace catalog. All active
-  subscriptions are cancelled and an email notification is sent to each
-  subscriber org's admins/owners.
+  deactivated and removed from the marketplace catalog. All pins are removed
+  and an email notification is sent to the admins/owners of each org that
+  pinned the tool.
 - **Manual re-enable required.** Auto-deactivated tools do **not** recover
   on their own. After fixing your upstream service, re-enable the tool by sending
   `PATCH /tools/<tool-id>` with `{"is_active": true}`. The failure counter
@@ -296,7 +297,7 @@ both you and your subscribers from misbehaving upstream endpoints:
 - **Server disable/delete cascade.** If you soft-delete an MCP server
   (`DELETE /mcp/servers/<id>`) or disable it (`PATCH /mcp/servers/<id>` with
   `{"is_active": false}`), every marketplace listing backed by that server is
-  automatically deactivated. Subscribers are notified via email. Re-enabling the
+  automatically deactivated. Orgs that pinned them are notified via email. Re-enabling the
   server does **not** auto-reactivate tools — you must re-enable each tool
   manually via `PATCH /tools/<tool-id>` with `{"is_active": true}`.
 

@@ -97,7 +97,22 @@ The zero-cost tools `calculate`, `get_datetime`, `count_text_stats`, and `discov
 
 `/tools/mcp` accepts x402 over both transports. HTTP clients send `Payment-Signature`/`X-Payment` and receive a bare `402` with the `PAYMENT-REQUIRED` header. MCP clients (requests with `MCP-Protocol-Version` or an `Accept` that includes `text/event-stream`) receive a `200` JSON-RPC result with `isError: true` and the `PaymentRequired` object in `structuredContent`, then pay by retrying with `params._meta["x402/payment"]`. Settled `_meta` payments return the receipt in `result._meta["x402/payment-response"]`. Every settled x402 call, on either transport, also returns the base64 `SettleResponse` receipt in the `PAYMENT-RESPONSE` header (with a legacy `X-PAYMENT-RESPONSE` alias). Callers without x402 can instead use a Bearer token from `POST /token` for prepaid credits.
 
-The public `/tools/mcp` `tools/list` exposes platform-tool reputation as an `Observed quality:` description suffix for LLM clients and a structured `_meta["teardrop/reputation"]` object for programmatic clients. The authenticated, credit-backed marketplace gateway (`POST /mcp/v1` `tools/list`) uses the same format for platform and published org tools. It lists platform tools once, by bare name; `tools/call` also accepts the catalog's `platform/{tool_name}` form. Metrics include `reputation_score`, `success_rate`, `sample_size`, `confidence`, `freshness`, `average_latency_ms`, and privacy-thresholded `unique_caller_count`. Unrated tools omit the quality suffix and metadata; absence means "unrated", not zero. For a bulk index, use `GET /.well-known/reputation.json`.
+The public `/tools/mcp` `tools/list` exposes platform-tool reputation as an `Observed quality:` description suffix for LLM clients and a structured `_meta["teardrop/reputation"]` object for programmatic clients. The authenticated, credit-backed marketplace gateway (`POST /mcp/v1` `tools/list`) uses the same format for platform and published org tools. It lists platform tools once, by bare name; `tools/call` also accepts the catalog's `platform/{tool_name}` form. Metrics include `reputation_score`, `success_rate`, `sample_size`, `confidence`, `freshness`, `average_latency_ms`, and privacy-thresholded `unique_caller_count`. Unrated tools omit the quality suffix and reputation metadata; absence means "unrated", not zero. For a bulk index, use `GET /.well-known/reputation.json`.
+
+`/tools/mcp` serves platform tools only; `tools/call` with a community name (`{org_slug}/{tool_name}`) returns JSON-RPC `-32601` pointing to `/mcp/v1`. The MCP server card lists the same platform tools and, when the marketplace is enabled, advertises `marketplace.mcp_url` for community tools.
+
+#### `/mcp/v1` marketplace gateway
+
+Community tools are callable over `POST /mcp/v1` with a Bearer token and funded credit; no subscription is required. Every `tools/list` entry carries `_meta["teardrop/price"] = {"cost_usdc": <atomic USDC>, "unit": "call"}`, resolved exactly as `tools/call` bills it. A caller may bound a call with `params._meta["teardrop/max_cost_usdc"]` (non-negative integer, atomic USDC); the charged amount never exceeds it. Org and principal pause and 24-hour caps still apply, and the per-org MCP rate limit is shared with `/tools/mcp`. Arguments are validated against the tool's input schema before billing. Rejected, failed, and unaffordable calls are not charged.
+
+| JSON-RPC code | Meaning |
+|---------------|---------|
+| `-32000` | Credit check failed; the message includes funding guidance |
+| `-32003` | Promotional credit cannot pay community authors |
+| `-32004` | Price exceeds `max_cost_usdc` |
+| `-32005` | Authors cannot call their own tool; use `POST /tools/test-webhook` |
+| `-32601` | Tool not found or unpublished |
+| `-32602` | Invalid arguments or `max_cost_usdc` |
 
 ### Marketplace
 
@@ -122,9 +137,9 @@ The public `/tools/mcp` `tools/list` exposes platform-tool reputation as an `Obs
 | `GET` | `/marketplace/earnings/by-tool` | Bearer | Author earnings grouped by tool |
 | `POST` | `/marketplace/withdraw` | Admin or machine-org owning-SIWE Bearer | Request an author payout to the configured settlement wallet; non-admins require an owning SIWE wallet and server-set `acquisition_source` of `siwe` or `x402`; client credentials cannot withdraw |
 | `GET` | `/marketplace/withdrawals` | Bearer | Withdrawal history |
-| `POST` | `/marketplace/subscriptions` | Bearer | Subscribe to a community marketplace tool |
-| `GET` | `/marketplace/subscriptions` | Bearer | List active marketplace subscriptions |
-| `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unsubscribe from a marketplace tool |
+| `POST` | `/marketplace/subscriptions` | Bearer | Pin a community tool into the org's `/agent/run` tool set (not required for `/mcp/v1`) |
+| `GET` | `/marketplace/subscriptions` | Bearer | List pinned community tools |
+| `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unpin a community tool |
 
 `GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `cost_usdc` is the effective per-call price exactly as billed by `/agent/run`, `/mcp/v1`, `/tools/mcp`, and `GET /marketplace/quote`; price sorting uses the listed price before admin overrides. `output_schema` is the tool's declared result schema, or `null`. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats; `reputation_score` and `success_rate` are `null` for unrated tools (absence means "unrated", not zero). `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
 

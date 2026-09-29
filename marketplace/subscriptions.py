@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: BUSL-1.1
 # Copyright (c) 2026 Teardrop AI. All rights reserved.
-"""Marketplace subscription CRUD, cache, and LangChain wrappers."""
+"""Marketplace subscription (pin) CRUD and LangChain wrappers.
+
+Subscriptions pin community tools into ``/agent/run``; direct MCP calls do not require them.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -16,7 +18,6 @@ from langchain_core.tools import StructuredTool
 from marketplace.catalog import PLATFORM_SLUG, get_marketplace_tool_by_name
 from marketplace.context import _get_pool
 from marketplace.models import MarketplaceSubscription, MarketplaceTool
-from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +32,6 @@ class SelfSubscribeError(ValueError):
     def __init__(self, qualified_tool_name: str) -> None:
         super().__init__(f"Cannot subscribe to your own published tool: {qualified_tool_name}")
         self.qualified_tool_name = qualified_tool_name
-
-
-_SUBSCRIPTION_CACHE: dict[str, tuple[frozenset[str], float]] = {}
-
-
-def _invalidate_subscription_cache(org_id: str) -> None:
-    """Drop the cached subscription set for org_id."""
-    _SUBSCRIPTION_CACHE.pop(org_id, None)
 
 
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
@@ -85,7 +78,6 @@ async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> Marketplac
     except Exception:
         raise ValueError(f"Failed to subscribe to {qualified_tool_name}")
 
-    _invalidate_subscription_cache(org_id)
     return MarketplaceSubscription(
         id=sub_id,
         org_id=org_id,
@@ -104,7 +96,6 @@ async def unsubscribe_from_tool(subscription_id: str, org_id: str) -> bool:
         subscription_id,
         org_id,
     )
-    _invalidate_subscription_cache(org_id)
     return result.split()[-1] != "0"
 
 
@@ -185,19 +176,6 @@ async def get_subscribed_tools_catalog(
         )
 
     return catalog
-
-
-async def check_org_subscription(org_id: str, qualified_tool_name: str) -> bool:
-    """Return True when org_id holds an active subscription to qualified_tool_name."""
-    now = time.monotonic()
-    cached = _SUBSCRIPTION_CACHE.get(org_id)
-    if cached is not None and now < cached[1]:
-        return qualified_tool_name in cached[0]
-    subs = await get_org_subscriptions(org_id)
-    names = frozenset(s.qualified_tool_name for s in subs)
-    ttl = get_settings().org_tools_cache_ttl_seconds
-    _SUBSCRIPTION_CACHE[org_id] = (names, now + ttl)
-    return qualified_tool_name in names
 
 
 async def build_subscribed_marketplace_tools(

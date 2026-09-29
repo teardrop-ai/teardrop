@@ -58,7 +58,6 @@ MARKETPLACE_IMPORT_SURFACE = [
     "_build_catalog_cursor",
     "_marketplace_sweep_loop",
     "build_subscribed_marketplace_tools",
-    "check_org_subscription",
     "close_marketplace_db",
     "complete_withdrawal",
     "get_author_balance",

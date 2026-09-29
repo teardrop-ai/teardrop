@@ -7,7 +7,7 @@
     "max_duration_ms": 12000,
     "max_cost_usdc": 500000,
     "scorer": "llm_judge",
-    "rubric": "Explains that platform tools appear in the Teardrop marketplace catalog and are accessible without a subscription. Must not claim that subscriptions are required for platform tools. Org tools require subscriptions; platform tools do not."
+    "rubric": "Explains that platform tools appear in the Teardrop marketplace catalog and are accessible without a subscription. Must not claim that subscriptions are required to call platform or community tools over MCP. Subscriptions only pin community tools into /agent/run."
   },
   {
     "id": "marketplace.catalog.001",

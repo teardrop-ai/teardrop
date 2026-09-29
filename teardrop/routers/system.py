@@ -15,7 +15,6 @@ from pydantic import BaseModel
 
 from billing import build_402_response_body
 from marketplace.reputation import get_public_reputation_snapshot
-from org_tools import list_marketplace_tools
 from shared.db_pool import PgPool
 from teardrop._meta import APP_VERSION
 from teardrop.cache import get_redis
@@ -728,25 +727,8 @@ async def mcp_server_card(request: Request) -> Response:
     tools = registry.to_mcp_server_card_tools(snapshot["tools"])
     description = _mcp_server_description()
 
-    # Include published marketplace tools
     s = get_settings()
     base_url = _public_base_url(request, s)
-    if s.marketplace_enabled:
-        try:
-            mp_tools = await list_marketplace_tools()
-            for mt in mp_tools:
-                mt_entry: dict[str, Any] = {
-                    "name": mt.name,
-                    "title": mt.name.replace("_", " ").title(),
-                    "description": mt.marketplace_description or mt.description,
-                    "inputSchema": mt.input_schema,
-                    "annotations": {"openWorldHint": True},
-                }
-                if mt.output_schema is not None:
-                    mt_entry["outputSchema"] = mt.output_schema
-                tools.append(mt_entry)
-        except Exception:
-            logger.debug("Failed to load marketplace tools for server card", exc_info=True)
 
     server_info: dict[str, Any] = {
         "name": "teardrop-tools",
@@ -767,6 +749,12 @@ async def mcp_server_card(request: Request) -> Response:
         "resources": [],
         "prompts": [],
     }
+    if s.marketplace_enabled:
+        # Community tools are a separate server; the card's `tools` lists only what /tools/mcp serves.
+        content["marketplace"] = {
+            "mcp_url": f"{base_url}/mcp/v1",
+            "authentication": {"required": True, "schemes": ["bearer"]},
+        }
     if s.mcp_x402_enabled:
         # Additive so registry consumers that only know bearer keep parsing the card.
         content["authentication"]["schemes"].append("x402")

@@ -1055,7 +1055,7 @@ class TestMarketplaceSubscriptionRouter:
         assert result is False
 
 
-# ─── get_org_subscriptions / check_org_subscription ──────────────────────────
+# ─── get_org_subscriptions ──────────────────────────────────────────────────────
 
 
 @pytest.mark.anyio
@@ -1068,28 +1068,6 @@ class TestOrgSubscriptions:
         monkeypatch.setattr("marketplace._pool", mock_pool)
         result = await get_org_subscriptions("org-1")
         assert result == []
-
-    async def test_check_subscription_cache_hit(self, monkeypatch):
-        import time
-
-        import marketplace as mp
-        from marketplace import check_org_subscription
-
-        names = frozenset(["acme/weather"])
-        monkeypatch.setitem(mp._SUBSCRIPTION_CACHE, "org-1", (names, time.monotonic() + 9999))
-        result = await check_org_subscription("org-1", "acme/weather")
-        assert result is True
-
-    async def test_check_subscription_cache_miss(self, monkeypatch):
-        import marketplace as mp
-        from marketplace import check_org_subscription
-
-        mp._SUBSCRIPTION_CACHE.pop("org-99", None)
-        mock_pool = MagicMock()
-        mock_pool.fetch = AsyncMock(return_value=[])
-        monkeypatch.setattr(mp, "_pool", mock_pool)
-        result = await check_org_subscription("org-99", "acme/weather")
-        assert result is False
 
 
 # ─── get_platform_tool_price ──────────────────────────────────────────────────

@@ -645,16 +645,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         method:
 
         * x402 callers — return the pending tuple so the post-response hook can
-          settle on-chain via ``settle_payment``. No credit verification or
-          subscription gate applies (access is payment-gated, not org-gated).
-        * credit callers — enforce the marketplace subscription gate and verify
-          the org's credit balance before allowing execution.
+          settle on-chain via ``settle_payment``. No credit verification
+          applies (access is payment-gated, not org-gated).
+        * credit callers — redirect community tool names to ``/mcp/v1`` and
+          verify the org's credit balance before allowing execution.
 
         Returns:
             None — billing disabled or not a billable ``tools/call`` request.
             tuple(org_id, tool_cost, tool_name, req_id) — ready for post-settle.
                 ``org_id`` is None for anonymous x402 callers.
-            Response — billing rejected (subscription or insufficient credits).
+            Response — billing rejected (wrong endpoint or insufficient credits).
         """
         settings = get_settings()
         if not settings.mcp_billing_enabled:
@@ -693,9 +693,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         tool_cost = await self._resolve_tool_cost(tool_name)
 
-        # x402 callers are billed via on-chain settlement after execution. The
-        # subscription gate and credit verification are credit-rail concepts and
-        # do not apply to anonymous per-call x402 payments.
+        # x402 callers are billed via on-chain settlement after execution.
+        # Credit verification is a credit-rail concept and does not apply to
+        # anonymous per-call x402 payments.
         if is_x402:
             from billing import release_payment_nonce, reserve_payer_spend
 
@@ -749,20 +749,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 ),
             )
 
-        # Subscription gate: marketplace tools require an active subscription.
-        if "/" in tool_name and settings.marketplace_enabled:
-            from marketplace import check_org_subscription
-
-            if not await check_org_subscription(org_id, tool_name):
-                logger.info("mcp subscription check failed org_id=%s tool=%s", org_id, tool_name)
-                return JSONResponse(
-                    status_code=403,
-                    content=_jsonrpc_error(
-                        req_id,
-                        -32001,
-                        f"Not subscribed to marketplace tool '{tool_name}'. Subscribe via POST /marketplace/subscriptions.",
-                    ),
-                )
+        # This server only registers registry tools; community tools live on /mcp/v1.
+        if "/" in tool_name and not tool_name.startswith("platform/"):
+            return JSONResponse(
+                status_code=404,
+                content=_jsonrpc_error(
+                    req_id,
+                    -32601,
+                    f"Community marketplace tool '{tool_name}' is served at POST /mcp/v1.",
+                ),
+            )
 
         billing = await verify_credit(
             org_id,

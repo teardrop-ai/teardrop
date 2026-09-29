@@ -11,4 +11,4 @@ dependency-free module lets routers reference the value without importing
 
 from __future__ import annotations
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"

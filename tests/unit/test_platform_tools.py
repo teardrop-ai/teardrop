@@ -802,7 +802,7 @@ class TestWeb3MarketplaceToolsMigration046:
 
 
 class TestMCPBillingGateQualifiedMarketplaceTools:
-    async def test_qualified_tool_billed_at_author_price(self, billing_client, test_jwt_token):
+    async def test_qualified_tool_redirected_to_mcp_v1_unbilled(self, billing_client, test_jwt_token):
         body = json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -817,18 +817,8 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                 patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
                 patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
                 patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
-                patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
-                patch(
-                    "billing.verify_credit",
-                    new_callable=AsyncMock,
-                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
-                ) as mock_verify,
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 5000)) as mock_debit,
-                patch(
-                    "marketplace.get_marketplace_tool_by_name",
-                    new_callable=AsyncMock,
-                    return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-                ),
+                patch("billing.verify_credit", new_callable=AsyncMock) as mock_verify,
+                patch("billing.debit_credit", new_callable=AsyncMock) as mock_debit,
             ):
                 resp = await client.post(
                     "/tools/mcp",
@@ -839,49 +829,33 @@ class TestMCPBillingGateQualifiedMarketplaceTools:
                     },
                 )
 
-        assert resp.status_code == 200
-        mock_verify.assert_awaited_once_with("test-org-id", 5000, principal_id="test-user-id")
+        assert resp.status_code == 404
+        assert resp.json()["error"]["code"] == -32601
+        assert "/mcp/v1" in resp.json()["error"]["message"]
+        mock_verify.assert_not_awaited()
         mock_debit.assert_not_awaited()
-        assert resp.json()["result"]["isError"] is True
 
-    async def test_qualified_tool_bare_override_wins(self, billing_client, test_jwt_token):
-        body = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "id": 3,
-                "params": {"name": "acme/weather", "arguments": {"city": "Paris"}},
-            }
-        )
+    async def test_qualified_tool_priced_at_author_price(self, test_settings):
+        from teardrop.mcp_gateway import MCPGatewayMiddleware
 
-        async with billing_client() as client:
-            with (
-                patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}),
-                patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
-                patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
-                patch("marketplace.check_org_subscription", new_callable=AsyncMock, return_value=True),
-                patch(
-                    "billing.verify_credit",
-                    new_callable=AsyncMock,
-                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
-                ) as mock_verify,
-                patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 9000)),
-                patch(
-                    "marketplace.get_marketplace_tool_by_name",
-                    new_callable=AsyncMock,
-                    return_value={"org_id": "author-org", "name": "weather", "base_price_usdc": 5000},
-                ),
-            ):
-                _ = await client.post(
-                    "/tools/mcp",
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {test_jwt_token}",
-                    },
-                )
+        with (
+            patch("teardrop.mcp_gateway.get_settings", return_value=MagicMock(marketplace_enabled=True)),
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+        ):
+            assert await MCPGatewayMiddleware._resolve_tool_cost("acme/weather") == 5000
 
-        mock_verify.assert_called_once_with("test-org-id", 9000, principal_id="test-user-id")
+    async def test_qualified_tool_bare_override_wins(self, test_settings):
+        from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+        with (
+            patch("teardrop.mcp_gateway.get_settings", return_value=MagicMock(marketplace_enabled=True)),
+            patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={"weather": 9000}),
+            patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+            patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
+        ):
+            assert await MCPGatewayMiddleware._resolve_tool_cost("acme/weather") == 9000
 
     # ── is_active soft-delete ─────────────────────────────────────────────
 

@@ -84,10 +84,8 @@ _SUBSCRIBE_TO_TOOL_ORIG = _subscriptions.subscribe_to_tool
 _UNSUBSCRIBE_FROM_TOOL_ORIG = _subscriptions.unsubscribe_from_tool
 _GET_ORG_SUBSCRIPTIONS_ORIG = _subscriptions.get_org_subscriptions
 _GET_SUBSCRIBED_TOOLS_CATALOG_ORIG = _subscriptions.get_subscribed_tools_catalog
-_CHECK_ORG_SUBSCRIPTION_ORIG = _subscriptions.check_org_subscription
 _BUILD_SUBSCRIBED_MARKETPLACE_TOOLS_ORIG = _subscriptions.build_subscribed_marketplace_tools
 _BUILD_MARKETPLACE_LANGCHAIN_TOOL_ORIG = _subscriptions._build_marketplace_langchain_tool
-_INVALIDATE_SUBSCRIPTION_CACHE_ORIG = _subscriptions._invalidate_subscription_cache
 
 _REQUEST_WITHDRAWAL_ORIG = _withdrawals.request_withdrawal
 _PROCESS_WITHDRAWAL_ORIG = _withdrawals.process_withdrawal
@@ -110,7 +108,6 @@ _REPUTATION_ROLLUP_ONCE_ORIG = _worker.reputation_rollup_once
 
 # Root-level mutable compatibility state patched by tests.
 _pool: PgPool | None = _ctx._pool
-_SUBSCRIPTION_CACHE = _subscriptions._SUBSCRIPTION_CACHE
 PLATFORM_SLUG = _catalog.PLATFORM_SLUG
 PlatformToolSubscriptionError = _subscriptions.PlatformToolSubscriptionError
 SelfSubscribeError = _subscriptions.SelfSubscribeError
@@ -128,7 +125,6 @@ def _sync_to_modules() -> None:
     _worker._get_pool = _get_pool
 
     _earnings.get_settings = get_settings
-    _subscriptions.get_settings = get_settings
     _withdrawals.get_settings = get_settings
     _worker.get_settings = get_settings
     _agents.get_settings = get_settings
@@ -420,7 +416,7 @@ async def record_run_feedback(
 
 
 async def subscribe_to_tool(org_id: str, qualified_tool_name: str) -> MarketplaceSubscription:
-    """Subscribe an org to a community tool (``org_slug/tool_name``), enabling billed calls."""
+    """Pin a community tool (``org_slug/tool_name``) into the org's ``/agent/run`` tool set."""
     return await _call_async(_SUBSCRIBE_TO_TOOL_ORIG, org_id, qualified_tool_name)
 
 
@@ -443,11 +439,6 @@ async def get_subscribed_tools_catalog(
     return await _call_async(_GET_SUBSCRIBED_TOOLS_CATALOG_ORIG, org_id, tool_overrides, default_tool_cost)
 
 
-async def check_org_subscription(org_id: str, qualified_tool_name: str) -> bool:
-    """Return True if the org has an active subscription to the given community tool."""
-    return await _call_async(_CHECK_ORG_SUBSCRIPTION_ORIG, org_id, qualified_tool_name)
-
-
 async def build_subscribed_marketplace_tools(org_id: str) -> tuple[list, dict[str, Any]]:
     """Build LangChain tool objects (plus price metadata) for the org's subscribed tools."""
     return await _call_async(_BUILD_SUBSCRIBED_MARKETPLACE_TOOLS_ORIG, org_id)
@@ -455,10 +446,6 @@ async def build_subscribed_marketplace_tools(org_id: str) -> tuple[list, dict[st
 
 def _build_marketplace_langchain_tool(tool_row: dict[str, Any], qualified_name: str):
     return _call_sync(_BUILD_MARKETPLACE_LANGCHAIN_TOOL_ORIG, tool_row, qualified_name)
-
-
-def _invalidate_subscription_cache(org_id: str) -> None:
-    _call_sync(_INVALIDATE_SUBSCRIPTION_CACHE_ORIG, org_id)
 
 
 async def request_withdrawal(org_id: str, amount_usdc: int) -> AuthorWithdrawal:
@@ -620,9 +607,6 @@ __all__ = [
     "unsubscribe_from_tool",
     "get_org_subscriptions",
     "get_subscribed_tools_catalog",
-    "_SUBSCRIPTION_CACHE",
-    "_invalidate_subscription_cache",
-    "check_org_subscription",
     "build_subscribed_marketplace_tools",
     "_build_marketplace_langchain_tool",
     "request_withdrawal",

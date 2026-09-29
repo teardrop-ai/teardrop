@@ -4,15 +4,15 @@
 
 Implements the MCP Streamable HTTP JSON-RPC 2.0 endpoint that exposes both
 built-in platform tools and published marketplace tools to external MCP clients.
-Extracted verbatim from ``teardrop.routers.marketplace`` with no logic changes;
-billing (credit-only gate), x402-free credit debit, SSRF validation, circuit
-breaker, subscription gating, and author-earnings semantics are preserved exactly.
+Billing is credit-only. Community tools need no subscription; subscriptions only
+pin tools into ``/agent/run``.
 
 Methods handled by ``mcp_jsonrpc_handler``:
   * ``initialize`` – server capabilities / protocol version
-  * ``tools/list`` – marketplace catalog + built-in tools with pricing
-  * ``tools/call`` – subscription gate → credit billing gate → execute → debit →
-    record author earnings + usage stats
+  * ``tools/list`` – marketplace catalog + built-in tools with ``_meta`` price
+  * ``tools/call`` – self-call/promo guards → argument validation → optional
+    caller price cap → credit billing gate → execute → debit → record author
+    earnings + usage stats
 
 Marketplace tool webhooks are invoked by ``_execute_marketplace_tool``, which
 applies ``async_validate_url`` (SSRF guard) before every outbound request.
@@ -41,7 +41,6 @@ from billing import (
 )
 from marketplace import (
     PLATFORM_SLUG,
-    check_org_subscription,
     get_marketplace_catalog,
     get_marketplace_tool_by_name,
     record_marketplace_tool_usage_many,
@@ -54,10 +53,19 @@ from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.executor import execute_tool
 from tools.registry import build_reputation_meta, format_mcp_quality_description
+from tools.schema import build_pydantic_model
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Atomic USDC (6 decimals) per call; resolved by the same resolver tools/call bills with.
+MCP_PRICE_META_KEY = "teardrop/price"
+MCP_MAX_COST_META_KEY = "teardrop/max_cost_usdc"
+
+
+def _tool_meta(metrics: dict[str, Any] | None, cost_usdc: int) -> dict[str, Any]:
+    return {**(build_reputation_meta(metrics) or {}), MCP_PRICE_META_KEY: {"cost_usdc": int(cost_usdc), "unit": "call"}}
 
 
 # ─── MCP Marketplace – JSON-RPC Handler ─────────────────────────────────────
@@ -224,6 +232,13 @@ async def mcp_jsonrpc_handler(
         s.rate_limit_mcp_rpm,
         detail="MCP rate limit exceeded.",
     )
+    if org_id:
+        # Shared bucket with the /tools/mcp gateway so multi-principal orgs cannot fan out.
+        await _enforce_rate_limit(
+            f"mcp:org:{org_id}",
+            s.rate_limit_org_mcp_rpm,
+            detail="Organization MCP rate limit exceeded.",
+        )
 
     try:
         body = await request.json()
@@ -276,28 +291,26 @@ async def mcp_jsonrpc_handler(
             if t.tool_type == "platform":
                 continue
             metrics = reputation.get(t.qualified_name)
-            entry: dict[str, Any] = {
-                "name": t.qualified_name,
-                "description": format_mcp_quality_description(t.marketplace_description, metrics),
-                "inputSchema": t.input_schema,
-            }
-            meta = build_reputation_meta(metrics)
-            if meta is not None:
-                entry["_meta"] = meta
-            tools_list.append(entry)
+            tools_list.append(
+                {
+                    "name": t.qualified_name,
+                    "description": format_mcp_quality_description(t.marketplace_description, metrics),
+                    "inputSchema": t.input_schema,
+                    "_meta": _tool_meta(metrics, t.cost_usdc),
+                }
+            )
 
         # Include built-in tools as well
         for bt in registry.list_latest():
             metrics = reputation.get(f"platform/{bt.name}")
-            entry = {
-                "name": bt.name,
-                "description": format_mcp_quality_description(bt.description, metrics),
-                "inputSchema": bt.input_schema.model_json_schema(),
-            }
-            meta = build_reputation_meta(metrics)
-            if meta is not None:
-                entry["_meta"] = meta
-            tools_list.append(entry)
+            tools_list.append(
+                {
+                    "name": bt.name,
+                    "description": format_mcp_quality_description(bt.description, metrics),
+                    "inputSchema": bt.input_schema.model_json_schema(),
+                    "_meta": _tool_meta(metrics, await resolve_tool_cost(bt.name, overrides, default_cost, True)),
+                }
+            )
 
         return JSONResponse(content=_jsonrpc_result(req_id, {"tools": tools_list}))
 
@@ -319,45 +332,29 @@ async def mcp_jsonrpc_handler(
         else:
             tool_org_slug, actual_tool_name = "", tool_name
 
-        # Subscription gate: marketplace tools require an active subscription.
-        if is_marketplace_tool:
-            if not await check_org_subscription(org_id, tool_name):
-                logger.info("mcp/v1 subscription check failed org_id=%s tool=%s", org_id, tool_name)
-                return JSONResponse(
-                    content=_jsonrpc_error(
-                        req_id,
-                        -32001,
-                        f"Not subscribed to marketplace tool '{tool_name}'. Subscribe via POST /marketplace/subscriptions.",
-                    )
-                )
-
-            # Verified-email promotional credit cannot be used to generate
-            # marketplace author earnings through this direct JSON-RPC route.
-            if s.billing_enabled and s.onboarding_credit_enabled and await is_promotional_credit(org_id):
-                logger.info("mcp/v1 promotional credit blocked marketplace tool org_id=%s tool=%s", org_id, tool_name)
-                return JSONResponse(
-                    content=_jsonrpc_error(
-                        req_id,
-                        -32003,
-                        "Marketplace author tools require a funded credit balance.",
-                    ),
-                    status_code=403,
-                )
-
-        # Determine tool cost only after marketplace access restrictions have
-        # passed. Built-in tools have no such gate and follow the same pricing
-        # resolution path.
-        overrides = await get_tool_pricing_overrides()
-        pricing = await get_current_pricing()
-        default_cost = pricing.tool_call_cost if pricing else 0
-
-        # Same resolver as /agent/run, /tools/mcp and the public catalog; settled before verify_credit.
-        tool_cost = await resolve_tool_cost(tool_name, overrides, default_cost, True)
+        # Verified-email promotional credit cannot be used to generate
+        # marketplace author earnings through this direct JSON-RPC route.
+        if is_marketplace_tool and s.billing_enabled and s.onboarding_credit_enabled and await is_promotional_credit(org_id):
+            logger.info("mcp/v1 promotional credit blocked marketplace tool org_id=%s tool=%s", org_id, tool_name)
+            return JSONResponse(
+                content=_jsonrpc_error(
+                    req_id,
+                    -32003,
+                    "Marketplace author tools require a funded credit balance.",
+                ),
+                status_code=403,
+            )
 
         result: Any
         author_org_id: str | None = None
         tool_row: dict | None = None
 
+        if not isinstance(arguments, dict):
+            return JSONResponse(
+                content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}': expected an object"),
+            )
+
+        # ── Validate arguments BEFORE the billing gate so rejected calls are never charged ──
         if is_marketplace_tool:
             tool_row = await get_marketplace_tool_by_name(actual_tool_name, tool_org_slug)
             if tool_row is None:
@@ -365,23 +362,35 @@ async def mcp_jsonrpc_handler(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
                 )
             author_org_id = tool_row.get("org_id")
-
-        # ── Validate built-in tool arguments BEFORE the billing gate ──
-        # Built-in tools are invoked through their raw implementation coroutine
-        # (`tool_def.implementation`), which bypasses the LangChain/Pydantic
-        # argument coercion that the agent runtime relies on. Without an explicit
-        # check, malformed `arguments` would reach the tool body and surface as an
-        # unclassified runtime error — after the caller had already been billed.
-        # Validate here so rejected calls are never charged.
-        if not is_marketplace_tool:
+            if author_org_id == org_id:
+                # Self-calls would debit the author with zero earnings; testing has its own unbilled route.
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32005,
+                        "Authors cannot call their own marketplace tool here; use POST /tools/test-webhook.",
+                    ),
+                )
+            raw_schema = tool_row.get("input_schema") or {}
+            if isinstance(raw_schema, str):
+                raw_schema = json.loads(raw_schema)
+            try:
+                build_pydantic_model(
+                    tool_name,
+                    raw_schema,
+                    model_name=f"MPTool_{tool_name.replace('/', '_')}_Input",
+                )(**arguments)
+            except PydanticValidationError:
+                logger.info("mcp/v1 invalid arguments org_id=%s tool=%s", org_id, tool_name)
+                return JSONResponse(
+                    content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}'"),
+                )
+        else:
+            # Built-in implementations bypass LangChain/Pydantic coercion, so validate explicitly.
             tool_def = registry.get(tool_name)
             if tool_def is None:
                 return JSONResponse(
                     content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
-                )
-            if not isinstance(arguments, dict):
-                return JSONResponse(
-                    content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}': expected an object"),
                 )
             try:
                 tool_def.input_schema(**arguments)
@@ -389,6 +398,34 @@ async def mcp_jsonrpc_handler(
                 logger.info("mcp/v1 invalid arguments org_id=%s tool=%s", org_id, tool_name)
                 return JSONResponse(
                     content=_jsonrpc_error(req_id, -32602, f"Invalid arguments for tool '{tool_name}'"),
+                )
+
+        overrides = await get_tool_pricing_overrides()
+        pricing = await get_current_pricing()
+        default_cost = pricing.tool_call_cost if pricing else 0
+
+        # Same resolver as /agent/run, /tools/mcp and the public catalog; settled before verify_credit.
+        tool_cost = await resolve_tool_cost(tool_name, overrides, default_cost, True)
+
+        # Optional caller consent bound; the debit below uses this same tool_cost, so charge <= cap.
+        call_meta = params.get("_meta")
+        max_cost = call_meta.get(MCP_MAX_COST_META_KEY) if isinstance(call_meta, dict) else None
+        if max_cost is not None:
+            if type(max_cost) is not int or max_cost < 0:
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32602,
+                        f"_meta['{MCP_MAX_COST_META_KEY}'] must be a non-negative integer (atomic USDC).",
+                    ),
+                )
+            if tool_cost > max_cost:
+                return JSONResponse(
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32004,
+                        f"Tool price {tool_cost} atomic USDC exceeds max_cost_usdc {max_cost}.",
+                    ),
                 )
 
         # ── Billing gate (credit-only for MCP calls) ──────────────────
@@ -400,7 +437,7 @@ async def mcp_jsonrpc_handler(
                     content=_jsonrpc_error(
                         req_id,
                         -32000,
-                        f"Insufficient credit balance. Required: {tool_cost} USDC atomic units.",
+                        billing.error or f"Insufficient credit balance. Required: {tool_cost} USDC atomic units.",
                     )
                 )
 
@@ -431,7 +468,7 @@ async def mcp_jsonrpc_handler(
                     result = {"error": "Tool execution failed"}
 
         # ── Debit credits ─────────────────────────────────────────────
-        # Skip debit when execution failed: subscribers must not be charged
+        # Skip debit when execution failed: callers must not be charged
         # for infrastructure failures, breaker trips, or auth/decryption errors.
         execution_failed = isinstance(result, dict) and "error" in result
         debited = False

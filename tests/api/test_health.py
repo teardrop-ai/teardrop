@@ -666,6 +666,25 @@ async def test_mcp_server_card(api_client, test_settings):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("marketplace_enabled", [True, False])
+async def test_mcp_server_card_points_community_tools_to_mcp_v1(api_client, test_settings, marketplace_enabled):
+    """The card lists only tools /tools/mcp serves; community tools are discovered via /mcp/v1."""
+    from tools import registry
+
+    test_settings.marketplace_enabled = marketplace_enabled
+    body = (await api_client.get("/.well-known/mcp/server-card.json")).json()
+
+    assert {tool["name"] for tool in body["tools"]} <= {tool.name for tool in registry.list_latest()}
+    if marketplace_enabled:
+        assert body["marketplace"] == {
+            "mcp_url": "http://test/mcp/v1",
+            "authentication": {"required": True, "schemes": ["bearer"]},
+        }
+    else:
+        assert "marketplace" not in body
+
+
+@pytest.mark.anyio
 async def test_oauth_protected_resource_metadata(api_client):
     root_resp = await api_client.get("/.well-known/oauth-protected-resource")
 

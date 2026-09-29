@@ -8,10 +8,10 @@ Sub-domains (each with its own section below):
   2. Author Earnings        — balance, history, per-tool aggregates (atomic USDC)
   3. Author Withdrawals     — request payout to settlement wallet
   4. Public Catalog         — browse/search marketplace, author discovery
-  5. Subscriptions          — subscribe/unsubscribe to published tools
+  5. Subscriptions          — pin/unpin community tools for /agent/run
 
 Extracted verbatim from ``teardrop.app`` with no logic changes. Billing, x402,
-SSRF, circuit-breaker, and subscription-gate semantics are preserved exactly.
+SSRF, and circuit-breaker semantics are preserved exactly.
 Sibling marketplace routers:
   * ``teardrop.routers.marketplace_import`` — MCP import preview/publish
   * ``teardrop.routers.marketplace_agents`` — A2A agent registration + directory

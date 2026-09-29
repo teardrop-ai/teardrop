@@ -278,8 +278,8 @@ async def test_billing_gate_x402_returns_pending_tuple():
 
 
 @pytest.mark.asyncio
-async def test_billing_gate_x402_skips_subscription_gate():
-    """Marketplace subscription gate is a credit-rail concept; x402 must skip it."""
+async def test_billing_gate_x402_community_name_returns_pending_tuple():
+    """x402 callers are payment-gated; unknown community names fail at the server, unsettled."""
     gateway = MCPGatewayMiddleware(app=MagicMock())
     body = b'{"jsonrpc":"2.0","id":"req-2","method":"tools/call","params":{"name":"acme/tool"}}'
     request = _gate_request(body, is_x402=True, org_id=None)
@@ -295,12 +295,37 @@ async def test_billing_gate_x402_skips_subscription_gate():
         patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
         patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
         patch("billing.reserve_payer_spend", new=AsyncMock(return_value=True)),
-        patch("marketplace.check_org_subscription", new=AsyncMock()) as sub_mock,
     ):
         result = await gateway._billing_gate(request)
 
     assert result == (None, 500, "acme/tool", "req-2")
-    sub_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_credit_redirects_community_tool_to_mcp_v1():
+    """/tools/mcp cannot serve community tools, so credit callers are pointed at /mcp/v1 unbilled."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    body = b'{"jsonrpc":"2.0","id":"req-3","method":"tools/call","params":{"name":"acme/tool"}}'
+    request = _gate_request(body, is_x402=False, org_id="org-1")
+
+    settings = MagicMock()
+    settings.mcp_billing_enabled = True
+    settings.onboarding_credit_enabled = False
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("billing.verify_credit", new=AsyncMock()) as verify_mock,
+    ):
+        result = await gateway._billing_gate(request)
+
+    assert result.status_code == 404
+    error = json.loads(result.body)["error"]
+    assert error["code"] == -32601
+    assert "/mcp/v1" in error["message"]
+    verify_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

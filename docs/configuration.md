@@ -164,7 +164,7 @@ Event-trigger admission uses a short cluster-global Postgres advisory lock so gl
 | `AUTH_LOCKOUT_WINDOW_SECONDS` | Failed email-login lockout window in seconds (default: `900`) |
 | `RATE_LIMIT_AGENT_RPM` | Per-user rate limit for `/agent/run` (default: `30`) |
 | `RATE_LIMIT_ORG_AGENT_RPM` | Per-org aggregate rate limit for `/agent/run` (default: `100`) |
-| `RATE_LIMIT_ORG_MCP_RPM` | Per-org rate limit for MCP gateway (default: `200`) |
+| `RATE_LIMIT_ORG_MCP_RPM` | Per-org rate limit shared by the `/tools/mcp` and `/mcp/v1` gateways (default: `200`) |
 | `RATE_LIMIT_WEBHOOK_RPM` | Per-IP rate limit for Stripe webhook (default: `120`) |
 | `RATE_LIMIT_TEST_WEBHOOK_RPM` | Per-org rate limit for test-webhook endpoint (default: `10`) |
 | `TRUSTED_PROXY_COUNT` | Trusted proxy hops when deriving client IP from `X-Forwarded-For` (default: `1`; set `0` to ignore the header) |
