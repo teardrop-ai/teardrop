@@ -1018,6 +1018,9 @@ async def test_mcp_initialize(api_client, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     assert data["result"]["serverInfo"]["name"] == "teardrop-marketplace"
+    assert resp.headers["Deprecation"] == "@1790640000"
+    assert resp.headers["Sunset"] == "Thu, 29 Oct 2026 00:00:00 GMT"
+    assert resp.headers["Link"] == '<http://test/tools/mcp>; rel="successor-version"'
 
     config.get_settings.cache_clear()
 

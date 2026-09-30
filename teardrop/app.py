@@ -256,7 +256,7 @@ def _validate_production_config(s: "Settings") -> None:
 
 lifespan = build_lifespan(_validate_production_config)
 
-from tools.mcp_server import build_mcp_app, refresh_mcp_tool_reputations  # noqa: E402
+from tools.mcp_server import build_mcp_app, refresh_mcp_tools  # noqa: E402
 from tools.mcp_server import mcp as _mcp_server  # noqa: E402
 
 mcp_app = build_mcp_app(_mcp_server)
@@ -266,12 +266,12 @@ _MCP_REPUTATION_REFRESH_SECONDS = 300
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
     async with lifespan(app):
-        await refresh_mcp_tool_reputations(_mcp_server)
+        await refresh_mcp_tools(_mcp_server)
         async with _mcp_server.session_manager.run():
             refresh_task = asyncio.create_task(
                 _run_periodic(
-                    "MCP reputation refresh",
-                    lambda: refresh_mcp_tool_reputations(_mcp_server),
+                    "MCP tool refresh",
+                    lambda: refresh_mcp_tools(_mcp_server),
                     _MCP_REPUTATION_REFRESH_SECONDS,
                 )
             )

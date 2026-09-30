@@ -45,6 +45,9 @@ def _mcp_safe_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | N
 # Namespaced `_meta` key for structured reputation. Follows the MCP `_meta`
 # key grammar (vendor-prefix/name), matching the x402 SDK's `x402/payment`.
 MCP_REPUTATION_META_KEY = "teardrop/reputation"
+# Atomic USDC per call, resolved by the same resolver tools/call bills with.
+MCP_PRICE_META_KEY = "teardrop/price"
+MCP_MAX_COST_META_KEY = "teardrop/max_cost_usdc"
 
 # Numeric reputation fields surfaced to programmatic MCP clients. Kept in sync
 # with `marketplace.reputation._load_public_reputation` output keys.
@@ -105,6 +108,10 @@ def build_reputation_meta(metrics: dict[str, Any] | None) -> dict[str, Any] | No
     if not structured:
         return None
     return {MCP_REPUTATION_META_KEY: structured}
+
+
+def build_mcp_tool_meta(metrics: dict[str, Any] | None, cost_usdc: int) -> dict[str, Any]:
+    return {**(build_reputation_meta(metrics) or {}), MCP_PRICE_META_KEY: {"cost_usdc": int(cost_usdc), "unit": "call"}}
 
 
 def format_mcp_quality_description(description: str, metrics: dict[str, Any] | None) -> str:
@@ -398,6 +405,7 @@ class ToolRegistry:
     def to_mcp_tool_defs(
         self,
         reputation: dict[str, dict[str, Any]] | None = None,
+        prices: dict[str, int] | None = None,
     ) -> list[dict[str, Any]]:
         """Return metadata dicts suitable for dynamic MCP tool registration."""
         defs: list[dict[str, Any]] = []
@@ -434,7 +442,11 @@ class ToolRegistry:
                     "output_schema": _mcp_safe_output_schema(raw_output_schema),
                     "output_model": output_model,
                     "annotations": tool.annotations or {"readOnlyHint": True},
-                    "meta": build_reputation_meta(metrics),
+                    "meta": (
+                        build_mcp_tool_meta(metrics, prices[tool.name])
+                        if prices is not None and tool.name in prices
+                        else build_reputation_meta(metrics)
+                    ),
                     "implementation": tool.implementation,
                 }
             )

@@ -50,10 +50,10 @@ Programmatic MCP clients also receive structured reputation in each tool's
 `reputation_score`, `success_rate`, `sample_size`, `confidence`, `freshness`,
 `average_latency_ms`, and privacy-thresholded `unique_caller_count`). The key is
 omitted entirely for unrated tools, so clients should treat its absence as
-"unrated" rather than zero. The authenticated marketplace MCP gateway
-(`POST /mcp/v1` `tools/list`) emits the same metadata and description summary
-for both platform and published org tools; platform tools appear once, by bare
-name, and `tools/call` also accepts `platform/{tool_name}`. `/tools/mcp` is the x402 endpoint.
+"unrated" rather than zero. The `/tools/mcp` gateway emits the same metadata,
+plus `_meta["teardrop/price"]`, for platform tools (bare names) and published
+org tools (`{org_slug}/{tool_name}`, Bearer and credit only). `/tools/mcp` is
+also the x402 endpoint for platform tools; `POST /mcp/v1` is deprecated.
 Every registered tool defines `use_when`, `limitations`, and `alternatives`
 guidance to help agents choose the right capability and avoid redundant calls;
 this contract is enforced by `tests/unit/test_tool_definition_standard.py`.

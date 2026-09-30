@@ -25,6 +25,8 @@ SURFACE_MCP_SERVER_CARD = "mcp_server_card"
 SURFACE_CATALOG = "catalog"
 SURFACE_QUOTE = "quote"
 SURFACE_TOOLS_LIST = "tools_list"
+# Subset of tools_list without a Bearer token: the anonymous x402 audience.
+SURFACE_TOOLS_LIST_ANON = "tools_list_anon"
 SURFACE_MCP_402_CHALLENGE = "mcp_402_challenge"
 # Subsets of mcp_402_challenge for anonymous x402 callers; credit-rail 402s count only in the total.
 SURFACE_MCP_402_NO_PAYMENT = "mcp_402_no_payment"
@@ -38,6 +40,7 @@ VALID_SURFACES: frozenset[str] = frozenset(
         SURFACE_CATALOG,
         SURFACE_QUOTE,
         SURFACE_TOOLS_LIST,
+        SURFACE_TOOLS_LIST_ANON,
         SURFACE_MCP_402_CHALLENGE,
         SURFACE_MCP_402_NO_PAYMENT,
         SURFACE_MCP_402_PAYMENT_INVALID,

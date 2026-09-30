@@ -278,54 +278,80 @@ async def test_billing_gate_x402_returns_pending_tuple():
 
 
 @pytest.mark.asyncio
-async def test_billing_gate_x402_community_name_returns_pending_tuple():
-    """x402 callers are payment-gated; unknown community names fail at the server, unsettled."""
+async def test_x402_auth_rejects_community_tool_before_payment():
+    """Community tools are credit-only: no x402 challenge, verify, or nonce claim."""
     gateway = MCPGatewayMiddleware(app=MagicMock())
     body = b'{"jsonrpc":"2.0","id":"req-2","method":"tools/call","params":{"name":"acme/tool"}}'
-    request = _gate_request(body, is_x402=True, org_id=None)
+    request = _gate_request(body, is_x402=False, org_id=None)
 
-    settings = MagicMock()
-    settings.mcp_billing_enabled = True
-    settings.marketplace_enabled = True
-    settings.x402_payer_daily_spend_limit_usdc = 5_000_000
+    with patch("billing.verify_payment", new=AsyncMock()) as verify_mock:
+        result = await gateway._handle_x402_auth(request)
 
+    assert result.status_code == 401
+    assert json.loads(result.body)["error"]["code"] == -32001
+    assert "Bearer" in result.headers["WWW-Authenticate"]
+    verify_mock.assert_not_called()
+
+
+async def _run_credit_gate(name: str, *, row, meta=None, cost=500, org_id="org-1"):
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    params = {"name": name, **({"_meta": meta} if meta is not None else {})}
+    body = json.dumps({"jsonrpc": "2.0", "id": "req-3", "method": "tools/call", "params": params}).encode()
+    request = _gate_request(body, is_x402=False, org_id=org_id)
+    settings = MagicMock(mcp_billing_enabled=True, onboarding_credit_enabled=False, marketplace_enabled=True)
+    verify = AsyncMock(return_value=BillingResult(verified=True))
     with (
         patch("teardrop.mcp_gateway.get_settings", return_value=settings),
         patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
         patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
-        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
-        patch("billing.reserve_payer_spend", new=AsyncMock(return_value=True)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=cost)),
+        patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value=row)),
+        patch("billing.verify_credit", new=verify),
     ):
         result = await gateway._billing_gate(request)
-
-    assert result == (None, 500, "acme/tool", "req-2")
+    return result, verify
 
 
 @pytest.mark.asyncio
-async def test_billing_gate_credit_redirects_community_tool_to_mcp_v1():
-    """/tools/mcp cannot serve community tools, so credit callers are pointed at /mcp/v1 unbilled."""
-    gateway = MCPGatewayMiddleware(app=MagicMock())
-    body = b'{"jsonrpc":"2.0","id":"req-3","method":"tools/call","params":{"name":"acme/tool"}}'
-    request = _gate_request(body, is_x402=False, org_id="org-1")
+async def test_billing_gate_credit_community_tool_verifies_credit():
+    result, verify = await _run_credit_gate("acme/tool", row={"org_id": "author-org"})
 
-    settings = MagicMock()
-    settings.mcp_billing_enabled = True
-    settings.onboarding_credit_enabled = False
+    assert result == ("org-1", 500, "acme/tool", "req-3")
+    verify.assert_awaited_once()
 
-    with (
-        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
-        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
-        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
-        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
-        patch("billing.verify_credit", new=AsyncMock()) as verify_mock,
-    ):
-        result = await gateway._billing_gate(request)
 
-    assert result.status_code == 404
-    error = json.loads(result.body)["error"]
-    assert error["code"] == -32601
-    assert "/mcp/v1" in error["message"]
-    verify_mock.assert_not_called()
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "status", "code"),
+    [(None, 404, -32601), ({"org_id": "org-1"}, 403, -32005)],
+)
+async def test_billing_gate_credit_rejects_unknown_or_self_owned_community_tool(row, status, code):
+    result, verify = await _run_credit_gate("acme/tool", row=row)
+
+    assert result.status_code == status
+    assert json.loads(result.body)["error"]["code"] == code
+    verify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cap", "status", "code"),
+    [(499, 402, -32004), (-1, 400, -32602), ("500", 400, -32602), (True, 400, -32602), (1.5, 400, -32602)],
+)
+async def test_billing_gate_credit_enforces_max_cost_before_verify(cap, status, code):
+    result, verify = await _run_credit_gate("get_price", row=None, meta={"teardrop/max_cost_usdc": cap})
+
+    assert result.status_code == status
+    assert json.loads(result.body)["error"]["code"] == code
+    verify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_credit_max_cost_equal_to_price_passes():
+    result, verify = await _run_credit_gate("get_price", row=None, meta={"teardrop/max_cost_usdc": 500})
+
+    assert result == ("org-1", 500, "get_price", "req-3")
+    verify.assert_awaited_once()
 
 
 @pytest.mark.asyncio

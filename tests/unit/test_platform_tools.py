@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -801,39 +802,102 @@ class TestWeb3MarketplaceToolsMigration046:
         assert await get_platform_tool_price("get_datetime") is None
 
 
-class TestMCPBillingGateQualifiedMarketplaceTools:
-    async def test_qualified_tool_redirected_to_mcp_v1_unbilled(self, billing_client, test_jwt_token):
-        body = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "id": 2,
-                "params": {"name": "acme/weather", "arguments": {"city": "Paris"}},
-            }
-        )
+@asynccontextmanager
+async def _community_client(monkeypatch):
+    """Mounted /tools/mcp app with one registered community tool, auth + billing on."""
+    from types import SimpleNamespace
 
-        async with billing_client() as client:
+    monkeypatch.setenv("MCP_AUTH_ENABLED", "true")
+    monkeypatch.setenv("MCP_BILLING_ENABLED", "true")
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+    monkeypatch.setenv("MCP_AUTH_AUDIENCE", "")
+    config.get_settings.cache_clear()
+
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import _sync_community_tools, build_mcp_app, create_mcp_server
+
+    mcp = create_mcp_server()
+    tool = SimpleNamespace(
+        qualified_name="acme/weather",
+        tool_type="community",
+        marketplace_description="Weather lookup",
+        input_schema={"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        cost_usdc=5000,
+    )
+    await _sync_community_tools(mcp, [tool], {})
+    mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    mounted_app.add_middleware(MCPGatewayMiddleware)
+    mounted_app.mount("/tools/mcp", build_mcp_app(mcp))
+    try:
+        async with mounted_app.router.lifespan_context(mounted_app):
+            async with AsyncClient(transport=ASGITransport(app=mounted_app), base_url="http://test") as client:
+                yield client
+    finally:
+        config.get_settings.cache_clear()
+
+
+class TestMCPBillingGateQualifiedMarketplaceTools:
+    _ROW = {"id": "tool-1", "org_id": "author-org", "name": "weather"}
+
+    async def _call(self, monkeypatch, token, execute_result):
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 2,
+            "params": {"name": "acme/weather", "arguments": {"city": "Paris"}},
+        }
+        mocks = {
+            "execute": AsyncMock(return_value=execute_result),
+            "debit": AsyncMock(return_value=(True, 5000)),
+            "earnings": AsyncMock(),
+        }
+        async with _community_client(monkeypatch) as client:
             with (
                 patch("billing.get_tool_pricing_overrides", new_callable=AsyncMock, return_value={}),
                 patch("billing.get_current_pricing", new_callable=AsyncMock, return_value=MagicMock(tool_call_cost=1000)),
+                patch("billing.is_promotional_credit", new_callable=AsyncMock, return_value=False),
                 patch("marketplace.get_org_tool_price_by_qualified_name", new_callable=AsyncMock, return_value=5000),
-                patch("billing.verify_credit", new_callable=AsyncMock) as mock_verify,
-                patch("billing.debit_credit", new_callable=AsyncMock) as mock_debit,
+                patch("marketplace.get_marketplace_tool_by_name", new_callable=AsyncMock, return_value=self._ROW),
+                patch("marketplace.execution.execute_marketplace_tool", new=mocks["execute"]),
+                patch(
+                    "billing.verify_credit",
+                    new_callable=AsyncMock,
+                    return_value=MagicMock(verified=True, billing_method="credit", error=None),
+                ),
+                patch("billing.debit_credit", new=mocks["debit"]),
+                patch("marketplace.record_tool_call_earnings", new=mocks["earnings"]),
+                patch("marketplace.record_marketplace_tool_usage_many", new_callable=AsyncMock),
+                patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock),
             ):
                 resp = await client.post(
                     "/tools/mcp",
-                    content=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {test_jwt_token}",
-                    },
+                    json=body,
+                    headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
                 )
+                await asyncio.sleep(0)
+        return resp, mocks
 
-        assert resp.status_code == 404
-        assert resp.json()["error"]["code"] == -32601
-        assert "/mcp/v1" in resp.json()["error"]["message"]
-        mock_verify.assert_not_awaited()
-        mock_debit.assert_not_awaited()
+    async def test_qualified_tool_executes_and_debits_author_price(self, monkeypatch, test_jwt_token):
+        resp, mocks = await self._call(monkeypatch, test_jwt_token, {"temp_c": 20})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["result"]["isError"] is False
+        mocks["execute"].assert_awaited_once_with(self._ROW, {"city": "Paris"})
+        mocks["debit"].assert_awaited_once_with("test-org-id", 5000, reason="mcp:acme/weather", principal_id="test-user-id")
+        mocks["earnings"].assert_awaited_once_with(
+            author_org_id="author-org",
+            caller_org_id="test-org-id",
+            tool_name="weather",
+            total_cost_usdc=5000,
+        )
+
+    async def test_qualified_tool_webhook_error_is_not_charged(self, monkeypatch, test_jwt_token):
+        resp, mocks = await self._call(monkeypatch, test_jwt_token, {"error": "Webhook returned HTTP 500"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["result"]["isError"] is True
+        mocks["debit"].assert_not_awaited()
+        mocks["earnings"].assert_not_awaited()
 
     async def test_qualified_tool_priced_at_author_price(self, test_settings):
         from teardrop.mcp_gateway import MCPGatewayMiddleware

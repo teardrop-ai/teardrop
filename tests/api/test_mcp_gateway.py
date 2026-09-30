@@ -385,6 +385,67 @@ async def test_jwks_returns_valid_key(test_settings):
 # ── Auth gate ─────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("billing_enabled", "status", "code"), [("false", 503, -32603), ("true", 401, -32001)])
+async def test_community_tool_call_fails_closed_without_billing(test_settings, monkeypatch, billing_enabled, status, code):
+    """Community tools never run unbilled, even with the MCP auth gate disabled."""
+    monkeypatch.setenv("MCP_AUTH_ENABLED", "false")
+    monkeypatch.setenv("MCP_BILLING_ENABLED", billing_enabled)
+    config.get_settings.cache_clear()
+    from teardrop.main import app
+
+    body = {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "acme/weather", "arguments": {}}}
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as c:
+            resp = await c.post("/tools/mcp", json=body, headers={"Accept": "application/json"})
+    finally:
+        config.get_settings.cache_clear()
+
+    assert resp.status_code == status
+    assert resp.json()["error"]["code"] == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bearer", "expect_community", "expected_hits"),
+    [
+        (False, False, ["tools_list", "tools_list_anon"]),
+        (True, True, ["tools_list"]),
+    ],
+)
+async def test_tools_list_hides_community_tools_from_anonymous_callers(
+    monkeypatch, test_jwt_token, bearer, expect_community, expected_hits
+):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import _sync_community_tools, build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    community = SimpleNamespace(
+        qualified_name="acme/weather",
+        tool_type="community",
+        marketplace_description="Weather lookup",
+        input_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        cost_usdc=5000,
+    )
+    await _sync_community_tools(mcp, [community], {})
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    headers = {"Accept": "application/json", **({"Authorization": f"Bearer {test_jwt_token}"} if bearer else {})}
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/tools/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    names = {tool["name"] for tool in resp.json()["result"]["tools"]}
+    assert "calculate" in names
+    assert ("acme/weather" in names) is expect_community
+    assert hits == expected_hits
+
+
 @pytest.fixture
 async def mcp_client(test_settings, monkeypatch):
     """AsyncClient with mcp_auth_enabled=True and no dep overrides."""
@@ -562,14 +623,15 @@ async def test_mcp_app_real_handshake():
 
 @pytest.mark.asyncio
 async def test_mcp_tool_reputation_reaches_http_clients(monkeypatch):
-    from tools.mcp_server import build_mcp_app, create_mcp_server, refresh_mcp_tool_reputations
+    from tools.mcp_server import build_mcp_app, create_mcp_server, refresh_mcp_tools
 
     server = create_mcp_server()
     monkeypatch.setattr(
         "marketplace.reputation.get_public_reputation",
         AsyncMock(return_value={"platform/calculate": {"reputation_score": 0.9, "sample_size": 0.5}}),
     )
-    await refresh_mcp_tool_reputations(server)
+    monkeypatch.setattr("billing.get_current_pricing", AsyncMock(side_effect=RuntimeError("no pricing")))
+    await refresh_mcp_tools(server)
     mcp_app = build_mcp_app(server)
 
     async with mcp_app.router.lifespan_context(mcp_app):

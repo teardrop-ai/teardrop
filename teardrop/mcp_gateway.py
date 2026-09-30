@@ -42,6 +42,7 @@ from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token
 from teardrop.config import get_settings
 from teardrop.public_url import public_base_url
+from tools.registry import MCP_MAX_COST_META_KEY
 from tools.schema import flatten_embedded_json_schema
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,27 @@ def _tool_call_name(data: dict) -> str | None:
     params = data.get("params")
     name = params.get("name") if isinstance(params, dict) else None
     return name if isinstance(name, str) and name else None
+
+
+def _is_community_tool(name: str | None) -> bool:
+    return isinstance(name, str) and "/" in name and not name.startswith("platform/")
+
+
+def _x402_payable(name: str | None) -> bool:
+    # Community tools stay credit-only until anonymous payers get earnings attribution (caller_org_id).
+    return not _is_community_tool(name)
+
+
+def _bearer_required(req_id: int | str | None) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content=_jsonrpc_error(
+            req_id,
+            -32001,
+            "Marketplace tools require 'Authorization: Bearer <token>' from POST /token and funded credit.",
+        ),
+        headers={"WWW-Authenticate": 'Bearer realm="teardrop-mcp"'},
+    )
 
 
 def _mcp_402_extensions(tool_name: str | None = None) -> dict:
@@ -283,19 +305,27 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             if limited is not None:
                 return limited
 
-            from teardrop.funnel_counters import SURFACE_TOOLS_LIST, record_discovery_hit
+            from teardrop.funnel_counters import SURFACE_TOOLS_LIST, SURFACE_TOOLS_LIST_ANON, record_discovery_hit
 
             try:
-                if json.loads(body or b"{}").get("method") == "tools/list":
-                    record_discovery_hit(SURFACE_TOOLS_LIST)
+                is_tools_list = json.loads(body or b"{}").get("method") == "tools/list"
             except Exception:
-                pass
+                is_tools_list = False
+            is_anonymous = self._extract_bearer(request) is None
+            if is_tools_list:
+                record_discovery_hit(SURFACE_TOOLS_LIST)
+                if is_anonymous:
+                    record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
             if discovery_response is not None:
                 return discovery_response
-            return await call_next(request)
+            response = await call_next(request)
+            if is_tools_list and is_anonymous:
+                # Community tools are Bearer + credit only, so anonymous (x402) callers never see them.
+                return await self._without_community_tools(response)
+            return response
 
         # ── Phase 1: JWT auth (or x402 fallback) ──────────────────────────
         auth_response = await self._authenticate(request, settings)
@@ -323,6 +353,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 status_code=503,
                 content=_jsonrpc_error(rpc_id, -32603, "Paid MCP execution is temporarily unavailable."),
             )
+        if pending_debit is None and _is_community_tool(_tool_call_name(await _read_jsonrpc(request))):
+            # Community tools never run unbilled, whatever the auth/billing flags say.
+            if not settings.mcp_billing_enabled:
+                return JSONResponse(
+                    status_code=503,
+                    content=_jsonrpc_error(rpc_id, -32603, "Paid MCP execution is temporarily unavailable."),
+                )
+            return _bearer_required(rpc_id)
 
         # ── Forward to MCPServer ──────────────────────────────────────────
         try:
@@ -379,6 +417,23 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         except Exception:
             return False
         return False
+
+    @staticmethod
+    async def _without_community_tools(response: Response) -> Response:
+        if response.status_code != 200:
+            return response
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+            chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        body = b"".join(chunks)
+        try:
+            data = json.loads(body)
+            data["result"]["tools"] = [tool for tool in data["result"]["tools"] if not _is_community_tool(tool.get("name"))]
+            body = json.dumps(data).encode("utf-8")
+        except (ValueError, KeyError, TypeError, AttributeError):
+            logger.debug("MCP tools/list response left unfiltered", exc_info=True)
+        headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+        return Response(content=body, status_code=response.status_code, headers=headers)
 
     @staticmethod
     async def _attach_payment_receipt(response: Response, billing) -> Response:  # noqa: ANN001
@@ -543,6 +598,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         data = await _read_jsonrpc(request)
         tool_name = _tool_call_name(data)
+        if not _x402_payable(tool_name):
+            return _bearer_required(data.get("id"))
         if tool_name in _ANON_FREE_TOOLS:
             try:
                 is_free = await self._resolve_tool_cost(tool_name) == 0
@@ -647,8 +704,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         * x402 callers — return the pending tuple so the post-response hook can
           settle on-chain via ``settle_payment``. No credit verification
           applies (access is payment-gated, not org-gated).
-        * credit callers — redirect community tool names to ``/mcp/v1`` and
-          verify the org's credit balance before allowing execution.
+        * credit callers — check community tool existence/ownership and the
+          caller's optional ``teardrop/max_cost_usdc`` bound, then verify the
+          org's credit balance before allowing execution.
 
         Returns:
             None — billing disabled or not a billable ``tools/call`` request.
@@ -733,12 +791,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # Verified-email promotional credit must not create author earnings
         # through a direct marketplace MCP call. Platform tools are not
         # author-owned and remain available on this rail.
-        if (
-            settings.onboarding_credit_enabled
-            and "/" in tool_name
-            and not tool_name.startswith("platform/")
-            and await is_promotional_credit(org_id)
-        ):
+        if settings.onboarding_credit_enabled and _is_community_tool(tool_name) and await is_promotional_credit(org_id):
             logger.info("mcp promotional credit blocked marketplace tool org_id=%s tool=%s", org_id, tool_name)
             return JSONResponse(
                 status_code=403,
@@ -749,16 +802,48 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 ),
             )
 
-        # This server only registers registry tools; community tools live on /mcp/v1.
-        if "/" in tool_name and not tool_name.startswith("platform/"):
-            return JSONResponse(
-                status_code=404,
-                content=_jsonrpc_error(
-                    req_id,
-                    -32601,
-                    f"Community marketplace tool '{tool_name}' is served at POST /mcp/v1.",
-                ),
-            )
+        if _is_community_tool(tool_name):
+            from marketplace import get_marketplace_tool_by_name
+
+            org_slug, bare_name = tool_name.split("/", 1)
+            tool_row = await get_marketplace_tool_by_name(bare_name, org_slug)
+            if tool_row is None:
+                return JSONResponse(
+                    status_code=404,
+                    content=_jsonrpc_error(req_id, -32601, f"Tool not found: {tool_name}"),
+                )
+            if tool_row.get("org_id") == org_id:
+                # Self-calls would debit the author with zero earnings; testing has its own unbilled route.
+                return JSONResponse(
+                    status_code=403,
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32005,
+                        "Authors cannot call their own marketplace tool here; use POST /tools/test-webhook.",
+                    ),
+                )
+
+        call_meta = params.get("_meta")
+        max_cost = call_meta.get(MCP_MAX_COST_META_KEY) if isinstance(call_meta, dict) else None
+        if max_cost is not None:
+            if type(max_cost) is not int or max_cost < 0:
+                return JSONResponse(
+                    status_code=400,
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32602,
+                        f"_meta['{MCP_MAX_COST_META_KEY}'] must be a non-negative integer (atomic USDC).",
+                    ),
+                )
+            if tool_cost > max_cost:
+                return JSONResponse(
+                    status_code=402,
+                    content=_jsonrpc_error(
+                        req_id,
+                        -32004,
+                        f"Tool price {tool_cost} atomic USDC exceeds max_cost_usdc {max_cost}.",
+                    ),
+                )
 
         billing = await verify_credit(
             org_id,

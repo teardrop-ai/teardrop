@@ -750,9 +750,9 @@ async def mcp_server_card(request: Request) -> Response:
         "prompts": [],
     }
     if s.marketplace_enabled:
-        # Community tools are a separate server; the card's `tools` lists only what /tools/mcp serves.
+        # Community tools are served by /tools/mcp too, but only to Bearer + credit callers.
         content["marketplace"] = {
-            "mcp_url": f"{base_url}/mcp/v1",
+            "mcp_url": f"{base_url}/tools/mcp",
             "authentication": {"required": True, "schemes": ["bearer"]},
         }
     if s.mcp_x402_enabled:

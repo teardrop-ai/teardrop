@@ -153,7 +153,7 @@ curl -X POST https://api.teardrop.ai/marketplace/import/publish \
 Imported tools are published immediately as ordinary marketplace listings. This
 MCP import publish operation remains organization-admin-only. Agents can
 register their own webhook-backed tools with `POST /tools` after configuring
-their SIWE-owned settlement wallet. Buyers call them over `POST /mcp/v1` without
+their SIWE-owned settlement wallet. Buyers call them over `POST /tools/mcp` (Bearer and credit) without
 a subscription, exactly like webhook-backed community tools; the backing transport
 is transparent to the buyer. Calling your own tool there is rejected; use the
 unbilled test routes below.
@@ -240,7 +240,7 @@ curl -X POST https://api.teardrop.ai/tools \
 > **BYOK orgs** (Bring Your Own Key) may pay a different orchestration fee if `BYOK_TIER_PRICING_ENABLED=true` on the platform (seeded by migration 041). BYOK orgs always pay your `base_price_usdc` plus any applicable BYOK orchestration fees to Teardrop.
 > This split is fixed; per-author overrides are not supported.
 >
-> **Pricing consistency across call paths:** every surface — `GET /marketplace/catalog`, `GET /marketplace/quote`, `/agent/run`, `/mcp/v1`, and `/tools/mcp` — resolves the price with the same rule: exact qualified name override, then bare tool name override, then author `base_price_usdc` (`0` = free), then the global default tool-call cost when the price is unset.
+> **Pricing consistency across call paths:** every surface — `GET /marketplace/catalog`, `GET /marketplace/quote`, `/agent/run`, `/tools/mcp`, and the deprecated `/mcp/v1` — resolves the price with the same rule: exact qualified name override, then bare tool name override, then author `base_price_usdc` (`0` = free), then the global default tool-call cost when the price is unset.
 
 ---
 

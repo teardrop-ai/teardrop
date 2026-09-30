@@ -14398,7 +14398,8 @@
     },
     "/mcp/v1": {
       "post": {
-        "description": "MCP Streamable HTTP endpoint \u2014 JSON-RPC 2.0.\n\nImplements the following MCP methods:\n  - ``initialize`` \u2013 returns server capabilities\n  - ``tools/list`` \u2013 returns available tool definitions with pricing\n  - ``tools/call`` \u2013 execute a tool (subject to billing gate)",
+        "deprecated": true,
+        "description": "Deprecated MCP JSON-RPC 2.0 endpoint; use ``POST /tools/mcp``.",
         "operationId": "mcp_jsonrpc_handler_mcp_v1_post",
         "responses": {
           "200": {
