@@ -345,7 +345,7 @@ async def test_settle_billing_attaches_receipt_for_meta_payment(monkeypatch):
     request.state.x402_billing = settled
     request.state.mcp_x402_payment = "encoded-meta-payment"
     monkeypatch.setattr("billing.settle_payment", AsyncMock(return_value=settled))
-    monkeypatch.setattr(gateway, "_record_mcp_outcome", lambda *args, **kwargs: None)
+    monkeypatch.setattr(gateway, "_record_mcp_outcome", AsyncMock(return_value="charge-1"))
     monkeypatch.setattr("teardrop.mcp_gateway.asyncio.create_task", lambda coro: coro.close())
 
     result = await gateway._settle_billing(request, (None, 10000, "calculate", 7), response)

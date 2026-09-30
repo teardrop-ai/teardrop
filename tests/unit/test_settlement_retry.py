@@ -79,6 +79,52 @@ async def test_credit_debit_and_retry_finalization_share_one_transaction():
 
 
 @pytest.mark.anyio
+async def test_credit_retry_settles_linked_charge_in_same_transaction():
+    transaction = MagicMock()
+    transaction.__aenter__ = AsyncMock(return_value=None)
+    transaction.__aexit__ = AsyncMock(return_value=False)
+
+    connection = MagicMock()
+    connection.transaction.return_value = transaction
+    connection.fetchval = AsyncMock(return_value="settlement-1")
+    connection.execute = AsyncMock()
+
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=connection)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = acquire
+
+    credit_service = MagicMock()
+    credit_service._debit_credit_locked = AsyncMock(return_value=(True, 500, "ledger-1"))
+    spend_cache = MagicMock()
+    spend_cache.invalidate = AsyncMock()
+    row = {
+        "id": "settlement-1",
+        "usage_event_id": "call-1",
+        "org_id": "org-1",
+        "run_id": "call-1",
+        "amount_usdc": 500,
+        "principal_id": None,
+        "charge_id": "charge-1",
+        "next_retry_at": "2026-09-14T12:05:00Z",
+    }
+
+    with (
+        patch.object(settlement, "_get_credit_service", return_value=credit_service),
+        patch.object(settlement, "_get_daily_spend_cache", return_value=spend_cache),
+    ):
+        assert await settlement._settle_claimed_credit(pool, row, 1) == (True, 500)
+
+    assert connection.execute.await_count == 3
+    charge_sql, charge_id, amount = connection.execute.await_args_list[2].args
+    assert "UPDATE billing_charges" in charge_sql
+    assert "status = 'failed'" in charge_sql
+    assert (charge_id, amount) == ("charge-1", 500)
+    transaction.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_settle_claimed_credit_raises_when_claim_is_lost():
     transaction = MagicMock()
     transaction.__aenter__ = AsyncMock(return_value=None)

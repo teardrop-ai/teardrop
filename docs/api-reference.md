@@ -231,6 +231,7 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `GET` | `/admin/telemetry/machine-funnel` | Admin | Machine acquisition, MCP settlement, wallet-conversion, and repeat-payer metrics |
 | `GET` | `/admin/telemetry/discovery-funnel` | Admin | Aggregate discovery-stage hit counts (agent card, x402 discovery, catalog, quote, tools/list, 402 challenges, with anonymous x402 challenges split into `mcp_402_no_payment` and `mcp_402_payment_invalid`), challenge-to-settle rate, and a per-day series for the window |
 | `GET` | `/admin/billing/revenue` | Admin | Aggregated revenue summary |
+| `GET` | `/admin/billing/charges/reconciliation` | Admin | Compares the unified `billing_charges` ledger with `usage_events`, `mcp_call_events`, and credit-ledger debits over `[start, end)` (default: the 24h ending 5 minutes ago, so in-flight settlements are excluded; max 31 days; naive timestamps are UTC). Returns per-check discrepancy counts, up to 5 sample ids, legacy vs ledger revenue, and `ok` (true only when every discrepancy count is zero). Use windows that start after migration 115 was deployed; direct MCP credit debits reconcile per org and tool, so a call committed within milliseconds of a window edge can show a transient `group_mismatch` |
 | `POST` | `/admin/credits/topup` | Admin | Add prepaid USDC credits to an org |
 | `POST` | `/admin/pricing/tools` | Admin | Create or update a per-tool pricing override |
 | `DELETE` | `/admin/pricing/tools/{tool_name}` | Admin | Remove a per-tool pricing override |

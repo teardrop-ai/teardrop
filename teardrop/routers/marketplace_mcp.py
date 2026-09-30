@@ -38,6 +38,7 @@ from billing import (
     resolve_tool_cost,
     verify_credit,
 )
+from billing.charges import record_charge
 from marketplace import (
     PLATFORM_SLUG,
     get_marketplace_catalog,
@@ -348,24 +349,35 @@ async def _handle_mcp_jsonrpc(request: Request, payload: dict) -> JSONResponse:
         execution_failed = isinstance(result, dict) and "error" in result
         debited = False
         if billing.verified and billing.billing_method == "credit" and not execution_failed:
-            debited, _ = await debit_credit(
+            call_id = str(uuid.uuid4())
+            debited, deducted = await debit_credit(
                 org_id,
                 tool_cost,
                 reason=f"mcp:{tool_name}",
                 principal_id=payload.get("sub") or None,
+            )
+            charge_id = await record_charge(
+                source="mcp_v1",
+                invocation_id=call_id,
+                org_id=org_id or "",
+                principal_id=payload.get("sub") or "",
+                capability=tool_name,
+                billing_method="credit",
+                amount_usdc=tool_cost,
+                status="settled" if debited else "failed",
+                settled_amount_usdc=deducted,
             )
             if not debited and tool_cost > 0:
                 # Tool already executed but the credit debit failed (e.g. a
                 # concurrent debit drained the balance below the preflight
                 # snapshot). Enqueue for asynchronous retry so the org is still
                 # charged — mirrors agent_post_run.dispatch_settlement. The
-                # gateway has no usage_event row, so a synthetic UUID anchors
-                # both ids (pending_settlements has no FK).
+                # gateway has no usage_event row, so the call id anchors the
+                # usage_event_id, run_id and charge (pending_settlements has no FK).
                 logger.warning("MCP debit failed org=%s tool=%s — enqueuing recovery", org_id, tool_name)
                 try:
                     from billing.settlement import enqueue_failed_settlement
 
-                    call_id = str(uuid.uuid4())
                     await enqueue_failed_settlement(
                         call_id,
                         org_id or "",
@@ -373,6 +385,7 @@ async def _handle_mcp_jsonrpc(request: Request, payload: dict) -> JSONResponse:
                         "credit",
                         tool_cost,
                         principal_id=payload.get("sub") or None,
+                        charge_id=charge_id,
                     )
                 except Exception:
                     logger.exception("Failed to enqueue MCP settlement recovery org=%s", org_id)

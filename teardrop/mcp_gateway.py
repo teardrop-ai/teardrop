@@ -863,7 +863,15 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         return (org_id, tool_cost, tool_name, req_id)
 
     @staticmethod
-    def _record_mcp_outcome(
+    def _call_event_id(request: Request) -> str:
+        event_id = getattr(request.state, "mcp_call_event_id", None)
+        if not isinstance(event_id, str) or not event_id:
+            event_id = str(uuid.uuid4())
+            request.state.mcp_call_event_id = event_id
+        return event_id
+
+    @staticmethod
+    async def _record_mcp_outcome(
         request: Request,
         org_id: str | None,
         tool_name: str,
@@ -871,17 +879,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         billing_method: str,
         settlement_status: str,
         settlement_tx: str = "",
-    ) -> None:
+    ) -> str:
+        from billing.charges import record_charge
         from teardrop.usage import record_mcp_call_event
 
-        event_id = getattr(request.state, "mcp_call_event_id", None)
-        if not isinstance(event_id, str) or not event_id:
-            event_id = str(uuid.uuid4())
-            request.state.mcp_call_event_id = event_id
+        event_id = MCPGatewayMiddleware._call_event_id(request)
         billing = getattr(request.state, "x402_billing", None)
         payer = getattr(billing, "payer", "") if billing_method == "x402" else ""
         if not isinstance(payer, str):
             payer = ""
+        principal_id = getattr(request.state, "mcp_principal_id", "")
         asyncio.create_task(
             record_mcp_call_event(
                 event_id,
@@ -894,20 +901,34 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 settlement_tx,
             )
         )
+        return await record_charge(
+            source="mcp",
+            invocation_id=event_id,
+            org_id=org_id or "",
+            principal_id=principal_id if isinstance(principal_id, str) else "",
+            payer_address=payer,
+            capability=tool_name,
+            billing_method=billing_method,
+            amount_usdc=tool_cost,
+            status=settlement_status,
+            settled_amount_usdc=tool_cost if settlement_status == "settled" else 0,
+            settlement_tx=settlement_tx,
+        )
 
     @staticmethod
     async def _enqueue_mcp_recovery(
+        request: Request,
         org_id,
         tool_cost: int,
         billing_method: str,
         billing,
         principal_id: str | None = None,
+        charge_id: str = "",
     ) -> None:
         """Enqueue a failed MCP settlement for asynchronous retry.
 
-        The MCP gateway has no usage_event row, so a synthetic UUID anchors both
-        the usage_event_id and run_id (``pending_settlements`` has no FK). Mirrors
-        the recovery path in ``agent_post_run.dispatch_settlement``.
+        The MCP gateway has no usage_event row, so the call event id anchors
+        usage_event_id and run_id (``pending_settlements`` has no FK).
         """
         from billing.settlement import enqueue_failed_settlement
 
@@ -915,7 +936,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if billing is not None and getattr(billing, "payment_payload", None):
             payment_payload = str(billing.payment_payload)
         try:
-            call_id = str(uuid.uuid4())
+            call_id = MCPGatewayMiddleware._call_event_id(request)
             await enqueue_failed_settlement(
                 call_id,
                 org_id or "",
@@ -924,6 +945,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 tool_cost,
                 payment_payload=payment_payload,
                 principal_id=principal_id,
+                charge_id=charge_id,
             )
         except Exception:
             logger.exception("Failed to enqueue MCP settlement recovery org=%s method=%s", org_id, billing_method)
@@ -966,11 +988,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             if settled is None or not settled.settled:
                 if settled is not None:
                     logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
-                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
+                await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
                 # Facilitator /verify does not prove funds, so an unsettled payment must not release the result.
                 return self._x402_settlement_failed(request, req_id)
 
-            self._record_mcp_outcome(
+            await self._record_mcp_outcome(
                 request,
                 org_id,
                 tool_name,
@@ -1005,16 +1027,18 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             )
             if not debited:
                 logger.warning("MCP debit failed org=%s tool=%s", org_id, tool_name)
+                charge_id = await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "failed")
                 await self._enqueue_mcp_recovery(
+                    request,
                     org_id,
                     tool_cost,
                     "credit",
                     None,
                     principal_id=getattr(request.state, "mcp_principal_id", "") or None,
+                    charge_id=charge_id,
                 )
-                self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "failed")
                 return response
-            self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "settled")
+            await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "settled")
 
         # Record marketplace earnings (fire-and-forget).
         if "/" in tool_name and tool_cost > 0:

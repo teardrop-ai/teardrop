@@ -454,6 +454,7 @@ async def run_agent_once(
         run_id=run_id,
         result=settlement_result,
         enqueue_x402_retry=source != "a2a",
+        source=source,
     ):
         pass
 

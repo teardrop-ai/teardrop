@@ -43,7 +43,7 @@ async def settlement_pool(docker_postgres: str):
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            TRUNCATE TABLE pending_settlements, org_credit_ledger, org_credits,
+            TRUNCATE TABLE pending_settlements, billing_charges, mcp_call_events, org_credit_ledger, org_credits,
                            usage_events, siwe_nonces, wallets, users, orgs
             RESTART IDENTITY CASCADE
             """
@@ -197,6 +197,136 @@ async def test_x402_row_reaches_exhausted_instead_of_looping(settlement_pool):
     row = await _settlement(settlement_pool, settlement_id)
     assert row["status"] == "exhausted"
     assert "x402 settlements cannot be retried" in row["last_error"]
+
+
+async def test_credit_retry_settles_linked_charge_and_ledger_rejects_rewrites(settlement_pool):
+    from billing.charges import record_charge
+
+    org, event, settlement_id = await _seed(settlement_pool, balance=100_000, amount=25_000)
+    charge_kwargs = dict(
+        source="api",
+        invocation_id=event.run_id,
+        usage_event_id=event.id,
+        org_id=org.id,
+        billing_method="credit",
+        amount_usdc=25_000,
+        status="failed",
+    )
+    charge_id = await record_charge(**charge_kwargs)
+    await settlement_pool.execute("UPDATE pending_settlements SET charge_id = $2 WHERE id = $1", settlement_id, charge_id)
+
+    assert await process_pending_settlements() == 1
+
+    async def _charge():
+        row = await settlement_pool.fetchrow("SELECT status, settled_amount_usdc FROM billing_charges WHERE id = $1", charge_id)
+        return row["status"], row["settled_amount_usdc"]
+
+    assert await _charge() == ("settled", 25_000)
+
+    # A late duplicate of the original failed outcome must not clobber the settled charge.
+    assert await record_charge(**charge_kwargs) == charge_id
+    assert await _charge() == ("settled", 25_000)
+
+    with pytest.raises(Exception, match="immutable"):
+        await settlement_pool.execute("UPDATE billing_charges SET amount_usdc = 1 WHERE id = $1", charge_id)
+    with pytest.raises(Exception, match="cannot move"):
+        await settlement_pool.execute("UPDATE billing_charges SET status = 'failed' WHERE id = $1", charge_id)
+    with pytest.raises(Exception, match="append-only"):
+        await settlement_pool.execute("DELETE FROM billing_charges WHERE id = $1", charge_id)
+    assert await _charge() == ("settled", 25_000)
+
+
+async def test_charge_reconciliation_passes_when_consistent_and_flags_phantom_charge(settlement_pool):
+    from datetime import datetime, timezone
+
+    from billing import debit_credit, get_charge_reconciliation
+    from billing.charges import record_charge
+    from teardrop.usage import record_mcp_call_event
+
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    # Agent run whose failed credit debit is settled by the retry worker.
+    org, event, run_settlement_id = await _seed(settlement_pool, balance=100_000, amount=25_000)
+    run_charge = await record_charge(
+        source="api",
+        invocation_id=event.run_id,
+        usage_event_id=event.id,
+        org_id=org.id,
+        billing_method="credit",
+        amount_usdc=25_000,
+        status="failed",
+    )
+    await settlement_pool.execute("UPDATE pending_settlements SET charge_id = $2 WHERE id = $1", run_settlement_id, run_charge)
+
+    # MCP call whose failed credit debit is retried under the call id.
+    retried_call = str(uuid.uuid4())
+    await record_mcp_call_event(retried_call, org.id, "", "acme/tool", "credit", 4_000, "failed")
+    retried_charge = await record_charge(
+        source="mcp",
+        invocation_id=retried_call,
+        org_id=org.id,
+        capability="acme/tool",
+        billing_method="credit",
+        amount_usdc=4_000,
+        status="failed",
+    )
+    await settlement_pool.execute(
+        """
+        INSERT INTO pending_settlements
+            (id, usage_event_id, org_id, run_id, billing_method, amount_usdc, charge_id, next_retry_at)
+        VALUES ($1, $2, $3, $2, 'credit', 4000, $4, NOW() - INTERVAL '1 second')
+        """,
+        str(uuid.uuid4()),
+        retried_call,
+        org.id,
+        retried_charge,
+    )
+    assert await process_pending_settlements() == 2
+
+    # Direct MCP credit call settled on the first attempt.
+    direct_call = str(uuid.uuid4())
+    assert (await debit_credit(org.id, 3_000, reason="mcp:acme/tool"))[0]
+    await record_charge(
+        source="mcp",
+        invocation_id=direct_call,
+        org_id=org.id,
+        capability="acme/tool",
+        billing_method="credit",
+        amount_usdc=3_000,
+        status="settled",
+        settled_amount_usdc=3_000,
+    )
+    await record_mcp_call_event(direct_call, org.id, "", "acme/tool", "credit", 3_000, "settled")
+
+    async def _report():
+        report = await get_charge_reconciliation(window_start, datetime.now(timezone.utc) + timedelta(minutes=1))
+        return report, {check["name"]: check for check in report["checks"]}
+
+    report, checks = await _report()
+    assert report["ok"] is True, report
+    assert checks["agent_runs"]["source_rows"] == 1
+    assert checks["mcp_calls"]["source_rows"] == 2
+    assert checks["mcp_calls"]["info"]["retry_settled"] == 1
+    assert checks["credit_run_debits"]["source_rows"] == 2
+    assert checks["credit_mcp_debits"]["source_rows"] == 1
+    assert report["legacy_revenue_usdc"] == 25_000
+    assert (report["ledger_revenue_usdc"], report["ledger_mcp_revenue_usdc"]) == (32_000, 7_000)
+
+    # A settled credit charge with no debit behind it is revenue that never moved.
+    await record_charge(
+        source="api",
+        invocation_id="phantom-run",
+        org_id=org.id,
+        billing_method="credit",
+        amount_usdc=1_000,
+        status="settled",
+        settled_amount_usdc=1_000,
+    )
+
+    report, checks = await _report()
+    assert report["ok"] is False
+    assert checks["credit_run_debits"]["discrepancies"]["missing_debit"] == 1
+    assert checks["agent_runs"]["discrepancies"]["unmatched_charge"] == 1
 
     # Terminal means terminal: the claim query must not pick it up again.
     assert await process_pending_settlements() == 0

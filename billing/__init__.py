@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 import billing.context as _ctx
 import billing.history as _history
 import billing.pricing as _pricing
+import billing.reconciliation as _reconciliation
 import billing.settlement as _settlement
 import billing.stripe as _stripe
 import billing.x402 as _x402
@@ -86,6 +87,7 @@ _ENQUEUE_FAILED_SETTLEMENT_ORIG = _settlement.enqueue_failed_settlement
 _PROCESS_PENDING_SETTLEMENTS_ORIG = _settlement.process_pending_settlements
 _GET_PENDING_SETTLEMENTS_ORIG = _settlement.get_pending_settlements
 _RESET_EXHAUSTED_SETTLEMENT_ORIG = _settlement.reset_exhausted_settlement
+_GET_CHARGE_RECONCILIATION_ORIG = _reconciliation.get_charge_reconciliation
 
 _CREATE_STRIPE_EMBEDDED_SESSION_ORIG = _stripe.create_stripe_embedded_session
 _HANDLE_STRIPE_WEBHOOK_ORIG = _stripe.handle_stripe_webhook
@@ -752,6 +754,8 @@ async def enqueue_failed_settlement(
     billing_method: str,
     amount_usdc: int,
     payment_payload: str | None = None,
+    principal_id: str | None = None,
+    charge_id: str = "",
 ) -> None:
     """Queue a failed settlement for later retry, preserving rail and atomic amount."""
     await _call_async(
@@ -762,6 +766,8 @@ async def enqueue_failed_settlement(
         billing_method,
         amount_usdc,
         payment_payload,
+        principal_id=principal_id,
+        charge_id=charge_id,
     )
 
 
@@ -781,6 +787,11 @@ async def get_pending_settlements(
 async def reset_exhausted_settlement(settlement_id: str) -> bool | None:
     """Re-arm a retry-exhausted settlement for another processing attempt."""
     return await _call_async(_RESET_EXHAUSTED_SETTLEMENT_ORIG, settlement_id)
+
+
+async def get_charge_reconciliation(start: datetime, end: datetime) -> dict:
+    """Compare the unified charge ledger with legacy billing records over ``[start, end)``."""
+    return await _call_async(_GET_CHARGE_RECONCILIATION_ORIG, start, end)
 
 
 # Stripe API
@@ -850,6 +861,7 @@ __all__ = [
     "get_invoice_by_run",
     # settlement retry
     "enqueue_failed_settlement",
+    "get_charge_reconciliation",
     "process_pending_settlements",
     "get_pending_settlements",
     "reset_exhausted_settlement",

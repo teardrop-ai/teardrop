@@ -29,7 +29,7 @@ async def test_record_mcp_outcome_schedules_sanitized_x402_event():
     request.state.x402_billing = BillingResult(payer="0xabc", payment_payload="secret-payload")
 
     with patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock) as record_mock:
-        gateway._record_mcp_outcome(request, None, "platform/get_price", 200, "x402", "settled", "0xtx")
+        await gateway._record_mcp_outcome(request, None, "platform/get_price", 200, "x402", "settled", "0xtx")
         await asyncio.sleep(0)
 
     record_mock.assert_awaited_once_with(
@@ -454,6 +454,57 @@ async def test_settle_billing_credit_debit_fail_enqueues_recovery():
     assert args[4] == 100
     record_mock.assert_called_once_with(request, "org-1", "test_tool", 100, "credit", "failed")
     assert result is response
+
+
+@pytest.mark.asyncio
+async def test_mcp_credit_recovery_persists_charge_before_enqueue():
+    from billing.charges import charge_id_for
+
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = SimpleNamespace(mcp_call_event_id="call-1", mcp_principal_id="user-1")
+    order: list[str] = []
+
+    async def _charge(**kwargs):
+        order.append("charge")
+        return charge_id_for(kwargs["source"], kwargs["invocation_id"])
+
+    async def _enqueue(*args, **kwargs):
+        order.append("enqueue")
+
+    with (
+        patch("billing.debit_credit", new=AsyncMock(return_value=(False, 0))),
+        patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock),
+        patch("billing.charges.record_charge", new=AsyncMock(side_effect=_charge)) as charge_mock,
+        patch("billing.settlement.enqueue_failed_settlement", new=AsyncMock(side_effect=_enqueue)) as enqueue_mock,
+    ):
+        await gateway._settle_billing(request, ("org-1", 100, "acme/tool", "req-1"), MagicMock())
+
+    assert order == ["charge", "enqueue"]
+    charge_mock.assert_awaited_once()
+    assert charge_mock.await_args.kwargs["status"] == "failed"
+    args = enqueue_mock.await_args.args
+    assert args[0] == args[2] == "call-1"
+    assert enqueue_mock.await_args.kwargs["charge_id"] == charge_id_for("mcp", "call-1")
+
+
+@pytest.mark.asyncio
+async def test_record_mcp_outcome_dual_writes_charge_with_call_event_id():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state.mcp_call_event_id = "server-call-1"
+    request.state.mcp_principal_id = "user-1"
+    request.state.x402_billing = None
+
+    with (
+        patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock),
+        patch("billing.charges.record_charge", new_callable=AsyncMock) as charge_mock,
+    ):
+        await gateway._record_mcp_outcome(request, "org-1", "acme/tool", 100, "credit", "settled")
+
+    kwargs = charge_mock.await_args.kwargs
+    assert (kwargs["source"], kwargs["invocation_id"]) == ("mcp", "server-call-1")
+    assert (kwargs["status"], kwargs["settled_amount_usdc"], kwargs["principal_id"]) == ("settled", 100, "user-1")
 
 
 @pytest.mark.asyncio

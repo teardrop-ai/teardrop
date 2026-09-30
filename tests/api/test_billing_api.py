@@ -18,7 +18,7 @@ All DB/billing functions are mocked; no live Postgres required.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -210,6 +210,79 @@ async def test_admin_billing_revenue_with_date_range(admin_api_client, monkeypat
     start_arg, end_arg = mock_fn.call_args.args
     assert start_arg is not None
     assert end_arg is not None
+
+
+# ─── /admin/billing/charges/reconciliation ─────────────────────────────────────
+
+_RECONCILIATION_URL = "/admin/billing/charges/reconciliation"
+
+
+@pytest.mark.anyio
+async def test_charge_reconciliation_requires_admin(api_client):
+    assert (await api_client.get(_RECONCILIATION_URL)).status_code == 403
+
+
+@pytest.mark.anyio
+async def test_charge_reconciliation_requires_auth(anon_client):
+    assert (await anon_client.get(_RECONCILIATION_URL)).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_charge_reconciliation_defaults_to_last_day_in_utc(admin_api_client, monkeypatch):
+    report = {
+        "start": "2026-09-28T00:00:00+00:00",
+        "end": "2026-09-29T00:00:00+00:00",
+        "ok": False,
+        "checks": [
+            {
+                "name": "credit_run_debits",
+                "source_rows": 4,
+                "discrepancies": {"missing_debit": 1},
+                "info": {},
+                "sample_ids": ["ledger-1"],
+            }
+        ],
+        "legacy_revenue_usdc": 25_000,
+        "ledger_revenue_usdc": 32_000,
+        "ledger_mcp_revenue_usdc": 7_000,
+    }
+    mock_fn = AsyncMock(return_value=report)
+    monkeypatch.setattr("teardrop.routers.admin.billing.get_charge_reconciliation", mock_fn)
+
+    resp = await admin_api_client.get(_RECONCILIATION_URL)
+
+    assert resp.status_code == 200
+    assert resp.json() == report
+    start_arg, end_arg = mock_fn.call_args.args
+    assert end_arg.tzinfo is not None
+    assert datetime.now(timezone.utc) - end_arg >= timedelta(minutes=5)
+    assert end_arg - start_arg == timedelta(hours=24)
+
+
+@pytest.mark.anyio
+async def test_charge_reconciliation_treats_naive_bounds_as_utc(admin_api_client, monkeypatch):
+    mock_fn = AsyncMock(return_value={})
+    monkeypatch.setattr("teardrop.routers.admin.billing.get_charge_reconciliation", mock_fn)
+
+    await admin_api_client.get(f"{_RECONCILIATION_URL}?start=2026-09-01T00:00:00&end=2026-09-02T00:00:00")
+
+    start_arg, end_arg = mock_fn.call_args.args
+    assert start_arg == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert end_arg == datetime(2026, 9, 2, tzinfo=timezone.utc)
+
+
+@pytest.mark.anyio
+async def test_charge_reconciliation_rejects_invalid_windows(admin_api_client, monkeypatch):
+    monkeypatch.setattr(
+        "teardrop.routers.admin.billing.get_charge_reconciliation",
+        AsyncMock(side_effect=ValueError("reconciliation window must not exceed 31 days")),
+    )
+
+    resp = await admin_api_client.get(f"{_RECONCILIATION_URL}?start=2026-01-01T00:00:00Z&end=2026-09-01T00:00:00Z")
+    assert resp.status_code == 400
+    assert "31 days" in resp.json()["detail"]
+
+    assert (await admin_api_client.get(f"{_RECONCILIATION_URL}?start=not-a-date")).status_code == 422
 
 
 # ─── /admin/orgs/{org_id}/spending ──────────────────────────────────────────

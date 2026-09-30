@@ -31,6 +31,7 @@ from billing import (
     settle_payment,
     verify_settlement_on_chain,
 )
+from billing.charges import record_charge
 from teardrop.agent_stream import _EV_BILLING_SETTLEMENT, _sse_event
 from teardrop.agent_telemetry import _log_agent_memory
 from teardrop.memory import extract_and_store_memories
@@ -208,6 +209,7 @@ async def dispatch_settlement(
     run_id: str,
     result: dict[str, Any],
     enqueue_x402_retry: bool = True,
+    source: str = "api",
 ):
     """Credit debit or x402 settlement, yielding ``BILLING_SETTLEMENT`` frames.
 
@@ -223,6 +225,24 @@ async def dispatch_settlement(
     if not billing.verified:
         return
 
+    payer = getattr(billing, "payer", "")
+
+    async def _charge(method: str, status: str, amount: int, settled: int = 0, tx: str = "") -> str:
+        return await record_charge(
+            source=source,
+            invocation_id=run_id,
+            usage_event_id=usage_event.id,
+            org_id=org_id or "",
+            principal_id=principal_id or "",
+            payer_address=payer if method == "x402" and isinstance(payer, str) else "",
+            capability="agent_run",
+            billing_method=method,
+            amount_usdc=amount,
+            status=status,
+            settled_amount_usdc=settled,
+            settlement_tx=tx,
+        )
+
     if billing.billing_method == "credit":
         success, deducted_amount = await debit_credit(
             org_id,
@@ -234,6 +254,7 @@ async def dispatch_settlement(
             result["marketplace_stats_billable"] = True
             result["settlement_amount_usdc"] = deducted_amount
             await record_settlement(usage_event.id, deducted_amount, "", "settled")
+            await _charge("credit", "settled", cost_usdc, deducted_amount)
             yield _sse_event(
                 _EV_BILLING_SETTLEMENT,
                 {
@@ -247,6 +268,7 @@ async def dispatch_settlement(
             )
         else:
             await record_settlement(usage_event.id, cost_usdc, "", "failed")
+            charge_id = await _charge("credit", "failed", cost_usdc)
             await enqueue_failed_settlement(
                 usage_event.id,
                 org_id,
@@ -254,6 +276,7 @@ async def dispatch_settlement(
                 "credit",
                 cost_usdc,
                 principal_id=principal_id or None,
+                charge_id=charge_id,
             )
             logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
     else:
@@ -301,6 +324,13 @@ async def dispatch_settlement(
                 billing_settled.tx_hash,
                 "settled",
             )
+            await _charge(
+                "x402",
+                "settled",
+                cost_usdc,
+                max(0, billing_settled.amount_usdc),
+                billing_settled.tx_hash,
+            )
             yield _sse_event(
                 _EV_BILLING_SETTLEMENT,
                 {
@@ -330,6 +360,7 @@ async def dispatch_settlement(
                     )
         else:
             await record_settlement(usage_event.id, 0, "", "failed")
+            charge_id = await _charge("x402", "failed", cost_usdc)
             if enqueue_x402_retry:
                 await enqueue_failed_settlement(
                     usage_event.id,
@@ -338,6 +369,7 @@ async def dispatch_settlement(
                     "x402",
                     cost_usdc,
                     payment_payload=str(billing.payment_payload) if billing.payment_payload else None,
+                    charge_id=charge_id,
                 )
             logger.warning(
                 "Settlement failed run_id=%s: %s",

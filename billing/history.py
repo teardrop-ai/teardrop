@@ -10,6 +10,7 @@ from datetime import datetime
 
 import sentry_sdk
 
+from billing.charges import mark_charge_reverted
 from billing.context import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ async def verify_settlement_on_chain(
             return
 
         await record_settlement(usage_event_id, 0, tx_hash, "reverted")
+        await mark_charge_reverted(usage_event_id, tx_hash)
         logger.error(
             "x402 settlement reverted on-chain usage_event_id=%s tx_hash=%s chain_id=%d",
             usage_event_id,

@@ -224,3 +224,75 @@ async def test_x402_failure_skips_retry_when_result_is_withheld():
     record.assert_awaited_once_with("ue-1", 0, "", "failed")
     enqueue.assert_not_awaited()
     assert result["settlement_tx"] == ""
+
+
+def _dispatch(billing, *, source: str = "api", cost_usdc: int = 4_000, org_id: str = "org-1"):
+    from teardrop import agent_post_run
+
+    return agent_post_run.dispatch_settlement(
+        billing=billing,
+        settings=SimpleNamespace(x402_scheme="exact", x402_settlement_timeout_seconds=5, x402_network="eip155:8453"),
+        usage_event=SimpleNamespace(id="ue-1"),
+        platform_fee=0,
+        cost_usdc=cost_usdc,
+        delegation_spend=0,
+        org_id=org_id,
+        principal_id="user-1",
+        run_id="run-1",
+        result={},
+        source=source,
+    )
+
+
+@pytest.mark.anyio
+async def test_credit_success_records_settled_charge():
+    from teardrop import agent_post_run
+
+    with (
+        patch.object(agent_post_run, "debit_credit", AsyncMock(return_value=(True, 3_900))),
+        patch.object(agent_post_run, "record_settlement", AsyncMock()),
+        patch.object(agent_post_run, "record_charge", AsyncMock(return_value="charge-1")) as charge,
+    ):
+        await _drain(_dispatch(SimpleNamespace(verified=True, billing_method="credit", payer=""), source="schedule"))
+
+    kwargs = charge.await_args.kwargs
+    assert kwargs["source"] == "schedule"
+    assert kwargs["invocation_id"] == "run-1"
+    assert kwargs["usage_event_id"] == "ue-1"
+    assert (kwargs["status"], kwargs["amount_usdc"], kwargs["settled_amount_usdc"]) == ("settled", 4_000, 3_900)
+
+
+@pytest.mark.anyio
+async def test_credit_failure_links_retry_to_failed_charge():
+    from teardrop import agent_post_run
+
+    with (
+        patch.object(agent_post_run, "debit_credit", AsyncMock(return_value=(False, 0))),
+        patch.object(agent_post_run, "record_settlement", AsyncMock()),
+        patch.object(agent_post_run, "record_charge", AsyncMock(return_value="charge-1")) as charge,
+        patch.object(agent_post_run, "enqueue_failed_settlement", AsyncMock()) as enqueue,
+    ):
+        await _drain(_dispatch(SimpleNamespace(verified=True, billing_method="credit", payer="")))
+
+    assert charge.await_args.kwargs["status"] == "failed"
+    assert enqueue.await_args.kwargs == {"principal_id": "user-1", "charge_id": "charge-1"}
+
+
+@pytest.mark.anyio
+async def test_x402_success_records_payer_and_tx_on_charge():
+    from teardrop import agent_post_run
+
+    settled = SimpleNamespace(settled=True, amount_usdc=4_000, tx_hash="0xtx", error="")
+    with (
+        patch.object(agent_post_run, "settle_payment", AsyncMock(return_value=settled)),
+        patch.object(agent_post_run, "record_settlement", AsyncMock()),
+        patch.object(agent_post_run, "record_charge", AsyncMock(return_value="charge-1")) as charge,
+        patch.object(agent_post_run, "verify_settlement_on_chain", AsyncMock()),
+    ):
+        billing = SimpleNamespace(verified=True, billing_method="x402", payer="0xPayer", payment_payload=None)
+        await _drain(_dispatch(billing, source="a2a", org_id=""))
+
+    kwargs = charge.await_args.kwargs
+    assert kwargs["source"] == "a2a"
+    assert kwargs["payer_address"] == "0xPayer"
+    assert (kwargs["status"], kwargs["settlement_tx"], kwargs["org_id"]) == ("settled", "0xtx", "")

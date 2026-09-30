@@ -1628,6 +1628,38 @@ async def test_mcp_v1_community_tool_callable_without_subscription(api_client, c
 
 
 @pytest.mark.anyio
+async def test_mcp_v1_records_settled_charge(api_client, community_call, monkeypatch):
+    community_call()
+    charge = AsyncMock(return_value="charge-1")
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_charge", charge)
+
+    resp = await api_client.post("/mcp/v1", json=_call_body({"city": "Paris"}))
+
+    assert resp.json()["result"]["isError"] is False
+    kwargs = charge.await_args.kwargs
+    assert (kwargs["source"], kwargs["capability"], kwargs["status"]) == ("mcp_v1", "acme/weather", "settled")
+    assert (kwargs["amount_usdc"], kwargs["settled_amount_usdc"], kwargs["org_id"]) == (5_000, 5_000, "test-org-id")
+
+
+@pytest.mark.anyio
+async def test_mcp_v1_debit_failure_links_retry_to_charge(api_client, community_call, monkeypatch):
+    mocks = community_call()
+    mocks.debit.return_value = (False, 0)
+    charge = AsyncMock(return_value="charge-1")
+    enqueue = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_mcp.record_charge", charge)
+    monkeypatch.setattr("billing.settlement.enqueue_failed_settlement", enqueue)
+
+    await api_client.post("/mcp/v1", json=_call_body({"city": "Paris"}))
+
+    assert charge.await_args.kwargs["status"] == "failed"
+    args = enqueue.await_args.args
+    assert args[0] == args[2] == charge.await_args.kwargs["invocation_id"]
+    assert enqueue.await_args.kwargs["charge_id"] == "charge-1"
+    mocks.earnings.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_mcp_v1_author_self_call_rejected_unbilled(api_client, community_call):
     mocks = community_call(tool_row={**_WEATHER_ROW, "org_id": "test-org-id"})
 

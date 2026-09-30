@@ -9,7 +9,7 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from billing import (
     admin_topup_credit,
     delete_tool_pricing_override,
+    get_charge_reconciliation,
     get_org_spending_config,
     get_pending_settlements,
     get_revenue_summary,
@@ -127,6 +128,53 @@ async def admin_billing_revenue(
     end_dt = datetime.fromisoformat(end) if end else None
     summary = await get_revenue_summary(start_dt, end_dt)
     return JSONResponse(content=summary)
+
+
+class ReconciliationCheckResponse(BaseModel):
+    name: str
+    source_rows: int
+    discrepancies: dict[str, int]
+    info: dict[str, int]
+    sample_ids: list[str]
+
+
+class ChargeReconciliationResponse(BaseModel):
+    start: datetime
+    end: datetime
+    ok: bool
+    checks: list[ReconciliationCheckResponse]
+    legacy_revenue_usdc: int
+    ledger_revenue_usdc: int
+    ledger_mcp_revenue_usdc: int
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+@router.get(
+    "/admin/billing/charges/reconciliation",
+    tags=["Admin", "Admin / Billing"],
+    response_model=ChargeReconciliationResponse,
+)
+async def admin_charge_reconciliation(
+    _admin: dict = Depends(require_admin),
+    start: datetime | None = Query(None, description="Window start (ISO 8601; UTC when no offset). Defaults to 24h before end."),
+    end: datetime | None = Query(None, description="Exclusive window end (ISO 8601). Defaults to 5 minutes ago."),
+) -> JSONResponse:
+    """Compare the unified charge ledger with legacy billing records (admin only).
+
+    ``ok`` is true only when every check reports zero discrepancies over a window
+    that starts after migration 115 was deployed.
+    """
+    # The default end lags so in-flight settlements (debit committed, charge not yet written) are excluded.
+    end_dt = _as_utc(end) if end else datetime.now(timezone.utc) - timedelta(minutes=5)
+    start_dt = _as_utc(start) if start else end_dt - timedelta(hours=24)
+    try:
+        report = await get_charge_reconciliation(start_dt, end_dt)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return JSONResponse(content=report)
 
 
 class TopupRequest(BaseModel):

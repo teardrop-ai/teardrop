@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from billing.charges import mark_charge_settled
 from billing.context import (
     _get_daily_debit_spend,
     _get_daily_principal_debit_spend,
@@ -89,6 +90,8 @@ async def _settle_claimed_credit(pool: PgPool, row, retry_count: int) -> tuple[b
                 row["usage_event_id"],
                 settled_amount,
             )
+            if row.get("charge_id"):
+                await mark_charge_settled(conn, row["charge_id"], settled_amount)
 
     try:
         await _get_daily_spend_cache(row["org_id"]).invalidate()
@@ -105,6 +108,7 @@ async def enqueue_failed_settlement(
     amount_usdc: int,
     payment_payload: str | None = None,
     principal_id: str | None = None,
+    charge_id: str = "",
 ) -> None:
     """Insert a failed settlement into the retry queue."""
     if amount_usdc <= 0:
@@ -123,8 +127,8 @@ async def enqueue_failed_settlement(
             """
             INSERT INTO pending_settlements
                 (id, usage_event_id, org_id, run_id, billing_method,
-                  amount_usdc, payment_payload, principal_id, max_retries, next_retry_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW() + INTERVAL '2 seconds')
+                  amount_usdc, payment_payload, principal_id, max_retries, charge_id, next_retry_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW() + INTERVAL '2 seconds')
             """,
             str(uuid.uuid4()),
             usage_event_id,
@@ -135,6 +139,7 @@ async def enqueue_failed_settlement(
             payment_payload,
             principal_id,
             settings.settlement_max_retries,
+            charge_id,
         )
         logger.info(
             "Enqueued failed settlement for retry: run_id=%s method=%s",
@@ -171,7 +176,7 @@ async def process_pending_settlements() -> int:
                                             settlement.run_id, settlement.billing_method, settlement.amount_usdc,
                                             settlement.payment_payload, settlement.principal_id,
                                             settlement.retry_count, settlement.max_retries,
-                                            settlement.next_retry_at
+                                            settlement.charge_id, settlement.next_retry_at
             """,
         )
     except Exception:

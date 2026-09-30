@@ -1020,6 +1020,54 @@
         "title": "CalibrationBin",
         "type": "object"
       },
+      "ChargeReconciliationResponse": {
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationCheckResponse"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "ledger_mcp_revenue_usdc": {
+            "title": "Ledger Mcp Revenue Usdc",
+            "type": "integer"
+          },
+          "ledger_revenue_usdc": {
+            "title": "Ledger Revenue Usdc",
+            "type": "integer"
+          },
+          "legacy_revenue_usdc": {
+            "title": "Legacy Revenue Usdc",
+            "type": "integer"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "ok",
+          "checks",
+          "legacy_revenue_usdc",
+          "ledger_revenue_usdc",
+          "ledger_mcp_revenue_usdc"
+        ],
+        "title": "ChargeReconciliationResponse",
+        "type": "object"
+      },
       "CompleteWithdrawalRequest": {
         "properties": {
           "tx_hash": {
@@ -5918,6 +5966,48 @@
         "title": "PublicToolReputation",
         "type": "object"
       },
+      "ReconciliationCheckResponse": {
+        "properties": {
+          "discrepancies": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Discrepancies",
+            "type": "object"
+          },
+          "info": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Info",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sample_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sample Ids",
+            "type": "array"
+          },
+          "source_rows": {
+            "title": "Source Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "source_rows",
+          "discrepancies",
+          "info",
+          "sample_ids"
+        ],
+        "title": "ReconciliationCheckResponse",
+        "type": "object"
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -8386,7 +8476,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.3.0"
+    "version": "2.4.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -9016,6 +9106,84 @@
         "tags": [
           "Admin",
           "Admin / A2A"
+        ]
+      }
+    },
+    "/admin/billing/charges/reconciliation": {
+      "get": {
+        "description": "Compare the unified charge ledger with legacy billing records (admin only).\n\n``ok`` is true only when every check reports zero discrepancies over a window\nthat starts after migration 115 was deployed.",
+        "operationId": "admin_charge_reconciliation_admin_billing_charges_reconciliation_get",
+        "parameters": [
+          {
+            "description": "Window start (ISO 8601; UTC when no offset). Defaults to 24h before end.",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Window start (ISO 8601; UTC when no offset). Defaults to 24h before end.",
+              "title": "Start"
+            }
+          },
+          {
+            "description": "Exclusive window end (ISO 8601). Defaults to 5 minutes ago.",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exclusive window end (ISO 8601). Defaults to 5 minutes ago.",
+              "title": "End"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeReconciliationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Admin Charge Reconciliation",
+        "tags": [
+          "Admin",
+          "Admin / Billing"
         ]
       }
     },
