@@ -26,7 +26,14 @@ from teardrop.funnel_counters import (
     record_discovery_hit,
 )
 from teardrop.public_url import public_base_url
-from tools import registry
+from tools.capabilities import (
+    get_capability_manifest,
+    to_a2a_skill,
+    to_a2a_tool,
+    to_llms_txt_line,
+    to_mcp_server_card_tool,
+    to_x402_mcp_listing,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -112,6 +119,10 @@ def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
         "",
         "## Pricing",
         f"- [Billing Pricing]({base_url}/billing/pricing): Public pricing and payment metadata.",
+        "",
+        "## Tools",
+        f"Callable over MCP at {base_url}/tools/mcp; input schemas are in the MCP Server Card.",
+        *(to_llms_txt_line(c) for c in get_capability_manifest() if c.kind == "platform" and not c.deprecated),
     ]
     if marketplace_enabled:
         lines.extend(
@@ -130,12 +141,10 @@ def _build_llms_txt(base_url: str, *, marketplace_enabled: bool) -> str:
     return "\n".join(lines)
 
 
-def _build_agent_card_content(
-    request: Request,
-    reputation: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+def _build_agent_card_content(request: Request) -> dict[str, Any]:
     card_settings = get_settings()
     base_url = _public_base_url(request, card_settings)
+    card_tools = [c for c in get_capability_manifest() if c.kind == "platform" and c.show_on_agent_card]
     security_requirements = [{"bearer_jwt": []}]
     capabilities: dict[str, Any] = {
         "streaming": True,
@@ -247,7 +256,7 @@ def _build_agent_card_content(
                 "Break this counterparty investigation into evidence-gathering and decision steps.",
             ],
         },
-        *registry.to_a2a_skills(reputation),
+        *(to_a2a_skill(c) for c in card_tools),
         {
             "id": "a2ui_rendering",
             "name": "a2ui_rendering",
@@ -316,7 +325,7 @@ def _build_agent_card_content(
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["text/plain", "application/json"],
         "skills": skills,
-        "tools": registry.to_a2a_tool_list(reputation),
+        "tools": [to_a2a_tool(c) for c in card_tools],
         "authentication": {
             "required": True,
             "scheme": "bearer",
@@ -367,6 +376,11 @@ def _build_oauth_protected_resource_content(request: Request, resource_path: str
     }
 
 
+def _x402_mcp_tool_listings() -> list[dict[str, Any]]:
+    # Only positive prices are charged per tool; zero-priced calls are free or use the flat default.
+    return [to_x402_mcp_listing(c) for c in get_capability_manifest() if c.x402_payable and not c.deprecated and c.cost_usdc]
+
+
 async def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
     current_settings = get_settings()
     base_url = _public_base_url(request, current_settings)
@@ -392,6 +406,7 @@ async def _build_x402_discovery_content(request: Request) -> dict[str, Any]:
             "protocol": "mcp",
             "auth_modes": ["bearer", *(["x402"] if current_settings.mcp_x402_enabled else [])],
             "description": "MCP discovery and optional paid tool execution gateway.",
+            **({"tools": _x402_mcp_tool_listings()} if current_settings.mcp_x402_enabled else {}),
         },
     ]
     if current_settings.a2a_inbound_enabled:
@@ -616,8 +631,7 @@ async def jwks() -> JSONResponse:
 async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
     record_discovery_hit(SURFACE_AGENT_CARD)
-    snapshot = await get_public_reputation_snapshot()
-    return _json_discovery_response(request, _build_agent_card_content(request, snapshot["tools"]))
+    return _json_discovery_response(request, _build_agent_card_content(request))
 
 
 @router.get(
@@ -672,8 +686,7 @@ async def registry_benefits(request: Request) -> Response:
 @router.get("/.well-known/agent.json", include_in_schema=False, tags=["A2A"])
 async def legacy_agent_card(request: Request) -> Response:
     """Legacy alias for older discovery clients that still probe agent.json."""
-    snapshot = await get_public_reputation_snapshot()
-    return _json_discovery_response(request, _build_agent_card_content(request, snapshot["tools"]))
+    return _json_discovery_response(request, _build_agent_card_content(request))
 
 
 @router.get("/.well-known/oauth-protected-resource", tags=["MCP"])
@@ -723,8 +736,8 @@ async def robots_txt(request: Request) -> Response:
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
     record_discovery_hit(SURFACE_MCP_SERVER_CARD)
-    snapshot = await get_public_reputation_snapshot()
-    tools = registry.to_mcp_server_card_tools(snapshot["tools"])
+    # Platform tools only: community tools are Bearer-only and advertised via the marketplace block.
+    tools = [to_mcp_server_card_tool(c) for c in get_capability_manifest() if c.kind == "platform" and not c.deprecated]
     description = _mcp_server_description()
 
     s = get_settings()

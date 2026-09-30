@@ -31,6 +31,7 @@ def _community_tool(name="acme/weather", cost=5_000, schema=None):
         tool_type="community",
         marketplace_description="Weather lookup",
         input_schema=schema or {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        output_schema=None,
         cost_usdc=cost,
     )
 
@@ -168,6 +169,43 @@ async def test_refresh_registers_priced_community_tools_and_skips_platform_rows(
     assert weather.meta == {"teardrop/price": {"cost_usdc": 5_000, "unit": "call"}}
     assert weather.input_schema["required"] == ["city"]
     assert "platform/calculate" not in await _names(server)
+
+
+async def test_refresh_snapshot_matches_tools_list_including_pricing_failure(monkeypatch):
+    from tools.capabilities import get_capability_manifest
+
+    mod = importlib.import_module("tools.mcp_server")
+    server = mod.create_mcp_server()
+    catalog_mock = _marketplace_on(monkeypatch, [_community_tool()])
+    await mod.refresh_mcp_tools(server)
+
+    by_name = {capability.name: capability for capability in get_capability_manifest()}
+    assert by_name["acme/weather"].cost_usdc == 5_000
+    assert by_name["calculate"].cost_usdc == 0
+    assert await _names(server) == set(by_name)
+
+    catalog_mock.side_effect = RuntimeError("db down")
+    await mod.refresh_mcp_tools(server)
+
+    by_name = {capability.name: capability for capability in get_capability_manifest()}
+    assert await _names(server) == set(by_name)
+    assert by_name["calculate"].cost_usdc is None
+    assert by_name["acme/weather"].cost_usdc == 5_000
+
+
+async def test_manifest_price_matches_gateway_x402_charge(monkeypatch):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.capabilities import get_capability_manifest
+
+    monkeypatch.setattr("billing.get_tool_pricing_overrides", AsyncMock(return_value={"web_search": 15_000}))
+    monkeypatch.setattr("billing.get_current_pricing", AsyncMock(return_value=SimpleNamespace(tool_call_cost=1_000)))
+    monkeypatch.setattr("marketplace.reputation.get_public_reputation", AsyncMock(return_value={}))
+    mod = importlib.import_module("tools.mcp_server")
+    await mod.refresh_mcp_tools(mod.create_mcp_server())
+
+    by_name = {capability.name: capability for capability in get_capability_manifest()}
+    for name in ("web_search", "get_token_price"):
+        assert by_name[name].cost_usdc == await MCPGatewayMiddleware._resolve_tool_cost(name)
 
 
 async def test_refresh_removes_delisted_and_keeps_last_set_on_catalog_failure(monkeypatch):

@@ -42,10 +42,10 @@ human operator):
 
 ## Where the fields surface
 
-`tools/registry.py` exports them on the MCP server card (`to_mcp_server_card_tools`),
+`tools/capabilities.py` projects them onto the MCP server card (`to_mcp_server_card_tool`),
 renders them into live MCP `tools/list` descriptions (`to_mcp_tool_defs`), and, for
-`show_on_agent_card=True` tools, emits them on the A2A card (`to_a2a_skills`,
-`to_a2a_tool_list`). LangChain tool binding (`to_langchain_tool`) passes
+`show_on_agent_card=True` tools, emits them on the A2A card (`to_a2a_skill`,
+`to_a2a_tool`). LangChain tool binding (`to_langchain_tool`) passes
 **`description` only** — so `description` must stand alone without
 `use_when`/`limitations`.
 

@@ -9,8 +9,8 @@ exports them as LangChain tools, A2A skills, and MCP definitions).
 Owner map:
   - reputation helpers:  build_reputation_meta, format_mcp_quality_description (MCP ``_meta`` + description trailer)
   - ToolDefinition:      tool declaration model + LangChain conversion
-  - ToolRegistry:        register/deprecate/get, exporters (to_langchain_tools, to_a2a_skills,
-                         to_a2a_tool_list, to_mcp_server_card_tools, to_mcp_tool_defs)
+  - ToolRegistry:        register/deprecate/get, exporters (to_langchain_tools, to_mcp_tool_defs);
+                         public discovery cards are projected from ``tools.capabilities``
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ class ToolDefinition(BaseModel):
             "(skills/tools sections). Commoditized utility/low-level RPC "
             "primitives are set False to keep the card focused on Teardrop's "
             "differentiated capabilities; the tool remains fully callable via "
-            "MCP (to_mcp_server_card_tools) and GET /agent/tools regardless."
+            "MCP (server card and tools/list) and GET /agent/tools regardless."
         ),
     )
     implementation: Callable[..., Any] = Field(..., description="Async callable that executes the tool")
@@ -288,119 +288,7 @@ class ToolRegistry:
         """Return a ``{name: StructuredTool}`` mapping for the tool executor."""
         return {t.name: t.to_langchain_tool() for t in self.list_latest()}
 
-    # ── Export: A2A ───────────────────────────────────────────────────────────
-
-    def to_a2a_skills(
-        self,
-        reputation: dict[str, dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Generate the ``skills`` section for the A2A agent card.
-
-        Only tools with ``show_on_agent_card=True`` are included — this is a
-        public discoverability surface, not the full tool inventory (see
-        ``GET /agent/tools`` and ``to_mcp_server_card_tools`` for that).
-        """
-        skills: list[dict[str, Any]] = []
-        for tool in self.list_latest(include_deprecated=True):
-            if not tool.show_on_agent_card:
-                continue
-            skill: dict[str, Any] = {
-                "id": tool.name,
-                "name": tool.name,
-                "description": tool.description,
-                "tags": tool.tags,
-                "version": tool.version,
-            }
-            if tool.examples:
-                skill["examples"] = list(tool.examples)
-            if tool.use_when:
-                skill["use_when"] = tool.use_when
-            if tool.limitations:
-                skill["limitations"] = tool.limitations
-            if tool.alternatives:
-                skill["alternatives"] = list(tool.alternatives)
-            if tool.deprecated:
-                skill["deprecated"] = True
-                if tool.superseded_by:
-                    skill["superseded_by"] = tool.superseded_by
-            metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if _has_reputation_signal(metrics):
-                skill["reputation"] = dict(metrics)
-            skills.append(skill)
-        return skills
-
-    def to_a2a_tool_list(
-        self,
-        reputation: dict[str, dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Generate a detailed ``tools`` section with JSON Schema for the A2A card.
-
-        Only tools with ``show_on_agent_card=True`` are included (see
-        ``to_a2a_skills`` for rationale).
-        """
-        tools: list[dict[str, Any]] = []
-        for tool in self.list_latest(include_deprecated=True):
-            if not tool.show_on_agent_card:
-                continue
-            entry: dict[str, Any] = {
-                "name": tool.name,
-                "version": tool.version,
-                "description": tool.description,
-                "tags": tool.tags,
-                "input_schema": tool.input_schema.model_json_schema(),
-            }
-            if tool.use_when:
-                entry["use_when"] = tool.use_when
-            if tool.limitations:
-                entry["limitations"] = tool.limitations
-            if tool.alternatives:
-                entry["alternatives"] = list(tool.alternatives)
-            if tool.output_schema is not None:
-                if isinstance(tool.output_schema, dict):
-                    entry["output_schema"] = tool.output_schema
-                else:
-                    entry["output_schema"] = tool.output_schema.model_json_schema()
-            if tool.deprecated:
-                entry["deprecated"] = True
-            metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if _has_reputation_signal(metrics):
-                entry["reputation"] = dict(metrics)
-            tools.append(entry)
-        return tools
-
     # ── Export: MCP ───────────────────────────────────────────────────────────
-
-    def to_mcp_server_card_tools(
-        self,
-        reputation: dict[str, dict[str, Any]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Generate the tools array for the static .well-known/mcp/server-card.json."""
-        tools: list[dict[str, Any]] = []
-        for tool in self.list_latest():
-            title = tool.name.replace("_", " ").title()
-            entry: dict[str, Any] = {
-                "name": tool.name,
-                "title": title,
-                "description": tool.description,
-                "inputSchema": tool.input_schema.model_json_schema(),
-                "annotations": tool.annotations or {"readOnlyHint": True},
-            }
-            if tool.use_when:
-                entry["use_when"] = tool.use_when
-            if tool.limitations:
-                entry["limitations"] = tool.limitations
-            if tool.alternatives:
-                entry["alternatives"] = list(tool.alternatives)
-            if tool.output_schema is not None:
-                if isinstance(tool.output_schema, dict):
-                    entry["outputSchema"] = tool.output_schema
-                else:
-                    entry["outputSchema"] = tool.output_schema.model_json_schema()
-            metrics = (reputation or {}).get(f"platform/{tool.name}")
-            if _has_reputation_signal(metrics):
-                entry["reputation"] = dict(metrics)
-            tools.append(entry)
-        return tools
 
     def to_mcp_tool_defs(
         self,

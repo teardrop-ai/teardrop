@@ -57,6 +57,7 @@ from teardrop.dependencies import (
 )
 from teardrop.funnel_counters import SURFACE_CATALOG, SURFACE_QUOTE, record_discovery_hit
 from teardrop.rate_limit import _enforce_rate_limit
+from tools.capabilities import escape_llms_text, format_atomic_usdc
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -479,28 +480,7 @@ def _serialize_marketplace_tool(tool: Any) -> dict[str, Any]:
     return result
 
 
-def _format_atomic_usdc(amount_usdc: int) -> str:
-    whole, fractional = divmod(max(0, int(amount_usdc)), 1_000_000)
-    return f"${whole}.{fractional:06d}"
-
-
-def _escape_llms_text(value: Any) -> str:
-    # ─── Public Catalog & Author Discovery (browse/search marketplace) ─────────
-
-    return (
-        str(value or "")
-        .replace("\\", "\\\\")
-        .replace("`", "'")
-        .replace("[", "(")
-        .replace("]", ")")
-        .replace("<", "(")
-        .replace(">", ")")
-        .replace("#", "")
-        .replace("|", "-")
-        .replace("\r", " ")
-        .replace("\n", " ")
-        .strip()
-    )
+# ─── Public Catalog & Author Discovery (browse/search marketplace) ─────────
 
 
 @router.get("/marketplace/catalog", tags=["Marketplace"], response_model=MarketplaceCatalogResponse)
@@ -894,13 +874,13 @@ async def marketplace_llms_txt(request: Request) -> Response:
             quote_url = f"{base_url}/marketplace/quote?tool={tool.qualified_name}"
             description = tool.marketplace_description or tool.description
             lines.append(
-                f"## {_escape_llms_text(tool.qualified_name)}\n"
-                f"- Description: {_escape_llms_text(description)}\n"
-                f"- Author: {_escape_llms_text(tool.author_org_name)}\n"
-                f"- Category: {_escape_llms_text(tool.category or 'uncategorized')}\n"
-                f"- Health: {_escape_llms_text(tool.health_status)}\n"
+                f"## {escape_llms_text(tool.qualified_name)}\n"
+                f"- Description: {escape_llms_text(description)}\n"
+                f"- Author: {escape_llms_text(tool.author_org_name)}\n"
+                f"- Category: {escape_llms_text(tool.category or 'uncategorized')}\n"
+                f"- Health: {escape_llms_text(tool.health_status)}\n"
                 f"- Calls: {tool.total_calls}\n"
-                f"- Price: {_format_atomic_usdc(tool.cost_usdc)}\n"
+                f"- Price: {format_atomic_usdc(tool.cost_usdc)}\n"
                 f"- [Detail]({detail_url})\n"
                 f"- [Quote]({quote_url})\n"
                 f"- [Reputation]({base_url}/.well-known/reputation.json)\n"

@@ -76,6 +76,12 @@ def initialize_rpc_semaphore(test_settings):
     init_rpc_semaphore(test_settings.agent_rpc_semaphore_limit)
 
 
+@pytest.fixture(autouse=True)
+def _reset_capability_manifest(monkeypatch):
+    """Keep the process-wide capability snapshot from leaking between tests."""
+    monkeypatch.setattr("tools.capabilities._snapshot", None)
+
+
 @pytest.fixture
 def test_jwt_token(test_settings) -> str:
     """A valid JWT for a regular test user."""

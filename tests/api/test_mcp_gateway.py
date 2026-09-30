@@ -417,6 +417,7 @@ async def test_tools_list_hides_community_tools_from_anonymous_callers(
     monkeypatch, test_jwt_token, bearer, expect_community, expected_hits
 ):
     from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.capabilities import build_capability_manifest
     from tools.mcp_server import _sync_community_tools, build_mcp_app, create_mcp_server
 
     hits: list[str] = []
@@ -427,9 +428,10 @@ async def test_tools_list_hides_community_tools_from_anonymous_callers(
         tool_type="community",
         marketplace_description="Weather lookup",
         input_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        output_schema=None,
         cost_usdc=5000,
     )
-    await _sync_community_tools(mcp, [community], {})
+    await _sync_community_tools(mcp, build_capability_manifest(community=[community]))
     app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     app.add_middleware(MCPGatewayMiddleware)
     app.mount("/tools/mcp", build_mcp_app(mcp))

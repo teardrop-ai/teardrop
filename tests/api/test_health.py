@@ -184,25 +184,45 @@ async def test_agent_card_hides_disabled_event_trigger_control_plane(api_client,
 
 
 @pytest.mark.anyio
-async def test_agent_card_includes_public_tool_reputation(api_client, monkeypatch):
-    snapshot = {
-        "generated_at": "2026-08-02T12:00:00+00:00",
-        "tools": {
-            "platform/assess_counterparty_risk": {
-                "reputation_score": 0.93,
-                "success_rate": 0.97,
-            }
-        },
-    }
-    monkeypatch.setattr(
-        "teardrop.routers.system.get_public_reputation_snapshot",
-        AsyncMock(return_value=snapshot),
-    )
+async def test_agent_card_includes_public_tool_reputation(api_client):
+    from tools.capabilities import build_capability_manifest, set_capability_manifest
+
+    metrics = {"reputation_score": 0.93, "success_rate": 0.97}
+    set_capability_manifest(build_capability_manifest({"platform/assess_counterparty_risk": metrics}))
 
     response = await api_client.get("/.well-known/agent-card.json")
 
-    risk_tool = next(tool for tool in response.json()["tools"] if tool["name"] == "assess_counterparty_risk")
-    assert risk_tool["reputation"] == snapshot["tools"]["platform/assess_counterparty_risk"]
+    body = response.json()
+    risk_tool = next(tool for tool in body["tools"] if tool["name"] == "assess_counterparty_risk")
+    risk_skill = next(skill for skill in body["skills"] if skill["id"] == "assess_counterparty_risk")
+    assert risk_tool["reputation"] == metrics
+    assert risk_skill["reputation"] == metrics
+
+
+@pytest.mark.anyio
+async def test_deprecated_capability_is_flagged_on_agent_card_and_hidden_from_mcp_card(api_client):
+    from tools.capabilities import Capability, set_capability_manifest
+
+    retired = Capability(
+        name="retired_tool",
+        qualified_name="platform/retired_tool",
+        kind="platform",
+        version="1.0.0",
+        description="Retired.",
+        input_schema={"type": "object"},
+        x402_payable=True,
+        deprecated=True,
+        superseded_by="2.0.0",
+    )
+    set_capability_manifest((retired,))
+
+    agent_card = (await api_client.get("/.well-known/agent-card.json")).json()
+    mcp_card = (await api_client.get("/.well-known/mcp/server-card.json")).json()
+
+    skill = next(skill for skill in agent_card["skills"] if skill["id"] == "retired_tool")
+    assert skill["deprecated"] is True
+    assert skill["superseded_by"] == "2.0.0"
+    assert mcp_card["tools"] == []
 
 
 @pytest.mark.anyio
@@ -445,6 +465,7 @@ async def test_x402_discovery_metadata(api_client, test_settings, monkeypatch):
         "protocol": "mcp",
         "auth_modes": ["bearer", "x402"],
         "description": "MCP discovery and optional paid tool execution gateway.",
+        "tools": [],
     }
     assert body["accepts"] == [{"scheme": "exact", "network": "eip155:8453", "maxAmountRequired": "0.01"}]
 
@@ -457,6 +478,47 @@ async def test_x402_discovery_metadata(api_client, test_settings, monkeypatch):
         headers={"If-None-Match": resp.headers["etag"]},
     )
     assert cached_resp.status_code == 304
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("mcp_x402_enabled", [True, False])
+async def test_x402_discovery_lists_priced_payable_mcp_tools(api_client, test_settings, mcp_x402_enabled):
+    from types import SimpleNamespace
+
+    from tools.capabilities import Capability, build_capability_manifest, set_capability_manifest
+
+    test_settings.mcp_x402_enabled = mcp_x402_enabled
+    community = SimpleNamespace(
+        qualified_name="acme/weather",
+        tool_type="community",
+        marketplace_description="Weather lookup",
+        input_schema={"type": "object"},
+        output_schema=None,
+        cost_usdc=5_000,
+    )
+    retired = Capability(
+        name="retired_tool",
+        qualified_name="platform/retired_tool",
+        kind="platform",
+        description="Retired.",
+        input_schema={"type": "object"},
+        cost_usdc=9_000,
+        x402_payable=True,
+        deprecated=True,
+    )
+    manifest = build_capability_manifest(prices={"web_search": 15_000, "calculate": 0}, community=[community])
+    set_capability_manifest((*manifest, retired))
+
+    body = (await api_client.get("/.well-known/x402")).json()
+
+    mcp = next(item for item in body["resources"] if item["path"] == "/tools/mcp")
+    if not mcp_x402_enabled:
+        assert "tools" not in mcp
+        return
+    web_search = next(c for c in manifest if c.name == "web_search")
+    assert mcp["tools"] == [
+        {"name": "web_search", "description": web_search.description, "scheme": "exact", "amount_usdc": 15_000}
+    ]
 
 
 @pytest.mark.anyio
@@ -685,6 +747,41 @@ async def test_mcp_server_card_points_community_tools_to_tools_mcp(api_client, t
 
 
 @pytest.mark.anyio
+async def test_mcp_server_card_projects_capability_snapshot(api_client):
+    """The card mirrors live tools/list pricing and reputation but stays platform-only."""
+    from types import SimpleNamespace
+
+    from tools.capabilities import build_capability_manifest, set_capability_manifest
+
+    community = SimpleNamespace(
+        qualified_name="acme/weather",
+        tool_type="community",
+        marketplace_description="Weather lookup",
+        input_schema={"type": "object"},
+        output_schema=None,
+        cost_usdc=5_000,
+    )
+    set_capability_manifest(
+        build_capability_manifest(
+            {"platform/web_search": {"reputation_score": 0.9, "sample_size": 5}},
+            {"web_search": 15_000},
+            [community],
+        )
+    )
+
+    body = (await api_client.get("/.well-known/mcp/server-card.json")).json()
+
+    tools = {tool["name"]: tool for tool in body["tools"]}
+    assert "acme/weather" not in tools
+    assert tools["web_search"]["reputation"] == {"reputation_score": 0.9, "sample_size": 5}
+    assert tools["web_search"]["_meta"] == {
+        "teardrop/reputation": {"reputation_score": 0.9, "sample_size": 5},
+        "teardrop/price": {"cost_usdc": 15_000, "unit": "call"},
+    }
+    assert "_meta" not in tools["get_wallet_portfolio"]
+
+
+@pytest.mark.anyio
 async def test_oauth_protected_resource_metadata(api_client):
     root_resp = await api_client.get("/.well-known/oauth-protected-resource")
 
@@ -727,6 +824,41 @@ async def test_root_llms_txt(api_client, test_settings):
     assert "http://test/.well-known/reputation.json" in resp.text
     assert "http://test/.well-known/registry-benefits.json" in resp.text
     assert "http://test/marketplace/llms.txt" in resp.text
+
+
+@pytest.mark.anyio
+async def test_root_llms_txt_lists_callable_platform_tools_from_manifest(api_client):
+    from types import SimpleNamespace
+
+    from tools.capabilities import Capability, build_capability_manifest, set_capability_manifest
+
+    community = SimpleNamespace(
+        qualified_name="acme/weather",
+        tool_type="community",
+        marketplace_description="Weather lookup",
+        input_schema={"type": "object"},
+        output_schema=None,
+        cost_usdc=5_000,
+    )
+    retired = Capability(
+        name="retired_tool",
+        qualified_name="platform/retired_tool",
+        kind="platform",
+        description="Retired.",
+        input_schema={"type": "object"},
+        x402_payable=True,
+        deprecated=True,
+    )
+    manifest = build_capability_manifest(prices={"web_search": 15_000, "calculate": 0}, community=[community])
+    set_capability_manifest((*manifest, retired))
+
+    text = (await api_client.get("/llms.txt")).text
+
+    assert "## Tools" in text
+    assert "- web_search ($0.015000 per call): " in text
+    assert "- calculate: " in text
+    assert "acme/weather" not in text
+    assert "retired_tool" not in text
 
 
 @pytest.mark.anyio

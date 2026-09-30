@@ -52,7 +52,9 @@ Programmatic MCP clients also receive structured reputation in each tool's
 omitted entirely for unrated tools, so clients should treat its absence as
 "unrated" rather than zero. The `/tools/mcp` gateway emits the same metadata,
 plus `_meta["teardrop/price"]`, for platform tools (bare names) and published
-org tools (`{org_slug}/{tool_name}`, Bearer and credit only). `/tools/mcp` is
+org tools (`{org_slug}/{tool_name}`, Bearer and credit only). The MCP server card
+is projected from the same capability snapshot (`tools/capabilities.py`), so its
+platform-tool `_meta` matches `tools/list`. `/tools/mcp` is
 also the x402 endpoint for platform tools; `POST /mcp/v1` is deprecated.
 Every registered tool defines `use_when`, `limitations`, and `alternatives`
 guidance to help agents choose the right capability and avoid redundant calls;

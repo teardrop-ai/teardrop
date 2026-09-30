@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import logging
 import sys
+from collections.abc import Iterable
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
@@ -27,7 +28,14 @@ from pydantic import Field
 from teardrop._meta import APP_VERSION
 from teardrop.config import get_settings
 from tools import registry
-from tools.registry import build_mcp_tool_meta, format_mcp_quality_description
+from tools.capabilities import (
+    Capability,
+    build_capability_manifest,
+    capability_meta,
+    get_capability_manifest,
+    set_capability_manifest,
+)
+from tools.registry import format_mcp_quality_description
 from tools.schema import build_pydantic_model
 
 logger = logging.getLogger(__name__)
@@ -157,20 +165,19 @@ def _marketplace_impl(qualified_name: str) -> Any:
     return impl
 
 
-async def _sync_community_tools(server: MCPServer, catalog: list[Any], reputation: dict[str, dict[str, Any]]) -> None:
-    listed = {tool.qualified_name: tool for tool in catalog if tool.tool_type == "community"}
+async def _sync_community_tools(server: MCPServer, capabilities: Iterable[Capability]) -> None:
+    listed = {capability.name: capability for capability in capabilities if capability.kind == "community"}
     for name in [tool.name for tool in await server.list_tools() if "/" in tool.name]:
         server.remove_tool(name)
-    for name, tool in listed.items():
-        metrics = reputation.get(name)
+    for name, capability in listed.items():
         try:
-            schema = build_pydantic_model(name, tool.input_schema, model_name=f"MPTool_{name.replace('/', '_')}_Input")
+            schema = build_pydantic_model(name, capability.input_schema, model_name=f"MPTool_{name.replace('/', '_')}_Input")
             handler = _make_handler(_marketplace_impl(name), schema, None, exclude_none=True)
             handler.__name__ = f"mcp_{name.replace('/', '__')}"
             server.tool(
                 name=name,
-                description=format_mcp_quality_description(tool.marketplace_description, metrics),
-                meta=build_mcp_tool_meta(metrics, tool.cost_usdc),
+                description=format_mcp_quality_description(capability.description, capability.reputation),
+                meta=capability_meta(capability),
             )(handler)
         except Exception:
             logger.warning("MCP: skipped community tool %s (unsupported input schema)", name)
@@ -207,11 +214,15 @@ async def refresh_mcp_tools(server: MCPServer) -> None:
     except Exception:
         # Price meta is advisory (the gateway re-prices every call); keep the last community set.
         logger.warning("MCP: tool pricing refresh unavailable")
+        kept_community = tuple(c for c in get_capability_manifest() if c.kind == "community")
+        set_capability_manifest(build_capability_manifest(reputation) + kept_community)
         _register_tools_with_mcp(server, reputation=reputation, replace_existing=True)
         return
 
+    capabilities = build_capability_manifest(reputation, prices, catalog)
+    set_capability_manifest(capabilities)
     _register_tools_with_mcp(server, reputation=reputation, prices=prices, replace_existing=True)
-    await _sync_community_tools(server, catalog, reputation)
+    await _sync_community_tools(server, capabilities)
 
 
 def create_mcp_server() -> MCPServer:

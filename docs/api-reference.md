@@ -10,7 +10,7 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 |--------|------|------|-------------|
 | `GET` | `/` | — | Redirects to `/docs` |
 | `GET` | `/health` | — | Liveness probe |
-| `GET` | `/llms.txt` | — | Root LLM-friendly discovery index for public Teardrop surfaces |
+| `GET` | `/llms.txt` | — | Root LLM-friendly discovery index for public Teardrop surfaces; a `Tools` section lists callable platform tools (with per-call price when positive) from the shared capability manifest |
 | `GET` | `/robots.txt` | — | Public crawler directives with `llms.txt` pointer |
 | `POST` | `/agent/run` | Bearer | Main streaming endpoint (SSE) |
 | `POST` | `/message:send` | Bearer or x402 | Inbound A2A endpoint; blocking by default, or `202` with `Prefer: respond-async` (when enabled) |
@@ -21,9 +21,9 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `DELETE` | `/agent/tool-exclusions/{tool_name}` | Bearer | Remove a persisted tool exclusion |
 | `GET` | `/.well-known/agent-card.json` | — | A2A agent card with MCP discovery and optional marketplace metadata |
 | `GET` | `/.well-known/reputation.json` | — | Aggregate quality metrics for active marketplace tools; caller counts are omitted below five distinct orgs |
-| `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators; advertises the `grant_type=x402` bootstrap entrypoint when enabled |
+| `GET` | `/.well-known/x402` | — | Public x402 discovery metadata for registries and validators; advertises the `grant_type=x402` bootstrap entrypoint when enabled. When `MCP_X402_ENABLED`, the `/tools/mcp` resource lists `tools` (`name`, `description`, `scheme: exact`, `amount_usdc`) for each positively priced, x402-payable tool from the shared capability manifest — the same per-call amount the gateway challenges for |
 | `GET` | `/.well-known/x402.json` | — | Legacy JSON alias for x402 discovery metadata |
-| `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery; advertises `bearer` + `x402` auth schemes and an `x402` capability block (network, scheme, discovery URL, bootstrap endpoint) when `MCP_X402_ENABLED` |
+| `GET` | `/.well-known/mcp/server-card.json` | — | Static MCP tool catalogue for Smithery; lists platform tools from the shared capability manifest (`tools/capabilities.py`) with the same `_meta` (`teardrop/reputation`, `teardrop/price`) as live `tools/list`; advertises `bearer` + `x402` auth schemes and an `x402` capability block (network, scheme, discovery URL, bootstrap endpoint) when `MCP_X402_ENABLED` |
 | `GET` | `/.well-known/agent.json` | — | Legacy alias for the agent card used by older crawlers |
 | `GET` | `/.well-known/jwks.json` | — | RS256 public key in JWKS format (for external JWT verification) |
 | `GET` | `/docs` | — | Swagger UI |

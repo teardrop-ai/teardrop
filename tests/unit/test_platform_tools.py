@@ -814,6 +814,7 @@ async def _community_client(monkeypatch):
     config.get_settings.cache_clear()
 
     from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.capabilities import build_capability_manifest
     from tools.mcp_server import _sync_community_tools, build_mcp_app, create_mcp_server
 
     mcp = create_mcp_server()
@@ -822,9 +823,10 @@ async def _community_client(monkeypatch):
         tool_type="community",
         marketplace_description="Weather lookup",
         input_schema={"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        output_schema=None,
         cost_usdc=5000,
     )
-    await _sync_community_tools(mcp, [tool], {})
+    await _sync_community_tools(mcp, build_capability_manifest(community=[tool]))
     mounted_app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
     mounted_app.add_middleware(MCPGatewayMiddleware)
     mounted_app.mount("/tools/mcp", build_mcp_app(mcp))

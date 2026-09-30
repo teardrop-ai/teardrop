@@ -130,53 +130,6 @@ def test_to_langchain_tools_returns_list():
     assert lc_tools[0].name == "test_tool"
 
 
-def test_to_a2a_skills_shape():
-    reg = ToolRegistry()
-    tool = _make_tool()
-    tool.examples = ["Check this test input."]
-    reg.register(tool)
-    skills = reg.to_a2a_skills()
-    assert len(skills) == 1
-    skill = skills[0]
-    assert skill["name"] == "test_tool"
-    assert "description" in skill
-    assert "tags" in skill
-    assert "version" in skill
-    assert skill["examples"] == ["Check this test input."]
-    assert "reputation" not in skill
-
-
-def test_to_a2a_skills_omits_empty_examples():
-    reg = ToolRegistry()
-    reg.register(_make_tool())
-
-    assert "examples" not in reg.to_a2a_skills()[0]
-
-
-def test_public_exports_include_reputation_when_supplied():
-    reg = ToolRegistry()
-    reg.register(_make_tool())
-    reputation = {"platform/test_tool": {"reputation_score": 0.9, "unique_caller_count": 5}}
-
-    skill = reg.to_a2a_skills(reputation)[0]
-    tool = reg.to_a2a_tool_list(reputation)[0]
-    mcp_tool = reg.to_mcp_server_card_tools(reputation)[0]
-
-    assert skill["reputation"] == reputation["platform/test_tool"]
-    assert tool["reputation"] == reputation["platform/test_tool"]
-    assert mcp_tool["reputation"] == reputation["platform/test_tool"]
-
-
-def test_public_cards_do_not_rate_tools_with_no_observations():
-    reg = ToolRegistry()
-    reg.register(_make_tool())
-    reputation = {"platform/test_tool": {"reputation_score": 0, "sample_size": 0, "success_rate": 0}}
-
-    assert "reputation" not in reg.to_a2a_skills(reputation)[0]
-    assert "reputation" not in reg.to_a2a_tool_list(reputation)[0]
-    assert "reputation" not in reg.to_mcp_server_card_tools(reputation)[0]
-
-
 def test_dynamic_mcp_defs_include_reputation_in_description():
     reg = ToolRegistry()
     reg.register(_make_tool())
@@ -354,82 +307,9 @@ def test_dynamic_mcp_defs_rebuild_without_guidance_duplication():
     assert second.count("Use when:") == 1
 
 
-def test_public_exports_ignore_unknown_reputation():
-    reg = ToolRegistry()
-    reg.register(_make_tool())
-
-    assert "reputation" not in reg.to_a2a_skills({"platform/other": {"reputation_score": 1.0}})[0]
-
-
-def test_agent_commerce_fields_emitted_when_present_and_omitted_when_empty():
-    reg = ToolRegistry()
-    reg.register(
-        ToolDefinition(
-            name="guided_tool",
-            version="1.0.0",
-            description="A guided tool.",
-            tags=["test"],
-            use_when="Use when the task needs guidance.",
-            limitations="Only works on mainnet.",
-            alternatives=["other_tool"],
-            input_schema=_In,
-            output_schema=_Out,
-            implementation=_noop,
-        )
-    )
-    reg.register(_make_tool(name="plain_tool"))
-
-    skill = reg.to_a2a_skills()[0]
-    assert skill["use_when"] == "Use when the task needs guidance."
-    assert skill["limitations"] == "Only works on mainnet."
-    assert skill["alternatives"] == ["other_tool"]
-
-    tool = reg.to_a2a_tool_list()[0]
-    assert tool["use_when"] == "Use when the task needs guidance."
-    assert tool["limitations"] == "Only works on mainnet."
-    assert tool["alternatives"] == ["other_tool"]
-
-    mcp_tool = reg.to_mcp_server_card_tools()[0]
-    assert mcp_tool["use_when"] == "Use when the task needs guidance."
-    assert mcp_tool["limitations"] == "Only works on mainnet."
-    assert mcp_tool["alternatives"] == ["other_tool"]
-
-    # Empty fields are omitted entirely (backward compatible).
-    plain_skill = reg.to_a2a_skills()[1]
-    assert "use_when" not in plain_skill
-    assert "limitations" not in plain_skill
-    assert "alternatives" not in plain_skill
-
-
 def test_show_on_agent_card_defaults_true():
     tool = _make_tool()
     assert tool.show_on_agent_card is True
-
-
-def test_to_a2a_skills_excludes_hidden_tools():
-    reg = ToolRegistry()
-    reg.register(_make_tool(name="visible_tool"))
-    hidden = _make_tool(name="hidden_tool")
-    hidden.show_on_agent_card = False
-    reg.register(hidden)
-
-    skills = reg.to_a2a_skills()
-    names = {s["name"] for s in skills}
-    assert "visible_tool" in names
-    assert "hidden_tool" not in names
-
-
-def test_to_a2a_tool_list_excludes_hidden_tools():
-    reg = ToolRegistry()
-    reg.register(_make_tool(name="visible_tool"))
-    hidden = _make_tool(name="hidden_tool")
-    hidden.show_on_agent_card = False
-    reg.register(hidden)
-
-    tools = reg.to_a2a_tool_list()
-    names = {t["name"] for t in tools}
-    assert "visible_tool" in names
-    assert "hidden_tool" not in names
 
 
 def test_hidden_tool_still_available_via_langchain_and_mcp():
