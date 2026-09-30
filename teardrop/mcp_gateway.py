@@ -48,11 +48,12 @@ from tools.schema import flatten_embedded_json_schema
 logger = logging.getLogger(__name__)
 
 _MCP_PREFIX = "/tools/mcp"
+# Must be a paid tool: the Bazaar replays this example and expects a 402 (never an _ANON_FREE_TOOLS entry).
 _MCP_BAZAAR_INPUT_EXAMPLE = {
     "jsonrpc": "2.0",
     "id": 1,
     "method": "tools/call",
-    "params": {"name": "get_datetime", "arguments": {}},
+    "params": {"name": "get_token_price", "arguments": {"tokens": ["ETH"]}},
 }
 _MCP_BAZAAR_INPUT_SCHEMA = {
     "type": "object",
@@ -77,7 +78,13 @@ _MCP_BAZAAR_OUTPUT_EXAMPLE = {
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-        "content": [{"type": "text", "text": '{"datetime":"2026-09-11T00:00:00+00:00"}'}],
+        "content": [
+            {
+                "type": "text",
+                "text": '{"vs_currency":"usd","prices":[{"id":"ethereum","symbol":"eth","price":3500.0,'
+                '"market_cap":null,"volume_24h":null,"change_24h_pct":null}]}',
+            }
+        ],
         "isError": False,
     },
 }
@@ -92,6 +99,7 @@ _MCP_PAYMENT_HINT = (
 # Price lookups fail open to 0, so a zero cost alone is not proof a tool is free.
 _ANON_FREE_TOOLS = frozenset({"calculate", "get_datetime", "count_text_stats", "discover_agents"})
 _ANON_IP_LIMIT_PER_MINUTE = 60
+_JSONRPC_MESSAGE_KEYS = frozenset({"method", "result", "error"})
 # The CDP facilitator rejects verify and settle when a discovery description exceeds 500 characters.
 _BAZAAR_DESCRIPTION_MAX_CHARS = 500
 
@@ -287,26 +295,38 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         rpc_id: int | str | None = None
         discovery_response: JSONResponse | None = None
         is_public_discovery = False
+        is_payment_probe = False
         if request.method != "POST":
             is_public_discovery = True
         else:
             try:
                 # Sniff JSON-RPC method safely; Starlette caches body in request._body
                 body = await request.body()
-                if body:
-                    data = json.loads(body)
-                    rpc_id = data.get("id")
-                    method = data.get("method", "")
-                    if method == "ai.smithery/events/list":
-                        discovery_response = self._smithery_events_list_response(rpc_id)
-                        is_public_discovery = True
-                    # Gate only execution (tools/call). Handshakes/listing/notifications are public.
-                    elif method != "tools/call":
-                        is_public_discovery = True
-                else:
+                data = json.loads(body) if body.strip() else {}
+                rpc_id = data.get("id")
+                method = data.get("method", "")
+                if method == "ai.smithery/events/list":
+                    discovery_response = self._smithery_events_list_response(rpc_id)
+                    is_public_discovery = True
+                elif (
+                    not (_JSONRPC_MESSAGE_KEYS & data.keys())
+                    and settings.mcp_auth_enabled
+                    and settings.mcp_x402_enabled
+                    and self._extract_bearer(request) is None
+                ):
+                    # A non-JSON-RPC POST (e.g. the Bazaar validator's empty probe) gets the paid resource's 402.
+                    is_payment_probe = True
+                # Gate only execution (tools/call). Handshakes/listing/notifications are public.
+                elif method != "tools/call":
                     is_public_discovery = True
             except Exception:
                 is_public_discovery = True
+
+        if is_payment_probe:
+            limited = await _anonymous_ip_limit(request)
+            if limited is not None:
+                return limited
+            return await self._payment_probe_challenge(request)
 
         if is_public_discovery:
             limited = await _anonymous_ip_limit(request)
@@ -698,6 +718,22 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             return build_exact_payment_requirements(tool_cost) or None
         # Never offer upto on MCP: it needs a one-time Permit2 approval most MCP payers lack.
         return [req for req in get_payment_requirements() if getattr(req, "scheme", "exact") == "exact"] or None
+
+    @classmethod
+    async def _payment_probe_challenge(cls, request: Request) -> Response:
+        """HTTP 402 for an anonymous non-JSON-RPC POST, priced and described as the declared Bazaar example call."""
+        try:
+            requirements = await cls._x402_tool_requirements(_MCP_BAZAAR_INPUT_EXAMPLE)
+        except Exception:
+            logger.warning("x402 MCP probe pricing unavailable", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content=_jsonrpc_error(None, -32603, "Paid MCP pricing is temporarily unavailable."),
+            )
+        response_kwargs: dict = {"resource": _mcp_402_resource(request), "extensions": _mcp_402_extensions()}
+        if requirements is not None:
+            response_kwargs["requirements"] = requirements
+        return cls._x402_challenge(None, False, response_kwargs)
 
     @staticmethod
     def _x402_settlement_failed(request: Request, req_id: int | str | None) -> Response:

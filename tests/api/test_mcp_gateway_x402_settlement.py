@@ -150,6 +150,64 @@ async def test_allowlisted_free_tool_is_ip_rate_limited(x402_gateway_env, monkey
     mocks.verify.assert_not_awaited()
 
 
+async def _post_raw(content: bytes, headers: dict[str, str]):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPPathNormalizer)
+    app.mount("/tools/mcp", MCPGatewayMiddleware(build_mcp_app(mcp), mounted=True))
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post("/tools/mcp", content=content, headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [b"{}", b"", b'{"jsonrpc":"2.0","id":1}'])
+async def test_non_jsonrpc_probe_gets_bazaar_402(x402_gateway_env, monkeypatch, content):
+    from x402.extensions.bazaar.facilitator import validate_discovery_extension_spec
+
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _post_raw(content, {"Content-Type": "application/json", "Accept": "application/json"})
+
+    assert response.status_code == 402
+    bazaar = mocks.body["extensions"]["bazaar"]
+    assert validate_discovery_extension_spec(bazaar).valid
+    assert bazaar["info"]["input"]["type"] == "http"
+    assert bazaar["info"]["input"]["method"] == "POST"
+    assert bazaar["info"]["input"]["body"]["params"]["name"] == "get_token_price"
+    assert mocks.body["requirements"] is mocks.scoped
+    assert mocks.body["resource"]["url"].endswith("/tools/mcp")
+    mocks.verify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_jsonrpc_probe_with_bearer_is_not_a_payment_challenge(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _post_raw(b"{}", {"Content-Type": "application/json", "Authorization": "Bearer token"})
+
+    assert response.status_code != 402
+    assert mocks.body is None
+
+
+@pytest.mark.asyncio
+async def test_bazaar_example_call_is_a_paid_402(x402_gateway_env, monkeypatch):
+    from teardrop.mcp_gateway import _ANON_FREE_TOOLS, _MCP_BAZAAR_INPUT_EXAMPLE
+
+    _patch_billing(monkeypatch, tool_cost=2_000)
+
+    response = await _post_raw(json.dumps(_MCP_BAZAAR_INPUT_EXAMPLE).encode(), {"Content-Type": "application/json"})
+
+    assert _MCP_BAZAAR_INPUT_EXAMPLE["params"]["name"] not in _ANON_FREE_TOOLS
+    assert response.status_code == 402
+
+
 @pytest.mark.asyncio
 async def test_verified_header_payment_settles_through_mounted_gateway(x402_gateway_env, monkeypatch):
     mocks = _patch_billing(monkeypatch)

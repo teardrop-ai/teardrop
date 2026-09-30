@@ -438,6 +438,8 @@ Use the full public URL of the paid A2A surface, for example `https://api.teardr
 
 Agentic Market validators may probe `/.well-known/x402`, `/.well-known/x402.json`, and the configured endpoint URL. Teardrop serves those discovery aliases publicly and issues the x402 challenge on unpaid anonymous `POST /message:send` requests before body validation. The challenge includes the full x402 v2 `PaymentRequired` envelope (`PAYMENT-REQUIRED`), a legacy `X-PAYMENT-REQUIRED` alias, a top-level `resource.url` describing the paid surface, and `extensions.bazaar` describing the A2A request/response shape.
 
+The MCP endpoint `POST https://api.teardrop.dev/tools/mcp` behaves the same way for validators: an anonymous POST whose body is empty or not a JSON-RPC message receives an HTTP `402` whose `extensions.bazaar` declares a paid `tools/call` example (`get_token_price`) and is priced at that tool's cost. Unpaid anonymous `tools/call` requests receive per-tool MCP Bazaar metadata. MCP handshakes and `tools/list` stay public.
+
 ## Publishing to Smithery
 
 Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-card.json`. To distribute on Smithery:
