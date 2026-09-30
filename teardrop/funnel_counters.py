@@ -31,6 +31,48 @@ SURFACE_MCP_402_CHALLENGE = "mcp_402_challenge"
 # Subsets of mcp_402_challenge for anonymous x402 callers; credit-rail 402s count only in the total.
 SURFACE_MCP_402_NO_PAYMENT = "mcp_402_no_payment"
 SURFACE_MCP_402_PAYMENT_INVALID = "mcp_402_payment_invalid"
+# Partition of no_payment + payment_invalid by header-derived client class.
+SURFACE_MCP_402_ANON_CLIENT_PREFIX = "mcp_402_anon_client:"
+# MCP `initialize` handshakes by clientInfo.name bucket (the app is stateless, so tools/call carries no clientInfo).
+SURFACE_MCP_INITIALIZE_PREFIX = "mcp_initialize:"
+
+CLIENT_CLASSES: tuple[str, ...] = ("bot", "mcp", "browser", "script", "unknown")
+MCP_HOSTS: tuple[str, ...] = ("claude", "cursor", "vscode", "openai", "inspector", "x402", "other", "none")
+
+_BOT_UA_TOKENS = ("bot", "crawl", "spider", "scan", "monitor", "uptime", "probe", "validat", "health", "preview", "headless")
+_SCRIPT_UA_TOKENS = (
+    "curl",
+    "wget",
+    "python",
+    "httpx",
+    "aiohttp",
+    "requests",
+    "node",
+    "undici",
+    "axios",
+    "go-http",
+    "okhttp",
+    "java",
+    "ruby",
+    "reqwest",
+    "deno",
+    "bun/",
+    "postman",
+    "insomnia",
+)
+# First match wins: "cursor-vscode" must bucket as cursor.
+_MCP_HOST_TOKENS = (
+    ("claude", "claude"),
+    ("cursor", "cursor"),
+    ("visual studio code", "vscode"),
+    ("vscode", "vscode"),
+    ("openai", "openai"),
+    ("chatgpt", "openai"),
+    ("codex", "openai"),
+    ("inspector", "inspector"),
+    ("x402", "x402"),
+)
+_MAX_CLASSIFIED_CHARS = 256
 
 VALID_SURFACES: frozenset[str] = frozenset(
     {
@@ -44,6 +86,8 @@ VALID_SURFACES: frozenset[str] = frozenset(
         SURFACE_MCP_402_CHALLENGE,
         SURFACE_MCP_402_NO_PAYMENT,
         SURFACE_MCP_402_PAYMENT_INVALID,
+        *(SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
+        *(SURFACE_MCP_INITIALIZE_PREFIX + host for host in MCP_HOSTS),
     }
 )
 
@@ -65,6 +109,31 @@ def close_funnel_counters() -> None:
     _pool = None
     _enabled = False
     _counters.clear()
+
+
+def anon_challenge_client_surface(user_agent: str | None, is_mcp: bool) -> str:
+    """Bucket an anonymous x402 challenger; self-identified bots win over the MCP transport signal."""
+    ua = (user_agent or "")[:_MAX_CLASSIFIED_CHARS].lower()
+    if any(token in ua for token in _BOT_UA_TOKENS):
+        cls = "bot"
+    elif is_mcp:
+        cls = "mcp"
+    elif ua.startswith("mozilla/"):
+        cls = "browser"
+    elif any(token in ua for token in _SCRIPT_UA_TOKENS):
+        cls = "script"
+    else:
+        cls = "unknown"
+    return SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls
+
+
+def mcp_initialize_surface(client_name: object) -> str:
+    """Bucket an MCP ``initialize`` clientInfo.name into the bounded host vocabulary."""
+    if not isinstance(client_name, str) or not client_name.strip():
+        return SURFACE_MCP_INITIALIZE_PREFIX + "none"
+    name = client_name[:_MAX_CLASSIFIED_CHARS].lower()
+    host = next((bucket for token, bucket in _MCP_HOST_TOKENS if token in name), "other")
+    return SURFACE_MCP_INITIALIZE_PREFIX + host
 
 
 def record_discovery_hit(surface: str) -> None:

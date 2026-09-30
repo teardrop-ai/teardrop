@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from x402.schemas import VerifyResponse  # noqa: F401  # loaded before tests patch sys.modules["x402"]
 
 import billing as billing_facade
 import billing.x402 as x402
@@ -230,6 +231,90 @@ def test_facilitator_affinity_is_internal():
     result = BillingResult(facilitator_index=2)
 
     assert result.model_dump() == BillingResult().model_dump()
+
+
+_CDP_REJECTION = ValueError(
+    'Facilitator verify failed (400): {"invalidMessage":"contract call failed: execution reverted",'
+    '"invalidReason":"invalid_payload","isValid":false,"payer":"0xabc"}'
+)
+
+
+@pytest.mark.anyio
+async def test_verify_4xx_rejection_is_a_result_not_an_outage(monkeypatch):
+    first = MagicMock(verify_payment=AsyncMock(side_effect=_CDP_REJECTION))
+    second = MagicMock(verify_payment=AsyncMock(return_value=SimpleNamespace(is_valid=True, payer="0xabc")))
+    _requirement, parser = _verification_context(monkeypatch, [first, second])
+
+    with patch.dict("sys.modules", {"x402": parser}):
+        result = await x402.verify_payment(base64.b64encode(b"payment").decode())
+
+    assert result.verified is False
+    assert result.error == "Payment verification failed: invalid_payload"
+    second.verify_payment.assert_not_awaited()
+    assert x402._facilitator_unhealthy_until[0] == 0.0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(ValueError('Facilitator verify failed (400): {"isValid":true,"payer":"0xabc"}'), id="4xx-claims-valid"),
+        pytest.param(ValueError("Facilitator verify failed (400): not json"), id="4xx-unparseable"),
+        pytest.param(ValueError('Facilitator verify failed (503): {"isValid":false}'), id="5xx"),
+    ],
+)
+async def test_verify_non_rejection_errors_still_fail_over(monkeypatch, error):
+    first = MagicMock(verify_payment=AsyncMock(side_effect=error))
+    second = MagicMock(verify_payment=AsyncMock(return_value=SimpleNamespace(is_valid=True, payer="0xabc")))
+    _requirement, parser = _verification_context(monkeypatch, [first, second])
+
+    with patch.dict("sys.modules", {"x402": parser}):
+        result = await x402.verify_payment(base64.b64encode(b"payment").decode())
+
+    assert result.verified is True
+    assert result.facilitator_index == 1
+    assert x402._facilitator_unhealthy_until[0] > 0.0
+
+
+def test_cdp_facilitator_client_is_authenticated():
+    config = {"url": "https://api.cdp.coinbase.com/platform/v2/x402", "create_headers": lambda: {}}
+    with (
+        patch("cdp.x402.create_facilitator_config", return_value=config) as create_config,
+        patch("x402.http.HTTPFacilitatorClient") as client_factory,
+    ):
+        x402.build_facilitator_client("https://api.cdp.coinbase.com/platform/v2/x402", "key-id", "key-secret")
+
+    create_config.assert_called_once_with("key-id", "key-secret")
+    client_factory.assert_called_once_with(config)
+
+
+def test_cdp_facilitator_requires_api_key():
+    with pytest.raises(RuntimeError, match="CDP_API_KEY_ID"):
+        x402.build_facilitator_client("https://api.cdp.coinbase.com/platform/v2/x402")
+
+
+@pytest.mark.anyio
+async def test_init_skips_cdp_facilitator_without_api_key(monkeypatch):
+    settings = _init_settings()
+    settings.x402_facilitator_urls = ["https://api.cdp.coinbase.com/platform/v2/x402", "https://two.example"]
+    settings.cdp_api_key_id = ""
+    settings.cdp_api_key_secret = ""
+    fallback = MagicMock()
+    fallback.build_payment_requirements.side_effect = lambda config: [config]
+    monkeypatch.setattr(x402, "get_settings", lambda: settings)
+    monkeypatch.setattr(x402, "get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr(x402, "async_validate_url", AsyncMock(return_value=None))
+    monkeypatch.setattr(x402, "_bind_pool", MagicMock())
+    monkeypatch.setattr(x402, "_servers", [])
+
+    with (
+        patch("x402.x402ResourceServer", MagicMock(return_value=fallback)),
+        patch("x402.http.HTTPFacilitatorClient") as client_factory,
+    ):
+        await x402.init_billing(MagicMock())
+
+    assert x402._servers == [fallback]
+    assert client_factory.call_args.args[0].url == "https://two.example"
 
 
 def test_build_requirements_advertises_each_treasury():

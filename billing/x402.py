@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Mapping
@@ -74,6 +75,51 @@ def _facilitator_host(url: str) -> str:
     return urlsplit(url).hostname or "unknown"
 
 
+CDP_FACILITATOR_HOST = "api.cdp.coinbase.com"
+# The x402 SDK raises on any non-200 verify; CDP reports definitive rejections with HTTP 400.
+_VERIFY_REJECTION = re.compile(r"^Facilitator verify failed \((4\d\d)\): (.+)$", re.DOTALL)
+
+
+def build_facilitator_client(url: str, cdp_api_key_id: str = "", cdp_api_key_secret: str = ""):
+    """Return an x402 facilitator client, authenticated with the CDP Secret API key for the CDP facilitator."""
+    from x402.http import HTTPFacilitatorClient
+    from x402.http.facilitator_client_base import FacilitatorConfig
+
+    if urlsplit(url).hostname != CDP_FACILITATOR_HOST:
+        return HTTPFacilitatorClient(FacilitatorConfig(url=url))
+    if not (cdp_api_key_id and cdp_api_key_secret):
+        raise RuntimeError("The CDP facilitator requires CDP_API_KEY_ID and CDP_API_KEY_SECRET")
+    from cdp.x402 import create_facilitator_config
+
+    # CDP auth JWTs are bound to the SDK's fixed /platform/v2/x402 route, so the configured path is not used.
+    return HTTPFacilitatorClient(create_facilitator_config(cdp_api_key_id, cdp_api_key_secret))
+
+
+def _verify_rejection(exc: Exception):
+    """Return the facilitator's 4xx verify body when it is an explicit ``isValid: false`` rejection."""
+    match = _VERIFY_REJECTION.match(str(exc)) if isinstance(exc, ValueError) else None
+    if match is None:
+        return None
+    from x402.schemas import VerifyResponse
+
+    try:
+        result = VerifyResponse.model_validate_json(match.group(2))
+    except ValueError:
+        return None
+    return result if result.is_valid is False else None
+
+
+async def verify_with_facilitator(server, payload, requirement):
+    """Verify through one facilitator; a 4xx rejection is a result, anything else that raises is an outage."""
+    try:
+        return await server.verify_payment(payload, requirement)
+    except ValueError as exc:
+        rejection = _verify_rejection(exc)
+        if rejection is None:
+            raise
+        return rejection
+
+
 def _build_requirements(server, settings, treasuries: list[str], price: str) -> tuple[list, list | None, list]:
     from x402 import ResourceConfig
 
@@ -120,8 +166,6 @@ async def init_billing(pool: PgPool) -> None:
         raise RuntimeError("billing_enabled=True but no x402 treasury address is configured")
 
     from x402 import x402ResourceServer
-    from x402.http import HTTPFacilitatorClient
-    from x402.http.facilitator_client_base import FacilitatorConfig
     from x402.mechanisms.evm.exact import ExactEvmServerScheme
 
     upto_scheme = None
@@ -140,7 +184,11 @@ async def init_billing(pool: PgPool) -> None:
             logger.warning("x402 facilitator blocked by URL policy host=%s", _facilitator_host(facilitator_url))
             continue
         try:
-            facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=facilitator_url))
+            facilitator = build_facilitator_client(
+                facilitator_url,
+                getattr(settings, "cdp_api_key_id", ""),
+                getattr(settings, "cdp_api_key_secret", ""),
+            )
             server = x402ResourceServer(facilitator)
             server.register(settings.x402_network, ExactEvmServerScheme())
             if upto_scheme is not None:
@@ -591,7 +639,7 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
             available = [min(range(len(servers)), key=_facilitator_unhealthy_until.__getitem__)]
         for index in available:
             try:
-                result = await servers[index].verify_payment(payload, requirement)
+                result = await verify_with_facilitator(servers[index], payload, requirement)
             except Exception as exc:  # noqa: BLE001
                 _facilitator_failures[index] += 1
                 cooldown = min(2 ** (_facilitator_failures[index] - 1) * 5, 300)
@@ -759,7 +807,7 @@ async def verify_and_settle_usdc_topup(
     requirement = requirements[0]
 
     try:
-        verify_result = await server.verify_payment(payload, requirement)
+        verify_result = await verify_with_facilitator(server, payload, requirement)
     except Exception as exc:
         logger.error("usdc_topup: verification unavailable error_type=%s", type(exc).__name__)
         return BillingResult(error="Payment verification service unavailable")

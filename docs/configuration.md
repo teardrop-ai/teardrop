@@ -50,7 +50,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
 | `ONBOARDING_CREDIT_RETRY_INTERVAL_SECONDS` | Poll interval for retrying failed onboarding-credit grants (default: `60`) |
 | `X402_FACILITATOR_URL` | Primary x402 facilitator URL (default: `https://x402.org/facilitator`) |
-| `X402_FACILITATOR_URLS` | Ordered JSON array of credential-free HTTPS facilitator URLs; verification fails over on transport errors. Empty uses `X402_FACILITATOR_URL`. Only list facilitators whose `/verify` rejects unfunded payers; check with `python scripts/probe_x402_facilitators.py --urls ...` before changing this value. |
+| `X402_FACILITATOR_URLS` | Ordered JSON array of credential-free HTTPS facilitator URLs; verification fails over on transport errors and 5xx responses, while a facilitator's explicit `isValid: false` rejection (including CDP's HTTP 400) is final. Empty uses `X402_FACILITATOR_URL`. `https://api.cdp.coinbase.com/platform/v2/x402` (the CDP facilitator, required for x402 Bazaar indexing) authenticates with `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` and is skipped at startup without them. Only list facilitators whose `/verify` rejects unfunded payers; check with `python scripts/probe_x402_facilitators.py --urls ...` before changing this value. |
 | `X402_PAY_TO_ADDRESS` | Primary treasury wallet (USDC recipient) |
 | `X402_TREASURY_ADDRESSES` | JSON array of EVM treasury addresses advertised in payment requirements. Empty uses `X402_PAY_TO_ADDRESS`. |
 | `X402_NETWORK` | `eip155:8453` for Base mainnet |
@@ -59,7 +59,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `SIWE_DOMAIN` | Your public domain (e.g. `api.teardrop.dev`) |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `AGENT_WALLET_ENABLED` | `true` to enable per-org CDP-backed wallets |
-| `CDP_API_KEY_ID` | Coinbase Developer Platform API key ID |
+| `CDP_API_KEY_ID` | Coinbase Developer Platform API key ID (agent wallets, withdrawals, VOR anchoring, and the CDP x402 facilitator) |
 | `CDP_API_KEY_SECRET` | CDP API key secret (Ed25519 / ECDSA) |
 | `CDP_WALLET_SECRET` | CDP wallet secret (decrypts TEE-stored keys) |
 | `CDP_NETWORK` | CDP network: `base-sepolia` (testnet) or `base` (mainnet) |

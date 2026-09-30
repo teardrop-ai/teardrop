@@ -92,6 +92,14 @@ _MCP_PAYMENT_HINT = (
 # Price lookups fail open to 0, so a zero cost alone is not proof a tool is free.
 _ANON_FREE_TOOLS = frozenset({"calculate", "get_datetime", "count_text_stats", "discover_agents"})
 _ANON_IP_LIMIT_PER_MINUTE = 60
+# The CDP facilitator rejects verify and settle when a discovery description exceeds 500 characters.
+_BAZAAR_DESCRIPTION_MAX_CHARS = 500
+
+
+def _bazaar_description(text: str) -> str:
+    if len(text) <= _BAZAAR_DESCRIPTION_MAX_CHARS:
+        return text
+    return text[: _BAZAAR_DESCRIPTION_MAX_CHARS - 1].rstrip() + "\u2026"
 
 
 class MCPPathNormalizer:
@@ -179,7 +187,7 @@ def _mcp_402_extensions(tool_name: str | None = None) -> dict:
         return declare_mcp_discovery_extension(
             DeclareMcpDiscoveryConfig(
                 tool_name=tool.name,
-                description=tool.description,
+                description=_bazaar_description(tool.description),
                 transport="streamable-http",
                 input_schema=flatten_embedded_json_schema(tool.input_schema.model_json_schema()),
             )
@@ -305,17 +313,28 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             if limited is not None:
                 return limited
 
-            from teardrop.funnel_counters import SURFACE_TOOLS_LIST, SURFACE_TOOLS_LIST_ANON, record_discovery_hit
+            from teardrop.funnel_counters import (
+                SURFACE_TOOLS_LIST,
+                SURFACE_TOOLS_LIST_ANON,
+                mcp_initialize_surface,
+                record_discovery_hit,
+            )
 
             try:
-                is_tools_list = json.loads(body or b"{}").get("method") == "tools/list"
+                rpc = json.loads(body or b"{}")
             except Exception:
-                is_tools_list = False
+                rpc = None
+            rpc_method = rpc.get("method") if isinstance(rpc, dict) else None
+            is_tools_list = rpc_method == "tools/list"
             is_anonymous = self._extract_bearer(request) is None
             if is_tools_list:
                 record_discovery_hit(SURFACE_TOOLS_LIST)
                 if is_anonymous:
                     record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
+            elif rpc_method == "initialize":
+                params = rpc.get("params")
+                client_info = params.get("clientInfo") if isinstance(params, dict) else None
+                record_discovery_hit(mcp_initialize_surface(client_info.get("name") if isinstance(client_info, dict) else None))
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
@@ -593,6 +612,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_MCP_402_CHALLENGE,
             SURFACE_MCP_402_NO_PAYMENT,
             SURFACE_MCP_402_PAYMENT_INVALID,
+            anon_challenge_client_surface,
             record_discovery_hit,
         )
 
@@ -637,9 +657,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         }
         if requirements is not None:
             response_kwargs["requirements"] = requirements
+        client_surface = anon_challenge_client_surface(request.headers.get("user-agent"), mcp_signal)
         if not payment_header:
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
+            record_discovery_hit(client_surface)
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         billing = await verify_payment(payment_header, requirements)
@@ -647,6 +669,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             response_kwargs["error"] = billing.error
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_PAYMENT_INVALID)
+            record_discovery_hit(client_surface)
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing

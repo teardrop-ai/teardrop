@@ -161,10 +161,11 @@ async def test_mcp_x402_challenge_records_funnel_counter(monkeypatch, payment_he
         subtype = (
             funnel_module.SURFACE_MCP_402_NO_PAYMENT if payment_header is None else funnel_module.SURFACE_MCP_402_PAYMENT_INVALID
         )
-        assert sum(funnel_module._counters.values()) == 2
+        assert sum(funnel_module._counters.values()) == 3
         assert {surface for surface, _ in funnel_module._counters} == {
             funnel_module.SURFACE_MCP_402_CHALLENGE,
             subtype,
+            funnel_module.SURFACE_MCP_402_ANON_CLIENT_PREFIX + "unknown",
         }
     finally:
         funnel_module.close_funnel_counters()
@@ -446,6 +447,48 @@ async def test_tools_list_hides_community_tools_from_anonymous_callers(
     assert "calculate" in names
     assert ("acme/weather" in names) is expect_community
     assert hits == expected_hits
+
+
+@pytest.mark.asyncio
+async def test_initialize_records_client_host_bucket(monkeypatch):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "claude-ai", "version": "0.1.0"},
+        },
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/tools/mcp", json=body, headers={"Accept": "application/json"})
+
+    assert resp.status_code == 200, resp.text
+    assert hits == ["mcp_initialize:claude"]
+
+
+@pytest.mark.parametrize("tool_name", ["get_wallet_positions", "get_dex_quote"])
+def test_bazaar_tool_description_fits_cdp_limit(tool_name):
+    from teardrop.mcp_gateway import _mcp_402_extensions
+    from tools import registry
+
+    assert len(registry.get(tool_name).description) > 500
+    description = _mcp_402_extensions(tool_name)["bazaar"]["info"]["input"]["description"]
+
+    assert len(description) <= 500
+    assert description.endswith("\u2026")
 
 
 @pytest.fixture

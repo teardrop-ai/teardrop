@@ -10,12 +10,17 @@ import pytest
 
 import teardrop.funnel_counters as funnel_module
 from teardrop.funnel_counters import (
+    CLIENT_CLASSES,
+    MCP_HOSTS,
     SURFACE_AGENT_CARD,
     SURFACE_CATALOG,
     SURFACE_MCP_402_CHALLENGE,
+    VALID_SURFACES,
+    anon_challenge_client_surface,
     close_funnel_counters,
     flush_discovery_counters,
     init_funnel_counters,
+    mcp_initialize_surface,
     record_discovery_hit,
 )
 
@@ -51,8 +56,56 @@ class TestRecordDiscoveryHit:
         init_funnel_counters(_pool(), enabled=True)
         record_discovery_hit("not_a_surface")
         record_discovery_hit("")
+        record_discovery_hit("mcp_402_anon_client:curl/8.0")
 
         assert funnel_module._counters == {}
+
+
+class TestClientClassification:
+    @pytest.mark.parametrize(
+        ("user_agent", "is_mcp", "expected"),
+        [
+            ("x402scan-indexer/1.0", True, "bot"),
+            ("Mozilla/5.0 (compatible; Googlebot/2.1)", False, "bot"),
+            ("python-httpx/0.28.1", True, "mcp"),
+            ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130", False, "browser"),
+            ("curl/8.9.1", False, "script"),
+            ("node", False, "script"),
+            ("", False, "unknown"),
+            (None, False, "unknown"),
+            ("SomeAgent/1.0", False, "unknown"),
+        ],
+    )
+    def test_anon_challenge_client_surface(self, user_agent, is_mcp, expected):
+        surface = anon_challenge_client_surface(user_agent, is_mcp)
+
+        assert surface == f"mcp_402_anon_client:{expected}"
+        assert surface in VALID_SURFACES
+
+    @pytest.mark.parametrize(
+        ("client_name", "expected"),
+        [
+            ("claude-ai", "claude"),
+            ("claude-code", "claude"),
+            ("cursor-vscode", "cursor"),
+            ("Visual Studio Code", "vscode"),
+            ("openai-mcp", "openai"),
+            ("mcp-inspector", "inspector"),
+            ("x402-mcp-client", "x402"),
+            ("my-agent", "other"),
+            ("   ", "none"),
+            (None, "none"),
+            ({"name": "claude"}, "none"),
+        ],
+    )
+    def test_mcp_initialize_surface(self, client_name, expected):
+        surface = mcp_initialize_surface(client_name)
+
+        assert surface == f"mcp_initialize:{expected}"
+        assert surface in VALID_SURFACES
+
+    def test_vocabulary_is_bounded(self):
+        assert len(VALID_SURFACES) == 10 + len(CLIENT_CLASSES) + len(MCP_HOSTS)
 
 
 @pytest.mark.anyio
