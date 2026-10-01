@@ -272,5 +272,25 @@
     "max_cost_usdc": 700000,
     "scorer": "llm_judge",
     "rubric": "Calls get_lending_rates with protocol=all, chain_id=1, and assets=[USDS]. Compares Aave v3 and Compound v3 supply and borrow APYs using live values when available, and labels missing or partial data instead of fabricating rates."
+  },
+  {
+    "id": "defi.market_resolution.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Before I trade it, check whether the Polymarket market will-the-us-confirm-that-aliens-exist-before-2027-789-924-249 is well-defined. Give a tradeable, ambiguous, or avoid verdict and the main resolution risk."
+      }
+    ],
+    "expected_tool_calls": ["assess_market_resolution"],
+    "expected_tool_args": {
+      "assess_market_resolution": {
+        "market": "will-the-us-confirm-that-aliens-exist-before-2027-789-924-249"
+      }
+    },
+    "expected_text_contains": ["Polymarket"],
+    "max_duration_ms": 10000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "Calls assess_market_resolution once for the named market and reports its verdict (tradeable, ambiguous, avoid, or insufficient_data) with the resolution basis or top risk factor. Does not invent a probability forecast or claim to have read rules the tool did not return."
   }
 ]

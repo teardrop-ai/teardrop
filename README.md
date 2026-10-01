@@ -386,7 +386,7 @@ Pricing is dynamic via the `pricing_rules` database table. Current rates (usage-
 |--------|------|
 | Input tokens | $0.0015 / 1k tokens |
 | Output tokens | $0.0075 / 1k tokens |
-| Tool calls | $0.001 / call |
+| Tool calls | $0.001 / call default; platform tools use per-tool prices ($0.005 minimum, see [docs/tools-catalog.md](docs/tools-catalog.md)) |
 | Minimum per run | $0.01 |
 
 Check live pricing: `GET /billing/pricing`

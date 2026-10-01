@@ -75,6 +75,7 @@ _STATELESS_TOOLS: frozenset[str] = frozenset(
         "get_protocol_tvl",
         "get_yield_rates",
         "validate_opportunity",
+        "assess_market_resolution",
     }
 )
 _WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")

@@ -126,3 +126,5 @@ python -m migrations.runner
 | `113_a2a_self_serve_allowlist.sql` | Adds `a2a_allowed_agents.source` (`admin` / `self_serve`) with a constraint forcing self-serve rows to x402, no JWT forwarding, and a positive cap; adds the append-only `a2a_allowed_agent_events` log |
 | `114_a2a_treasury_outflow_index.sql` | Partial index on `a2a_delegation_refund_outbox.delivery_started_at` for the rolling 24h treasury outflow cap |
 | `115_billing_charges.sql` | Unified `billing_charges` ledger (one row per billed agent run or MCP call, unique on `source` + `invocation_id`); a trigger keeps rows append-only except `failed → settled` (credit retry) and `settled → reverted` (on-chain receipt check); adds `pending_settlements.charge_id`. Dual-write only; revenue reads are unchanged |
+| `116_platform_tool_price_floor.sql` | Raises every paid `marketplace_platform_tools` price and `tool_pricing_overrides` cost below 5,000 atomic USDC ($0.005) to that floor; free (`0`) rows are untouched and re-runs are no-ops |
+| `117_market_resolution_platform_tool.sql` | Registers `assess_market_resolution` composite platform tool at $0.025 USDC (Polymarket resolution-risk verdict) |

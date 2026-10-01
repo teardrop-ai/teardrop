@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from tools.definitions.assess_counterparty_risk import TOOL as assess_counterparty_risk_tool
+from tools.definitions.assess_market_resolution import TOOL as assess_market_resolution_tool
 from tools.definitions.calculate import TOOL as calculate_tool
 from tools.definitions.convert_currency import TOOL as convert_currency_tool
 from tools.definitions.decode_transaction import TOOL as decode_transaction_tool
@@ -42,6 +43,7 @@ from tools.registry import ToolRegistry
 
 _ALL_TOOLS = [
     assess_counterparty_risk_tool,
+    assess_market_resolution_tool,
     calculate_tool,
     convert_currency_tool,
     decode_transaction_tool,

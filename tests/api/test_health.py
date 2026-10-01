@@ -94,6 +94,7 @@ async def test_agent_card_shape(api_client):
     assert body["description"].startswith("A2A-delegable Web3 decision service")
     assert {tool["name"] for tool in body["tools"]} == {
         "assess_counterparty_risk",
+        "assess_market_resolution",
         "validate_opportunity",
         "delegate_to_agent",
         "discover_agents",
@@ -109,6 +110,7 @@ async def test_agent_card_shape(api_client):
     assert {skill["id"] for skill in body["skills"]} == {
         "task_planning",
         "assess_counterparty_risk",
+        "assess_market_resolution",
         "validate_opportunity",
         "delegate_to_agent",
         "discover_agents",

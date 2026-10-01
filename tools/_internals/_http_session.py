@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _coingecko_session: aiohttp.ClientSession | None = None
 _defillama_session: aiohttp.ClientSession | None = None
 _debank_session: aiohttp.ClientSession | None = None
+_polymarket_session: aiohttp.ClientSession | None = None
 _session_lock: asyncio.Lock | None = None
 
 
@@ -94,9 +95,27 @@ async def get_debank_session() -> aiohttp.ClientSession:
         return _debank_session
 
 
+async def get_polymarket_session() -> aiohttp.ClientSession:
+    """Return a shared aiohttp.ClientSession for Polymarket Gamma API calls."""
+    global _polymarket_session
+    if _polymarket_session is not None and not _polymarket_session.closed:
+        return _polymarket_session
+
+    async with _get_session_lock():
+        if _polymarket_session is not None and not _polymarket_session.closed:
+            return _polymarket_session
+        connector = aiohttp.TCPConnector(
+            limit=10,
+            ttl_dns_cache=300,
+        )
+        _polymarket_session = aiohttp.ClientSession(connector=connector, connector_owner=True)
+        logger.debug("Initialised shared Polymarket session")
+        return _polymarket_session
+
+
 async def close_http_sessions() -> None:
     """Close all shared aiohttp sessions. Safe to call multiple times."""
-    global _coingecko_session, _defillama_session, _debank_session
+    global _coingecko_session, _defillama_session, _debank_session, _polymarket_session
     if _coingecko_session is not None and not _coingecko_session.closed:
         try:
             await _coingecko_session.close()
@@ -112,6 +131,12 @@ async def close_http_sessions() -> None:
             await _debank_session.close()
         except Exception as exc:  # pragma: no cover — best-effort shutdown
             logger.warning("Error closing DeBank session: %s", exc)
+    if _polymarket_session is not None and not _polymarket_session.closed:
+        try:
+            await _polymarket_session.close()
+        except Exception as exc:  # pragma: no cover — best-effort shutdown
+            logger.warning("Error closing Polymarket session: %s", exc)
     _coingecko_session = None
     _defillama_session = None
     _debank_session = None
+    _polymarket_session = None

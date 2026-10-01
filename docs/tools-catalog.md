@@ -4,37 +4,40 @@ Teardrop exposes built-in, metered tools through the marketplace catalog. Caller
 - Via the **MCP gateway** at `GET /tools/mcp` (direct tool invocation, billed per call).
 - As **tools called during agent runs** (via `POST /agent/run` when the agent decides to use them; billed in the run's usage cost).
 
-Pricing is fixed per call in atomic USDC (1,000,000 = $1.00):
+Pricing is fixed per call in atomic USDC (1,000,000 = $1.00). Paid platform
+tools have a $0.005 (5,000 atomic) floor so a per-settlement x402 facilitator
+fee stays a small share of each call; free tools stay at $0.000.
 
 | Tool | Price/call |
 |------|------------|
-| `get_wallet_portfolio` | $0.004 (4,000 atomic) |
+| `get_wallet_portfolio` | $0.005 (5,000 atomic) |
 | `get_wallet_positions` | $0.020 (20,000 atomic) |
-| `get_wallet_approvals` | $0.004 (4,000 atomic) |
+| `get_wallet_approvals` | $0.005 (5,000 atomic) |
 | `get_wallet_history` | $0.006 (6,000 atomic) |
 | `web_search` | $0.015 (15,000 atomic) |
-| `get_token_price` | $0.002 (2,000 atomic) |
-| `get_token_price_historical` | $0.004 (4,000 atomic) |
-| `get_protocol_tvl` | $0.003 (3,000 atomic) |
-| `get_chain_metrics` | $0.003 (3,000 atomic) |
-| `get_dex_volume` | $0.003 (3,000 atomic) |
-| `get_yield_rates` | $0.004 (4,000 atomic) |
-| `get_lending_rates` | $0.003 (3,000 atomic) |
-| `http_fetch` | $0.002 (2,000 atomic) |
-| `convert_currency` | $0.002 (2,000 atomic) |
-| `get_eth_balance` | $0.001 (1,000 atomic) |
-| `get_erc20_balance` | $0.002 (2,000 atomic) |
-| `get_block` | $0.001 (1,000 atomic) |
-| `get_transaction` | $0.002 (2,000 atomic) |
-| `get_token_approvals` | $0.004 (4,000 atomic) |
+| `get_token_price` | $0.005 (5,000 atomic) |
+| `get_token_price_historical` | $0.005 (5,000 atomic) |
+| `get_protocol_tvl` | $0.005 (5,000 atomic) |
+| `get_chain_metrics` | $0.005 (5,000 atomic) |
+| `get_dex_volume` | $0.005 (5,000 atomic) |
+| `get_yield_rates` | $0.005 (5,000 atomic) |
+| `get_lending_rates` | $0.005 (5,000 atomic) |
+| `http_fetch` | $0.005 (5,000 atomic) |
+| `convert_currency` | $0.005 (5,000 atomic) |
+| `get_eth_balance` | $0.005 (5,000 atomic) |
+| `get_erc20_balance` | $0.005 (5,000 atomic) |
+| `get_block` | $0.005 (5,000 atomic) |
+| `get_transaction` | $0.005 (5,000 atomic) |
+| `get_token_approvals` | $0.005 (5,000 atomic) |
 | `get_defi_positions` | $0.013 (13,000 atomic) |
 | `get_liquidation_risk` | $0.010 (10,000 atomic) |
 | `get_dex_quote` | $0.005 (5,000 atomic) |
-| `get_gas_price` | $0.002 (2,000 atomic) |
-| `resolve_ens` | $0.003 (3,000 atomic) |
+| `get_gas_price` | $0.005 (5,000 atomic) |
+| `resolve_ens` | $0.005 (5,000 atomic) |
 | `discover_agents` | $0.000 (0 atomic) |
 | `assess_counterparty_risk` | $0.035 (35,000 atomic) |
 | `validate_opportunity` | $0.015 (15,000 atomic) |
+| `assess_market_resolution` | $0.025 (25,000 atomic) |
 
 ## Agent Discovery
 
@@ -97,7 +100,7 @@ DeFiLlama analytics tools `get_yield_rates`, `get_protocol_tvl`, and `get_chain_
 
 ## Tool Definitions
 
-All system tool implementations are under [tools/definitions/](tools/definitions/). The following 31 caller-facing tools are currently registered in the catalog:
+All system tool implementations are under [tools/definitions/](tools/definitions/). The following 34 caller-facing tools are currently registered in the catalog:
 
 | Tool | Description |
 |------|-------------|
@@ -134,6 +137,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `get_yield_rates` | DeFi yield pool rates from DeFiLlama across 1,000+ protocols and all chains. Returns pools sorted by APY with TVL, base/reward APY, 7d/30d mean APY context, and provenance metadata. |
 | `assess_counterparty_risk` | Composite counterparty risk assessment fanning out to token approvals, liquidation health, and activity history to return an agent-branchable risk verdict without raw transaction payloads. |
 | `validate_opportunity` | Composite DeFi yield pool sustainability verdict and risk factor analysis fanning out to pool metrics, historical charts, and token price stability. |
+| `assess_market_resolution` | Composite Polymarket resolution-risk verdict (`tradeable`, `ambiguous`, `avoid`, `insufficient_data`) from one Gamma API market read: resolution basis, UMA dispute state, rule-wording flags, and liquidity/spread executability. Accepts a market slug, numeric market id, or polymarket.com URL; results are cached for 120 seconds. |
 
 The internal `record_predictions` tool is registered for scheduled analysis but is
 not a caller-facing marketplace listing.
