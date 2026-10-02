@@ -925,6 +925,8 @@ class TestAdminTopupCredit:
                     "hashed_secret": "hash",
                     "salt": "salt",
                     "created_at": datetime.now(timezone.utc),
+                    "scope": "publish",
+                    "disabled_at": None,
                 },
                 {"balance_usdc": 50_000},
             ]

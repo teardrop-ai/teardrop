@@ -14,6 +14,57 @@ from teardrop.users import Org, User
 
 
 @pytest.mark.anyio
+async def test_admin_create_client_credentials_scope(admin_api_client, monkeypatch):
+    """Admin issuance must honor the requested scope and echo it back."""
+    from teardrop.users import OrgClientCredential
+
+    cred = OrgClientCredential(
+        client_id="scoped-key",
+        org_id="test-org-id",
+        hashed_secret="h",
+        salt="s",
+        created_at=datetime.now(timezone.utc),
+        scope="read",
+    )
+    create = AsyncMock(return_value=(cred, "plaintext-secret"))
+    monkeypatch.setattr("teardrop.routers.admin.identity.create_client_credential", create)
+
+    resp = await admin_api_client.post("/admin/client-credentials", json={"org_id": "test-org-id", "scope": "read"})
+
+    assert resp.status_code == 201
+    assert resp.json()["scope"] == "read"
+    create.assert_awaited_once_with("test-org-id", scope="read")
+
+
+@pytest.mark.anyio
+async def test_admin_create_client_credentials_defaults_publish(admin_api_client, monkeypatch):
+    from teardrop.users import OrgClientCredential
+
+    cred = OrgClientCredential(
+        client_id="default-key",
+        org_id="test-org-id",
+        hashed_secret="h",
+        salt="s",
+        created_at=datetime.now(timezone.utc),
+    )
+    create = AsyncMock(return_value=(cred, "plaintext-secret"))
+    monkeypatch.setattr("teardrop.routers.admin.identity.create_client_credential", create)
+
+    resp = await admin_api_client.post("/admin/client-credentials", json={"org_id": "test-org-id"})
+
+    assert resp.status_code == 201
+    assert resp.json()["scope"] == "publish"
+    create.assert_awaited_once_with("test-org-id", scope="publish")
+
+
+@pytest.mark.anyio
+async def test_admin_create_client_credentials_rejects_bad_scope(admin_api_client):
+    resp = await admin_api_client.post("/admin/client-credentials", json={"org_id": "test-org-id", "scope": "admin"})
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
 async def test_admin_create_org(admin_api_client, monkeypatch):
     mock_org = Org(id="org-new", name="New Org", created_at=datetime.now(timezone.utc))
     monkeypatch.setattr("teardrop.routers.admin.identity.create_org", AsyncMock(return_value=mock_org))

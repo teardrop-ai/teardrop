@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import jwt
 import pytest
@@ -115,6 +116,49 @@ async def test_require_auth_valid_token(test_settings, test_jwt_token):
     payload = await require_auth(credentials=creds)
     assert payload["sub"] == "test-user-id"
     assert payload["role"] == "user"
+
+
+@pytest.mark.anyio
+async def test_require_auth_rejects_disabled_machine_credential(test_settings, monkeypatch):
+    """A client_credentials token whose backing credential is disabled must be rejected."""
+    import teardrop.users as users
+
+    monkeypatch.setattr(users, "is_client_credential_disabled", AsyncMock(return_value=True))
+    token = create_access_token(
+        "disabled-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "org-1", "scope": "publish"},
+    )
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    with pytest.raises(HTTPException) as exc_info:
+        await require_auth(credentials=creds)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_require_auth_allows_active_machine_credential(test_settings, monkeypatch):
+    import teardrop.users as users
+
+    monkeypatch.setattr(users, "is_client_credential_disabled", AsyncMock(return_value=False))
+    token = create_access_token(
+        "active-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "org-1", "scope": "publish"},
+    )
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    payload = await require_auth(credentials=creds)
+    assert payload["sub"] == "active-key"
+
+
+@pytest.mark.anyio
+async def test_require_auth_ignores_revocation_for_human_tokens(test_settings, test_jwt_token, monkeypatch):
+    """Human tokens must not trigger a credential-liveness lookup."""
+    import teardrop.users as users
+
+    liveness = AsyncMock(return_value=True)
+    monkeypatch.setattr(users, "is_client_credential_disabled", liveness)
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=test_jwt_token)
+    payload = await require_auth(credentials=creds)
+    assert payload["sub"] == "test-user-id"
+    liveness.assert_not_awaited()
 
 
 @pytest.mark.anyio

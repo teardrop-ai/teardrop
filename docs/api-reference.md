@@ -58,8 +58,9 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | `POST` | `/auth/logout` | Bearer | Revoke refresh token (end session) |
 | `POST` | `/org/invite` | Bearer | Create org invite link (any authenticated member) |
 | `POST` | `/register/invite` | — | Accept invite token + create user account |
-| `GET` | `/org/credentials` | Bearer | List org M2M client credentials |
-| `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin or owning SIWE wallet for machine orgs) |
+| `GET` | `/org/credentials` | Bearer | List org M2M client credentials with their `scope` (`read`/`publish`/`withdraw`) and `disabled_at` |
+| `POST` | `/org/credentials/regenerate` | Bearer | Rotate all org M2M credentials (admin or owning SIWE wallet for machine orgs); optional `scope` query parameter (default `publish`) |
+| `POST` | `/org/credentials/{client_id}/disable` | Bearer | Disable a single M2M credential immediately (admin or owning SIWE wallet); idempotent |
 
 Protected endpoints return a `401` challenge with `bootstrap_uri="/token"` and `bootstrap_grant="x402"` when bearer authentication is missing or invalid. Agents can follow that hint through payment-first bootstrap, then retry with the issued bearer token.
 
@@ -225,7 +226,7 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 |--------|------|------|-------------|
 | `POST` | `/admin/orgs` | Admin | Create organisation |
 | `POST` | `/admin/users` | Admin | Create user |
-| `POST` | `/admin/client-credentials` | Admin | Create M2M client credentials for an org |
+| `POST` | `/admin/client-credentials` | Admin | Create M2M client credentials for an org; optional `scope` (`read`/`publish`/`withdraw`, default `publish`) |
 | `GET` | `/admin/usage/{user_id}` | Admin | Usage for a specific user |
 | `GET` | `/admin/usage/org/{org_id}` | Admin | Usage for an org |
 | `GET` | `/admin/telemetry/machine-funnel` | Admin | Machine acquisition, MCP settlement, wallet-conversion, and repeat-payer metrics |
@@ -254,11 +255,11 @@ Custom webhook tools are currently read-only and must use the `GET` HTTP method.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/tools` | Bearer | Register a custom webhook tool |
+| `POST` | `/tools` | Bearer | Register a custom webhook tool; `publish_as_mcp=true` requires a `publish`-scoped machine credential |
 | `GET` | `/tools` | Bearer | List org's custom tools |
 | `GET` | `/tools/{tool_id}` | Bearer | Get a specific custom tool |
-| `PATCH` | `/tools/{tool_id}` | Bearer | Update a custom tool |
-| `DELETE` | `/tools/{tool_id}` | Bearer | Delete a custom tool |
+| `PATCH` | `/tools/{tool_id}` | Bearer | Update a custom tool; machine credentials need `publish` scope to publish or modify an already-published tool |
+| `DELETE` | `/tools/{tool_id}` | Bearer | Delete a custom tool; machine credentials need `publish` scope for an already-published tool |
 | `POST` | `/tools/test-webhook` | Bearer | Fire a test request to a webhook URL |
 
 ### Memory

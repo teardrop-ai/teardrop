@@ -72,7 +72,12 @@ def _created_tool(name: str = "remote_tool") -> OrgTool:
 @pytest.mark.parametrize("operation", ["preview", "publish"])
 async def test_machine_import_rejects_foreign_server(api_client, monkeypatch, marketplace_enabled, operation):
     async def authenticated():
-        return {"sub": "publisher", "org_id": "test-org-id", "auth_method": "client_credentials"}
+        return {
+            "sub": "publisher",
+            "org_id": "test-org-id",
+            "auth_method": "client_credentials",
+            "scope": "publish",
+        }
 
     app.dependency_overrides[require_auth] = authenticated
     lookup = AsyncMock(return_value=None)
@@ -146,7 +151,7 @@ async def test_preview_marketplace_import_member_returns_flags(api_client, monke
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials"}])
+@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials", "scope": "publish"}])
 async def test_preview_marketplace_import_with_wallet_can_publish(api_client, monkeypatch, marketplace_enabled, principal):
     async def authenticated():
         return {"sub": "publisher", "org_id": "test-org-id", **principal}
@@ -258,7 +263,7 @@ async def test_publish_marketplace_import_admin_partial_success(admin_api_client
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials"}])
+@pytest.mark.parametrize("principal", [{"role": "admin"}, {"auth_method": "client_credentials", "scope": "publish"}])
 async def test_publish_marketplace_import_derives_missing_schemas(api_client, monkeypatch, marketplace_enabled, principal):
     async def authenticated():
         return {"sub": "publisher", "org_id": "test-org-id", **principal}
@@ -478,3 +483,102 @@ async def test_publish_marketplace_import_name_collision(admin_api_client, monke
     assert resp.status_code == 409
     assert resp.json()["errors"][0]["status_code"] == 409
     create_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_publish_machine_credential_without_publish_scope_forbidden(api_client, monkeypatch, marketplace_enabled):
+    """Machine principal lacking the publish scope fails closed before any work."""
+
+    async def authenticated():
+        return {
+            "sub": "publisher",
+            "org_id": "test-org-id",
+            "auth_method": "client_credentials",
+            "scope": "read",
+        }
+
+    app.dependency_overrides[require_auth] = authenticated
+    create_mock = AsyncMock()
+    discover_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create_mock)
+    monkeypatch.setattr("teardrop.routers.marketplace_import.discover_mcp_tools", discover_mock)
+
+    resp = await api_client.post(
+        "/marketplace/import/publish",
+        json={
+            "server_id": "srv-1",
+            "tools": [{"remote_tool_name": "remote_tool", "name": "remote_tool", "description": "First"}],
+        },
+    )
+
+    assert resp.status_code == 403
+    create_mock.assert_not_awaited()
+    discover_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_publish_disabled_machine_credential_forbidden(api_client, monkeypatch, marketplace_enabled):
+    """A per-credential disable blocks publish even though the JWT is still unexpired."""
+
+    async def authenticated():
+        return {
+            "sub": "publisher",
+            "org_id": "test-org-id",
+            "auth_method": "client_credentials",
+            "scope": "publish",
+        }
+
+    app.dependency_overrides[require_auth] = authenticated
+    import teardrop.users as users
+
+    monkeypatch.setattr(users, "is_client_credential_disabled", AsyncMock(return_value=True))
+    create_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_import.create_org_tool", create_mock)
+
+    resp = await api_client.post(
+        "/marketplace/import/publish",
+        json={
+            "server_id": "srv-1",
+            "tools": [{"remote_tool_name": "remote_tool", "name": "remote_tool", "description": "First"}],
+        },
+    )
+
+    assert resp.status_code == 403
+    create_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_preview_flags_missing_publish_scope(api_client, monkeypatch, marketplace_enabled):
+    """Preview soft-blocks (blockers list) instead of 403ing the dry-run."""
+
+    async def authenticated():
+        return {
+            "sub": "publisher",
+            "org_id": "test-org-id",
+            "auth_method": "client_credentials",
+            "scope": "read",
+        }
+
+    app.dependency_overrides[require_auth] = authenticated
+    monkeypatch.setattr("teardrop.routers.marketplace_import._enforce_rate_limit", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.marketplace_import.get_org_mcp_server", AsyncMock(return_value=_server()))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_import.discover_mcp_tools",
+        AsyncMock(return_value=[{"name": "t", "description": "d", "input_schema": {}, "output_schema": None}]),
+    )
+    monkeypatch.setattr("teardrop.routers.marketplace_import.list_org_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_import.get_current_pricing",
+        AsyncMock(return_value=SimpleNamespace(tool_call_cost=12_345)),
+    )
+    monkeypatch.setattr(
+        "teardrop.routers.marketplace_import.get_author_config",
+        AsyncMock(return_value=SimpleNamespace(org_id="test-org-id", settlement_wallet="0x" + "a" * 40)),
+    )
+
+    resp = await api_client.post("/marketplace/import/preview", json={"server_id": "srv-1"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["can_publish"] is False
+    assert data["blockers"] == ["requires_publish_scope"]

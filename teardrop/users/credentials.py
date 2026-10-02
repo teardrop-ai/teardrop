@@ -11,20 +11,24 @@ from datetime import datetime, timezone
 from teardrop.users.base import _get_pool, _hash_secret
 from teardrop.users.models import OrgClientCredential
 
+_CRED_COLUMNS = "client_id, org_id, hashed_secret, salt, created_at, scope, disabled_at"
 
-async def create_client_credential_in_transaction(conn, org_id: str) -> tuple[OrgClientCredential, str]:
+
+async def create_client_credential_in_transaction(conn, org_id: str, scope: str = "publish") -> tuple[OrgClientCredential, str]:
     """Create an org credential using a caller-owned database transaction."""
     client_id = str(uuid.uuid4())
     plaintext_secret = secrets.token_urlsafe(32)
     hashed, salt_hex = _hash_secret(plaintext_secret)
     now = datetime.now(timezone.utc)
     await conn.execute(
-        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at, scope)"
+        " VALUES ($1, $2, $3, $4, $5, $6)",
         client_id,
         org_id,
         hashed,
         salt_hex,
         now,
+        scope,
     )
     return (
         OrgClientCredential(
@@ -33,12 +37,13 @@ async def create_client_credential_in_transaction(conn, org_id: str) -> tuple[Or
             hashed_secret=hashed,
             salt=salt_hex,
             created_at=now,
+            scope=scope,
         ),
         plaintext_secret,
     )
 
 
-async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", str]:
+async def create_client_credential(org_id: str, scope: str = "publish") -> tuple["OrgClientCredential", str]:
     """Create a new M2M client credential for an org.
 
     Returns ``(OrgClientCredential, plaintext_secret)``.
@@ -50,12 +55,14 @@ async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", 
     hashed, salt_hex = _hash_secret(plaintext_secret)
     now = datetime.now(timezone.utc)
     await pool.execute(
-        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO org_client_credentials (client_id, org_id, hashed_secret, salt, created_at, scope)"
+        " VALUES ($1, $2, $3, $4, $5, $6)",
         client_id,
         org_id,
         hashed,
         salt_hex,
         now,
+        scope,
     )
     cred = OrgClientCredential(
         client_id=client_id,
@@ -63,6 +70,7 @@ async def create_client_credential(org_id: str) -> tuple["OrgClientCredential", 
         hashed_secret=hashed,
         salt=salt_hex,
         created_at=now,
+        scope=scope,
     )
     return cred, plaintext_secret
 
@@ -71,7 +79,7 @@ async def get_client_credential_by_id(client_id: str) -> "OrgClientCredential | 
     """Look up an org client credential by client_id. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT client_id, org_id, hashed_secret, salt, created_at FROM org_client_credentials WHERE client_id = $1",
+        f"SELECT {_CRED_COLUMNS} FROM org_client_credentials WHERE client_id = $1",
         client_id,
     )
     if row is None:
@@ -82,16 +90,41 @@ async def get_client_credential_by_id(client_id: str) -> "OrgClientCredential | 
         hashed_secret=row["hashed_secret"],
         salt=row["salt"],
         created_at=row["created_at"],
+        scope=row["scope"],
+        disabled_at=row["disabled_at"],
     )
+
+
+async def disable_client_credential(client_id: str, org_id: str) -> bool:
+    """Disable a single credential for an org. Idempotent.
+
+    Returns True when this call flipped the row; False if it was already
+    disabled or does not belong to ``org_id``.
+    """
+    pool = _get_pool()
+    result = await pool.execute(
+        "UPDATE org_client_credentials SET disabled_at = now() WHERE client_id = $1 AND org_id = $2 AND disabled_at IS NULL",
+        client_id,
+        org_id,
+    )
+    return result == "UPDATE 1"
+
+
+async def is_client_credential_disabled(client_id: str) -> bool:
+    """True when the credential is unknown or disabled (fail closed)."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT disabled_at FROM org_client_credentials WHERE client_id = $1",
+        client_id,
+    )
+    return row is None or row["disabled_at"] is not None
 
 
 async def list_org_client_credentials(org_id: str) -> list["OrgClientCredential"]:
     """Return all client credentials for an org, ordered by creation date."""
     pool = _get_pool()
     rows = await pool.fetch(
-        "SELECT client_id, org_id, hashed_secret, salt, created_at"
-        " FROM org_client_credentials WHERE org_id = $1"
-        " ORDER BY created_at DESC",
+        f"SELECT {_CRED_COLUMNS} FROM org_client_credentials WHERE org_id = $1 ORDER BY created_at DESC",
         org_id,
     )
     return [
@@ -101,6 +134,8 @@ async def list_org_client_credentials(org_id: str) -> list["OrgClientCredential"
             hashed_secret=r["hashed_secret"],
             salt=r["salt"],
             created_at=r["created_at"],
+            scope=r["scope"],
+            disabled_at=r["disabled_at"],
         )
         for r in rows
     ]

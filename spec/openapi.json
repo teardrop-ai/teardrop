@@ -1157,6 +1157,16 @@
           "org_id": {
             "title": "Org Id",
             "type": "string"
+          },
+          "scope": {
+            "default": "publish",
+            "enum": [
+              "read",
+              "publish",
+              "withdraw"
+            ],
+            "title": "Scope",
+            "type": "string"
           }
         },
         "required": [
@@ -1184,12 +1194,18 @@
           "org_id": {
             "title": "Org Id",
             "type": "string"
+          },
+          "scope": {
+            "description": "Granted scope: read, publish, or withdraw.",
+            "title": "Scope",
+            "type": "string"
           }
         },
         "required": [
           "client_id",
           "client_secret",
           "org_id",
+          "scope",
           "created_at"
         ],
         "title": "CreateClientCredentialsResponse",
@@ -5063,6 +5079,26 @@
         "title": "OrgCreateA2AAgentRequest",
         "type": "object"
       },
+      "OrgCredentialDisableResponse": {
+        "properties": {
+          "client_id": {
+            "description": "M2M client ID that was disabled.",
+            "title": "Client Id",
+            "type": "string"
+          },
+          "disabled_at": {
+            "description": "ISO 8601 timestamp of the disable.",
+            "title": "Disabled At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "disabled_at"
+        ],
+        "title": "OrgCredentialDisableResponse",
+        "type": "object"
+      },
       "OrgCredentialItem": {
         "properties": {
           "client_id": {
@@ -5073,6 +5109,24 @@
           "created_at": {
             "description": "ISO 8601 timestamp the credential was created/rotated.",
             "title": "Created At",
+            "type": "string"
+          },
+          "disabled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO 8601 timestamp of disable, or null if active.",
+            "title": "Disabled At"
+          },
+          "scope": {
+            "default": "publish",
+            "description": "Granted scope: read, publish, or withdraw.",
+            "title": "Scope",
             "type": "string"
           }
         },
@@ -5099,11 +5153,17 @@
             "description": "ISO 8601 timestamp of this rotation.",
             "title": "Created At",
             "type": "string"
+          },
+          "scope": {
+            "description": "Granted scope: read, publish, or withdraw.",
+            "title": "Scope",
+            "type": "string"
           }
         },
         "required": [
           "client_id",
           "client_secret",
+          "scope",
           "created_at"
         ],
         "title": "OrgCredentialRegenerateResponse",
@@ -8476,7 +8536,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.5.0"
+    "version": "2.6.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -14895,8 +14955,25 @@
     },
     "/org/credentials/regenerate": {
       "post": {
-        "description": "Rotate org M2M credentials for an admin or machine-org SIWE owner.\n\nThe operation destroys every existing machine credential and reveals the\nreplacement secret exactly once, so ordinary members and client credentials\ncannot invoke it.",
+        "description": "Rotate org M2M credentials for an admin or machine-org SIWE owner.\n\nThe operation destroys every existing machine credential and reveals the\nreplacement secret exactly once, so ordinary members and client credentials\ncannot invoke it. ``scope`` selects the replacement credential's capability.",
         "operationId": "regenerate_org_credentials_org_credentials_regenerate_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "publish",
+              "enum": [
+                "read",
+                "publish",
+                "withdraw"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "201": {
             "content": {
@@ -14907,6 +14984,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -14915,6 +15002,54 @@
           }
         ],
         "summary": "Regenerate Org Credentials",
+        "tags": [
+          "Credentials"
+        ]
+      }
+    },
+    "/org/credentials/{client_id}/disable": {
+      "post": {
+        "description": "Disable a single M2M credential for an org (admin or owning SIWE wallet).\n\nIdempotent within the caller's org: re-disabling returns 200 with the\noriginal timestamp. Unknown or foreign-org credentials return 404.\nTokens minted from this credential are rejected on every authenticated\npath (REST, MCP, A2A) even before the JWT expires.",
+        "operationId": "disable_org_credential_org_credentials__client_id__disable_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "client_id",
+            "required": true,
+            "schema": {
+              "title": "Client Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgCredentialDisableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disable Org Credential",
         "tags": [
           "Credentials"
         ]

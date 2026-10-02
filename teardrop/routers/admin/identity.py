@@ -8,6 +8,8 @@ All routes require the ``require_admin`` dependency. Extracted verbatim from
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -81,12 +83,14 @@ async def admin_create_user(
 
 class CreateClientCredentialsRequest(BaseModel):
     org_id: str
+    scope: Literal["read", "publish", "withdraw"] = "publish"
 
 
 class CreateClientCredentialsResponse(BaseModel):
     client_id: str
     client_secret: str = Field(..., description="Plaintext secret — shown once, only its hash is persisted.")
     org_id: str
+    scope: str = Field(..., description="Granted scope: read, publish, or withdraw.")
     created_at: str = Field(..., description="ISO 8601 timestamp.")
 
 
@@ -104,13 +108,14 @@ async def admin_create_client_credentials(
 
     The client_secret is returned exactly once — store it immediately.
     """
-    cred, plaintext_secret = await create_client_credential(body.org_id)
+    cred, plaintext_secret = await create_client_credential(body.org_id, scope=body.scope)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={
             "client_id": cred.client_id,
             "client_secret": plaintext_secret,
             "org_id": cred.org_id,
+            "scope": cred.scope,
             "created_at": cred.created_at.isoformat(),
         },
     )

@@ -63,6 +63,22 @@ def decode_access_token(token: str, audience: str | None = None) -> dict:
     return payload
 
 
+async def is_machine_credential_revoked(payload: dict) -> bool:
+    """True when a client_credentials token's backing credential is disabled or gone.
+
+    Config-fallback credentials (no org row) are not DB-backed and are never
+    treated as revoked. Unknown client_ids fail closed.
+    """
+    if payload.get("auth_method") != "client_credentials":
+        return False
+    org_id = payload.get("org_id")
+    if not isinstance(org_id, str) or not org_id:
+        return False
+    from teardrop.users import is_client_credential_disabled
+
+    return await is_client_credential_disabled(str(payload.get("sub", "")))
+
+
 async def require_auth(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> dict:
@@ -89,6 +105,12 @@ async def require_auth(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token. {_AUTH_REQUIRED_DETAIL}",
+            headers={"WWW-Authenticate": _AUTH_CHALLENGE},
+        )
+    if await is_machine_credential_revoked(payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential has been disabled.",
             headers={"WWW-Authenticate": _AUTH_CHALLENGE},
         )
     return payload

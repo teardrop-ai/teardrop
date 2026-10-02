@@ -19,6 +19,8 @@ __all__ = [
     "require_org_admin",
     "require_org_machine",
     "require_credential_recovery",
+    "require_scope",
+    "require_machine_scope",
     "require_settlement_wallet_auth",
     "_require_org_id",
 ]
@@ -89,6 +91,83 @@ async def require_org_machine(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Organization admin or org-bound machine credentials required.",
     )
+
+
+def require_scope(scope: str):
+    """Dependency factory: org admins or machine creds holding ``scope``.
+
+    Machine credentials are re-checked against the DB so a per-credential
+    disable takes effect before the JWT expires; admins bypass the scope
+    gate. Config-fallback tokens (no org row) always fail closed.
+    """
+
+    async def _require_scope(payload: dict = Depends(require_auth)) -> dict:
+        if payload.get("role") == "admin":
+            if not payload.get("org_id"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No org_id in token.",
+                )
+            return payload
+
+        org_id = payload.get("org_id")
+        if payload.get("auth_method") == "client_credentials" and isinstance(org_id, str) and org_id:
+            granted = payload.get("scope")
+            granted_set = {granted} if isinstance(granted, str) else set()
+            if scope not in granted_set:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Credential lacks required scope: {scope}",
+                )
+            from teardrop.auth import is_machine_credential_revoked
+
+            if await is_machine_credential_revoked(payload):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Credential has been disabled.",
+                )
+            return payload
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Requires an org admin or a machine credential with scope {scope}.",
+        )
+
+    return _require_scope
+
+
+def require_machine_scope(scope: str):
+    """Constrain machine credentials to ``scope``; human users/admins pass unchanged.
+
+    Use on routes that human members may already call, where only the machine
+    credential path needs a scope and revocation check.
+    """
+
+    async def _require_machine_scope(payload: dict = Depends(require_auth)) -> dict:
+        if payload.get("auth_method") == "client_credentials":
+            org_id = payload.get("org_id")
+            if not isinstance(org_id, str) or not org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Requires a machine credential with scope {scope}.",
+                )
+            granted = payload.get("scope")
+            granted_set = {granted} if isinstance(granted, str) else set()
+            if scope not in granted_set:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Credential lacks required scope: {scope}",
+                )
+            from teardrop.auth import is_machine_credential_revoked
+
+            if await is_machine_credential_revoked(payload):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Credential has been disabled.",
+                )
+        return payload
+
+    return _require_machine_scope
 
 
 async def require_credential_recovery(

@@ -34,6 +34,7 @@ from teardrop.users import (
     create_user,
     create_verification_token,
     delete_org_client_credentials,
+    disable_client_credential,
     get_client_credential_by_id,
     get_org_by_id,
     get_org_invite,
@@ -210,7 +211,13 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid client credentials",
                 )
+            if db_cred.disabled_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Credential has been disabled.",
+                )
             org_id = db_cred.org_id
+            scope = db_cred.scope
         else:
             # Fall back to config-based credential (backward compat — org_id is empty)
             if not settings.jwt_client_secret:
@@ -226,9 +233,10 @@ async def token(body: TokenRequest, request: Request) -> JSONResponse:
                     detail="Invalid client credentials",
                 )
             org_id = ""
+            scope = "read"
         access_token = create_access_token(
             subject=body.client_id,
-            extra_claims={"auth_method": "client_credentials", "org_id": org_id},
+            extra_claims={"auth_method": "client_credentials", "org_id": org_id, "scope": scope},
         )
         return JSONResponse(
             content={
@@ -683,11 +691,19 @@ async def register_via_invite(body: AcceptInviteRequest, request: Request) -> JS
 class OrgCredentialItem(BaseModel):
     client_id: str = Field(..., description="M2M client ID.")
     created_at: str = Field(..., description="ISO 8601 timestamp the credential was created/rotated.")
+    scope: str = Field(default="publish", description="Granted scope: read, publish, or withdraw.")
+    disabled_at: str | None = Field(default=None, description="ISO 8601 timestamp of disable, or null if active.")
+
+
+class OrgCredentialDisableResponse(BaseModel):
+    client_id: str = Field(..., description="M2M client ID that was disabled.")
+    disabled_at: str = Field(..., description="ISO 8601 timestamp of the disable.")
 
 
 class OrgCredentialRegenerateResponse(BaseModel):
     client_id: str = Field(..., description="Newly issued M2M client ID.")
     client_secret: str = Field(..., description="Plaintext client secret — shown once, never retrievable again.")
+    scope: str = Field(..., description="Granted scope: read, publish, or withdraw.")
     created_at: str = Field(..., description="ISO 8601 timestamp of this rotation.")
 
 
@@ -702,7 +718,57 @@ async def get_org_credentials(
     """
     org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     credentials = await list_org_client_credentials(org_id)
-    return JSONResponse(content=[{"client_id": c.client_id, "created_at": c.created_at.isoformat()} for c in credentials])
+    return JSONResponse(
+        content=[
+            {
+                "client_id": c.client_id,
+                "created_at": c.created_at.isoformat(),
+                "scope": c.scope,
+                "disabled_at": c.disabled_at.isoformat() if c.disabled_at else None,
+            }
+            for c in credentials
+        ]
+    )
+
+
+@router.post(
+    "/org/credentials/{client_id}/disable",
+    tags=["Credentials"],
+    response_model=OrgCredentialDisableResponse,
+)
+async def disable_org_credential(
+    client_id: str,
+    payload: dict = Depends(require_credential_recovery),
+) -> JSONResponse:
+    """Disable a single M2M credential for an org (admin or owning SIWE wallet).
+
+    Idempotent within the caller's org: re-disabling returns 200 with the
+    original timestamp. Unknown or foreign-org credentials return 404.
+    Tokens minted from this credential are rejected on every authenticated
+    path (REST, MCP, A2A) even before the JWT expires.
+    """
+    org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
+    changed = await disable_client_credential(client_id, org_id)
+    logger.info(
+        "org_credential_disabled org=%s cred=%s changed=%s by=%s",
+        org_id,
+        client_id,
+        changed,
+        payload["sub"],
+    )
+    credentials = await list_org_client_credentials(org_id)
+    disabled = next((c for c in credentials if c.client_id == client_id), None)
+    if disabled is None or disabled.disabled_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown credential for this organization.",
+        )
+    return JSONResponse(
+        content={
+            "client_id": client_id,
+            "disabled_at": disabled.disabled_at.isoformat(),
+        }
+    )
 
 
 @router.post(
@@ -713,22 +779,24 @@ async def get_org_credentials(
 )
 async def regenerate_org_credentials(
     payload: dict = Depends(require_credential_recovery),
+    scope: Literal["read", "publish", "withdraw"] = "publish",
 ) -> JSONResponse:
     """Rotate org M2M credentials for an admin or machine-org SIWE owner.
 
     The operation destroys every existing machine credential and reveals the
     replacement secret exactly once, so ordinary members and client credentials
-    cannot invoke it.
+    cannot invoke it. ``scope`` selects the replacement credential's capability.
     """
     org_id = _require_org_id(payload, "No org_id in token — credentials require an org-scoped session.")
     await delete_org_client_credentials(org_id)
-    cred, plaintext_secret = await create_client_credential(org_id)
-    logger.info("org_credentials_rotated org=%s rotated_by=%s", org_id, payload["sub"])
+    cred, plaintext_secret = await create_client_credential(org_id, scope=scope)
+    logger.info("org_credentials_rotated org=%s rotated_by=%s scope=%s", org_id, payload["sub"], scope)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={
             "client_id": cred.client_id,
             "client_secret": plaintext_secret,
+            "scope": cred.scope,
             "created_at": cred.created_at.isoformat(),
         },
     )

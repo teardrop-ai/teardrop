@@ -39,7 +39,7 @@ from x402.extensions.bazaar import (
 )
 
 from shared.request_ip import client_ip_from_request
-from teardrop.auth import decode_access_token
+from teardrop.auth import decode_access_token, is_machine_credential_revoked
 from teardrop.config import get_settings
 from teardrop.public_url import public_base_url
 from tools.registry import MCP_MAX_COST_META_KEY
@@ -534,6 +534,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     headers={
                         "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="invalid_token"',
+                    },
+                )
+
+            if await is_machine_credential_revoked(payload):
+                return Response(
+                    status_code=403,
+                    headers={
+                        "WWW-Authenticate": 'Bearer realm="teardrop-mcp", error="credential_disabled"',
                     },
                 )
 

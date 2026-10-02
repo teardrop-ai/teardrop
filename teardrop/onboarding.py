@@ -286,7 +286,13 @@ async def bootstrap_org_from_payment(payment_header: str, request: Request) -> d
 async def _issue_bootstrap_credential(org_id: str, cred: object, client_secret: str | None) -> dict:
     access_token = create_access_token(
         subject=cred.client_id,
-        extra_claims={"org_id": org_id, "auth_method": "client_credentials", "role": "user"},
+        extra_claims={
+            "org_id": org_id,
+            "auth_method": "client_credentials",
+            "role": "user",
+            # mirror the DB row's scope so scope-gated paths accept fresh machine orgs
+            "scope": getattr(cred, "scope", "publish"),
+        },
     )
     logger.info(
         "x402 onboarding bootstrapped org=%s credential_reused=%s payer=%s tx=%s",

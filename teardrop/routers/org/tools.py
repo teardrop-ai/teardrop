@@ -28,7 +28,7 @@ from org_tools import (
 )
 from shared.db_pool import UniqueViolation
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_auth
+from teardrop.dependencies import _require_org_id, require_auth, require_machine_scope
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 
@@ -36,6 +36,19 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+_require_publish_scope = require_machine_scope("publish")
+
+
+async def _require_publish_scope_for_tool(payload: dict, tool_id: str, org_id: str, *, publishing: bool) -> None:
+    """Machine credentials need publish scope to publish or mutate an already-published tool."""
+    if payload.get("auth_method") != "client_credentials":
+        return
+    if not publishing:
+        current = await get_org_tool(tool_id, org_id)
+        publishing = current is not None and current.publish_as_mcp
+    if publishing:
+        await _require_publish_scope(payload)
 
 
 def _validate_webhook_url(url: str) -> None:
@@ -198,6 +211,8 @@ async def create_tool(
     """Register a custom webhook-backed tool for the authenticated org."""
     from jsonschema import Draft7Validator, SchemaError  # noqa: PLC0415
 
+    if body.publish_as_mcp:
+        await _require_publish_scope(payload)
     org_id = _require_org_id(payload)
     user_id: str = payload.get("sub", "")
 
@@ -318,6 +333,7 @@ async def patch_tool(
     from jsonschema import Draft7Validator, SchemaError  # noqa: PLC0415
 
     org_id = _require_org_id(payload)
+    await _require_publish_scope_for_tool(payload, tool_id, org_id, publishing=body.publish_as_mcp is True)
     user_id: str = payload.get("sub", "")
 
     # SSRF check if webhook_url is being changed
@@ -409,6 +425,7 @@ async def remove_tool(
 ) -> JSONResponse:
     """Soft-delete a custom tool."""
     org_id = _require_org_id(payload)
+    await _require_publish_scope_for_tool(payload, tool_id, org_id, publishing=False)
     user_id: str = payload.get("sub", "")
     deleted = await delete_org_tool(tool_id, org_id, actor_id=user_id)
     if not deleted:

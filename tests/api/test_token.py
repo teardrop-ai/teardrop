@@ -96,6 +96,7 @@ async def test_token_client_credentials_success(anon_client, test_settings, monk
     )
     assert claims["auth_method"] == "client_credentials"
     assert "org_id" in claims
+    assert claims["scope"] == "read"  # config-fallback credential never earns publish
 
 
 @pytest.mark.anyio
@@ -161,6 +162,34 @@ async def test_token_db_client_credentials_success(anon_client, test_settings, m
     )
     assert claims["auth_method"] == "client_credentials"
     assert claims["org_id"] == "org-abc"
+    assert claims["scope"] == "publish"
+
+
+@pytest.mark.anyio
+async def test_token_db_client_credentials_disabled_rejected(anon_client, monkeypatch):
+    """A disabled DB credential must not mint a token."""
+    from datetime import datetime, timezone
+
+    from teardrop.users import OrgClientCredential
+
+    mock_cred = OrgClientCredential(
+        client_id="db-client-id",
+        org_id="org-abc",
+        hashed_secret="ignored",
+        salt="ignored",
+        created_at=datetime.now(timezone.utc),
+        scope="publish",
+        disabled_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr("teardrop.routers.auth.get_client_credential_by_id", AsyncMock(return_value=mock_cred))
+    monkeypatch.setattr("teardrop.routers.auth.verify_secret", lambda secret, hashed, salt: True)
+
+    resp = await anon_client.post(
+        "/token",
+        json={"client_id": "db-client-id", "client_secret": "some-secret"},
+    )
+
+    assert resp.status_code == 403
 
 
 @pytest.mark.anyio

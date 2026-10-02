@@ -423,8 +423,9 @@ class BillingCreditService:
                     if existing["org_id"] != org_id or int(existing["amount_usdc"]) != amount_usdc:
                         raise ValueError("Onboarding payment reference is bound to a different settlement")
                     credential = await conn.fetchrow(
-                        "SELECT client_id, org_id, hashed_secret, salt, created_at "
-                        "FROM org_client_credentials WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1",
+                        "SELECT client_id, org_id, hashed_secret, salt, created_at, scope, disabled_at "
+                        "FROM org_client_credentials WHERE org_id = $1 AND disabled_at IS NULL "
+                        "ORDER BY created_at ASC LIMIT 1",
                         org_id,
                     )
                     if credential is not None:
@@ -435,14 +436,17 @@ class BillingCreditService:
                                 hashed_secret=credential["hashed_secret"],
                                 salt=credential["salt"],
                                 created_at=credential["created_at"],
+                                scope=credential["scope"],
+                                disabled_at=credential["disabled_at"],
                             ),
                             None,
                         )
                     return await create_client_credential_in_transaction(conn, org_id)
 
                 existing_credential = await conn.fetchrow(
-                    "SELECT client_id, org_id, hashed_secret, salt, created_at "
-                    "FROM org_client_credentials WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1",
+                    "SELECT client_id, org_id, hashed_secret, salt, created_at, scope, disabled_at "
+                    "FROM org_client_credentials WHERE org_id = $1 AND disabled_at IS NULL "
+                    "ORDER BY created_at ASC LIMIT 1",
                     org_id,
                 )
                 if existing_credential is not None:
@@ -452,6 +456,8 @@ class BillingCreditService:
                         hashed_secret=existing_credential["hashed_secret"],
                         salt=existing_credential["salt"],
                         created_at=existing_credential["created_at"],
+                        scope=existing_credential["scope"],
+                        disabled_at=existing_credential["disabled_at"],
                     )
                     client_secret = None
                 else:

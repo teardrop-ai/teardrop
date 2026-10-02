@@ -58,7 +58,7 @@ async def test_agent_registration_dry_run_routes(anon_client, monkeypatch, path,
     config.get_settings.cache_clear()
     token = create_access_token(
         subject="machine-client",
-        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id"},
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "publish"},
     )
     response = await anon_client.post(
         path,
@@ -127,7 +127,7 @@ async def test_agent_registration_machine_credentials_success(anon_client, monke
     config.get_settings.cache_clear()
     token = create_access_token(
         subject="machine-client",
-        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id"},
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "publish"},
     )
     response = await anon_client.put(
         "/marketplace/agent-registration",
@@ -168,6 +168,33 @@ async def test_agent_registration_unscoped_machine_credentials_forbidden(anon_cl
 
 
 @pytest.mark.anyio
+async def test_agent_registration_machine_credentials_missing_publish_scope_forbidden(anon_client, monkeypatch):
+    """Machine token without the publish scope cannot register an agent."""
+    from teardrop.auth import create_access_token
+
+    set_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.marketplace_agents.set_agent_registration", set_mock)
+    monkeypatch.setenv("MARKETPLACE_ENABLED", "true")
+
+    import teardrop.config as config
+
+    config.get_settings.cache_clear()
+    token = create_access_token(
+        subject="read-only-client",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "read"},
+    )
+    response = await anon_client.put(
+        "/marketplace/agent-registration",
+        json={"agent_url": "https://agent.example.com"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    set_mock.assert_not_awaited()
+    config.get_settings.cache_clear()
+
+
+@pytest.mark.anyio
 async def test_agent_registration_machine_credentials_delete(anon_client, monkeypatch):
     from teardrop.auth import create_access_token
 
@@ -182,7 +209,7 @@ async def test_agent_registration_machine_credentials_delete(anon_client, monkey
     config.get_settings.cache_clear()
     token = create_access_token(
         subject="machine-client",
-        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id"},
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "publish"},
     )
     response = await anon_client.delete(
         "/marketplace/agent-registration",

@@ -46,6 +46,18 @@ def _isolate_app_state():
     app.dependency_overrides.update(saved_overrides)
 
 
+@pytest.fixture(autouse=True)
+def _stub_credential_disabled(monkeypatch):
+    """require_scope re-checks credential liveness against the DB; stub it active.
+
+    Individual tests override this mock (via monkeypatch on teardrop.users) to
+    exercise the disabled path.
+    """
+    mock = AsyncMock(return_value=False)
+    monkeypatch.setattr("teardrop.users.is_client_credential_disabled", mock)
+    return mock
+
+
 @pytest.fixture
 async def api_client(test_settings):
     """AsyncClient for a regular (non-admin) authenticated user.

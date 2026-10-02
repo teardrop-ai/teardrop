@@ -47,7 +47,9 @@ from teardrop.users.base import (  # noqa: F401  (re-exported for backward compa
 from teardrop.users.credentials import (  # noqa: F401  (re-exported for backward compatibility)
     create_client_credential,
     delete_org_client_credentials,
+    disable_client_credential,
     get_client_credential_by_id,
+    is_client_credential_disabled,
     list_org_client_credentials,
 )
 from teardrop.users.models import (  # noqa: F401  (re-exported for backward compatibility)

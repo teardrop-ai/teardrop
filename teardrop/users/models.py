@@ -35,6 +35,8 @@ class OrgClientCredential(BaseModel):
     hashed_secret: str
     salt: str
     created_at: datetime
+    scope: str = "publish"
+    disabled_at: datetime | None = None
 
 
 class OrgInvite(BaseModel):

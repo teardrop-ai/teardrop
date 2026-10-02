@@ -373,3 +373,145 @@ async def test_create_tool_publish_requires_author_config(api_client, monkeypatc
     resp = await api_client.post("/tools", json=body)
     assert resp.status_code == 409
     assert "settlement wallet" in resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_create_tool_publish_denied_for_read_scope_machine(anon_client, monkeypatch):
+    """A read-scoped machine credential cannot publish a community tool."""
+    from teardrop.auth import create_access_token
+
+    create = AsyncMock(return_value=_TOOL)
+    monkeypatch.setattr("teardrop.routers.org.tools.create_org_tool", create)
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
+    token = create_access_token(
+        "read-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "read"},
+    )
+    body = {
+        **_CREATE_BODY,
+        "publish_as_mcp": True,
+        "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+    }
+
+    resp = await anon_client.post("/tools", json=body, headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 403
+    create.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_create_tool_publish_denied_for_disabled_machine(anon_client, monkeypatch):
+    """A disabled machine credential cannot publish even with the publish scope."""
+    import teardrop.users as users
+    from teardrop.auth import create_access_token
+
+    monkeypatch.setattr(users, "is_client_credential_disabled", AsyncMock(return_value=True))
+    create = AsyncMock(return_value=_TOOL)
+    monkeypatch.setattr("teardrop.routers.org.tools.create_org_tool", create)
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
+    token = create_access_token(
+        "disabled-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "publish"},
+    )
+    body = {
+        **_CREATE_BODY,
+        "publish_as_mcp": True,
+        "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+    }
+
+    resp = await anon_client.post("/tools", json=body, headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 403
+    create.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_create_unpublished_tool_allowed_for_read_scope_machine(anon_client, monkeypatch):
+    """Non-publishing tool CRUD stays available to a read-scoped machine credential."""
+    from teardrop.auth import create_access_token
+
+    create = AsyncMock(return_value=_TOOL)
+    monkeypatch.setattr("teardrop.routers.org.tools.create_org_tool", create)
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+    monkeypatch.setattr("teardrop.routers.org.tools.registry.get", MagicMock(return_value=None))
+    token = create_access_token(
+        "read-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": "read"},
+    )
+
+    resp = await anon_client.post("/tools", json=_CREATE_BODY, headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 201
+    create.assert_awaited_once()
+
+
+_PUBLISHED_TOOL = OrgTool(**{**_TOOL.model_dump(), "publish_as_mcp": True, "is_active": False})
+
+
+def _machine_headers(scope: str) -> dict[str, str]:
+    from teardrop.auth import create_access_token
+
+    token = create_access_token(
+        f"{scope}-key",
+        extra_claims={"auth_method": "client_credentials", "org_id": "test-org-id", "scope": scope},
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"base_price_usdc": 1_000_000},
+        {"webhook_url": "https://example.com/replacement"},
+        {"marketplace_description": "Changed listing"},
+        {"is_active": True},
+        {"publish_as_mcp": False},
+    ],
+)
+async def test_patch_published_tool_denied_for_read_scope_machine(anon_client, monkeypatch, body):
+    """Read-scoped machines cannot alter, reactivate, or unpublish an already-published tool."""
+    update = AsyncMock(return_value=_PUBLISHED_TOOL)
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=_PUBLISHED_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", update)
+
+    resp = await anon_client.patch("/tools/tool-abc", json=body, headers=_machine_headers("read"))
+
+    assert resp.status_code == 403
+    update.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_delete_published_tool_denied_for_read_scope_machine(anon_client, monkeypatch):
+    delete = AsyncMock(return_value=True)
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=_PUBLISHED_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.delete_org_tool", delete)
+
+    resp = await anon_client.delete("/tools/tool-abc", headers=_machine_headers("read"))
+
+    assert resp.status_code == 403
+    delete.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_published_tool_mutations_allowed_for_publish_scope_machine(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=_PUBLISHED_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", AsyncMock(return_value=_PUBLISHED_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.delete_org_tool", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+    headers = _machine_headers("publish")
+
+    assert (await anon_client.patch("/tools/tool-abc", json={"base_price_usdc": 0}, headers=headers)).status_code == 200
+    assert (await anon_client.delete("/tools/tool-abc", headers=headers)).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_private_tool_mutations_allowed_for_read_scope_machine(anon_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.org.tools.get_org_tool", AsyncMock(return_value=_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.update_org_tool", AsyncMock(return_value=_TOOL))
+    monkeypatch.setattr("teardrop.routers.org.tools.delete_org_tool", AsyncMock(return_value=True))
+    monkeypatch.setattr("teardrop.routers.org.tools.invalidate_org_tools_cache", AsyncMock())
+    headers = _machine_headers("read")
+
+    assert (await anon_client.patch("/tools/tool-abc", json={"description": "x"}, headers=headers)).status_code == 200
+    assert (await anon_client.delete("/tools/tool-abc", headers=headers)).status_code == 200

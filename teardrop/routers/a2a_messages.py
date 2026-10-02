@@ -45,7 +45,7 @@ from teardrop.a2a_tasks import (
     mark_inbound_task_billing_method,
 )
 from teardrop.agent_runtime import _run_billing_gate, run_agent_once
-from teardrop.auth import decode_access_token
+from teardrop.auth import decode_access_token, is_machine_credential_revoked
 from teardrop.concurrency import AgentRunCapacityError
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
@@ -201,12 +201,12 @@ def _extract_bearer_token(request: Request) -> str | None:
     return token.strip()
 
 
-def _parse_auth_payload(request: Request) -> dict[str, Any] | None:
+async def _parse_auth_payload(request: Request) -> dict[str, Any] | None:
     token = _extract_bearer_token(request)
     if token is None:
         return None
     try:
-        return decode_access_token(token)
+        payload = decode_access_token(token)
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -219,6 +219,13 @@ def _parse_auth_payload(request: Request) -> dict[str, Any] | None:
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if await is_machine_credential_revoked(payload):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Credential has been disabled.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
 
 
 def _request_client_ip(request: Request) -> str:
@@ -673,7 +680,7 @@ async def message_status(task_id: str, request: Request) -> JSONResponse:
             content={"error": "A2A inbound endpoint disabled"},
         )
 
-    payload = _parse_auth_payload(request)
+    payload = await _parse_auth_payload(request)
     if payload is None:
         task = await get_inbound_task(task_id, anonymous_only=True)
     else:
@@ -704,7 +711,7 @@ async def message_send(request: Request) -> JSONResponse:
         )
 
     run_id = str(uuid.uuid4())
-    payload = _parse_auth_payload(request)
+    payload = await _parse_auth_payload(request)
     payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
     intro_requirements: list | None = None
 

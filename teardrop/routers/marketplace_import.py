@@ -20,7 +20,7 @@ from marketplace.models import MarketplaceCategory
 from mcp_client import discover_mcp_tools, get_org_mcp_server
 from org_tools import create_org_tool, list_org_tools, validate_safe_schema_subset
 from teardrop.config import get_settings
-from teardrop.dependencies import _require_org_id, require_auth, require_org_machine
+from teardrop.dependencies import _require_org_id, require_auth, require_org_machine, require_scope
 from teardrop.rate_limit import _enforce_rate_limit
 from tools import registry
 from tools.schema import normalize_to_safe_schema_subset
@@ -305,6 +305,11 @@ async def preview_marketplace_import(
         await require_org_machine(payload)
     except HTTPException:
         blockers.append("requires_org_machine")
+    else:
+        try:
+            await require_scope("publish")(payload)
+        except HTTPException:
+            blockers.append("requires_publish_scope")
     if author_config is None:
         blockers.append("settlement_wallet_missing")
     can_publish = not blockers
@@ -347,7 +352,7 @@ async def preview_marketplace_import(
 @router.post("/marketplace/import/publish", tags=["Marketplace"], response_model=MarketplaceImportPublishResponse)
 async def publish_marketplace_import(
     body: MarketplaceImportPublishRequest,
-    payload: dict = Depends(require_org_machine),
+    payload: dict = Depends(require_scope("publish")),
 ) -> JSONResponse:
     """Publish selected MCP tools as marketplace-visible MCP-backed org tools."""
     s = get_settings()

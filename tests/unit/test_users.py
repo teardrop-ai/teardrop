@@ -306,6 +306,8 @@ def _make_cred_row():
         "hashed_secret": "h",
         "salt": "s",
         "created_at": datetime.now(timezone.utc),
+        "scope": "publish",
+        "disabled_at": None,
     }
 
 
@@ -366,6 +368,48 @@ class TestClientCredentials:
         with patch.object(users_module.base, "_pool", pool):
             await delete_org_client_credentials("org-1")
         pool.execute.assert_called_once()
+
+    async def test_create_defaults_scope_publish(self):
+        from teardrop.users import create_client_credential
+
+        pool = _pool()
+        with patch.object(users_module.base, "_pool", pool):
+            cred, _ = await create_client_credential("org-1")
+        assert cred.scope == "publish"
+        sql = pool.execute.call_args.args[0]
+        assert "scope" in sql
+
+    async def test_disable_is_org_scoped_and_idempotent(self):
+        from teardrop.users import disable_client_credential
+
+        pool = _pool()
+        pool.execute = AsyncMock(return_value="UPDATE 1")
+        with patch.object(users_module.base, "_pool", pool):
+            changed = await disable_client_credential("cid-1", "org-1")
+        assert changed is True
+        sql, *args = pool.execute.call_args.args
+        assert "disabled_at IS NULL" in sql
+        assert args == ["cid-1", "org-1"]
+
+        pool.execute = AsyncMock(return_value="UPDATE 0")
+        with patch.object(users_module.base, "_pool", pool):
+            assert await disable_client_credential("cid-1", "org-1") is False
+
+    async def test_is_disabled_fails_closed_on_unknown_credential(self):
+        from teardrop.users import is_client_credential_disabled
+
+        pool = _pool()
+        pool.fetchrow = AsyncMock(return_value=None)
+        with patch.object(users_module.base, "_pool", pool):
+            assert await is_client_credential_disabled("missing") is True
+
+        pool.fetchrow = AsyncMock(return_value={"disabled_at": None})
+        with patch.object(users_module.base, "_pool", pool):
+            assert await is_client_credential_disabled("cid-1") is False
+
+        pool.fetchrow = AsyncMock(return_value={"disabled_at": datetime.now(timezone.utc)})
+        with patch.object(users_module.base, "_pool", pool):
+            assert await is_client_credential_disabled("cid-1") is True
 
 
 # ─── register_org_and_user ────────────────────────────────────────────────────
