@@ -18,11 +18,14 @@ from teardrop.funnel_counters import (
     VALID_SURFACES,
     anon_challenge_client_surface,
     close_funnel_counters,
+    discover_client_surface,
     flush_discovery_counters,
     init_funnel_counters,
     mcp_initialize_surface,
     mcp_meta_client_name,
+    record_discover_hit,
     record_discovery_hit,
+    tools_list_anon_client_surface,
 )
 
 
@@ -82,6 +85,49 @@ class TestClientClassification:
 
         assert surface == f"mcp_402_anon_client:{expected}"
         assert surface in VALID_SURFACES
+
+    @pytest.mark.parametrize(
+        ("user_agent", "expected"),
+        [
+            ("x402scan-indexer/1.0", "bot"),
+            ("Mozilla/5.0 (Macintosh) Safari/605", "browser"),
+            ("python-httpx/0.28.1", "script"),
+            (None, "unknown"),
+        ],
+    )
+    def test_discover_client_surface_has_no_mcp_class(self, user_agent, expected):
+        surface = discover_client_surface(user_agent)
+
+        assert surface == f"discover_client:{expected}"
+        assert surface in VALID_SURFACES
+
+    @pytest.mark.parametrize(
+        ("user_agent", "is_mcp", "expected"),
+        [
+            ("smithery-validator/1.0", True, "bot"),
+            ("node", True, "mcp"),
+            ("node", False, "script"),
+        ],
+    )
+    def test_tools_list_anon_client_surface(self, user_agent, is_mcp, expected):
+        surface = tools_list_anon_client_surface(user_agent, is_mcp)
+
+        assert surface == f"tools_list_anon_client:{expected}"
+        assert surface in VALID_SURFACES
+
+    def test_record_discover_hit_records_stage_and_partition(self):
+        init_funnel_counters(_pool(), enabled=True)
+        record_discover_hit(SURFACE_AGENT_CARD, "Googlebot/2.1")
+
+        assert sorted(surface for surface, _ in funnel_module._counters) == ["agent_card", "discover_client:bot"]
+
+    def test_every_client_class_is_a_valid_partition(self):
+        prefixes = ("mcp_402_anon_client:", "discover_client:", "tools_list_anon_client:", "tools_call_free_anon_client:")
+        for prefix in prefixes:
+            assert {prefix + cls for cls in CLIENT_CLASSES} <= VALID_SURFACES
+
+    def test_tools_call_free_anon_client_surface(self):
+        assert funnel_module.tools_call_free_anon_client_surface("node", True) == "tools_call_free_anon_client:mcp"
 
     @pytest.mark.parametrize(
         ("client_name", "expected"),
@@ -176,7 +222,7 @@ class TestClientClassification:
         assert mcp_initialize_surface(f"prefix{token.upper()}suffix-cline") == f"mcp_initialize:{expected}"
 
     def test_vocabulary_is_bounded(self):
-        assert len(VALID_SURFACES) == 12 + len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS)
+        assert len(VALID_SURFACES) == 13 + 4 * len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS)
         assert len(MCP_HOSTS) == 25
         assert len(set(MCP_HOSTS)) == len(MCP_HOSTS)
 

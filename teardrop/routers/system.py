@@ -23,7 +23,7 @@ from teardrop.funnel_counters import (
     SURFACE_AGENT_CARD,
     SURFACE_MCP_SERVER_CARD,
     SURFACE_X402_DISCOVERY,
-    record_discovery_hit,
+    record_discover_hit,
 )
 from teardrop.public_url import public_base_url
 from tools.capabilities import (
@@ -630,7 +630,7 @@ async def jwks() -> JSONResponse:
 @router.get("/.well-known/agent-card.json", tags=["A2A"])
 async def agent_card(request: Request) -> Response:
     """A2A agent card for discoverability and inter-agent communication."""
-    record_discovery_hit(SURFACE_AGENT_CARD)
+    record_discover_hit(SURFACE_AGENT_CARD, request.headers.get("user-agent"))
     return _json_discovery_response(request, _build_agent_card_content(request))
 
 
@@ -657,7 +657,7 @@ async def public_reputation(request: Request) -> Response:
 @router.get("/.well-known/x402", tags=["System"])
 async def x402_discovery(request: Request) -> Response:
     """Public x402 metadata for registries and validators."""
-    record_discovery_hit(SURFACE_X402_DISCOVERY)
+    record_discover_hit(SURFACE_X402_DISCOVERY, request.headers.get("user-agent"))
     content = await _build_x402_discovery_content(request)
     cache_seconds = max(0, min(300, get_settings().pricing_cache_ttl_seconds))
     if "bootstrap" in content and not content["bootstrap"]["accepts"]:
@@ -735,7 +735,7 @@ async def robots_txt(request: Request) -> Response:
 @router.get("/.well-known/mcp/server-card.json", tags=["MCP"])
 async def mcp_server_card(request: Request) -> Response:
     """Static MCP server card for Smithery and other MCP registries."""
-    record_discovery_hit(SURFACE_MCP_SERVER_CARD)
+    record_discover_hit(SURFACE_MCP_SERVER_CARD, request.headers.get("user-agent"))
     # Platform tools only: community tools are Bearer-only and advertised via the marketplace block.
     tools = [to_mcp_server_card_tool(c) for c in get_capability_manifest() if c.kind == "platform" and not c.deprecated]
     description = _mcp_server_description()

@@ -34,6 +34,13 @@ SURFACE_MCP_402_NO_PAYMENT = "mcp_402_no_payment"
 SURFACE_MCP_402_PAYMENT_INVALID = "mcp_402_payment_invalid"
 # Partition of no_payment + payment_invalid by header-derived client class.
 SURFACE_MCP_402_ANON_CLIENT_PREFIX = "mcp_402_anon_client:"
+# Partition of the discover stage (agent_card + x402_discovery + mcp_server_card + catalog) by client class.
+SURFACE_DISCOVER_CLIENT_PREFIX = "discover_client:"
+# Partition of tools_list_anon by client class.
+SURFACE_TOOLS_LIST_ANON_CLIENT_PREFIX = "tools_list_anon_client:"
+# Anonymous tools/call admitted to an allowlisted zero-cost tool (activation before any payment).
+SURFACE_TOOLS_CALL_FREE_ANON = "tools_call_free_anon"
+SURFACE_TOOLS_CALL_FREE_ANON_CLIENT_PREFIX = "tools_call_free_anon_client:"
 # MCP `initialize` (legacy) / `server/discover` (2026-07-28) handshakes by clientInfo.name bucket.
 SURFACE_MCP_INITIALIZE_PREFIX = "mcp_initialize:"
 # 2026-07-28 tools/call by params._meta clientInfo bucket; legacy calls carry no clientInfo and are not counted.
@@ -159,7 +166,11 @@ VALID_SURFACES: frozenset[str] = frozenset(
         SURFACE_MCP_402_PAYMENT_INVALID,
         SURFACE_MCP_MODERN_ENVELOPE,
         SURFACE_MCP_REQUEST,
+        SURFACE_TOOLS_CALL_FREE_ANON,
         *(SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
+        *(SURFACE_DISCOVER_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
+        *(SURFACE_TOOLS_LIST_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
+        *(SURFACE_TOOLS_CALL_FREE_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
         *(SURFACE_MCP_INITIALIZE_PREFIX + host for host in MCP_HOSTS),
         *(SURFACE_MCP_CALL_CLIENT_PREFIX + host for host in MCP_HOSTS),
     }
@@ -185,20 +196,44 @@ def close_funnel_counters() -> None:
     _counters.clear()
 
 
-def anon_challenge_client_surface(user_agent: str | None, is_mcp: bool) -> str:
-    """Bucket an anonymous x402 challenger; self-identified bots win over the MCP transport signal."""
+def _client_class(user_agent: str | None, is_mcp: bool) -> str:
+    """Header-derived client class; self-identified bots win over the MCP transport signal."""
     ua = (user_agent or "")[:_MAX_CLASSIFIED_CHARS].lower()
     if any(token in ua for token in _BOT_UA_TOKENS):
-        cls = "bot"
-    elif is_mcp:
-        cls = "mcp"
-    elif ua.startswith("mozilla/"):
-        cls = "browser"
-    elif any(token in ua for token in _SCRIPT_UA_TOKENS):
-        cls = "script"
-    else:
-        cls = "unknown"
-    return SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls
+        return "bot"
+    if is_mcp:
+        return "mcp"
+    if ua.startswith("mozilla/"):
+        return "browser"
+    if any(token in ua for token in _SCRIPT_UA_TOKENS):
+        return "script"
+    return "unknown"
+
+
+def anon_challenge_client_surface(user_agent: str | None, is_mcp: bool) -> str:
+    """Bucket an anonymous x402 challenger."""
+    return SURFACE_MCP_402_ANON_CLIENT_PREFIX + _client_class(user_agent, is_mcp)
+
+
+def discover_client_surface(user_agent: str | None) -> str:
+    """Bucket a discover-stage hit; discovery documents are plain GETs, so there is no MCP signal."""
+    return SURFACE_DISCOVER_CLIENT_PREFIX + _client_class(user_agent, False)
+
+
+def tools_list_anon_client_surface(user_agent: str | None, is_mcp: bool) -> str:
+    """Bucket an anonymous ``tools/list`` caller."""
+    return SURFACE_TOOLS_LIST_ANON_CLIENT_PREFIX + _client_class(user_agent, is_mcp)
+
+
+def tools_call_free_anon_client_surface(user_agent: str | None, is_mcp: bool) -> str:
+    """Bucket an anonymous caller admitted to a free tool."""
+    return SURFACE_TOOLS_CALL_FREE_ANON_CLIENT_PREFIX + _client_class(user_agent, is_mcp)
+
+
+def record_discover_hit(surface: str, user_agent: str | None) -> None:
+    """Record a discover-stage hit and its client-class partition."""
+    record_discovery_hit(surface)
+    record_discovery_hit(discover_client_surface(user_agent))
 
 
 def _mcp_host_bucket(client_name: object) -> str:

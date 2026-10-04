@@ -461,6 +461,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 mcp_initialize_surface,
                 mcp_meta_client_name,
                 record_discovery_hit,
+                tools_list_anon_client_surface,
             )
 
             try:
@@ -474,6 +475,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 record_discovery_hit(SURFACE_TOOLS_LIST)
                 if is_anonymous:
                     record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
+                    record_discovery_hit(
+                        tools_list_anon_client_surface(request.headers.get("user-agent"), _wants_mcp_payment_signal(request))
+                    )
             elif rpc_method in ("initialize", "server/discover"):
                 # Modern clients replace initialize with server/discover and put clientInfo in params._meta.
                 params = rpc.get("params")
@@ -842,8 +846,10 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_MCP_402_CHALLENGE,
             SURFACE_MCP_402_NO_PAYMENT,
             SURFACE_MCP_402_PAYMENT_INVALID,
+            SURFACE_TOOLS_CALL_FREE_ANON,
             anon_challenge_client_surface,
             record_discovery_hit,
+            tools_call_free_anon_client_surface,
         )
 
         data = await _read_jsonrpc(request)
@@ -869,6 +875,10 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 limited = await _anonymous_ip_limit(request)
                 if limited is not None:
                     return limited
+                record_discovery_hit(SURFACE_TOOLS_CALL_FREE_ANON)
+                record_discovery_hit(
+                    tools_call_free_anon_client_surface(request.headers.get("user-agent"), _wants_mcp_payment_signal(request))
+                )
                 request.state.mcp_org_id = None
                 request.state.mcp_auth_method = ""
                 return None

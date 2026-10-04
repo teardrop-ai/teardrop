@@ -127,6 +127,8 @@ async def test_zero_cost_challenge_never_offers_upto(x402_gateway_env, monkeypat
 async def test_allowlisted_zero_cost_tool_runs_free_for_anonymous_callers(x402_gateway_env, monkeypatch):
     mocks = _patch_billing(monkeypatch, tool_cost=0)
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
 
     response = await _post_paid_call({"Accept": "application/json", "X-PAYMENT": "signed-payment"})
 
@@ -135,6 +137,7 @@ async def test_allowlisted_zero_cost_tool_runs_free_for_anonymous_callers(x402_g
     mocks.verify.assert_not_awaited()
     mocks.settle.assert_not_awaited()
     mocks.record.assert_not_awaited()
+    assert hits[-2:] == ["tools_call_free_anon", "tools_call_free_anon_client:script"]
 
 
 @pytest.mark.asyncio
@@ -142,12 +145,15 @@ async def test_allowlisted_free_tool_is_ip_rate_limited(x402_gateway_env, monkey
     mocks = _patch_billing(monkeypatch, tool_cost=0)
     limiter = AsyncMock(return_value=(False, 0, 123))
     monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", limiter)
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
 
     response = await _post_paid_call({"Accept": "application/json"})
 
     assert response.status_code == 429
     assert limiter.await_args.args[0].startswith("mcp:ip:")
     mocks.verify.assert_not_awaited()
+    assert "tools_call_free_anon" not in hits
 
 
 async def _post_raw(content: bytes, headers: dict[str, str]):

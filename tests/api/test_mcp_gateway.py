@@ -410,7 +410,7 @@ async def test_community_tool_call_fails_closed_without_billing(test_settings, m
 @pytest.mark.parametrize(
     ("bearer", "expect_community", "expected_hits"),
     [
-        (False, False, ["mcp_request", "tools_list", "tools_list_anon"]),
+        (False, False, ["mcp_request", "tools_list", "tools_list_anon", "tools_list_anon_client:script"]),
         (True, True, ["mcp_request", "tools_list"]),
     ],
 )

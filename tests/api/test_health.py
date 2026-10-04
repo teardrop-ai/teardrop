@@ -155,6 +155,21 @@ async def test_agent_card_hides_onboarding_methods_when_disabled(api_client, tes
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("path", "surface"),
+    [("/.well-known/agent-card.json", "agent_card"), ("/.well-known/mcp/server-card.json", "mcp_server_card")],
+)
+async def test_discover_surfaces_record_client_class_partition(api_client, monkeypatch, path, surface):
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+
+    response = await api_client.get(path, headers={"User-Agent": "x402scan-indexer/1.0"})
+
+    assert response.status_code == 200
+    assert hits == [surface, "discover_client:bot"]
+
+
+@pytest.mark.anyio
 async def test_agent_card_advertises_event_trigger_control_plane(api_client, test_settings):
     test_settings.event_triggers_enabled = True
 
