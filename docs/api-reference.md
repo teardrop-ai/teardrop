@@ -115,6 +115,18 @@ Credit callers may bound any call with `params._meta["teardrop/max_cost_usdc"]` 
 | `404` | `-32601` | Community tool not found or unpublished |
 | `200` | `isError: true` | Invalid arguments or tool execution failure (not charged) |
 
+#### MPP charge on MCP
+
+When `MPP_ENABLED` is active ([configuration](configuration.md)), `/tools/mcp` also accepts [MPP](https://mpp.dev) `evm` charge credentials for paid platform tools, without a ******. x402 stays the primary rail and its challenges are unchanged. A no-payment HTTP `402` adds a `WWW-Authenticate: Payment ...` challenge, and an MCP result-level x402 challenge adds `result._meta["org.paymentauth/challenges"]`. Challenges advertise `methodDetails.credentialTypes = ["hash"]` and the Base chain id.
+
+To pay, broadcast a standard ERC-20 transfer of exactly `amount` of `currency` from your wallet to `recipient`, **after** receiving the challenge. Then retry with `{challenge, source, payload: {"type": "hash", "hash": "0x..."}}` in either `params._meta["org.paymentauth/credential"]` or `Authorization: Payment <base64url JSON>`, before the challenge `expires`. Echo the challenge unchanged. `source` must be the sending address, as `0x...` or `did:pkh:eip155:<chainId>:0x...`. Each transaction hash pays for one call. The transfer is final before execution, so the charge stands even when the tool returns `isError`; payer spend caps and failure budgets don't apply. Success returns the receipt (`status`, `method`, `reference` = transaction hash, `challengeId`, `timestamp`) in `result._meta["org.paymentauth/receipt"]` and the `Payment-Receipt` header.
+
+| HTTP | JSON-RPC code | Meaning |
+|------|---------------|---------|
+| `402` | `-32602` | Malformed credential, a non-`hash` payload, or an invalid `source`; includes a replacement challenge |
+| `402` | `-32043` | Challenge not issued by this server, expired, or terms changed; transfer missing, unconfirmed, mismatched, or mined before the challenge; or hash already used. Includes a replacement challenge in `error.data.challenges` |
+| `503` | `-32603` | Replay store or chain RPC unavailable; retry the same credential before it expires |
+
 #### `/mcp/v1` marketplace gateway (deprecated)
 
 `POST /mcp/v1` is deprecated and sunsets on 2026-10-29. Responses carry `Deprecation`, `Sunset`, and `Link: </tools/mcp>; rel="successor-version"` headers. It keeps its existing behavior until then: Bearer and credit only, the same price metadata, `max_cost_usdc` bound, and error codes (returned as HTTP `200` JSON-RPC errors). To migrate to `/tools/mcp`, send `Accept: application/json` (Streamable HTTP), call platform tools by bare name instead of `platform/{tool_name}`, and expect the HTTP statuses above.

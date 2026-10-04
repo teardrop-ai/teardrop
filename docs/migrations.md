@@ -129,3 +129,4 @@ python -m migrations.runner
 | `116_platform_tool_price_floor.sql` | Raises every paid `marketplace_platform_tools` price and `tool_pricing_overrides` cost below 5,000 atomic USDC ($0.005) to that floor; free (`0`) rows are untouched and re-runs are no-ops |
 | `117_market_resolution_platform_tool.sql` | Registers `assess_market_resolution` composite platform tool at $0.025 USDC (Polymarket resolution-risk verdict) |
 | `118_org_credential_scopes.sql` | Adds `scope` (`read`/`publish`/`withdraw`, CHECK-constrained, default `publish`) and `disabled_at` to `org_client_credentials`; partial index over active rows. Existing credentials keep publish capability (backfill by default), so live machine publishing behavior is unchanged |
+| `119_mpp_billing_method.sql` | Widens the `billing_method` CHECK on `mcp_call_events` and `billing_charges` to allow `mpp` (MPP charges recorded `settled` with the payer's tx hash). Additive; no rows rewritten |

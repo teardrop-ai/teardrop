@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_CALL_EVENT_SCHEMA_VERSION = 1
 TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a"]
-McpBillingMethod = Literal["x402", "credit"]
+McpBillingMethod = Literal["x402", "credit", "mpp"]
 McpSettlementStatus = Literal["settled", "failed"]
 _VALID_TELEMETRY_SOURCES = frozenset({"api", "schedule", "trigger", "a2a"})
 

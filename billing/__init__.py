@@ -658,6 +658,11 @@ async def release_payment_nonce(payment_header: str) -> None:
     return await _call_async(_x402.release_payment_nonce, payment_header)
 
 
+async def claim_payment_nonce(payment_header: str) -> bool:
+    """Atomically claim an opaque payment identity (e.g. ``mpp:<tx>``); raises if the store is unavailable."""
+    return await _call_async(_x402._claim_payment_nonce, payment_header, fail_closed=True)
+
+
 async def reserve_payer_spend(payment_header: str, payer_address: str, amount_usdc: int, limit_usdc: int) -> bool:
     """Reserve anonymous x402 spend against the payer's rolling limit."""
     return await _call_async(_RESERVE_PAYER_SPEND_ORIG, payment_header, payer_address, amount_usdc, limit_usdc)

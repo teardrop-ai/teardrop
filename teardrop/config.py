@@ -452,6 +452,24 @@ class Settings(BaseSettings):
     siwe_domain: str = Field(default="", description="Expected domain in SIWE messages (defaults to app_host if empty)")
     siwe_nonce_ttl_seconds: int = Field(default=300, description="SIWE nonce validity window in seconds")
 
+    # ── MPP (Machine Payments Protocol) charge — optional second payment scheme on /tools/mcp ──
+    mpp_enabled: bool = Field(
+        default=False,
+        description=(
+            "Accept MPP evm charge (type=hash) credentials on /tools/mcp; needs MCP auth, x402 and billing "
+            "enabled plus recipient, currency, secret key and RPC url."
+        ),
+    )
+    mpp_recipient: str = Field(
+        default="",
+        description="Dedicated recipient address for MPP charges; must not be an x402 treasury address.",
+    )
+    mpp_currency: str = Field(default="", description="Token contract address for MPP charge challenges (e.g. Base USDC)")
+    mpp_secret_key: str = Field(
+        default="", repr=False, description="HMAC key (>=32 chars) binding MPP Challenge ids to their parameters"
+    )
+    mpp_challenge_ttl_seconds: int = Field(default=300, description="MPP Challenge expiry window in seconds (30-3600)")
+
     @property
     def effective_siwe_domain(self) -> str:
         return self.siwe_domain or self.app_host
@@ -1183,6 +1201,20 @@ class Settings(BaseSettings):
             raise ValueError("x402_treasury_addresses must not contain duplicates")
         if any(not re.fullmatch(r"0x[0-9a-fA-F]{40}", address) for address in self.x402_treasury_addresses):
             raise ValueError("x402_treasury_addresses entries must be 20-byte EVM addresses")
+        if not 30 <= self.mpp_challenge_ttl_seconds <= 3600:
+            raise ValueError("mpp_challenge_ttl_seconds must be between 30 and 3600")
+        for name in ("mpp_recipient", "mpp_currency"):
+            value = getattr(self, name)
+            if value and not re.fullmatch(r"0x[0-9a-fA-F]{40}", value):
+                raise ValueError(f"{name} must be a 20-byte EVM address")
+        if self.mpp_enabled:
+            if self.mpp_secret_key and len(self.mpp_secret_key) < 32:
+                raise ValueError("mpp_secret_key must be at least 32 characters")
+            treasury = {address.lower() for address in self.effective_x402_treasury_addresses}
+            if self.mpp_recipient and self.mpp_recipient.lower() in treasury:
+                # Hash credentials can't prove which challenge a transfer paid; a shared address
+                # would let x402 and top-up settlements be re-presented as MPP payments.
+                raise ValueError("mpp_recipient must be a dedicated address, not an x402 treasury address")
         min_scheduled_timeout = self.agent_llm_timeout_seconds + self.agent_tool_executor_timeout_seconds + 60
         if self.scheduled_runs_execution_timeout_seconds < min_scheduled_timeout:
             raise ValueError(

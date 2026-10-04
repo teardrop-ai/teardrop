@@ -18,7 +18,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from billing import BillingResult
-from teardrop.mcp_gateway import MCPGatewayMiddleware
+from teardrop.mcp_gateway import (
+    MCPGatewayMiddleware,
+    _anonymous_failure_budget,
+    _payer_failure_budget,
+    _record_unbilled_failure,
+)
 
 
 @pytest.mark.asyncio
@@ -402,6 +407,55 @@ async def test_billing_gate_x402_rejects_missing_verified_payer():
     release_mock.assert_awaited_once_with("signed-payment")
 
 
+# ─── MPP is prepaid: the billing gate must never refuse it after payment ─────
+# The payer's transfer is final before execution. x402's payer cap and failure
+# budget bound unsettled exposure; applying them here would keep funds without
+# service, and releasing the mpp:<tx> claim would let the transfer replay.
+
+_MPP_PAYER = "0x" + "42" * 20
+_MPP_GATE_BODY = b'{"jsonrpc":"2.0","id":"req-mpp","method":"tools/call","params":{"name":"get_price"}}'
+
+
+def _mpp_gate_request():
+    request = MagicMock()
+    request.method = "POST"
+    request.headers = {}
+    request.body = AsyncMock(return_value=_MPP_GATE_BODY)
+    request.state = SimpleNamespace(
+        mcp_org_id=None,
+        x402_billing=BillingResult(
+            verified=True, settled=True, billing_method="mpp", payer=_MPP_PAYER, amount_usdc=500, tx_hash="0x" + "11" * 32
+        ),
+    )
+    return request
+
+
+@pytest.mark.asyncio
+async def test_billing_gate_mpp_skips_post_payment_refusals():
+    from teardrop.rate_limit import record_auth_failure
+
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = _mpp_gate_request()
+    settings = MagicMock(mcp_billing_enabled=True, marketplace_enabled=False)
+    settings.x402_payer_daily_spend_limit_usdc = 5_000_000
+
+    with (
+        patch("teardrop.mcp_gateway.get_settings", return_value=settings),
+        patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value={})),
+        patch("billing.get_current_pricing", new=AsyncMock(return_value=None)),
+        patch("billing.resolve_tool_cost", new=AsyncMock(return_value=500)),
+        patch("billing.reserve_payer_spend", new=AsyncMock(return_value=False)) as reserve_mock,
+        patch("billing.release_payment_nonce", new=AsyncMock()) as release_mock,
+    ):
+        for _ in range(3):
+            await record_auth_failure(f"mcpfail:payer:{_MPP_PAYER}", 600)
+        result = await gateway._billing_gate(request)
+
+    assert result == (None, 500, "get_price", "req-mpp")
+    reserve_mock.assert_not_awaited()
+    release_mock.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_billing_gate_credit_path_still_verifies():
     """Non-x402 org callers must still be credit-verified before execution."""
@@ -508,6 +562,45 @@ async def test_record_mcp_outcome_dual_writes_charge_with_call_event_id():
 
 
 @pytest.mark.asyncio
+async def test_record_mcp_outcome_mpp_passes_payer_and_tx():
+    """F3: mpp outcomes must carry the verified payer address + tx to consumers,
+    exactly like x402 — not the x402-only payer mapping that dropped both."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state.mcp_call_event_id = "server-call-1"
+    request.state.x402_billing = BillingResult(
+        verified=True,
+        settled=True,
+        billing_method="mpp",
+        payer="did:pkh:eip155:8453:0x" + "42" * 20,
+        tx_hash="0x" + "11" * 32,
+    )
+    tx = "0x" + "11" * 32
+
+    with (
+        patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock) as record_mock,
+        patch("billing.charges.record_charge", new_callable=AsyncMock, return_value="charge-1") as charge_mock,
+    ):
+        await gateway._record_mcp_outcome(request, None, "calculate", 10_000, "mpp", "settled", tx)
+        await asyncio.sleep(0)
+
+    record_mock.assert_awaited_once_with(
+        "server-call-1",
+        "",
+        "did:pkh:eip155:8453:0x" + "42" * 20,
+        "calculate",
+        "mpp",
+        10_000,
+        "settled",
+        tx,
+    )
+    kwargs = charge_mock.await_args.kwargs
+    assert kwargs["payer_address"] == "did:pkh:eip155:8453:0x" + "42" * 20
+    assert kwargs["billing_method"] == "mpp"
+    assert kwargs["settlement_tx"] == tx
+
+
+@pytest.mark.asyncio
 async def test_settle_billing_x402_exception_withholds_result_without_recovery(_stub_402_body):
     """A withheld result must never be retried into a charge."""
     gateway = MCPGatewayMiddleware(app=MagicMock())
@@ -574,3 +667,102 @@ async def test_settle_billing_credit_success_does_not_enqueue():
 
     enqueue_mock.assert_not_called()
     assert result is response
+
+
+# ─── Unbilled-failure budget (build order §3.1/§5.2) ─────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_failure_budget():
+    from teardrop import rate_limit
+
+    rate_limit._auth_fail_counters.clear()
+    yield
+    rate_limit._auth_fail_counters.clear()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_failure_budget_clear_below_limit():
+    request = MagicMock()
+    with patch("teardrop.mcp_gateway.client_ip_from_request", return_value="203.0.113.7"):
+        assert await _anonymous_failure_budget(request, 1) is None
+
+
+@pytest.mark.asyncio
+async def test_anonymous_failure_budget_locks_after_three_failures():
+    request = MagicMock()
+    request.state = MagicMock(spec=[])
+    with patch("teardrop.mcp_gateway.client_ip_from_request", return_value="203.0.113.7"):
+        for _ in range(3):
+            await _record_unbilled_failure(request)
+        limited = await _anonymous_failure_budget(request, 1)
+
+    assert limited is not None
+    assert limited.status_code == 429
+    assert limited.headers["X-RateLimit-Scope"] == "failure-budget"
+    assert json.loads(limited.body)["error"]["code"] == -32029
+
+
+@pytest.mark.asyncio
+async def test_payer_failure_budget_locks_independent_of_ip():
+    request = MagicMock()
+    request.state.x402_billing = SimpleNamespace(payer="0xDEAD")
+    ips = iter(["1.1.1.1", "2.2.2.2", "3.3.3.3"])
+    with patch("teardrop.mcp_gateway.client_ip_from_request", side_effect=lambda *a, **k: next(ips)):
+        for _ in range(3):
+            await _record_unbilled_failure(request)
+    with patch("teardrop.mcp_gateway.client_ip_from_request", return_value="4.4.4.4"):
+        assert await _anonymous_failure_budget(request, 1) is None
+
+    limited = await _payer_failure_budget("0xdead", 1)
+    assert limited is not None
+    assert limited.status_code == 429
+    assert limited.headers["X-RateLimit-Scope"] == "x402-payer"
+
+
+@pytest.mark.asyncio
+async def test_record_unbilled_failure_never_raises():
+    request = MagicMock()
+    with patch("teardrop.mcp_gateway.client_ip_from_request", side_effect=RuntimeError("boom")):
+        await _record_unbilled_failure(request)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_failed_execution_records_failure():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock(spec=[])
+    response = MagicMock()
+    pending = ("org-1", 100, "test_tool", "req-1")
+
+    with patch("teardrop.mcp_gateway._record_unbilled_failure", new_callable=AsyncMock) as count_mock:
+        result = await gateway._settle_billing(request, pending, response, execution_failed=True)
+
+    count_mock.assert_awaited_once_with(request)
+    assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_x402_rejected_records_failure(_stub_402_body):
+    """Unfunded wallet: verify ok, settle fails, tool ran unbilled → budget counts it."""
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state.x402_billing = MagicMock()
+    request.state.x402_billing.payment_payload = None
+    request.state.mcp_x402_challenge = (True, {})
+    response = MagicMock()
+    pending = ("org-1", 100, "acme/test_tool", "req-1")
+
+    with (
+        patch(
+            "billing.settle_payment",
+            new=AsyncMock(return_value=BillingResult(verified=True, settled=False, error="rejected")),
+        ),
+        patch("billing.settlement.enqueue_failed_settlement", new_callable=AsyncMock),
+        patch.object(gateway, "_record_mcp_outcome"),
+        patch("teardrop.mcp_gateway._record_unbilled_failure", new_callable=AsyncMock) as count_mock,
+    ):
+        result = await gateway._settle_billing(request, pending, response, execution_failed=False)
+
+    count_mock.assert_awaited_once_with(request)
+    _assert_withheld(result, "req-1")

@@ -472,7 +472,7 @@ def _payment_nonce_hash(payment_header: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-async def _claim_payment_nonce(payment_header: str) -> bool:
+async def _claim_payment_nonce(payment_header: str, *, fail_closed: bool = False) -> bool:
     """Atomically claim a payment header to block concurrent replays.
 
     Returns True if this is the first time the header is seen (caller may
@@ -484,9 +484,12 @@ async def _claim_payment_nonce(payment_header: str) -> bool:
     header both verify and execute a paid tool before either settles. If the
     nonce store is unavailable we fail open (log + allow) so a transient DB
     issue cannot take down all paid traffic — the chain remains the final
-    double-spend backstop.
+    double-spend backstop. ``fail_closed=True`` raises instead, for schemes
+    (MPP tx hashes) where the claim is the only replay guard.
     """
     if not _has_pool():
+        if fail_closed:
+            raise RuntimeError("payment nonce store unavailable")
         logger.warning("x402 nonce store unavailable (no pool); skipping replay claim")
         return True
 
@@ -503,6 +506,8 @@ async def _claim_payment_nonce(payment_header: str) -> bool:
             nonce_hash,
         )
     except Exception:
+        if fail_closed:
+            raise
         logger.warning("x402 nonce claim query failed; failing open", exc_info=True)
         return True
     return claimed is not None

@@ -21,6 +21,7 @@ from teardrop.funnel_counters import (
     flush_discovery_counters,
     init_funnel_counters,
     mcp_initialize_surface,
+    mcp_meta_client_name,
     record_discovery_hit,
 )
 
@@ -85,6 +86,7 @@ class TestClientClassification:
     @pytest.mark.parametrize(
         ("client_name", "expected"),
         [
+            # Pre-existing buckets must not shift as the vocabulary widens.
             ("claude-ai", "claude"),
             ("claude-code", "claude"),
             ("cursor-vscode", "cursor"),
@@ -92,10 +94,63 @@ class TestClientClassification:
             ("openai-mcp", "openai"),
             ("mcp-inspector", "inspector"),
             ("x402-mcp-client", "x402"),
+            # First match wins by token-list order, not position in the name:
+            # "cursor" precedes "vscode", and "openai" precedes "chatgpt".
+            ("vscode-cursor", "cursor"),
+            ("chatgpt-openai", "openai"),
+            ("cline-cursor", "cursor"),
+            ("anthropicclaude-cursor", "claude"),
+            ("x402client", "x402"),
+            ("x402client-cline", "x402"),
+            # Agent-builder apps.
+            ("cline", "cline"),
+            ("Roo Code", "roo"),
+            ("roo-code", "roo"),
+            ("windsurf", "windsurf"),
+            ("zed", "zed"),
+            ("Continue", "continue"),
+            ("block-goose", "goose"),
+            ("Cherry Studio", "cherry"),
+            ("LibreChat", "librechat"),
+            ("n8n-mcp", "n8n"),
+            ("dify-agent", "dify"),
+            ("open-webui", "openwebui"),
+            ("OpenWebUI", "openwebui"),
+            ("kiro", "kiro"),
+            ("augment", "augment"),
+            ("github-copilot", "copilot"),
+            ("qwen-code", "qwen"),
+            ("gemini-cli", "gemini"),
+            # Programmatic clients collapse into one shared bucket.
+            ("fastmcp", "sdk"),
+            ("@modelcontextprotocol/sdk", "sdk"),
+            ("langchain-mcp-adapter", "sdk"),
+            ("langgraph", "sdk"),
+            ("crewai-agents", "sdk"),
+            ("smol", "sdk"),
+            ("agno", "sdk"),
+            ("mcp-python-sdk", "sdk"),
+            ("mcp-node", "sdk"),
+            ("autogen", "sdk"),
+            # Legacy substring behavior remains; additional aliases need boundaries.
+            ("anthropicclaude", "claude"),
+            ("augmented-code", "other"),
+            ("discontinue", "other"),
+            ("mongoose", "other"),
+            ("room", "other"),
+            ("kangaroo", "other"),
+            ("organized", "other"),
+            ("difyy", "other"),
+            ("continuous-improver", "other"),
             ("my-agent", "other"),
             ("   ", "none"),
             (None, "none"),
             ({"name": "claude"}, "none"),
+            (123, "none"),
+            (" " * 256 + "cline", "other"),
+            (" " * 255 + "cline", "other"),
+            (" " * 251 + "cline", "cline"),
+            (" " * 256 + "claude", "other"),
         ],
     )
     def test_mcp_initialize_surface(self, client_name, expected):
@@ -104,8 +159,55 @@ class TestClientClassification:
         assert surface == f"mcp_initialize:{expected}"
         assert surface in VALID_SURFACES
 
+    @pytest.mark.parametrize(("token", "expected"), funnel_module._MCP_ADDITIONAL_HOST_TOKENS)
+    @pytest.mark.parametrize(("prefix", "suffix"), [("", ""), ("client/", "/1.0"), ("client_", "_1.0")])
+    def test_additional_host_alias_boundaries(self, token, expected, prefix, suffix):
+        surface = mcp_initialize_surface(f"{prefix}{token.upper()}{suffix}")
+
+        assert surface == f"mcp_initialize:{expected}"
+        assert surface in VALID_SURFACES
+
+    @pytest.mark.parametrize(("token", "expected"), funnel_module._MCP_ADDITIONAL_HOST_TOKENS)
+    def test_additional_host_alias_rejects_embedded_words(self, token, expected):
+        assert mcp_initialize_surface(f"prefix{token}suffix") == "mcp_initialize:other"
+
+    @pytest.mark.parametrize(("token", "expected"), funnel_module._MCP_HOST_TOKENS)
+    def test_legacy_host_substrings_take_precedence(self, token, expected):
+        assert mcp_initialize_surface(f"prefix{token.upper()}suffix-cline") == f"mcp_initialize:{expected}"
+
     def test_vocabulary_is_bounded(self):
-        assert len(VALID_SURFACES) == 10 + len(CLIENT_CLASSES) + len(MCP_HOSTS)
+        assert len(VALID_SURFACES) == 12 + len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS)
+        assert len(MCP_HOSTS) == 25
+        assert len(set(MCP_HOSTS)) == len(MCP_HOSTS)
+
+    @pytest.mark.parametrize(("client_name", "expected"), [("claude-ai", "claude"), ("my-agent", "other"), ("", "none")])
+    def test_mcp_call_client_surface_shares_host_buckets(self, client_name, expected):
+        surface = funnel_module.mcp_call_client_surface(client_name)
+
+        assert surface == f"mcp_call_client:{expected}"
+        assert surface in VALID_SURFACES
+
+    def test_host_buckets_are_split_part_safe(self):
+        """Panel 4 splits surfaces on ':'; a bucket containing one would be truncated."""
+        assert all(":" not in host and host for host in MCP_HOSTS)
+
+    @pytest.mark.parametrize(
+        ("params", "expected"),
+        [
+            ({"_meta": {"io.modelcontextprotocol/clientInfo": {"name": "claude-ai", "version": "1"}}}, "claude-ai"),
+            ({"_meta": {"io.modelcontextprotocol/clientInfo": {"name": ""}}}, ""),
+            ({"_meta": {"io.modelcontextprotocol/clientInfo": {"name": 3}}}, None),
+            ({"_meta": {"io.modelcontextprotocol/clientInfo": {}}}, None),
+            ({"_meta": {"io.modelcontextprotocol/clientInfo": "claude-ai"}}, None),
+            ({"_meta": {}}, None),
+            ({"_meta": None}, None),
+            ({}, None),
+            (None, None),
+            ("_meta", None),
+        ],
+    )
+    def test_mcp_meta_client_name(self, params, expected):
+        assert mcp_meta_client_name(params) == expected
 
 
 @pytest.mark.anyio

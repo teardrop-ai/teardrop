@@ -410,8 +410,8 @@ async def test_community_tool_call_fails_closed_without_billing(test_settings, m
 @pytest.mark.parametrize(
     ("bearer", "expect_community", "expected_hits"),
     [
-        (False, False, ["tools_list", "tools_list_anon"]),
-        (True, True, ["tools_list"]),
+        (False, False, ["mcp_request", "tools_list", "tools_list_anon"]),
+        (True, True, ["mcp_request", "tools_list"]),
     ],
 )
 async def test_tools_list_hides_community_tools_from_anonymous_callers(
@@ -476,7 +476,297 @@ async def test_initialize_records_client_host_bucket(monkeypatch):
             resp = await client.post("/tools/mcp", json=body, headers={"Accept": "application/json"})
 
     assert resp.status_code == 200, resp.text
-    assert hits == ["mcp_initialize:claude"]
+    assert hits == ["mcp_request", "mcp_initialize:claude"]
+
+
+@pytest.mark.asyncio
+async def test_server_discover_records_modern_envelope_and_client_bucket(monkeypatch):
+    """2026-07-28 clients replace initialize with server/discover + params._meta clientInfo."""
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": {"name": "claude-ai", "version": "0.1.0"},
+            }
+        },
+    }
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "server/discover",
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/tools/mcp", json=body, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"]["supportedVersions"] == ["2026-07-28"]
+    assert hits == ["mcp_request", "mcp_modern_envelope", "mcp_initialize:claude"]
+
+
+@pytest.mark.asyncio
+async def test_modern_tools_call_records_per_call_client_bucket(monkeypatch):
+    """Stateless 2026-07-28 clients may never handshake; tools/call carries clientInfo in _meta."""
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "get_datetime",
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": {"name": "Cursor", "version": "2.0"},
+            },
+        },
+    }
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/call",
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post("/tools/mcp", json=body, headers=headers)
+
+    assert hits[:3] == ["mcp_request", "mcp_modern_envelope", "mcp_call_client:cursor"]
+
+
+@pytest.mark.asyncio
+async def test_tools_list_modern_envelope_carries_cache_hints():
+    """cache_hints in create_mcp_server fills ttlMs/cacheScope the handler left unset."""
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/list",
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/tools/mcp", json=body, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    result = resp.json()["result"]
+    assert result["ttlMs"] == 60_000
+    assert result["cacheScope"] == "private"
+    assert result["tools"]
+
+
+@pytest.mark.asyncio
+async def test_anonymous_tools_call_blocked_after_failure_budget(monkeypatch):
+    """Dispatch Phase 0: an IP over its unbilled-failure budget never reaches execution."""
+    from teardrop import rate_limit
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    monkeypatch.setattr("teardrop.mcp_gateway.client_ip_from_request", lambda *a, **k: "198.51.100.9")
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "calculate", "arguments": {"expression": "1+1"}},
+    }
+
+    try:
+        rate_limit._auth_fail_counters.clear()
+        for _ in range(3):
+            await rate_limit.record_auth_failure("mcpfail:ip:198.51.100.9", 600)
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/tools/mcp", json=body, headers={"Accept": "application/json"})
+    finally:
+        rate_limit._auth_fail_counters.clear()
+        from teardrop.rate_limit import clear_auth_failures
+
+        await clear_auth_failures("mcpfail:ip:198.51.100.9")
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["error"]["code"] == -32029
+
+
+@pytest.mark.asyncio
+async def test_empty_bearer_header_still_enforces_failure_budget(test_settings, monkeypatch):
+    """F6: ``Authorization: Bearer `` (empty credential) authenticates nothing, so it
+    must not bypass Phase 0 — an exhausted IP cannot dodge the lockout with it."""
+    from teardrop import rate_limit
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    test_settings.mcp_auth_enabled = False
+    test_settings.mcp_billing_enabled = False
+    test_settings.mcp_x402_enabled = False
+    monkeypatch.setattr("teardrop.mcp_gateway.client_ip_from_request", lambda *a, **k: "198.51.100.11")
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "calculate", "arguments": {"expression": "1+1"}},
+    }
+
+    try:
+        rate_limit._auth_fail_counters.clear()
+        for _ in range(3):
+            await rate_limit.record_auth_failure("mcpfail:ip:198.51.100.11", 600)
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/tools/mcp",
+                    json=body,
+                    headers={"Accept": "application/json", "Authorization": "Bearer "},
+                )
+    finally:
+        rate_limit._auth_fail_counters.clear()
+        from teardrop.rate_limit import clear_auth_failures
+
+        await clear_auth_failures("mcpfail:ip:198.51.100.11")
+
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["error"]["code"] == -32029
+    assert resp.headers["X-RateLimit-Scope"] == "failure-budget"
+
+
+@pytest.mark.asyncio
+async def test_anonymous_free_tool_failure_counts_toward_budget(test_settings, monkeypatch):
+    """F5: with billing disabled an anonymous free-tool ``isError`` result has no
+    pending debit — the dispatch must still count it against the Phase 0 IP budget."""
+    from teardrop import rate_limit
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    test_settings.mcp_auth_enabled = False
+    test_settings.mcp_billing_enabled = False
+    test_settings.mcp_x402_enabled = False
+    monkeypatch.setattr("teardrop.mcp_gateway.client_ip_from_request", lambda *a, **k: "198.51.100.12")
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    # Schema-violating argument → tool execution error (HTTP 200, isError: true).
+    body = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "calculate", "arguments": {"expression": ["1+1"]}},
+    }
+
+    try:
+        rate_limit._auth_fail_counters.clear()
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/tools/mcp", json=body, headers={"Accept": "application/json"})
+        count = rate_limit._auth_fail_counters.get("mcpfail:ip:198.51.100.12", (0, 0))[0]
+    finally:
+        rate_limit._auth_fail_counters.clear()
+        from teardrop.rate_limit import clear_auth_failures
+
+        await clear_auth_failures("mcpfail:ip:198.51.100.12")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"]["isError"] is True
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_credit_settle_path_failure_counts_budget_exactly_once(test_settings, test_jwt_token, monkeypatch):
+    """Guard for the F5 recorder: a settle-path (credit rail, JWT caller) failure
+    records exactly one unbilled failure — no double count, and JWT callers stay
+    outside the anonymous Phase 0 population."""
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    test_settings.mcp_auth_enabled = True
+    test_settings.mcp_billing_enabled = True
+    test_settings.mcp_x402_enabled = False
+    test_settings.mcp_auth_audience = ""
+    monkeypatch.setattr("teardrop.mcp_gateway.client_ip_from_request", lambda *a, **k: "198.51.100.13")
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("billing.get_tool_pricing_overrides", AsyncMock(return_value={}))
+    monkeypatch.setattr("billing.get_current_pricing", AsyncMock(return_value=None))
+    monkeypatch.setattr("billing.resolve_tool_cost", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        "billing.verify_credit",
+        AsyncMock(return_value=billing.BillingResult(verified=True, billing_method="credit")),
+    )
+    record_mock = AsyncMock()
+    monkeypatch.setattr("teardrop.rate_limit.record_auth_failure", record_mock)
+
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "calculate", "arguments": {"expression": ["1+1"]}},
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/tools/mcp",
+                json=body,
+                headers={"Accept": "application/json", "Authorization": f"Bearer {test_jwt_token}"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"]["isError"] is True
+    # Exactly one IP failure, from the settle path; the dispatch-side recorder
+    # must stay out (pending_debit exists and the caller is not anonymous).
+    record_mock.assert_awaited_once()
+    assert record_mock.await_args.args[0] == "mcpfail:ip:198.51.100.13"
 
 
 @pytest.mark.parametrize("tool_name", ["get_wallet_positions", "get_dex_quote"])

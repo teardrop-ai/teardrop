@@ -12,6 +12,7 @@ row-amplification and no PII (IP, user agent, referer) is ever stored.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from shared.db_pool import PgPool
@@ -33,11 +34,48 @@ SURFACE_MCP_402_NO_PAYMENT = "mcp_402_no_payment"
 SURFACE_MCP_402_PAYMENT_INVALID = "mcp_402_payment_invalid"
 # Partition of no_payment + payment_invalid by header-derived client class.
 SURFACE_MCP_402_ANON_CLIENT_PREFIX = "mcp_402_anon_client:"
-# MCP `initialize` handshakes by clientInfo.name bucket (the app is stateless, so tools/call carries no clientInfo).
+# MCP `initialize` (legacy) / `server/discover` (2026-07-28) handshakes by clientInfo.name bucket.
 SURFACE_MCP_INITIALIZE_PREFIX = "mcp_initialize:"
+# 2026-07-28 tools/call by params._meta clientInfo bucket; legacy calls carry no clientInfo and are not counted.
+SURFACE_MCP_CALL_CLIENT_PREFIX = "mcp_call_client:"
+# Every JSON-RPC request with a method — the denominator for the modern-envelope share.
+SURFACE_MCP_REQUEST = "mcp_request"
+# Requests carrying the 2026-07-28 per-request envelope (params._meta protocol version key).
+SURFACE_MCP_MODERN_ENVELOPE = "mcp_modern_envelope"
+
+# Reserved `_meta` keys of the 2026-07-28 stateless envelope (spec-reserved prefix).
+MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+MCP_CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 
 CLIENT_CLASSES: tuple[str, ...] = ("bot", "mcp", "browser", "script", "unknown")
-MCP_HOSTS: tuple[str, ...] = ("claude", "cursor", "vscode", "openai", "inspector", "x402", "other", "none")
+# Fixed buckets bound telemetry cardinality; `sdk` groups frameworks for readability.
+MCP_HOSTS: tuple[str, ...] = (
+    "claude",
+    "cursor",
+    "vscode",
+    "openai",
+    "inspector",
+    "x402",
+    "cline",
+    "roo",
+    "windsurf",
+    "zed",
+    "continue",
+    "goose",
+    "cherry",
+    "librechat",
+    "n8n",
+    "dify",
+    "openwebui",
+    "kiro",
+    "augment",
+    "copilot",
+    "qwen",
+    "gemini",
+    "sdk",
+    "other",
+    "none",
+)
 
 _BOT_UA_TOKENS = ("bot", "crawl", "spider", "scan", "monitor", "uptime", "probe", "validat", "health", "preview", "headless")
 _SCRIPT_UA_TOKENS = (
@@ -60,7 +98,7 @@ _SCRIPT_UA_TOKENS = (
     "postman",
     "insomnia",
 )
-# First match wins: "cursor-vscode" must bucket as cursor.
+# Preserve legacy ordered substring matching before trying additional aliases.
 _MCP_HOST_TOKENS = (
     ("claude", "claude"),
     ("cursor", "cursor"),
@@ -71,6 +109,39 @@ _MCP_HOST_TOKENS = (
     ("codex", "openai"),
     ("inspector", "inspector"),
     ("x402", "x402"),
+)
+_MCP_ADDITIONAL_HOST_TOKENS = (
+    ("cline", "cline"),
+    ("roo", "roo"),
+    ("windsurf", "windsurf"),
+    ("zed", "zed"),
+    ("continue", "continue"),
+    ("goose", "goose"),
+    ("cherry", "cherry"),
+    ("librechat", "librechat"),
+    ("n8n", "n8n"),
+    ("dify", "dify"),
+    ("open-webui", "openwebui"),
+    ("openwebui", "openwebui"),
+    ("kiro", "kiro"),
+    ("augment", "augment"),
+    ("copilot", "copilot"),
+    ("qwen", "qwen"),
+    ("gemini", "gemini"),
+    ("fastmcp", "sdk"),
+    ("modelcontextprotocol", "sdk"),
+    ("langchain", "sdk"),
+    ("langgraph", "sdk"),
+    ("crewai", "sdk"),
+    ("smol", "sdk"),
+    ("autogen", "sdk"),
+    ("agno", "sdk"),
+    ("mcp-python", "sdk"),
+    ("mcp-node", "sdk"),
+)
+_MCP_ADDITIONAL_HOST_PATTERNS = tuple(
+    (re.compile(r"(?:^|[^a-z0-9])" + re.escape(token) + r"(?:$|[^a-z0-9])"), bucket)
+    for token, bucket in _MCP_ADDITIONAL_HOST_TOKENS
 )
 _MAX_CLASSIFIED_CHARS = 256
 
@@ -86,8 +157,11 @@ VALID_SURFACES: frozenset[str] = frozenset(
         SURFACE_MCP_402_CHALLENGE,
         SURFACE_MCP_402_NO_PAYMENT,
         SURFACE_MCP_402_PAYMENT_INVALID,
+        SURFACE_MCP_MODERN_ENVELOPE,
+        SURFACE_MCP_REQUEST,
         *(SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
         *(SURFACE_MCP_INITIALIZE_PREFIX + host for host in MCP_HOSTS),
+        *(SURFACE_MCP_CALL_CLIENT_PREFIX + host for host in MCP_HOSTS),
     }
 )
 
@@ -127,13 +201,46 @@ def anon_challenge_client_surface(user_agent: str | None, is_mcp: bool) -> str:
     return SURFACE_MCP_402_ANON_CLIENT_PREFIX + cls
 
 
-def mcp_initialize_surface(client_name: object) -> str:
-    """Bucket an MCP ``initialize`` clientInfo.name into the bounded host vocabulary."""
+def _mcp_host_bucket(client_name: object) -> str:
+    """Bucket a clientInfo.name into the bounded host vocabulary.
+
+    Legacy hosts retain ordered substring matching. Additional aliases match
+    whole segments only, so "room" and "mongoose" remain unclassified.
+    """
     if not isinstance(client_name, str) or not client_name.strip():
-        return SURFACE_MCP_INITIALIZE_PREFIX + "none"
+        return "none"
     name = client_name[:_MAX_CLASSIFIED_CHARS].lower()
-    host = next((bucket for token, bucket in _MCP_HOST_TOKENS if token in name), "other")
-    return SURFACE_MCP_INITIALIZE_PREFIX + host
+    for token, bucket in _MCP_HOST_TOKENS:
+        if token in name:
+            return bucket
+    for pattern, bucket in _MCP_ADDITIONAL_HOST_PATTERNS:
+        if pattern.search(name):
+            return bucket
+    return "other"
+
+
+def mcp_initialize_surface(client_name: object) -> str:
+    """Handshake surface (``initialize`` / ``server/discover``) for a clientInfo.name."""
+    return SURFACE_MCP_INITIALIZE_PREFIX + _mcp_host_bucket(client_name)
+
+
+def mcp_call_client_surface(client_name: object) -> str:
+    """Per-call surface for a 2026-07-28 ``tools/call`` clientInfo.name."""
+    return SURFACE_MCP_CALL_CLIENT_PREFIX + _mcp_host_bucket(client_name)
+
+
+def mcp_meta_client_name(params: object) -> str | None:
+    """Read ``clientInfo.name`` from a 2026-07-28 request's ``params._meta`` envelope.
+
+    Modern clients skip ``initialize``; their identity rides every request's
+    ``_meta`` instead. Returns None when the envelope or name is absent.
+    """
+    if not isinstance(params, dict):
+        return None
+    meta = params.get("_meta")
+    client_info = meta.get(MCP_CLIENT_INFO_META_KEY) if isinstance(meta, dict) else None
+    name = client_info.get("name") if isinstance(client_info, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def record_discovery_hit(surface: str) -> None:

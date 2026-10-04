@@ -45,6 +45,22 @@ def test_scheduled_run_timeout_must_exceed_per_turn_budgets():
     config.get_settings.cache_clear()
 
 
+def test_mpp_rejects_unsafe_configuration():
+    treasury = "0x" + "aa" * 20
+    base = dict(mpp_enabled=True, x402_pay_to_address=treasury, mpp_currency="0x" + "cd" * 20)
+    # A shared treasury lets x402/top-up settlements be re-presented as MPP hash credentials.
+    with pytest.raises(ValueError, match="dedicated address"):
+        Settings(**base, mpp_recipient=treasury.upper().replace("0X", "0x"))
+    with pytest.raises(ValueError, match="at least 32"):
+        Settings(**base, mpp_recipient="0x" + "bb" * 20, mpp_secret_key="short")
+    with pytest.raises(ValueError, match="20-byte EVM address"):
+        Settings(mpp_recipient="0xnope")
+    with pytest.raises(ValueError, match="between 30 and 3600"):
+        Settings(mpp_challenge_ttl_seconds=86_400)
+    Settings(**base, mpp_recipient="0x" + "bb" * 20, mpp_secret_key="k" * 32)
+    config.get_settings.cache_clear()
+
+
 def test_pg_dsn_strips_asyncpg_prefix(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user:pass@host/db")
     s = Settings()

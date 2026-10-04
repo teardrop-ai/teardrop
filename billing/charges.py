@@ -19,7 +19,7 @@ from shared.db_pool import PgConnection
 logger = logging.getLogger(__name__)
 
 ChargeSource = Literal["api", "schedule", "trigger", "a2a", "mcp", "mcp_v1"]
-ChargeMethod = Literal["credit", "x402"]
+ChargeMethod = Literal["credit", "x402", "mpp"]
 ChargeStatus = Literal["settled", "failed"]
 
 # Fixed namespace so a charge id is reproducible from its (source, invocation_id) key.

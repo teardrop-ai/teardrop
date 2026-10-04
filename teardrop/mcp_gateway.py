@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -48,6 +49,15 @@ from tools.schema import flatten_embedded_json_schema
 logger = logging.getLogger(__name__)
 
 _MCP_PREFIX = "/tools/mcp"
+# Build order §5.2: unbilled failures per IP/payer before anonymous execution stays free — 3 per 10 min, then 429.
+_FAILURE_BUDGET_LIMIT = 3
+_FAILURE_BUDGET_WINDOW_SECONDS = 600
+# Mirrors billing.mpp (spec: mpp.dev/protocol/transports/mcp) so gateway startup never imports billing here.
+_MPP_CREDENTIAL_META_KEY = "org.paymentauth/credential"
+_MPP_RECEIPT_META_KEY = "org.paymentauth/receipt"
+_MPP_CHALLENGES_META_KEY = "org.paymentauth/challenges"
+_MPP_VERIFY_FAILED_CODE = -32043
+_MPP_MALFORMED_CODE = -32602
 # Must be a paid tool: the Bazaar replays this example and expects a 402 (never an _ANON_FREE_TOOLS entry).
 _MCP_BAZAAR_INPUT_EXAMPLE = {
     "jsonrpc": "2.0",
@@ -150,7 +160,66 @@ async def _anonymous_ip_limit(request: Request) -> JSONResponse | None:
     )
 
 
-def _mcp_402_resource(request: Request) -> dict[str, str]:
+async def _anonymous_failure_budget(request: Request, req_id: int | str | None) -> JSONResponse | None:
+    """429 once this IP exhausted its unbilled-failure budget (build order §3.1/§5.2)."""
+    from teardrop.rate_limit import check_auth_lockout
+
+    ip = client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
+    if not ip:
+        return None
+    locked, retry_after = await check_auth_lockout(f"mcpfail:ip:{ip}", _FAILURE_BUDGET_LIMIT, _FAILURE_BUDGET_WINDOW_SECONDS)
+    if not locked:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content=_jsonrpc_error(req_id, -32029, "Anonymous tool failure budget exceeded"),
+        headers={"X-RateLimit-Scope": "failure-budget", "Retry-After": str(max(1, retry_after))},
+    )
+
+
+async def _payer_failure_budget(payer: str, req_id: int | str | None) -> JSONResponse | None:
+    """429 once a verified x402 payer exhausted its unbilled-failure budget."""
+    from teardrop.rate_limit import check_auth_lockout
+
+    subject = payer.strip().lower()
+    if not subject:
+        return None
+    locked, retry_after = await check_auth_lockout(
+        f"mcpfail:payer:{subject}", _FAILURE_BUDGET_LIMIT, _FAILURE_BUDGET_WINDOW_SECONDS
+    )
+    if not locked:
+        return None
+    return JSONResponse(
+        status_code=429,
+        content=_jsonrpc_error(req_id, -32029, "Payer tool failure budget exceeded"),
+        headers={"X-RateLimit-Scope": "x402-payer", "Retry-After": str(max(1, retry_after))},
+    )
+
+
+async def _record_unbilled_failure(request: Request) -> None:
+    """Count one unbilled execution failure against the caller's IP and verified payer.
+
+    Hooked where the tool ran but nobody was charged (§5.2). Never raises:
+    budget accounting must not disturb the response path.
+    """
+    from teardrop.rate_limit import record_auth_failure
+
+    try:
+        billing = getattr(request.state, "x402_billing", None)
+        if billing is not None and getattr(billing, "billing_method", "x402") == "mpp":
+            return  # billed on-chain before execution — not an unbilled failure
+        ip = client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
+        if ip:
+            await record_auth_failure(f"mcpfail:ip:{ip}", _FAILURE_BUDGET_WINDOW_SECONDS)
+        billing = getattr(request.state, "x402_billing", None)
+        payer = str(getattr(billing, "payer", "") or "").strip().lower()
+        if payer:
+            await record_auth_failure(f"mcpfail:payer:{payer}", _FAILURE_BUDGET_WINDOW_SECONDS)
+    except Exception:
+        logger.debug("failure-budget accounting skipped", exc_info=True)
+
+
+def _mcp_402_resource(request: Request) -> dict:
     base_url = public_base_url(request, get_settings())
     return {
         "url": f"{base_url}/tools/mcp",
@@ -240,21 +309,53 @@ def _meta_payment_header(data: dict) -> str | None:
     return base64.b64encode(canonical.encode("utf-8")).decode("ascii")
 
 
-def _mcp_payment_required(req_id: int | str | None, payment_required: dict) -> JSONResponse:
-    return JSONResponse(
-        content={
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "result": {
-                "content": [
-                    {"type": "text", "text": json.dumps(payment_required)},
-                    {"type": "text", "text": _MCP_PAYMENT_HINT},
-                ],
-                "structuredContent": payment_required,
-                "isError": True,
-            },
-        }
-    )
+def _mpp_credential(request: Request, data: dict) -> object | None:
+    """MPP credential from ``params._meta`` (MCP transport) or ``Authorization: Payment`` (HTTP transport).
+
+    None routes the call to the x402 path.
+    """
+    params = data.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    credential = meta.get(_MPP_CREDENTIAL_META_KEY) if isinstance(meta, dict) else None
+    if credential is not None:
+        return credential
+    from billing.mpp import parse_payment_authorization
+
+    return parse_payment_authorization(request.headers.get("authorization"))
+
+
+def _mpp_error(
+    req_id: int | str | None, code: int, message: str, data: dict | None = None, challenge: dict | None = None
+) -> JSONResponse:
+    """Spec-shaped MPP payment error: JSON-RPC error, HTTP 402 carrying ``error.data``.
+
+    Per the MCP transport spec the challenge rides in ``error.data.challenges``;
+    plain HTTP clients also get it as ``WWW-Authenticate: Payment``.
+    """
+    error = _jsonrpc_error(req_id, code, message)
+    if data is not None:
+        error["error"]["data"] = data
+    headers = None
+    if challenge is not None:
+        from billing.mpp import mpp_www_authenticate
+
+        headers = {"WWW-Authenticate": mpp_www_authenticate(challenge)}
+    return JSONResponse(status_code=402, content=error, headers=headers)
+
+
+def _mcp_payment_required(req_id: int | str | None, payment_required: dict, mpp_challenge: dict | None = None) -> JSONResponse:
+    result: dict = {
+        "content": [
+            {"type": "text", "text": json.dumps(payment_required)},
+            {"type": "text", "text": _MCP_PAYMENT_HINT},
+        ],
+        "structuredContent": payment_required,
+        "isError": True,
+    }
+    if mpp_challenge is not None:
+        # x402 stays the primary MCP challenge; MPP clients find their offer in _meta.
+        result["_meta"] = {_MPP_CHALLENGES_META_KEY: [mpp_challenge]}
+    return JSONResponse(content={"jsonrpc": "2.0", "id": req_id, "result": result})
 
 
 class MCPGatewayMiddleware(BaseHTTPMiddleware):
@@ -305,6 +406,27 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 data = json.loads(body) if body.strip() else {}
                 rpc_id = data.get("id")
                 method = data.get("method", "")
+                if method:
+                    # 2026-07-28 envelope share (incl. tools/call) — feeds the modern-client tripwire.
+                    from teardrop.funnel_counters import (
+                        MCP_PROTOCOL_VERSION_META_KEY,
+                        SURFACE_MCP_MODERN_ENVELOPE,
+                        SURFACE_MCP_REQUEST,
+                        mcp_call_client_surface,
+                        mcp_meta_client_name,
+                        record_discovery_hit,
+                    )
+
+                    record_discovery_hit(SURFACE_MCP_REQUEST)
+                    sniff_params = data.get("params")
+                    sniff_meta = sniff_params.get("_meta") if isinstance(sniff_params, dict) else None
+                    if isinstance(sniff_meta, dict) and MCP_PROTOCOL_VERSION_META_KEY in sniff_meta:
+                        record_discovery_hit(SURFACE_MCP_MODERN_ENVELOPE)
+                    if method == "tools/call":
+                        # Stateless clients may never handshake; attribute each call by its _meta clientInfo.
+                        call_client = mcp_meta_client_name(sniff_params)
+                        if call_client is not None:
+                            record_discovery_hit(mcp_call_client_surface(call_client))
                 if method == "ai.smithery/events/list":
                     discovery_response = self._smithery_events_list_response(rpc_id)
                     is_public_discovery = True
@@ -337,6 +459,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 SURFACE_TOOLS_LIST,
                 SURFACE_TOOLS_LIST_ANON,
                 mcp_initialize_surface,
+                mcp_meta_client_name,
                 record_discovery_hit,
             )
 
@@ -351,10 +474,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 record_discovery_hit(SURFACE_TOOLS_LIST)
                 if is_anonymous:
                     record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
-            elif rpc_method == "initialize":
+            elif rpc_method in ("initialize", "server/discover"):
+                # Modern clients replace initialize with server/discover and put clientInfo in params._meta.
                 params = rpc.get("params")
                 client_info = params.get("clientInfo") if isinstance(params, dict) else None
-                record_discovery_hit(mcp_initialize_surface(client_info.get("name") if isinstance(client_info, dict) else None))
+                client_name = client_info.get("name") if isinstance(client_info, dict) else None
+                if client_name is None:
+                    client_name = mcp_meta_client_name(params)
+                record_discovery_hit(mcp_initialize_surface(client_name))
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
@@ -365,6 +492,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 # Community tools are Bearer + credit only, so anonymous (x402) callers never see them.
                 return await self._without_community_tools(response)
             return response
+
+        # ── Phase 0: anonymous unbilled-failure budget (build order §3.1) ──
+        # MPP credentials are prepaid on-chain; a 429 here could outlast the Challenge and strand
+        # the payment, so their budget check runs inside _handle_x402_auth only for unpaid paths.
+        if method == "tools/call" and self._is_anonymous(request) and not self._carries_mpp_credential(request, data):
+            budget_response = await _anonymous_failure_budget(request, rpc_id)
+            if budget_response is not None:
+                return budget_response
 
         # ── Phase 1: JWT auth (or x402 fallback) ──────────────────────────
         auth_response = await self._authenticate(request, settings)
@@ -383,11 +518,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if pending_debit is None and getattr(request.state, "x402_billing", None) is not None:
             # A verified x402 payment must never execute without a settlement path.
             logger.error("x402 MCP payment verified but billing gate is inactive; rejecting call")
-            payment_header = self._payment_header(request)
-            if payment_header:
-                from billing import release_payment_nonce
-
-                await release_payment_nonce(payment_header)
+            await self._release_payment_claim(request)
             return JSONResponse(
                 status_code=503,
                 content=_jsonrpc_error(rpc_id, -32603, "Paid MCP execution is temporarily unavailable."),
@@ -414,6 +545,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             response = await self._settle_billing(request, pending_debit, response, execution_failed=execution_failed)
         elif pending_debit is not None:
             await self._release_x402_reservation(request)
+        elif response.status_code == 200 and self._is_anonymous(request):
+            # Phase 0 population with no settlement path (free/allowlisted tools,
+            # billing disabled): count failed executions against the IP budget.
+            # Settle-path failures never reach this branch (pending_debit is not
+            # None above), so nothing here double-counts what _settle_billing
+            # already recorded; JWT-authenticated callers are not anonymous.
+            if await self._response_indicates_failure(response):
+                await _record_unbilled_failure(request)
 
         return response
 
@@ -472,6 +611,35 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         except (ValueError, KeyError, TypeError, AttributeError):
             logger.debug("MCP tools/list response left unfiltered", exc_info=True)
         headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+        return Response(content=body, status_code=response.status_code, headers=headers)
+
+    @staticmethod
+    async def _attach_mpp_receipt(response: Response, request: Request) -> Response:
+        """Add the spec receipt as ``result._meta["org.paymentauth/receipt"]`` and ``Payment-Receipt``."""
+        from billing.mpp import encode_receipt
+
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:  # type: ignore[attr-defined]
+            chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        body = b"".join(chunks)
+        receipt = {
+            "status": "success",
+            "method": "evm",
+            "reference": request.state.x402_billing.tx_hash,
+            "challengeId": getattr(request.state, "mcp_mpp_challenge_id", ""),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        try:
+            parsed = json.loads(body)
+            result = parsed["result"]
+            meta = result.get("_meta")
+            result["_meta"] = {**(meta if isinstance(meta, dict) else {}), _MPP_RECEIPT_META_KEY: receipt}
+            body = json.dumps(parsed).encode("utf-8")
+        except Exception:
+            # The payment already confirmed; a missing _meta receipt must not fail the call.
+            logger.debug("MPP receipt not attached to result", exc_info=True)
+        headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+        headers["Payment-Receipt"] = encode_receipt(receipt)
         return Response(content=body, status_code=response.status_code, headers=headers)
 
     @staticmethod
@@ -602,6 +770,16 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         return None
 
     @staticmethod
+    def _is_anonymous(request: Request) -> bool:
+        """True when the request carries no usable Bearer credential.
+
+        Shares ``_extract_bearer``'s truthiness semantics with
+        ``_authenticate`` so an empty ``Bearer `` header counts as anonymous
+        for both the Phase 0 gate and the unbilled-failure recorder.
+        """
+        return not MCPGatewayMiddleware._extract_bearer(request)
+
+    @staticmethod
     def _meta_payment(request: Request) -> str | None:
         payment = getattr(request.state, "mcp_x402_payment", None)
         return payment if isinstance(payment, str) and payment else None
@@ -616,6 +794,12 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     async def _release_x402_reservation(request: Request) -> None:
+        billing = getattr(request.state, "x402_billing", None)
+        if billing is not None and getattr(billing, "billing_method", "x402") == "mpp":
+            # Never free an mpp tx-hash claim: releasing would let the same
+            # on-chain payment replay (expiry bounds it; the claim closes it).
+            request.state.mcp_x402_reserved = False
+            return
         if getattr(request.state, "mcp_x402_reserved", False) is not True:
             return
         payment_header = MCPGatewayMiddleware._payment_header(request)
@@ -627,6 +811,24 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             except Exception:
                 logger.warning("x402 MCP reservation release failed", exc_info=True)
         request.state.mcp_x402_reserved = False
+
+    @staticmethod
+    async def _release_payment_claim(request: Request) -> None:
+        """Release the x402 replay nonce — never an MPP claim.
+
+        ``release_payment_nonce`` is scheme-blind: on an ``mpp:<tx>`` key it
+        would delete the durable replay claim and let a consumed on-chain
+        payment execute again, so every rejection path routes through here.
+        """
+        billing = getattr(request.state, "x402_billing", None)
+        if billing is not None and getattr(billing, "billing_method", "x402") == "mpp":
+            return
+        payment_header = MCPGatewayMiddleware._payment_header(request)
+        if not payment_header:
+            return
+        from billing import release_payment_nonce
+
+        await release_payment_nonce(payment_header)
 
     async def _handle_x402_auth(self, request: Request) -> Response | None:
         """Handle x402 auth for unauthenticated callers.
@@ -648,6 +850,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         tool_name = _tool_call_name(data)
         if not _x402_payable(tool_name):
             return _bearer_required(data.get("id"))
+        # Phase 0 skipped MPP-bearing calls; re-apply the IP failure budget wherever they end up unpaid.
+        mpp_bypassed_budget = self._carries_mpp_credential(request, data)
         if tool_name in _ANON_FREE_TOOLS:
             try:
                 is_free = await self._resolve_tool_cost(tool_name) == 0
@@ -658,12 +862,31 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     content=_jsonrpc_error(data.get("id"), -32603, "Paid MCP pricing is temporarily unavailable."),
                 )
             if is_free:
+                if mpp_bypassed_budget:
+                    budget_response = await _anonymous_failure_budget(request, data.get("id"))
+                    if budget_response is not None:
+                        return budget_response
                 limited = await _anonymous_ip_limit(request)
                 if limited is not None:
                     return limited
                 request.state.mcp_org_id = None
                 request.state.mcp_auth_method = ""
                 return None
+
+        # PaymentScheme seam: an MPP charge credential routes to the MPP verifier;
+        # absent credential (or MPP unconfigured) keeps the x402 rail byte-for-byte.
+        if mpp_bypassed_budget:
+            mpp_response = await self._handle_mpp_auth(request, data)
+            if mpp_response is not None:
+                return mpp_response
+            if getattr(getattr(request.state, "x402_billing", None), "billing_method", "") == "mpp":
+                # Verified and claimed: dispatch with MPP state intact. Falling through would hand
+                # the call to verify_payment and reject a payment already final on-chain.
+                return None
+            # None → zero-priced tool; continue on x402 (flat-requirement challenge).
+            budget_response = await _anonymous_failure_budget(request, data.get("id"))
+            if budget_response is not None:
+                return budget_response
 
         payment_header = self._payment_header(request)
         if not payment_header:
@@ -690,7 +913,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
             record_discovery_hit(client_surface)
-            return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
+            return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs, await self._mpp_offer(_tool_call_name(data)))
 
         billing = await verify_payment(payment_header, requirements)
         if not billing.verified:
@@ -705,6 +928,86 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         request.state.mcp_org_id = None
         request.state.mcp_auth_method = "x402"
         return None  # success — continue to billing / MCPServer
+
+    @staticmethod
+    def _carries_mpp_credential(request: Request, data: dict) -> bool:
+        from billing.mpp import mpp_configured
+
+        return mpp_configured(get_settings()) and _mpp_credential(request, data) is not None
+
+    async def _mpp_offer(self, tool_name: str | None) -> dict | None:
+        """MPP Challenge advertised next to the x402 challenge; None when MPP is off or the tool is free."""
+        from billing.mpp import build_mpp_challenge, mpp_configured
+
+        settings = get_settings()
+        if tool_name is None or not mpp_configured(settings):
+            return None
+        try:
+            cost = await self._resolve_tool_cost(tool_name)
+        except Exception:
+            # x402 already priced this call; a pricing blip only drops the optional MPP offer.
+            logger.warning("MPP offer pricing unavailable", exc_info=True)
+            return None
+        return build_mpp_challenge(tool_cost_usdc=cost, settings=settings) if cost > 0 else None
+
+    async def _handle_mpp_auth(self, request: Request, data: dict) -> Response | None:
+        """Verify an MPP evm-charge ``hash`` credential (draft-evm-charge-00 §6.4).
+
+        The transfer is final before execution, so there is no post-response
+        settlement: success stashes a ``BillingResult`` with
+        ``billing_method="mpp"`` for the billing gate and receipt attachment.
+        Error mapping: malformed → ``-32602``; binding/expiry/replay/receipt
+        mismatch → ``-32043`` with a replacement Challenge; store/RPC outage → 503.
+        Returns None only for zero-priced tools (caller continues on x402).
+        """
+        from billing.mpp import build_mpp_challenge, verify_mpp_payment
+
+        settings = get_settings()
+        req_id = data.get("id")
+        tool_name = _tool_call_name(data)
+        try:
+            tool_cost = await self._resolve_tool_cost(tool_name) if tool_name is not None else 0
+        except Exception:
+            logger.warning("MPP MCP tool pricing unavailable", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content=_jsonrpc_error(req_id, -32603, "Paid MCP pricing is temporarily unavailable."),
+            )
+        if tool_cost <= 0:
+            return None
+
+        credential = _mpp_credential(request, data)
+        outcome = await verify_mpp_payment(credential, tool_cost_usdc=tool_cost, settings=settings)
+        if outcome.status in ("malformed", "failed"):
+            replacement = build_mpp_challenge(tool_cost_usdc=tool_cost, settings=settings)
+            code = _MPP_MALFORMED_CODE if outcome.status == "malformed" else _MPP_VERIFY_FAILED_CODE
+            return _mpp_error(
+                req_id,
+                code,
+                outcome.message,
+                data={"httpStatus": 402, "challenges": [replacement]},
+                challenge=replacement,
+            )
+        if outcome.status != "ok":
+            return JSONResponse(
+                status_code=503,
+                content=_jsonrpc_error(req_id, -32603, "Paid MCP execution is temporarily unavailable."),
+            )
+
+        from billing import BillingResult
+
+        request.state.x402_billing = BillingResult(
+            verified=True,
+            settled=True,  # chain-confirmed during verification
+            billing_method="mpp",
+            payer=outcome.source,
+            amount_usdc=tool_cost,
+            tx_hash=outcome.tx_hash,
+        )
+        request.state.mcp_mpp_challenge_id = outcome.challenge_id
+        request.state.mcp_org_id = None
+        request.state.mcp_auth_method = "mpp"
+        return None
 
     @staticmethod
     async def _resolve_tool_cost(tool_name: str) -> int:
@@ -754,13 +1057,20 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         )
 
     @staticmethod
-    def _x402_challenge(req_id: int | str | None, mcp_signal: bool, response_kwargs: dict) -> Response:
+    def _x402_challenge(
+        req_id: int | str | None, mcp_signal: bool, response_kwargs: dict, mpp_challenge: dict | None = None
+    ) -> Response:
         from billing import build_402_headers, build_402_response_body
 
         body = build_402_response_body(**response_kwargs)
         if mcp_signal:
-            return _mcp_payment_required(req_id, body)
-        return JSONResponse(status_code=402, content=body, headers=build_402_headers(**response_kwargs))
+            return _mcp_payment_required(req_id, body, mpp_challenge)
+        headers = dict(build_402_headers(**response_kwargs))
+        if mpp_challenge is not None:
+            from billing.mpp import mpp_www_authenticate
+
+            headers["WWW-Authenticate"] = mpp_www_authenticate(mpp_challenge)
+        return JSONResponse(status_code=402, content=body, headers=headers)
 
     async def _billing_gate(self, request: Request) -> tuple | Response | None:
         """Pre-request billing gate for ``tools/call`` requests.
@@ -822,9 +1132,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         # Credit verification is a credit-rail concept and does not apply to
         # anonymous per-call x402 payments.
         if is_x402:
-            from billing import release_payment_nonce, reserve_payer_spend
+            from billing import reserve_payer_spend
 
             x402_billing = request.state.x402_billing
+            if getattr(x402_billing, "billing_method", "x402") == "mpp":
+                # The transfer is final before execution: a cap or failure-budget refusal here would
+                # keep the payer's money without service. Those x402 guards bound unsettled exposure.
+                request.state.mcp_call_event_id = str(uuid.uuid4())
+                return (org_id, int(x402_billing.amount_usdc), tool_name, req_id)
             authorized = int(getattr(getattr(x402_billing, "payment_requirements", None), "amount", 0) or 0)
             if getattr(x402_billing, "scheme", "exact") == "exact" and authorized > 0:
                 # Exact settles the full authorized amount, so account for that, not the catalog price.
@@ -832,12 +1147,15 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             payer = getattr(x402_billing, "payer", "")
             payment_header = self._payment_header(request)
             if not isinstance(payer, str) or not payer.strip() or not payment_header:
-                if payment_header:
-                    await release_payment_nonce(payment_header)
+                await self._release_payment_claim(request)
                 return JSONResponse(
                     status_code=402,
                     content=_jsonrpc_error(req_id, -32000, "Verified payer identity is required."),
                 )
+            payer_budget = await _payer_failure_budget(payer, req_id)
+            if payer_budget is not None:
+                await self._release_payment_claim(request)
+                return payer_budget
             reserved = await reserve_payer_spend(
                 payment_header,
                 payer,
@@ -845,7 +1163,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 settings.x402_payer_daily_spend_limit_usdc,
             )
             if not reserved:
-                await release_payment_nonce(payment_header)
+                await self._release_payment_claim(request)
                 return JSONResponse(
                     status_code=429,
                     content=_jsonrpc_error(req_id, -32029, "Anonymous x402 payer daily spend limit reached."),
@@ -952,7 +1270,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
         event_id = MCPGatewayMiddleware._call_event_id(request)
         billing = getattr(request.state, "x402_billing", None)
-        payer = getattr(billing, "payer", "") if billing_method == "x402" else ""
+        # On-chain rails (x402 and mpp) both carry a verified payer identity;
+        # the credit rail never does.
+        payer = getattr(billing, "payer", "") if billing_method in ("x402", "mpp") else ""
         if not isinstance(payer, str):
             payer = ""
         principal_id = getattr(request.state, "mcp_principal_id", "")
@@ -1035,13 +1355,23 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         org_id, tool_cost, tool_name, req_id = pending
 
         is_x402 = getattr(request.state, "x402_billing", None) is not None
+        is_mpp = is_x402 and getattr(request.state.x402_billing, "billing_method", "x402") == "mpp"
 
-        if execution_failed:
+        if is_mpp:
+            # The transfer was final before execution, so the ledger records it as settled even when
+            # the tool failed (there is nothing to withhold); the receipt goes out either way.
+            mpp_billing = request.state.x402_billing
+            await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "mpp", "settled", mpp_billing.tx_hash)
+            response = await self._attach_mpp_receipt(response, request)
+            if execution_failed:
+                logger.info("mcp mpp execution failed after payment org=%s tool=%s", org_id, tool_name)
+                return response
+        elif execution_failed:
             logger.info("mcp settle skipped (execution failed) org=%s tool=%s", org_id, tool_name)
             await self._release_x402_reservation(request)
+            await _record_unbilled_failure(request)
             return response
-
-        if is_x402:
+        elif is_x402:
             # Phase 3: on-chain settlement.
             from billing import settle_payment
 
@@ -1057,6 +1387,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     logger.warning("x402 MCP settlement rejected org=%s tool=%s error=%s", org_id, tool_name, settled.error)
                 await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "x402", "failed")
                 # Facilitator /verify does not prove funds, so an unsettled payment must not release the result.
+                # The tool already ran unbilled (typical cause: unfunded wallet) — count it against the budget.
+                await _record_unbilled_failure(request)
                 return self._x402_settlement_failed(request, req_id)
 
             await self._record_mcp_outcome(

@@ -1,6 +1,7 @@
 ---
 name: upgrade-model
-description: "Scaffold an LLM upgrade workflow using llm-lifecycle-manager. Usage: /upgrade-model <provider> <model> [--role <role>]"
+description: Scaffold an LLM upgrade workflow using llm-lifecycle-manager. Usage: /upgrade-model <provider> <model> [--role <role>]
+disable-model-invocation: true
 ---
 You are responding to an `/upgrade-model` command.
 The user expects a seamless, one-shot operation to scaffold a new model upgrade using the `llm-lifecycle-manager` skill.

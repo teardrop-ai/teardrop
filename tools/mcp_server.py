@@ -20,6 +20,7 @@ import sys
 from collections.abc import Iterable
 from typing import Annotated, Any
 
+from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
@@ -234,6 +235,10 @@ def create_mcp_server() -> MCPServer:
         website_url=settings.app_base_url if settings.app_base_url else None,
         icons=[{"src": settings.agent_card_icon_url}] if settings.agent_card_icon_url else None,
         version=APP_VERSION,
+        # 2026-07-28 freshness hints. The list is auth-context-specific (community
+        # tools are Bearer-only), so scope stays private; 60s sits well under the
+        # 300s reputation/price refresh.
+        cache_hints={"tools/list": CacheHint(ttl_ms=60_000, scope="private")},
     )
     _register_tools_with_mcp(server)
     return server

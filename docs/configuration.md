@@ -45,6 +45,11 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `X402_ONBOARDING_ENABLED` | `true` to allow `POST /token` with `grant_type=x402` (default: `true`; requires `BILLING_ENABLED=true`) |
 | `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC` | Default 24-hour rolling prepaid-credit limit for machine-provisioned orgs (default: `5000000` = $5.00; must be positive; explicit org limits may be raised by an operator) |
 | `X402_PAYER_DAILY_SPEND_LIMIT_USDC` | 24-hour rolling reservation cap for anonymous x402 MCP calls per verified payer (default: `5000000` = $5.00; must be positive) |
+| `MPP_ENABLED` | `true` to accept MPP `evm` charge credentials (`type="hash"` only) on `/tools/mcp` alongside x402 (default: `false`). Active only when `MCP_AUTH_ENABLED`, `MCP_X402_ENABLED` and `MCP_BILLING_ENABLED` are `true` and `MPP_RECIPIENT`, `MPP_CURRENCY`, `MPP_SECRET_KEY` and `BASE_RPC_URL` are set (`X402_NETWORK` supplies the chain id); otherwise the gateway is x402-only. x402 challenges are unchanged; MPP is advertised beside them. See [API reference](api-reference.md#mpp-charge-on-mcp). |
+| `MPP_RECIPIENT` | Dedicated address that receives MPP charges. Must not be an x402 treasury address (startup fails if it is): hash credentials can't prove which challenge a transfer paid. |
+| `MPP_CURRENCY` | Token contract address for MPP charges (e.g. Base USDC; 6 decimals assumed). |
+| `MPP_SECRET_KEY` | HMAC key (at least 32 characters) that binds MPP Challenge ids to their terms. Rotating it invalidates outstanding challenges. |
+| `MPP_CHALLENGE_TTL_SECONDS` | MPP Challenge expiry window in seconds (default: `300`, range 30–3600). Transfers must be mined after the challenge was issued and presented before it expires. |
 | `RATE_LIMIT_ORG_PROVISION_RPM` | Per-wallet rate limit for machine-org provisioning via SIWE and x402; new SIWE wallets also receive the same per-client-IP limit (default: `3`). |
 | `ONBOARDING_CREDIT_ENABLED` | `true` to grant prepaid credit after email verification (default: `false`) |
 | `ONBOARDING_CREDIT_USDC` | Grant amount in atomic USDC, max 10,000,000 (default: `500000` = $0.50) |
