@@ -198,6 +198,36 @@ async def test_message_send_anonymous_missing_payment_returns_402(anon_client, t
 
 
 @pytest.mark.anyio
+async def test_message_send_402_resource_carries_brand_metadata(anon_client, test_settings, monkeypatch):
+    from x402.extensions.bazaar.facilitator import _sanitize_resource_service_metadata
+    from x402.schemas.payments import ResourceInfo
+
+    from teardrop.bazaar_service import SERVICE_TAGS
+
+    test_settings.billing_enabled = True
+    test_settings.rate_limit_requests_per_minute = 1_000
+    seen: dict[str, dict] = {}
+    monkeypatch.setattr("teardrop.routers.a2a_messages.settings", test_settings)
+
+    def _body(**kwargs):
+        seen["resource"] = kwargs["resource"]
+        return {"error": kwargs["error"], "accepts": [], "x402Version": 2, "resource": kwargs["resource"]}
+
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_response_body", _body)
+    monkeypatch.setattr("teardrop.routers.a2a_messages.build_402_headers", lambda **kwargs: {})
+
+    resp = await anon_client.post("/message:send", json={})
+
+    assert resp.status_code == 402
+    resource = seen["resource"]
+    # Same brand as the MCP gateway, and every field survives the facilitator's soft-drop rules.
+    kept = _sanitize_resource_service_metadata(resource)
+    assert (kept.service_name, kept.tags, kept.icon_url) == ("Teardrop", list(SERVICE_TAGS), test_settings.agent_card_icon_url)
+    assert 0 < len(resource["description"]) <= 500
+    assert {"serviceName", "tags", "iconUrl"} <= ResourceInfo.model_validate(resource).model_dump(by_alias=True).keys()
+
+
+@pytest.mark.anyio
 async def test_message_send_intro_price_uses_exact_requirements_for_challenge(anon_client, test_settings, monkeypatch):
     test_settings.billing_enabled = True
     test_settings.a2a_inbound_intro_price_usdc = 25_000

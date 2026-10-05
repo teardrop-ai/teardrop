@@ -29,14 +29,27 @@ def test_static_seed_arguments_validate_against_tool_schema(tool_name):
     assert seed.resolve_arguments(tool_name) == seed.TOOL_ARGUMENTS[tool_name]
 
 
-def _response(status: int, body: dict) -> SimpleNamespace:
-    return SimpleNamespace(status_code=status, text=json.dumps(body), json=lambda: body)
+def _response(status: int, body: dict, headers: dict | None = None) -> SimpleNamespace:
+    return SimpleNamespace(status_code=status, text=json.dumps(body), json=lambda: body, headers=headers or {})
+
+
+def _receipt_header(tx_hash: str) -> dict:
+    # The gateway's own encoder, so this fake cannot drift from production again.
+    from billing import build_payment_response_headers
+
+    headers = build_payment_response_headers(tx_hash=tx_hash, network="eip155:8453", payer="0x" + "a" * 40, amount_usdc=2_000)
+    return {key.lower(): value for key, value in headers.items()}
 
 
 def _challenge(tool: str, amount: int = 2_000) -> dict:
     return {
         "x402Version": 2,
-        "resource": {"url": "https://api/tools/mcp", "serviceName": "Teardrop", "tags": ["mcp"]},
+        "resource": {
+            "url": "https://api/tools/mcp",
+            "serviceName": "Teardrop",
+            "tags": ["mcp"],
+            "iconUrl": "https://teardrop.dev/teardrop.png",
+        },
         "accepts": [{"scheme": "exact", "network": "eip155:8453", "amount": str(amount)}],
         "extensions": {"bazaar": {"info": {"input": {"type": "mcp", "toolName": tool}}}},
     }
@@ -49,12 +62,16 @@ class _FakeSession:
         self.paid_calls: list[str] = []
 
     def post(self, url, json, headers, timeout):  # noqa: A002, ANN001
-        tool = json["params"]["name"]
+        tool = seed.A2A_TARGET if url.endswith("/message:send") else json["params"]["name"]
         if "X-PAYMENT" not in headers:
-            return _response(402, _challenge(tool, self.amount))
+            challenge = _challenge(tool, self.amount)
+            if tool == seed.A2A_TARGET:
+                challenge["extensions"]["bazaar"]["info"]["input"] = {"type": "http", "method": "POST"}
+            return _response(402, challenge)
         self.paid_calls.append(tool)
-        receipt = {"_meta": {"x402/payment-response": {"transaction": f"0x{tool}"}}, "isError": False}
-        return self.paid.get(tool, _response(200, {"result": receipt}))
+        # Mirrors the gateway: X-PAYMENT callers get the receipt in PAYMENT-RESPONSE, not result._meta.
+        ok = _response(200, {"result": {"content": [], "isError": False}}, _receipt_header(f"0x{tool}"))
+        return self.paid.get(tool, ok)
 
 
 @pytest.fixture
@@ -89,6 +106,22 @@ def test_execute_stops_at_first_unsettled_call(stubbed):
 
     assert _run(session, ["a", "b", "c"]) == 1
     assert session.paid_calls == ["a"]
+
+
+def test_execute_accepts_meta_receipt(stubbed, capsys):
+    meta = {"result": {"isError": False, "_meta": {"x402/payment-response": {"transaction": "0xmeta"}}}}
+    session = _FakeSession(paid={"a": _response(200, meta)})
+
+    assert _run(session, ["a"]) == 0
+    assert "tx 0xmeta" in capsys.readouterr().out
+
+
+def test_execute_stops_when_receipt_missing(stubbed, capsys):
+    session = _FakeSession(paid={"a": _response(200, {"result": {"isError": False}})})
+
+    assert _run(session, ["a", "b"]) == 1
+    assert session.paid_calls == ["a"]
+    assert "check the payer's transactions" in capsys.readouterr().out
 
 
 def test_execute_refuses_quotes_above_budget(stubbed):
@@ -149,3 +182,33 @@ def test_quote_warns_when_output_declaration_missing():
     quote = seed.quote_tool(session, "https://api", "get_gas_price", {})
 
     assert any("output declaration" in warning for warning in quote.warnings)
+
+
+def test_a2a_seed_request_is_a_valid_message_send_body():
+    from teardrop.routers.a2a_messages import A2ASendMessageRequest
+
+    A2ASendMessageRequest.model_validate(seed.A2A_SEED_REQUEST)
+
+
+def test_a2a_execute_pays_message_send_once(stubbed, capsys):
+    session = _FakeSession(amount=10_000)
+
+    assert _run(session, [seed.A2A_TARGET]) == 0
+    assert session.paid_calls == [seed.A2A_TARGET]
+    assert f"tx 0x{seed.A2A_TARGET}" in capsys.readouterr().out
+
+
+def test_a2a_quote_blocks_payment_without_brand_metadata(stubbed):
+    body = _challenge(seed.A2A_TARGET)
+    body["extensions"]["bazaar"]["info"]["input"] = {"type": "http", "method": "POST"}
+    del body["resource"]["iconUrl"]
+    session = _FakeSession()
+    session.post = lambda url, json, headers, timeout: _response(402, body)  # noqa: A002
+
+    assert _run(session, [seed.A2A_TARGET]) == 1
+
+
+def test_a2a_withheld_result_stops(stubbed):
+    session = _FakeSession(paid={seed.A2A_TARGET: _response(402, {"error": "withheld"})})
+
+    assert _run(session, [seed.A2A_TARGET]) == 1

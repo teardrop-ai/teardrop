@@ -218,12 +218,13 @@ def _assert_full_service_metadata(resource: dict) -> None:
     from x402.extensions.bazaar.facilitator import _sanitize_resource_service_metadata
     from x402.schemas.payments import ResourceInfo
 
-    from teardrop.mcp_gateway import _BAZAAR_DESCRIPTION_MAX_CHARS, _MCP_SERVICE_TAGS
+    from teardrop.bazaar_service import SERVICE_TAGS
+    from teardrop.mcp_gateway import _BAZAAR_DESCRIPTION_MAX_CHARS
 
     # Facilitators soft-drop invalid fields, so every declared field must survive the SDK sanitizer.
     kept = _sanitize_resource_service_metadata(resource)
     assert kept.service_name == "Teardrop"
-    assert kept.tags == list(_MCP_SERVICE_TAGS)
+    assert kept.tags == list(SERVICE_TAGS)
     assert kept.icon_url == "https://teardrop.dev/teardrop.png"
     assert 0 < len(resource["description"]) <= _BAZAAR_DESCRIPTION_MAX_CHARS
     dumped = ResourceInfo.model_validate(resource).model_dump(by_alias=True, exclude_none=True)

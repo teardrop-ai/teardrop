@@ -19,6 +19,10 @@ Usage (from the repo root):
   $env:TEARDROP_SEED_PRIVATE_KEY = "0x..."
   python -m scripts.seed_bazaar_listings --base-url https://api.teardrop.dev --execute
   python -m scripts.seed_bazaar_listings --base-url https://api.teardrop.dev --execute --tools get_gas_price,get_block
+  python -m scripts.seed_bazaar_listings --base-url https://api.teardrop.dev --a2a --execute
+
+MCP-type listings lose serviceName/tags/iconUrl at the CDP facilitator, so ``--a2a`` seeds the HTTP
+``/message:send`` listing, which keeps the brand that Agentic.Market shows for the domain.
 """
 
 from __future__ import annotations
@@ -37,6 +41,12 @@ import requests
 
 PRIVATE_KEY_ENV = "TEARDROP_SEED_PRIVATE_KEY"
 DEFAULT_MAX_TOTAL_USDC = 1_000_000  # $1.00 in atomic USDC
+A2A_TARGET = "a2a:message:send"
+# Trivial task: completes fast and reliably, which is what releases (and settles) the paid result.
+A2A_SEED_REQUEST: dict[str, Any] = {
+    "message": {"role": "user", "parts": [{"kind": "text", "text": "What is 2 + 2? Reply with only the number."}]},
+    "metadata": {"source": "bazaar-seed"},
+}
 _PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
 _GAMMA_TOP_MARKET_URL = (
     "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=1&order=volume24hr&ascending=false"
@@ -179,27 +189,47 @@ def quote_tool(session: requests.Session, base_url: str, tool_name: str, argumen
         headers={"Accept": "application/json"},
         timeout=30,
     )
-    if resp.status_code != 402:
-        quote.error = f"expected 402, got {resp.status_code}: {resp.text[:200]}"
+    body = _read_challenge(quote, resp)
+    if body is None:
         return quote
-    body = resp.json()
-    exact = [req for req in body.get("accepts", []) if req.get("scheme", "exact") == "exact"]
-    if not exact:
-        quote.error = "402 offers no exact payment requirement"
-        return quote
-    quote.body = {**body, "accepts": exact[:1]}
-    quote.amount_usdc = int(exact[0]["amount"])
-    quote.network = exact[0].get("network", "")
     bazaar = (body.get("extensions") or {}).get("bazaar") or {}
     bazaar_input = bazaar.get("info", {}).get("input", {})
     if bazaar_input.get("toolName") != tool_name:
         quote.warnings.append("402 lacks per-tool Bazaar toolName")
     if _declares_output(tool_name) and not bazaar.get("info", {}).get("output"):
         quote.warnings.append("402 lacks Bazaar output declaration (gateway not redeployed?)")
-    resource = body.get("resource") or {}
-    if not resource.get("serviceName") or not resource.get("tags"):
-        quote.warnings.append("402 resource lacks serviceName/tags (gateway not redeployed?)")
     return quote
+
+
+def quote_a2a(session: requests.Session, base_url: str) -> Quote:
+    """Fetch the unpaid ``/message:send`` 402: the only paid HTTP surface, so the only one whose brand reaches catalogs."""
+    quote = Quote(tool=A2A_TARGET, arguments=A2A_SEED_REQUEST, warnings=[])
+    resp = session.post(f"{base_url}/message:send", json=A2A_SEED_REQUEST, headers={"Accept": "application/json"}, timeout=30)
+    body = _read_challenge(quote, resp)
+    if body is not None:
+        bazaar_input = ((body.get("extensions") or {}).get("bazaar") or {}).get("info", {}).get("input", {})
+        if bazaar_input.get("type") != "http":
+            quote.warnings.append("402 lacks an HTTP Bazaar declaration")
+    return quote
+
+
+def _read_challenge(quote: Quote, resp: Any) -> dict[str, Any] | None:
+    """Fill price/network from a 402 and warn on missing brand metadata; None (with ``quote.error``) otherwise."""
+    if resp.status_code != 402:
+        quote.error = f"expected 402, got {resp.status_code}: {resp.text[:200]}"
+        return None
+    body = resp.json()
+    exact = [req for req in body.get("accepts", []) if req.get("scheme", "exact") == "exact"]
+    if not exact:
+        quote.error = "402 offers no exact payment requirement"
+        return None
+    quote.body = {**body, "accepts": exact[:1]}
+    quote.amount_usdc = int(exact[0]["amount"])
+    quote.network = exact[0].get("network", "")
+    resource = body.get("resource") or {}
+    if not resource.get("serviceName") or not resource.get("tags") or not resource.get("iconUrl"):
+        quote.warnings.append("402 resource lacks serviceName/tags/iconUrl (not redeployed?)")
+    return body
 
 
 def sign_payment(payment_required_body: dict[str, Any], private_key: str) -> str:
@@ -228,10 +258,38 @@ def pay_tool(session: requests.Session, base_url: str, quote: Quote, payment_hea
     result = resp.json().get("result") or {}
     if result.get("isError"):
         raise RuntimeError(f"tool returned isError (unsettled): {json.dumps(result.get('content'))[:300]}")
+    tx_hash = _receipt_transaction(resp.headers, result)
+    if not tx_hash:
+        # Stop rather than guess: the payment may still have settled, so check the chain before re-running.
+        raise RuntimeError("tool ran but no x402 settlement receipt was found; check the payer's transactions")
+    return tx_hash
+
+
+def pay_a2a(session: requests.Session, base_url: str, quote: Quote, payment_header: str) -> str:
+    """Run one paid A2A task; the result is released (and the receipt sent) only after settlement."""
+    resp = session.post(
+        f"{base_url}/message:send",
+        json=quote.arguments,
+        headers={"Accept": "application/json", "X-PAYMENT": payment_header},
+        timeout=300,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"paid A2A task returned {resp.status_code}: {resp.text[:300]}")
+    tx_hash = _receipt_transaction(resp.headers, {})
+    if not tx_hash:
+        raise RuntimeError("A2A task finished without a settlement receipt; check the payer's transactions")
+    return tx_hash
+
+
+def _receipt_transaction(headers: Any, result: dict[str, Any]) -> str:
+    """Settlement tx hash: the PAYMENT-RESPONSE header (X-PAYMENT callers) or ``_meta`` (``_meta`` payers)."""
+    encoded = headers.get("payment-response") or headers.get("x-payment-response")
+    if encoded:
+        from x402.http import decode_payment_response_header
+
+        return decode_payment_response_header(encoded).transaction or ""
     receipt = (result.get("_meta") or {}).get(_PAYMENT_RESPONSE_META_KEY) or {}
-    if not receipt.get("transaction"):
-        raise RuntimeError("tool ran but no x402 settlement receipt was attached")
-    return receipt["transaction"]
+    return receipt.get("transaction") or ""
 
 
 def _select(requested: Iterable[str] | None, skipped: Iterable[str]) -> list[str]:
@@ -263,7 +321,11 @@ def run(
     quotes: list[Quote] = []
     for name in tools:
         try:
-            quote = quote_tool(session, base_url, name, resolve_arguments(name))
+            quote = (
+                quote_a2a(session, base_url)
+                if name == A2A_TARGET
+                else quote_tool(session, base_url, name, resolve_arguments(name))
+            )
         except Exception as exc:  # noqa: BLE001 - report every tool before deciding
             quote = Quote(tool=name, arguments={}, error=f"{type(exc).__name__}: {exc}")
         quotes.append(quote)
@@ -296,7 +358,8 @@ def run(
         if index:
             time.sleep(delay_seconds)
         try:
-            tx_hash = pay_tool(session, base_url, quote, sign_payment(quote.body or {}, private_key))
+            pay = pay_a2a if quote.tool == A2A_TARGET else pay_tool
+            tx_hash = pay(session, base_url, quote, sign_payment(quote.body or {}, private_key))
         except Exception as exc:  # noqa: BLE001
             # Stop: each further unbilled failure burns the 3-per-10-minute failure budget.
             print(f"  {quote.tool:<28} FAILED {exc}")
@@ -326,6 +389,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Pay even if a 402 lacks Bazaar metadata (indexes an incomplete listing)",
     )
     parser.add_argument("--list", action="store_true", help="Print seedable and excluded tools, then exit")
+    parser.add_argument(
+        "--a2a",
+        action="store_true",
+        help="Seed the HTTP /message:send listing instead of MCP tools (carries the brand name and icon)",
+    )
     return parser
 
 
@@ -340,9 +408,10 @@ def main(argv: list[str] | None = None) -> int:
         for name, reason in EXCLUDED_TOOLS.items():
             print(f"(excluded) {name}: {reason}")
         return 0
-    tools = _select(_csv(args.tools) or None, _csv(args.skip))
+    tools = [A2A_TARGET] if args.a2a else _select(_csv(args.tools) or None, _csv(args.skip))
     base_url = args.base_url.rstrip("/")
-    print(f"{'Paying' if args.execute else 'Quoting'} {len(tools)} tool(s) at {base_url}/tools/mcp\n")
+    target = f"{base_url}/message:send" if args.a2a else f"{base_url}/tools/mcp"
+    print(f"{'Paying' if args.execute else 'Quoting'} {len(tools)} target(s) at {target}\n")
     return run(
         base_url,
         tools,

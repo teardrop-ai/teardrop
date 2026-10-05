@@ -43,6 +43,7 @@ from x402.extensions.bazaar import (
 
 from shared.request_ip import client_ip_from_request
 from teardrop.auth import decode_access_token, is_machine_credential_revoked
+from teardrop.bazaar_service import service_metadata
 from teardrop.config import get_settings
 from teardrop.public_url import public_base_url
 from tools.registry import MCP_MAX_COST_META_KEY
@@ -116,10 +117,6 @@ _JSONRPC_MESSAGE_KEYS = frozenset({"method", "result", "error"})
 _BAZAAR_DESCRIPTION_MAX_CHARS = 500
 # The declaration rides in the base64 PAYMENT-REQUIRED header; this keeps every per-tool header under 8 KB.
 _BAZAAR_OUTPUT_SCHEMA_MAX_CHARS = 3_000
-# Bazaar service metadata (specs/extensions/bazaar.md): printable ASCII, name <= 32 chars, <= 5 tags of <= 32 chars.
-# Facilitators soft-drop invalid fields, so a bad value loses the listing field, never the payment.
-_MCP_SERVICE_NAME = "Teardrop"
-_MCP_SERVICE_TAGS = ("crypto", "defi", "onchain data", "wallet analytics", "mcp")
 _MCP_SERVICE_DESCRIPTION = (
     "Teardrop MCP gateway: pay-per-call tools for AI agents covering token prices, DeFi yields and lending, "
     "wallet portfolios and approvals, onchain transactions, DEX quotes, and web search. "
@@ -311,17 +308,12 @@ async def _record_unbilled_failure(request: Request) -> None:
 def _mcp_402_resource(request: Request) -> dict:
     settings = get_settings()
     base_url = public_base_url(request, settings)
-    resource = {
+    return {
         "url": f"{base_url}/tools/mcp",
         "description": _MCP_SERVICE_DESCRIPTION,
         "mimeType": "application/json",
-        "serviceName": _MCP_SERVICE_NAME,
-        "tags": list(_MCP_SERVICE_TAGS),
+        **service_metadata(settings),
     }
-    icon_url = (settings.agent_card_icon_url or "").strip()
-    if icon_url.startswith(("https://", "http://")):
-        resource["iconUrl"] = icon_url
-    return resource
 
 
 def _tool_call_name(data: dict) -> str | None:

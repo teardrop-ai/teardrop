@@ -46,6 +46,7 @@ from teardrop.a2a_tasks import (
 )
 from teardrop.agent_runtime import _run_billing_gate, run_agent_once
 from teardrop.auth import decode_access_token, is_machine_credential_revoked
+from teardrop.bazaar_service import service_metadata
 from teardrop.concurrency import AgentRunCapacityError
 from teardrop.config import get_settings
 from teardrop.llm_config import get_org_llm_config_cached
@@ -122,12 +123,20 @@ _A2A_BAZAAR_OUTPUT_EXAMPLE = {
 }
 
 
-def _a2a_402_resource(request: Request) -> dict[str, str]:
+_A2A_SERVICE_DESCRIPTION = (
+    "Teardrop crypto research agent over A2A: ask in plain language about token prices, DeFi yields and lending, "
+    "wallet portfolios, approvals and counterparty risk, or onchain transactions; the agent plans and runs Teardrop's "
+    "onchain data tools and returns a completed task. Pay per task with x402 USDC on Base."
+)
+
+
+def _a2a_402_resource(request: Request) -> dict[str, Any]:
     base_url = public_base_url(request, settings)
     return {
         "url": f"{base_url}/message:send",
-        "description": "Public A2A endpoint for external agent callers.",
+        "description": _A2A_SERVICE_DESCRIPTION,
         "mimeType": "application/json",
+        **service_metadata(settings),
     }
 
 
