@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -112,6 +114,8 @@ _ANON_IP_LIMIT_PER_MINUTE = 60
 _JSONRPC_MESSAGE_KEYS = frozenset({"method", "result", "error"})
 # The CDP facilitator rejects verify and settle when a discovery description exceeds 500 characters.
 _BAZAAR_DESCRIPTION_MAX_CHARS = 500
+# The declaration rides in the base64 PAYMENT-REQUIRED header; this keeps every per-tool header under 8 KB.
+_BAZAAR_OUTPUT_SCHEMA_MAX_CHARS = 3_000
 # Bazaar service metadata (specs/extensions/bazaar.md): printable ASCII, name <= 32 chars, <= 5 tags of <= 32 chars.
 # Facilitators soft-drop invalid fields, so a bad value loses the listing field, never the payment.
 _MCP_SERVICE_NAME = "Teardrop"
@@ -127,6 +131,82 @@ def _bazaar_description(text: str) -> str:
     if len(text) <= _BAZAAR_DESCRIPTION_MAX_CHARS:
         return text
     return text[: _BAZAAR_DESCRIPTION_MAX_CHARS - 1].rstrip() + "\u2026"
+
+
+def _without_titles(schema: Any) -> Any:
+    if isinstance(schema, list):
+        return [_without_titles(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    return {
+        key: ({name: _without_titles(prop) for name, prop in value.items()} if key == "properties" else _without_titles(value))
+        for key, value in schema.items()
+        if key != "title"
+    }
+
+
+def _top_level_schema(schema: dict) -> dict:
+    """Top-level fields only, for output schemas too large for the 402 header."""
+    properties: dict[str, dict] = {}
+    for name, prop in schema.get("properties", {}).items():
+        json_type = prop.get("type")
+        if json_type is None:
+            union = [option["type"] for option in prop.get("anyOf", []) if option.get("type")]
+            json_type = union if len(union) > 1 else (union[0] if union else None)
+        field: dict[str, Any] = {"type": json_type} if json_type else {}
+        if prop.get("description"):
+            field["description"] = prop["description"]
+        properties[name] = field
+    shallow: dict[str, Any] = {"type": "object", "properties": properties}
+    if schema.get("required"):
+        shallow["required"] = list(schema["required"])
+    return shallow
+
+
+def _schema_example(schema: dict) -> Any:
+    """Smallest value satisfying ``schema``: required fields only, empty arrays, typed placeholders."""
+    if "const" in schema:
+        return schema["const"]
+    if schema.get("default") is not None:
+        return schema["default"]
+    if schema.get("examples"):
+        return schema["examples"][0]
+    if schema.get("enum"):
+        return schema["enum"][0]
+    for key in ("anyOf", "oneOf"):
+        if key in schema:
+            options = [option for option in schema[key] if option.get("type") != "null"] or schema[key]
+            return _schema_example(options[0])
+    json_type = schema.get("type")
+    if isinstance(json_type, list):
+        json_type = next((item for item in json_type if item != "null"), "null")
+    if json_type == "object" or "properties" in schema:
+        properties = schema.get("properties", {})
+        return {name: _schema_example(properties[name]) for name in schema.get("required", []) if name in properties}
+    if json_type == "array":
+        return [_schema_example(schema.get("items", {})) for _ in range(schema.get("minItems", 0))]
+    return {"string": "", "integer": 0, "number": 0, "boolean": False}.get(json_type)
+
+
+@functools.lru_cache(maxsize=128)
+def _bazaar_output(tool_name: str, tool_version: str) -> OutputConfig | None:
+    """Bazaar output declaration for a tool's MCP ``structuredContent``; ``tool_version`` keys the cache."""
+    from tools import registry
+
+    tool = registry.get(tool_name)
+    model = getattr(tool, "output_schema", None)
+    if model is None:
+        return None
+    raw = model if isinstance(model, dict) else model.model_json_schema()
+    # Mirror tools.registry: MCP only advertises object-root output schemas.
+    if raw.get("type") != "object":
+        return None
+    schema = _without_titles(flatten_embedded_json_schema(raw))
+    if len(json.dumps(schema, separators=(",", ":"))) > _BAZAAR_OUTPUT_SCHEMA_MAX_CHARS:
+        schema = _top_level_schema(schema)
+        if len(json.dumps(schema, separators=(",", ":"))) > _BAZAAR_OUTPUT_SCHEMA_MAX_CHARS:
+            return None
+    return OutputConfig(example=_schema_example(schema), schema=schema)
 
 
 class MCPPathNormalizer:
@@ -283,6 +363,7 @@ def _mcp_402_extensions(tool_name: str | None = None) -> dict:
                 description=_bazaar_description(tool.description),
                 transport="streamable-http",
                 input_schema=flatten_embedded_json_schema(tool.input_schema.model_json_schema()),
+                output=_bazaar_output(tool.name, tool.version),
             )
         )
     extension = declare_discovery_extension(

@@ -141,3 +141,11 @@ def test_quote_warns_when_service_metadata_missing():
 
     assert not quote.error
     assert any("serviceName" in warning for warning in quote.warnings)
+
+
+def test_quote_warns_when_output_declaration_missing():
+    session = SimpleNamespace(post=lambda *a, **k: _response(402, _challenge("get_gas_price")))
+
+    quote = seed.quote_tool(session, "https://api", "get_gas_price", {})
+
+    assert any("output declaration" in warning for warning in quote.warnings)

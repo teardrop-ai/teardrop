@@ -161,6 +161,15 @@ def _tools_call(tool_name: str, arguments: dict[str, Any], req_id: int) -> dict[
     return {"jsonrpc": "2.0", "id": req_id, "method": "tools/call", "params": {"name": tool_name, "arguments": arguments}}
 
 
+def _declares_output(tool_name: str) -> bool:
+    """Whether the gateway should declare Bazaar output for this tool (mirrors teardrop.mcp_gateway)."""
+    from teardrop.mcp_gateway import _bazaar_output
+    from tools import registry
+
+    tool = registry.get(tool_name)
+    return tool is not None and _bazaar_output(tool.name, tool.version) is not None
+
+
 def quote_tool(session: requests.Session, base_url: str, tool_name: str, arguments: dict[str, Any]) -> Quote:
     """Fetch the unpaid 402 for a tool and check it carries per-tool Bazaar metadata."""
     quote = Quote(tool=tool_name, arguments=arguments, warnings=[])
@@ -181,9 +190,12 @@ def quote_tool(session: requests.Session, base_url: str, tool_name: str, argumen
     quote.body = {**body, "accepts": exact[:1]}
     quote.amount_usdc = int(exact[0]["amount"])
     quote.network = exact[0].get("network", "")
-    bazaar_input = ((body.get("extensions") or {}).get("bazaar") or {}).get("info", {}).get("input", {})
+    bazaar = (body.get("extensions") or {}).get("bazaar") or {}
+    bazaar_input = bazaar.get("info", {}).get("input", {})
     if bazaar_input.get("toolName") != tool_name:
         quote.warnings.append("402 lacks per-tool Bazaar toolName")
+    if _declares_output(tool_name) and not bazaar.get("info", {}).get("output"):
+        quote.warnings.append("402 lacks Bazaar output declaration (gateway not redeployed?)")
     resource = body.get("resource") or {}
     if not resource.get("serviceName") or not resource.get("tags"):
         quote.warnings.append("402 resource lacks serviceName/tags (gateway not redeployed?)")
