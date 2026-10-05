@@ -214,6 +214,126 @@ async def test_bazaar_example_call_is_a_paid_402(x402_gateway_env, monkeypatch):
     assert response.status_code == 402
 
 
+def _assert_full_service_metadata(resource: dict) -> None:
+    from x402.extensions.bazaar.facilitator import _sanitize_resource_service_metadata
+    from x402.schemas.payments import ResourceInfo
+
+    from teardrop.mcp_gateway import _BAZAAR_DESCRIPTION_MAX_CHARS, _MCP_SERVICE_TAGS
+
+    # Facilitators soft-drop invalid fields, so every declared field must survive the SDK sanitizer.
+    kept = _sanitize_resource_service_metadata(resource)
+    assert kept.service_name == "Teardrop"
+    assert kept.tags == list(_MCP_SERVICE_TAGS)
+    assert kept.icon_url == "https://teardrop.dev/teardrop.png"
+    assert 0 < len(resource["description"]) <= _BAZAAR_DESCRIPTION_MAX_CHARS
+    dumped = ResourceInfo.model_validate(resource).model_dump(by_alias=True, exclude_none=True)
+    assert {"serviceName", "tags", "iconUrl"} <= dumped.keys()
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_resource_carries_bazaar_service_metadata(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _post_raw(b"{}", {"Content-Type": "application/json"})
+
+    assert response.status_code == 402
+    _assert_full_service_metadata(mocks.body["resource"])
+    assert response.json()["resource"]["serviceName"] == "Teardrop"
+
+
+@pytest.mark.asyncio
+async def test_tools_call_challenge_resource_carries_bazaar_service_metadata(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+
+    response = await _post_paid_call({"Accept": "application/json"}, tool_name="get_token_price")
+
+    assert response.status_code == 402
+    _assert_full_service_metadata(mocks.body["resource"])
+    assert mocks.body["extensions"]["bazaar"]["info"]["input"]["toolName"] == "get_token_price"
+
+
+@pytest.mark.asyncio
+async def test_non_http_icon_setting_is_omitted(x402_gateway_env, monkeypatch):
+    monkeypatch.setenv("AGENT_CARD_ICON_URL", "")
+    config.get_settings.cache_clear()
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _post_raw(b"{}", {"Content-Type": "application/json"})
+
+    assert response.status_code == 402
+    assert "iconUrl" not in mocks.body["resource"]
+    assert mocks.body["resource"]["serviceName"] == "Teardrop"
+
+
+async def _get_raw(headers: dict[str, str]):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPPathNormalizer)
+    app.mount("/tools/mcp", MCPGatewayMiddleware(build_mcp_app(mcp), mounted=True))
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return await client.get("/tools/mcp", headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accept", ["application/json", "*/*", "text/html"])
+async def test_anonymous_non_sse_get_gets_bazaar_402(x402_gateway_env, monkeypatch, accept):
+    from x402.extensions.bazaar.facilitator import validate_discovery_extension_spec
+
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    limiter = AsyncMock(return_value=(True, 59, 0))
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", limiter)
+
+    response = await _get_raw({"Accept": accept})
+
+    assert response.status_code == 402
+    assert validate_discovery_extension_spec(mocks.body["extensions"]["bazaar"]).valid
+    assert mocks.body["requirements"] is mocks.scoped
+    _assert_full_service_metadata(mocks.body["resource"])
+    assert limiter.await_args.args[0].startswith("mcp:ip:")
+    mocks.verify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anonymous_non_sse_get_is_ip_rate_limited(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(False, 0, 123)))
+
+    response = await _get_raw({"Accept": "application/json"})
+
+    assert response.status_code == 429
+    assert mocks.body is None
+
+
+@pytest.mark.asyncio
+async def test_sse_get_still_reaches_mcp_transport(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    # An unsupported protocol version makes the SDK reject promptly instead of holding the SSE stream open.
+    response = await _get_raw({"Accept": "text/event-stream", "mcp-protocol-version": "1999-01-01"})
+
+    assert response.status_code not in (402, 406)
+    assert mocks.body is None
+
+
+@pytest.mark.asyncio
+async def test_bearer_get_is_not_a_payment_challenge(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+
+    response = await _get_raw({"Accept": "application/json", "Authorization": "Bearer token"})
+
+    assert response.status_code == 406
+    assert mocks.body is None
+
+
 @pytest.mark.asyncio
 async def test_verified_header_payment_settles_through_mounted_gateway(x402_gateway_env, monkeypatch):
     mocks = _patch_billing(monkeypatch)

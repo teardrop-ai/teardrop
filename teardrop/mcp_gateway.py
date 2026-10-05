@@ -112,6 +112,15 @@ _ANON_IP_LIMIT_PER_MINUTE = 60
 _JSONRPC_MESSAGE_KEYS = frozenset({"method", "result", "error"})
 # The CDP facilitator rejects verify and settle when a discovery description exceeds 500 characters.
 _BAZAAR_DESCRIPTION_MAX_CHARS = 500
+# Bazaar service metadata (specs/extensions/bazaar.md): printable ASCII, name <= 32 chars, <= 5 tags of <= 32 chars.
+# Facilitators soft-drop invalid fields, so a bad value loses the listing field, never the payment.
+_MCP_SERVICE_NAME = "Teardrop"
+_MCP_SERVICE_TAGS = ("crypto", "defi", "onchain data", "wallet analytics", "mcp")
+_MCP_SERVICE_DESCRIPTION = (
+    "Teardrop MCP gateway: pay-per-call tools for AI agents covering token prices, DeFi yields and lending, "
+    "wallet portfolios and approvals, onchain transactions, DEX quotes, and web search. "
+    "Call via MCP tools/call over streamable HTTP; settle with x402 USDC on Base."
+)
 
 
 def _bazaar_description(text: str) -> str:
@@ -220,12 +229,19 @@ async def _record_unbilled_failure(request: Request) -> None:
 
 
 def _mcp_402_resource(request: Request) -> dict:
-    base_url = public_base_url(request, get_settings())
-    return {
+    settings = get_settings()
+    base_url = public_base_url(request, settings)
+    resource = {
         "url": f"{base_url}/tools/mcp",
-        "description": "MCP gateway tools/call execution endpoint.",
+        "description": _MCP_SERVICE_DESCRIPTION,
         "mimeType": "application/json",
+        "serviceName": _MCP_SERVICE_NAME,
+        "tags": list(_MCP_SERVICE_TAGS),
     }
+    icon_url = (settings.agent_card_icon_url or "").strip()
+    if icon_url.startswith(("https://", "http://")):
+        resource["iconUrl"] = icon_url
+    return resource
 
 
 def _tool_call_name(data: dict) -> str | None:
@@ -398,7 +414,17 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         is_public_discovery = False
         is_payment_probe = False
         if request.method != "POST":
-            is_public_discovery = True
+            if (
+                request.method == "GET"
+                and "text/event-stream" not in request.headers.get("accept", "").lower()
+                and settings.mcp_auth_enabled
+                and settings.mcp_x402_enabled
+                and self._extract_bearer(request) is None
+            ):
+                # Only SSE-capable MCP clients can use GET; crawlers probing the paid resource get its 402, not the SDK's 406.
+                is_payment_probe = True
+            else:
+                is_public_discovery = True
         else:
             try:
                 # Sniff JSON-RPC method safely; Starlette caches body in request._body
@@ -1042,7 +1068,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
 
     @classmethod
     async def _payment_probe_challenge(cls, request: Request) -> Response:
-        """HTTP 402 for an anonymous non-JSON-RPC POST, priced and described as the declared Bazaar example call."""
+        """HTTP 402 for an anonymous non-JSON-RPC POST or non-SSE GET, priced as the declared Bazaar example call."""
         try:
             requirements = await cls._x402_tool_requirements(_MCP_BAZAAR_INPUT_EXAMPLE)
         except Exception:
