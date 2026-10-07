@@ -223,7 +223,7 @@ class TestClientClassification:
 
     def test_vocabulary_is_bounded(self):
         assert len(VALID_SURFACES) == 13 + 4 * len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS)
-        assert len(MCP_HOSTS) == 25
+        assert len(MCP_HOSTS) == 26
         assert len(set(MCP_HOSTS)) == len(MCP_HOSTS)
 
     @pytest.mark.parametrize(("client_name", "expected"), [("claude-ai", "claude"), ("my-agent", "other"), ("", "none")])
@@ -266,11 +266,11 @@ class TestUnclassifiedClientLogging:
         init_funnel_counters(_pool(), enabled=True)
         with caplog.at_level("INFO", logger=funnel_module.__name__):
             for _ in range(3):
-                mcp_initialize_surface("Scanner-X/2.1")
+                mcp_initialize_surface("Acme-Agent/2.1")
             mcp_initialize_surface("claude-ai")
             mcp_initialize_surface("")
 
-        assert self._lines(caplog) == ["mcp unclassified client name='scanner-x/2.1'"]
+        assert self._lines(caplog) == ["mcp unclassified client name='acme-agent/2.1'"]
 
     def test_sanitizes_and_truncates(self, caplog):
         init_funnel_counters(_pool(), enabled=True)
@@ -292,9 +292,139 @@ class TestUnclassifiedClientLogging:
 
     def test_disabled_counters_do_not_log(self, caplog):
         with caplog.at_level("INFO", logger=funnel_module.__name__):
-            mcp_initialize_surface("scanner-x")
+            mcp_initialize_surface("acme-agent")
 
         assert self._lines(caplog) == []
+
+    def test_bot_bucket_is_not_logged(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            mcp_initialize_surface("smithery-probe")
+
+        assert self._lines(caplog) == []
+
+
+class TestIndexerClassification:
+    @pytest.mark.parametrize(
+        "client_name",
+        [
+            # Every clientInfo.name in the 2026-10-07 unclassified log sample.
+            "smithery-probe",
+            "brickbluebot",
+            "glama",
+            "cdp-bazaar-discovery",
+            "agentprobe",
+            "taifoon-harvester",
+            "agentalog-sonda",
+            "mcp-rugpull-research",
+            "agent-tools.cloud",
+            "UptimeMonitor/1.0",
+        ],
+    )
+    def test_indexer_names_bucket_as_bot(self, client_name):
+        assert mcp_initialize_surface(client_name) == "mcp_initialize:bot"
+        assert funnel_module.mcp_call_client_surface(client_name) == "mcp_call_client:bot"
+
+    @pytest.mark.parametrize(
+        ("client_name", "expected"),
+        [("claude-code-preview", "claude"), ("cursor-health", "cursor"), ("fastmcp-scanner", "sdk")],
+    )
+    def test_known_hosts_win_over_bot_tokens(self, client_name, expected):
+        assert mcp_initialize_surface(client_name) == f"mcp_initialize:{expected}"
+
+    def test_research_agents_are_not_indexers(self):
+        assert mcp_initialize_surface("gpt-researcher") == "mcp_initialize:other"
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected"),
+        [
+            ({}, "mcp"),
+            ({"client_name": "smithery-probe"}, "bot"),
+            ({"client_name": "claude-ai"}, "mcp"),
+            ({"client_name": "my-agent"}, "mcp"),
+            ({"flagged": True}, "bot"),
+        ],
+    )
+    def test_client_name_and_flag_drive_bot_class(self, kwargs, expected):
+        for helper, prefix in (
+            (anon_challenge_client_surface, "mcp_402_anon_client:"),
+            (tools_list_anon_client_surface, "tools_list_anon_client:"),
+            (funnel_module.tools_call_free_anon_client_surface, "tools_call_free_anon_client:"),
+        ):
+            assert helper("node", True, **kwargs) == prefix + expected
+
+    def test_seed_script_user_agent_is_bot(self):
+        assert anon_challenge_client_surface("teardrop-seed-bot/1.0", False) == "mcp_402_anon_client:bot"
+
+
+@pytest.mark.anyio
+class TestIndexerIpFlag:
+    @pytest.fixture(autouse=True)
+    def _no_redis(self, monkeypatch):
+        monkeypatch.setattr("teardrop.cache.get_redis", lambda: None)
+
+    async def test_flag_roundtrip_in_process(self):
+        init_funnel_counters(_pool(), enabled=True)
+        assert await funnel_module.is_indexer_ip("203.0.113.7") is False
+
+        await funnel_module.mark_indexer_ip("203.0.113.7")
+
+        assert await funnel_module.is_indexer_ip("203.0.113.7") is True
+        assert await funnel_module.is_indexer_ip("203.0.113.8") is False
+        assert all("203.0.113.7" not in key for key in funnel_module._indexer_ips)
+
+    async def test_flag_expires(self, monkeypatch):
+        init_funnel_counters(_pool(), enabled=True)
+        await funnel_module.mark_indexer_ip("203.0.113.7")
+        now = funnel_module.time.monotonic()
+        monkeypatch.setattr(funnel_module.time, "monotonic", lambda: now + funnel_module._INDEXER_IP_TTL_SECONDS + 1)
+
+        assert await funnel_module.is_indexer_ip("203.0.113.7") is False
+        assert funnel_module._indexer_ips == {}
+
+    async def test_disabled_or_missing_ip_is_noop(self):
+        await funnel_module.mark_indexer_ip("203.0.113.7")
+        assert funnel_module._indexer_ips == {}
+        init_funnel_counters(_pool(), enabled=True)
+        await funnel_module.mark_indexer_ip(None)
+        assert await funnel_module.is_indexer_ip(None) is False
+        assert funnel_module._indexer_ips == {}
+
+    async def test_fallback_is_bounded(self, monkeypatch):
+        init_funnel_counters(_pool(), enabled=True)
+        monkeypatch.setattr(funnel_module, "_INDEXER_IP_MAX_KEYS", 3)
+        for i in range(5):
+            await funnel_module.mark_indexer_ip(f"203.0.113.{i}")
+
+        assert len(funnel_module._indexer_ips) == 3
+        assert await funnel_module.is_indexer_ip("203.0.113.0") is False
+        assert await funnel_module.is_indexer_ip("203.0.113.4") is True
+
+    async def test_redis_used_when_available(self, monkeypatch):
+        redis = MagicMock()
+        redis.set = AsyncMock()
+        redis.exists = AsyncMock(return_value=1)
+        monkeypatch.setattr("teardrop.cache.get_redis", lambda: redis)
+        init_funnel_counters(_pool(), enabled=True)
+
+        await funnel_module.mark_indexer_ip("203.0.113.7")
+        assert await funnel_module.is_indexer_ip("203.0.113.7") is True
+
+        key = redis.set.await_args.args[0]
+        assert key.startswith("teardrop:funnelbot:") and "203.0.113.7" not in key
+        assert redis.set.await_args.kwargs == {"ex": funnel_module._INDEXER_IP_TTL_SECONDS}
+        assert funnel_module._indexer_ips == {}
+
+    async def test_redis_failure_falls_back(self, monkeypatch):
+        redis = MagicMock()
+        redis.set = AsyncMock(side_effect=RuntimeError("down"))
+        redis.exists = AsyncMock(side_effect=RuntimeError("down"))
+        monkeypatch.setattr("teardrop.cache.get_redis", lambda: redis)
+        init_funnel_counters(_pool(), enabled=True)
+
+        await funnel_module.mark_indexer_ip("203.0.113.7")
+
+        assert await funnel_module.is_indexer_ip("203.0.113.7") is True
 
 
 @pytest.mark.anyio

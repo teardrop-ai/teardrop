@@ -17,6 +17,15 @@ def test_every_paid_tool_has_seed_arguments():
     assert not set(seed.seedable_tools()) - covered, "add new paid tools to TOOL_ARGUMENTS or EXCLUDED_TOOLS"
 
 
+def test_default_session_self_identifies_as_bot():
+    from teardrop.funnel_counters import anon_challenge_client_surface
+
+    session = seed._new_session()
+
+    assert session.headers["User-Agent"] == seed.SEED_USER_AGENT
+    assert anon_challenge_client_surface(seed.SEED_USER_AGENT, False) == "mcp_402_anon_client:bot"
+
+
 def test_seed_arguments_only_name_seedable_tools():
     from tools import registry
 

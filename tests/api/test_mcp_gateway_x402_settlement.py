@@ -156,6 +156,53 @@ async def test_allowlisted_free_tool_is_ip_rate_limited(x402_gateway_env, monkey
     assert "tools_call_free_anon" not in hits
 
 
+async def _post_sequence(bodies: list[dict], headers: dict[str, str]) -> list:
+    from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPPathNormalizer)
+    app.mount("/tools/mcp", MCPGatewayMiddleware(build_mcp_app(mcp), mounted=True))
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return [await client.post("/tools/mcp", json=body, headers=headers) for body in bodies]
+
+
+def _initialize(client_name: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": client_name}},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("client_name", "expected"), [("smithery-probe", "bot"), ("claude-ai", "mcp")])
+async def test_indexer_handshake_classifies_later_legacy_402_as_bot(x402_gateway_env, monkeypatch, client_name, expected):
+    """A legacy tools/call has no clientInfo; the stateless server ties it to the handshake by IP."""
+    from teardrop import funnel_counters
+
+    _patch_billing(monkeypatch, tool_cost=2_000)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    monkeypatch.setattr("teardrop.cache.get_redis", lambda: None)
+    monkeypatch.setattr(funnel_counters, "_enabled", True)
+    monkeypatch.setattr(funnel_counters, "_indexer_ips", {})
+    hits: list[str] = []
+    monkeypatch.setattr(funnel_counters, "record_discovery_hit", hits.append)
+
+    responses = await _post_sequence(
+        [_initialize(client_name), _tools_call("get_token_price")],
+        {"Accept": "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", "User-Agent": "node"},
+    )
+
+    assert responses[0].status_code == 200
+    assert "mcp_402_no_payment" in hits
+    assert hits[-1] == f"mcp_402_anon_client:{expected}"
+
+
 async def _post_raw(content: bytes, headers: dict[str, str]):
     from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
     from tools.mcp_server import build_mcp_app, create_mcp_server

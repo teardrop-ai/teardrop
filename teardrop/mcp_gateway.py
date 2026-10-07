@@ -224,9 +224,13 @@ def _jsonrpc_error(req_id: int | str | None, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
+def _request_ip(request: Request) -> str | None:
+    return client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
+
+
 async def _anonymous_ip_limit(request: Request) -> JSONResponse | None:
     """Per-IP limit shared by anonymous discovery and free tool calls."""
-    ip = client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
+    ip = _request_ip(request)
     if not ip:
         return None
     from teardrop.rate_limit import _check_rate_limit
@@ -555,8 +559,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 return limited
 
             from teardrop.funnel_counters import (
+                SURFACE_MCP_INITIALIZE_PREFIX,
                 SURFACE_TOOLS_LIST,
                 SURFACE_TOOLS_LIST_ANON,
+                is_indexer_ip,
+                mark_indexer_ip,
                 mcp_initialize_surface,
                 mcp_meta_client_name,
                 record_discovery_hit,
@@ -568,6 +575,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             except Exception:
                 rpc = None
             rpc_method = rpc.get("method") if isinstance(rpc, dict) else None
+            rpc_params = rpc.get("params") if isinstance(rpc, dict) else None
             is_tools_list = rpc_method == "tools/list"
             is_anonymous = self._extract_bearer(request) is None
             if is_tools_list:
@@ -575,16 +583,23 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 if is_anonymous:
                     record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
                     record_discovery_hit(
-                        tools_list_anon_client_surface(request.headers.get("user-agent"), _wants_mcp_payment_signal(request))
+                        tools_list_anon_client_surface(
+                            request.headers.get("user-agent"),
+                            _wants_mcp_payment_signal(request),
+                            client_name=mcp_meta_client_name(rpc_params),
+                            flagged=await is_indexer_ip(_request_ip(request)),
+                        )
                     )
             elif rpc_method in ("initialize", "server/discover"):
                 # Modern clients replace initialize with server/discover and put clientInfo in params._meta.
-                params = rpc.get("params")
-                client_info = params.get("clientInfo") if isinstance(params, dict) else None
+                client_info = rpc_params.get("clientInfo") if isinstance(rpc_params, dict) else None
                 client_name = client_info.get("name") if isinstance(client_info, dict) else None
                 if client_name is None:
-                    client_name = mcp_meta_client_name(params)
-                record_discovery_hit(mcp_initialize_surface(client_name))
+                    client_name = mcp_meta_client_name(rpc_params)
+                initialize_surface = mcp_initialize_surface(client_name)
+                record_discovery_hit(initialize_surface)
+                if initialize_surface == SURFACE_MCP_INITIALIZE_PREFIX + "bot":
+                    await mark_indexer_ip(_request_ip(request))
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
@@ -947,6 +962,8 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_MCP_402_PAYMENT_INVALID,
             SURFACE_TOOLS_CALL_FREE_ANON,
             anon_challenge_client_surface,
+            is_indexer_ip,
+            mcp_meta_client_name,
             record_discovery_hit,
             tools_call_free_anon_client_surface,
         )
@@ -976,7 +993,12 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     return limited
                 record_discovery_hit(SURFACE_TOOLS_CALL_FREE_ANON)
                 record_discovery_hit(
-                    tools_call_free_anon_client_surface(request.headers.get("user-agent"), _wants_mcp_payment_signal(request))
+                    tools_call_free_anon_client_surface(
+                        request.headers.get("user-agent"),
+                        _wants_mcp_payment_signal(request),
+                        client_name=mcp_meta_client_name(data.get("params")),
+                        flagged=await is_indexer_ip(_request_ip(request)),
+                    )
                 )
                 request.state.mcp_org_id = None
                 request.state.mcp_auth_method = ""
@@ -1017,11 +1039,19 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         }
         if requirements is not None:
             response_kwargs["requirements"] = requirements
-        client_surface = anon_challenge_client_surface(request.headers.get("user-agent"), mcp_signal)
+
+        async def challenger_surface() -> str:
+            return anon_challenge_client_surface(
+                request.headers.get("user-agent"),
+                mcp_signal,
+                client_name=mcp_meta_client_name(data.get("params")),
+                flagged=await is_indexer_ip(_request_ip(request)),
+            )
+
         if not payment_header:
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
-            record_discovery_hit(client_surface)
+            record_discovery_hit(await challenger_surface())
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs, await self._mpp_offer(_tool_call_name(data)))
 
         billing = await verify_payment(payment_header, requirements)
@@ -1029,7 +1059,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             response_kwargs["error"] = billing.error
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_PAYMENT_INVALID)
-            record_discovery_hit(client_surface)
+            record_discovery_hit(await challenger_surface())
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing

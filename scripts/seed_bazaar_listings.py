@@ -121,6 +121,16 @@ DYNAMIC_ARGUMENTS: dict[str, Callable[[], dict[str, Any]]] = {
     "assess_market_resolution": _top_polymarket_slug,
 }
 
+# Contains "bot" so the funnel classifies seeding traffic out of the non-bot (organic) stages.
+SEED_USER_AGENT = "teardrop-seed-bot/1.0"
+
+
+def _new_session() -> requests.Session:
+    session = requests.Session()
+    session.headers["User-Agent"] = SEED_USER_AGENT
+    return session
+
+
 EXCLUDED_TOOLS: dict[str, str] = {
     "delegate_to_agent": "spends on a third-party A2A agent; seed manually against a known agent",
     "record_predictions": "internal prediction sink, not a caller-facing tool",
@@ -317,7 +327,7 @@ def run(
     allow_warnings: bool = False,
     session: requests.Session | None = None,
 ) -> int:
-    session = session or requests.Session()
+    session = session or _new_session()
     quotes: list[Quote] = []
     for name in tools:
         try:
