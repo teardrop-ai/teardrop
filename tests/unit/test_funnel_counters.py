@@ -256,6 +256,47 @@ class TestClientClassification:
         assert mcp_meta_client_name(params) == expected
 
 
+class TestUnclassifiedClientLogging:
+    _MSG = "mcp unclassified client"
+
+    def _lines(self, caplog):
+        return [r.getMessage() for r in caplog.records if r.getMessage().startswith(self._MSG)]
+
+    def test_logs_each_unclassified_name_once_per_hour(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            for _ in range(3):
+                mcp_initialize_surface("Scanner-X/2.1")
+            mcp_initialize_surface("claude-ai")
+            mcp_initialize_surface("")
+
+        assert self._lines(caplog) == ["mcp unclassified client name='scanner-x/2.1'"]
+
+    def test_sanitizes_and_truncates(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            mcp_initialize_surface("evil\nname\x1b[31m" + "a" * 100)
+
+        (line,) = self._lines(caplog)
+        assert "\n" not in line and "\x1b" not in line
+        assert line == "mcp unclassified client name=" + repr(("evil?name??31m" + "a" * 100)[:64])
+
+    def test_caps_distinct_names_per_hour(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        cap = funnel_module._UNCLASSIFIED_LOG_MAX_PER_HOUR
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            for i in range(cap + 5):
+                mcp_initialize_surface(f"agent-{i}")
+
+        assert len(self._lines(caplog)) == cap
+
+    def test_disabled_counters_do_not_log(self, caplog):
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            mcp_initialize_surface("scanner-x")
+
+        assert self._lines(caplog) == []
+
+
 @pytest.mark.anyio
 class TestFlushDiscoveryCounters:
     async def test_flush_upserts_and_clears_counters(self):

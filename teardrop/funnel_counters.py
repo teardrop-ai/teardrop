@@ -151,6 +151,10 @@ _MCP_ADDITIONAL_HOST_PATTERNS = tuple(
     for token, bucket in _MCP_ADDITIONAL_HOST_TOKENS
 )
 _MAX_CLASSIFIED_CHARS = 256
+# Log-only sampling of unclassified clientInfo.name values so `other` can be named; never persisted.
+_UNCLASSIFIED_LOG_MAX_CHARS = 64
+_UNCLASSIFIED_LOG_MAX_PER_HOUR = 20
+_UNCLASSIFIED_NAME_UNSAFE = re.compile(r"[^a-z0-9._@/ -]")
 
 VALID_SURFACES: frozenset[str] = frozenset(
     {
@@ -179,6 +183,7 @@ VALID_SURFACES: frozenset[str] = frozenset(
 _pool: PgPool | None = None
 _enabled: bool = False
 _counters: dict[tuple[str, datetime], int] = {}
+_unclassified_logged: tuple[datetime | None, set[str]] = (None, set())
 
 
 def init_funnel_counters(pool: PgPool, enabled: bool) -> None:
@@ -190,10 +195,11 @@ def init_funnel_counters(pool: PgPool, enabled: bool) -> None:
 
 def close_funnel_counters() -> None:
     """Release the pool reference and drop any unflushed counters."""
-    global _pool, _enabled
+    global _pool, _enabled, _unclassified_logged
     _pool = None
     _enabled = False
     _counters.clear()
+    _unclassified_logged = (None, set())
 
 
 def _client_class(user_agent: str | None, is_mcp: bool) -> str:
@@ -251,7 +257,25 @@ def _mcp_host_bucket(client_name: object) -> str:
     for pattern, bucket in _MCP_ADDITIONAL_HOST_PATTERNS:
         if pattern.search(name):
             return bucket
+    _log_unclassified_client(name)
     return "other"
+
+
+def _log_unclassified_client(name: str) -> None:
+    """Log each distinct unclassified client name once per UTC hour, capped per hour."""
+    global _unclassified_logged
+    if not _enabled:
+        return
+    safe = _UNCLASSIFIED_NAME_UNSAFE.sub("?", name[:_UNCLASSIFIED_LOG_MAX_CHARS]).strip()
+    hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    logged_hour, seen = _unclassified_logged
+    if logged_hour != hour:
+        seen = set()
+        _unclassified_logged = (hour, seen)
+    if safe in seen or len(seen) >= _UNCLASSIFIED_LOG_MAX_PER_HOUR:
+        return
+    seen.add(safe)
+    logger.info("mcp unclassified client name=%r", safe)
 
 
 def mcp_initialize_surface(client_name: object) -> str:
