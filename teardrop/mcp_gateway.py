@@ -130,6 +130,17 @@ def _bazaar_description(text: str) -> str:
     return text[: _BAZAAR_DESCRIPTION_MAX_CHARS - 1].rstrip() + "\u2026"
 
 
+_ASCII_PUNCTUATION = str.maketrans({"\u2014": "-", "\u2013": "-", "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+
+
+def _bazaar_resource_description(text: str) -> str:
+    """Printable-ASCII resource description; the shared gateway blurb this replaces always was ASCII."""
+    text = "".join(ch for ch in text.translate(_ASCII_PUNCTUATION) if " " <= ch <= "~")
+    if len(text) <= _BAZAAR_DESCRIPTION_MAX_CHARS:
+        return text
+    return text[: _BAZAAR_DESCRIPTION_MAX_CHARS - 3].rstrip() + "..."
+
+
 def _without_titles(schema: Any) -> Any:
     if isinstance(schema, list):
         return [_without_titles(item) for item in schema]
@@ -228,6 +239,16 @@ def _request_ip(request: Request) -> str | None:
     return client_ip_from_request(request, trusted_proxy_count=get_settings().trusted_proxy_count)
 
 
+def _listing_source_tag(request: Request) -> str | None:
+    from teardrop.funnel_counters import SOURCE_QUERY_PARAM
+
+    # Attribution telemetry runs on the billing path, so a malformed scope must never raise.
+    try:
+        return request.query_params.get(SOURCE_QUERY_PARAM)
+    except Exception:
+        return None
+
+
 async def _anonymous_ip_limit(request: Request) -> JSONResponse | None:
     """Per-IP limit shared by anonymous discovery and free tool calls."""
     ip = _request_ip(request)
@@ -309,12 +330,21 @@ async def _record_unbilled_failure(request: Request) -> None:
         logger.debug("failure-budget accounting skipped", exc_info=True)
 
 
-def _mcp_402_resource(request: Request) -> dict:
+def _mcp_402_resource(request: Request, tool_name: str | None = None) -> dict:
     settings = get_settings()
     base_url = public_base_url(request, settings)
+    description = _MCP_SERVICE_DESCRIPTION
+    if tool_name:
+        from tools import registry
+
+        tool = registry.get(tool_name)
+        if tool is not None:
+            # The Bazaar catalogs each (resource, toolName) listing with resource.description, so a shared
+            # gateway blurb would make every tool listing match the same searches.
+            description = _bazaar_resource_description(f"Teardrop {tool.name}: {tool.description}")
     return {
         "url": f"{base_url}/tools/mcp",
-        "description": _MCP_SERVICE_DESCRIPTION,
+        "description": description,
         "mimeType": "application/json",
         **service_metadata(settings),
     }
@@ -562,11 +592,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 SURFACE_MCP_INITIALIZE_PREFIX,
                 SURFACE_TOOLS_LIST,
                 SURFACE_TOOLS_LIST_ANON,
+                SURFACE_TOOLS_LIST_ANON_SRC_PREFIX,
                 is_indexer_ip,
                 mark_indexer_ip,
                 mcp_initialize_surface,
                 mcp_meta_client_name,
                 record_discovery_hit,
+                record_source_hit,
                 tools_list_anon_client_surface,
             )
 
@@ -582,14 +614,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 record_discovery_hit(SURFACE_TOOLS_LIST)
                 if is_anonymous:
                     record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
-                    record_discovery_hit(
-                        tools_list_anon_client_surface(
-                            request.headers.get("user-agent"),
-                            _wants_mcp_payment_signal(request),
-                            client_name=mcp_meta_client_name(rpc_params),
-                            flagged=await is_indexer_ip(_request_ip(request)),
-                        )
+                    list_surface = tools_list_anon_client_surface(
+                        request.headers.get("user-agent"),
+                        _wants_mcp_payment_signal(request),
+                        client_name=mcp_meta_client_name(rpc_params),
+                        flagged=await is_indexer_ip(_request_ip(request)),
                     )
+                    record_discovery_hit(list_surface)
+                    record_source_hit(SURFACE_TOOLS_LIST_ANON_SRC_PREFIX, _listing_source_tag(request), list_surface)
             elif rpc_method in ("initialize", "server/discover"):
                 # Modern clients replace initialize with server/discover and put clientInfo in params._meta.
                 client_info = rpc_params.get("clientInfo") if isinstance(rpc_params, dict) else None
@@ -957,14 +989,17 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         """
         from billing import verify_payment
         from teardrop.funnel_counters import (
+            SURFACE_MCP_402_ANON_SRC_PREFIX,
             SURFACE_MCP_402_CHALLENGE,
             SURFACE_MCP_402_NO_PAYMENT,
             SURFACE_MCP_402_PAYMENT_INVALID,
             SURFACE_TOOLS_CALL_FREE_ANON,
+            SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX,
             anon_challenge_client_surface,
             is_indexer_ip,
             mcp_meta_client_name,
             record_discovery_hit,
+            record_source_hit,
             tools_call_free_anon_client_surface,
         )
 
@@ -992,14 +1027,14 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 if limited is not None:
                     return limited
                 record_discovery_hit(SURFACE_TOOLS_CALL_FREE_ANON)
-                record_discovery_hit(
-                    tools_call_free_anon_client_surface(
-                        request.headers.get("user-agent"),
-                        _wants_mcp_payment_signal(request),
-                        client_name=mcp_meta_client_name(data.get("params")),
-                        flagged=await is_indexer_ip(_request_ip(request)),
-                    )
+                free_surface = tools_call_free_anon_client_surface(
+                    request.headers.get("user-agent"),
+                    _wants_mcp_payment_signal(request),
+                    client_name=mcp_meta_client_name(data.get("params")),
+                    flagged=await is_indexer_ip(_request_ip(request)),
                 )
+                record_discovery_hit(free_surface)
+                record_source_hit(SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX, _listing_source_tag(request), free_surface)
                 request.state.mcp_org_id = None
                 request.state.mcp_auth_method = ""
                 return None
@@ -1034,24 +1069,26 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 content=_jsonrpc_error(data.get("id"), -32603, "Paid MCP pricing is temporarily unavailable."),
             )
         response_kwargs = {
-            "resource": _mcp_402_resource(request),
+            "resource": _mcp_402_resource(request, _tool_call_name(data)),
             "extensions": _mcp_402_extensions(_tool_call_name(data)),
         }
         if requirements is not None:
             response_kwargs["requirements"] = requirements
 
-        async def challenger_surface() -> str:
-            return anon_challenge_client_surface(
+        async def record_challenger() -> None:
+            client_surface = anon_challenge_client_surface(
                 request.headers.get("user-agent"),
                 mcp_signal,
                 client_name=mcp_meta_client_name(data.get("params")),
                 flagged=await is_indexer_ip(_request_ip(request)),
             )
+            record_discovery_hit(client_surface)
+            record_source_hit(SURFACE_MCP_402_ANON_SRC_PREFIX, _listing_source_tag(request), client_surface)
 
         if not payment_header:
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
-            record_discovery_hit(await challenger_surface())
+            await record_challenger()
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs, await self._mpp_offer(_tool_call_name(data)))
 
         billing = await verify_payment(payment_header, requirements)
@@ -1059,7 +1096,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             response_kwargs["error"] = billing.error
             record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
             record_discovery_hit(SURFACE_MCP_402_PAYMENT_INVALID)
-            record_discovery_hit(await challenger_surface())
+            await record_challenger()
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing
@@ -1541,6 +1578,11 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             )
             if settled.tx_hash:
                 logger.info("x402 MCP settlement succeeded org=%s tool=%s tx_hash=%s", org_id, tool_name, settled.tx_hash)
+            if not org_id:
+                from teardrop.funnel_counters import SURFACE_X402_SETTLED_SRC_PREFIX, record_source_hit
+
+                # Seeding and internal payers use untagged URLs, so they never reach a source partition.
+                record_source_hit(SURFACE_X402_SETTLED_SRC_PREFIX, _listing_source_tag(request))
             if self._meta_payment(request) is not None:
                 response = await self._attach_payment_receipt(response, settled)
             from billing import build_payment_response_headers

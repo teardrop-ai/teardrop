@@ -84,7 +84,7 @@ def _patch_billing(monkeypatch, *, tool_cost: int = 2_000):
     return mocks
 
 
-async def _post_paid_call(headers: dict[str, str], tool_name: str = "calculate"):
+async def _post_paid_call(headers: dict[str, str], tool_name: str = "calculate", path: str = "/tools/mcp"):
     from teardrop.mcp_gateway import MCPGatewayMiddleware, MCPPathNormalizer
     from tools.mcp_server import build_mcp_app, create_mcp_server
 
@@ -95,7 +95,7 @@ async def _post_paid_call(headers: dict[str, str], tool_name: str = "calculate")
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            return await client.post("/tools/mcp", json=_tools_call(tool_name), headers=headers)
+            return await client.post(path, json=_tools_call(tool_name), headers=headers)
 
 
 @pytest.mark.asyncio
@@ -288,6 +288,62 @@ async def test_payment_probe_resource_carries_bazaar_service_metadata(x402_gatew
     assert response.status_code == 402
     _assert_full_service_metadata(mocks.body["resource"])
     assert response.json()["resource"]["serviceName"] == "Teardrop"
+
+
+@pytest.mark.asyncio
+async def test_tool_challenge_resource_description_is_per_tool(x402_gateway_env, monkeypatch):
+    from teardrop.mcp_gateway import _BAZAAR_DESCRIPTION_MAX_CHARS, _MCP_SERVICE_DESCRIPTION
+
+    mocks = _patch_billing(monkeypatch, tool_cost=2_000)
+    descriptions = {}
+    for tool_name in ("get_token_price", "get_gas_price"):
+        response = await _post_paid_call({"Accept": "application/json"}, tool_name=tool_name)
+        assert response.status_code == 402
+        descriptions[tool_name] = mocks.body["resource"]["description"]
+
+    for tool_name, description in descriptions.items():
+        assert description.startswith(f"Teardrop {tool_name}: ")
+        assert len(description) <= _BAZAAR_DESCRIPTION_MAX_CHARS
+    assert descriptions["get_token_price"] != descriptions["get_gas_price"]
+
+    await _post_raw(b"{}", {"Content-Type": "application/json"})
+    assert mocks.body["resource"]["description"] == _MCP_SERVICE_DESCRIPTION
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "user_agent", "expected"),
+    [
+        ("/tools/mcp?utm_source=smithery", "node", ["mcp_402_anon_src:smithery"]),
+        ("/tools/mcp?utm_source=Brand-New-Dir", "node", ["mcp_402_anon_src:other"]),
+        ("/tools/mcp?utm_source=smithery", "smithery-probe-bot", []),
+        ("/tools/mcp", "node", []),
+    ],
+)
+async def test_challenge_records_listing_source_for_non_bots(x402_gateway_env, monkeypatch, path, user_agent, expected):
+    _patch_billing(monkeypatch, tool_cost=2_000)
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+
+    response = await _post_paid_call({"Accept": "application/json", "User-Agent": user_agent}, "get_token_price", path)
+
+    assert response.status_code == 402
+    assert "mcp_402_no_payment" in hits
+    assert [hit for hit in hits if "_src:" in hit] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("path", "expected"), [("/tools/mcp?utm_source=glama", ["x402_settled_src:glama"]), ("/tools/mcp", [])])
+async def test_settlement_records_listing_source(x402_gateway_env, monkeypatch, path, expected):
+    mocks = _patch_billing(monkeypatch)
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+
+    response = await _post_paid_call({"Accept": "application/json", "X-PAYMENT": "signed-payment"}, path=path)
+
+    assert response.status_code == 200
+    mocks.settle.assert_awaited_once()
+    assert [hit for hit in hits if hit.startswith("x402_settled_src:")] == expected
 
 
 @pytest.mark.asyncio

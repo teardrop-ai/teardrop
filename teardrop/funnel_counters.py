@@ -51,6 +51,21 @@ SURFACE_MCP_CALL_CLIENT_PREFIX = "mcp_call_client:"
 SURFACE_MCP_REQUEST = "mcp_request"
 # Requests carrying the 2026-07-28 per-request envelope (params._meta protocol version key).
 SURFACE_MCP_MODERN_ENVELOPE = "mcp_modern_envelope"
+# Listing-level attribution: the `utm_source` tag on the MCP URL we submit to each directory. Query
+# strings carry no MCP or payment meaning, so clients send them unchanged. The x402 Bazaar strips the
+# query from resource URLs, so Bazaar traffic is the untagged remainder.
+SOURCE_QUERY_PARAM = "utm_source"
+SOURCE_TAGS: tuple[str, ...] = ("smithery", "glama", "pulsemcp", "mcp-so", "agent-tools", "github", "docs", "other")
+SURFACE_TOOLS_LIST_ANON_SRC_PREFIX = "tools_list_anon_src:"
+SURFACE_MCP_402_ANON_SRC_PREFIX = "mcp_402_anon_src:"
+SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX = "tools_call_free_anon_src:"
+SURFACE_X402_SETTLED_SRC_PREFIX = "x402_settled_src:"
+_SOURCE_PREFIXES = (
+    SURFACE_TOOLS_LIST_ANON_SRC_PREFIX,
+    SURFACE_MCP_402_ANON_SRC_PREFIX,
+    SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX,
+    SURFACE_X402_SETTLED_SRC_PREFIX,
+)
 
 # Reserved `_meta` keys of the 2026-07-28 stateless envelope (spec-reserved prefix).
 MCP_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
@@ -186,6 +201,7 @@ VALID_SURFACES: frozenset[str] = frozenset(
         *(SURFACE_TOOLS_CALL_FREE_ANON_CLIENT_PREFIX + cls for cls in CLIENT_CLASSES),
         *(SURFACE_MCP_INITIALIZE_PREFIX + host for host in MCP_HOSTS),
         *(SURFACE_MCP_CALL_CLIENT_PREFIX + host for host in MCP_HOSTS),
+        *(prefix + tag for prefix in _SOURCE_PREFIXES for tag in SOURCE_TAGS),
     }
 )
 
@@ -259,6 +275,22 @@ def tools_call_free_anon_client_surface(
 
 def _indexer_key(ip: str) -> str:
     return "teardrop:funnelbot:" + hashlib.sha256(ip.encode()).hexdigest()[:32]
+
+
+def listing_source(raw: object) -> str | None:
+    """Bounded listing source for a ``utm_source`` value; unknown tags collapse to ``other``, absent to None."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    tag = raw.strip().lower()
+    return tag if tag in SOURCE_TAGS else "other"
+
+
+def record_source_hit(prefix: str, raw_source: object, client_surface: str | None = None) -> None:
+    """Record a listing-source partition. Skips bot callers, since directories probe the tagged URL they list."""
+    source = listing_source(raw_source)
+    if source is None or (client_surface is not None and client_surface.endswith(":bot")):
+        return
+    record_discovery_hit(prefix + source)
 
 
 async def mark_indexer_ip(ip: str | None) -> None:

@@ -222,7 +222,8 @@ class TestClientClassification:
         assert mcp_initialize_surface(f"prefix{token.upper()}suffix-cline") == f"mcp_initialize:{expected}"
 
     def test_vocabulary_is_bounded(self):
-        assert len(VALID_SURFACES) == 13 + 4 * len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS)
+        source_surfaces = 4 * len(funnel_module.SOURCE_TAGS)
+        assert len(VALID_SURFACES) == 13 + 4 * len(CLIENT_CLASSES) + 2 * len(MCP_HOSTS) + source_surfaces
         assert len(MCP_HOSTS) == 26
         assert len(set(MCP_HOSTS)) == len(MCP_HOSTS)
 
@@ -355,6 +356,48 @@ class TestIndexerClassification:
 
     def test_seed_script_user_agent_is_bot(self):
         assert anon_challenge_client_surface("teardrop-seed-bot/1.0", False) == "mcp_402_anon_client:bot"
+
+
+class TestListingSource:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("smithery", "smithery"),
+            (" Glama ", "glama"),
+            ("mcp-so", "mcp-so"),
+            ("some-new-directory", "other"),
+            ("x" * 500, "other"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+            (["smithery"], None),
+        ],
+    )
+    def test_listing_source_is_bounded(self, raw, expected):
+        assert funnel_module.listing_source(raw) == expected
+
+    def test_every_source_partition_is_valid_and_split_part_safe(self):
+        for prefix in funnel_module._SOURCE_PREFIXES:
+            assert prefix.count(":") == 1 and prefix.endswith(":")
+            assert {prefix + tag for tag in funnel_module.SOURCE_TAGS} <= VALID_SURFACES
+        assert all(":" not in tag for tag in funnel_module.SOURCE_TAGS)
+
+    @pytest.mark.parametrize(
+        ("raw", "client_surface", "expected"),
+        [
+            ("smithery", "mcp_402_anon_client:mcp", ["mcp_402_anon_src:smithery"]),
+            ("smithery", None, ["mcp_402_anon_src:smithery"]),
+            ("weird", "mcp_402_anon_client:script", ["mcp_402_anon_src:other"]),
+            ("smithery", "mcp_402_anon_client:bot", []),
+            (None, "mcp_402_anon_client:mcp", []),
+        ],
+    )
+    def test_record_source_hit_skips_bots_and_untagged(self, raw, client_surface, expected):
+        init_funnel_counters(_pool(), enabled=True)
+
+        funnel_module.record_source_hit(funnel_module.SURFACE_MCP_402_ANON_SRC_PREFIX, raw, client_surface)
+
+        assert [surface for surface, _ in funnel_module._counters] == expected
 
 
 @pytest.mark.anyio

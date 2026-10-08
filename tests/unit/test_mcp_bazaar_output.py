@@ -44,9 +44,27 @@ def test_tool_declaration_is_spec_valid_and_fits_header_budget(tool_name, monkey
     # The spec check also validates the generated example against the declared output schema.
     assert validate_discovery_extension_spec(extension["bazaar"]).valid
     headers = build_402_headers(
-        resource=gateway._mcp_402_resource(SimpleNamespace()), extensions=extension, requirements=[_requirement()]
+        resource=gateway._mcp_402_resource(SimpleNamespace(), tool_name), extensions=extension, requirements=[_requirement()]
     )
     assert sum(len(value) for value in headers.values()) < _HEADER_BUDGET_BYTES
+
+
+@pytest.mark.parametrize("tool_name", _TOOL_NAMES)
+def test_tool_resource_description_is_bounded_printable_ascii(tool_name, monkeypatch):
+    monkeypatch.setattr(gateway, "public_base_url", lambda request, settings: "https://api.teardrop.dev")
+
+    description = gateway._mcp_402_resource(SimpleNamespace(), tool_name)["description"]
+
+    assert description.startswith(f"Teardrop {tool_name}: ")
+    assert len(description) <= gateway._BAZAAR_DESCRIPTION_MAX_CHARS
+    assert all(" " <= ch <= "~" for ch in description)
+
+
+def test_resource_description_folds_dashes_and_truncates_in_ascii():
+    folded = gateway._bazaar_resource_description("a \u2014 b \u2013 c \u2019d\u2019 \u00e9" + "x" * 600)
+
+    assert folded.startswith("a - b - c 'd' ")
+    assert folded.endswith("...") and len(folded) == gateway._BAZAAR_DESCRIPTION_MAX_CHARS
 
 
 @pytest.mark.parametrize("tool_name", _TOOL_NAMES)
