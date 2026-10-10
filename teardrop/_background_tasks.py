@@ -200,6 +200,19 @@ async def _funnel_counter_flush_iter() -> None:
         logger.info("Funnel counters: flushed %d discovery bucket(s)", flushed)
 
 
+async def _model_catalogue_sync_iter() -> None:
+    from teardrop.model_catalogue import sync_model_catalogue_once
+
+    stats = await sync_model_catalogue_once()
+    if stats:
+        logger.info(
+            "Model catalogue sync: upserted=%d alias_changes=%d removed=%d",
+            stats["upserted"],
+            stats["alias_changes"],
+            stats["removed"],
+        )
+
+
 async def _event_dispatch_recovery_iter() -> None:
     recovered = await recover_expired_event_dispatches(
         limit=settings.event_triggers_recovery_batch_size,
@@ -332,6 +345,22 @@ async def _event_dispatch_recovery_loop() -> None:
         _event_dispatch_recovery_iter,
         settings.event_triggers_recovery_interval_seconds,
         monitor_slug="event-dispatch-recovery",
+    )
+
+
+async def _model_catalogue_sync_loop() -> None:
+    """Sync the OpenRouter model catalogue at startup (if stale), then periodically."""
+    try:
+        await _model_catalogue_sync_iter()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Model catalogue sync loop error")
+    await _run_periodic(
+        "Model catalogue sync",
+        _model_catalogue_sync_iter,
+        settings.model_catalogue_sync_interval_seconds,
+        monitor_slug="model-catalogue-sync",
     )
 
 

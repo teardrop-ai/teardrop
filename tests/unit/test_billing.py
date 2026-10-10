@@ -113,12 +113,21 @@ class TestCalculateRunCostUsdc:
             cost = await calculate_run_cost_usdc({"tokens_in": 2_000, "tokens_out": 1_000, "tool_calls": 2})
         assert cost == 500
 
-    async def test_floor_truncation_below_1k_tokens(self):
-        """999 tokens = 0 completed 1k blocks — cost is 0 for that leg."""
+    async def test_sub_1k_tokens_are_billed_pro_rata_rounded_up(self):
+        """999 tokens at 100/1k = 99.9 atomic USDC, rounded up once to 100."""
         rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
             cost = await calculate_run_cost_usdc({"tokens_in": 999, "tokens_out": 0, "tool_calls": 0})
-        assert cost == 0
+        assert cost == 100
+
+    async def test_cache_write_tokens_add_25_percent_input_premium(self):
+        """2000 input tokens incl. 1000 cache writes: 200 + 25% of 100 = 225."""
+        rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100)
+        with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 2000, "tokens_out": 0, "cache_creation_tokens": 1000, "tool_calls": 0}
+            )
+        assert cost == 225
 
     async def test_zero_usage_returns_flat_rate(self):
         rule = _make_rule(run_price_usdc=5_000)

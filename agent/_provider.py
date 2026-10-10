@@ -29,8 +29,6 @@ _RATE_LIMIT_MARKERS = (
 def _provider_api_key(settings, provider: str) -> str:
     """Resolve provider API key from global settings for per-turn overrides."""
     p = provider.lower()
-    if p == "anthropic":
-        return settings.anthropic_api_key or ""
     if p == "openai":
         return settings.openai_api_key or ""
     if p == "google":

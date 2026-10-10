@@ -165,6 +165,19 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 300,
         "knowledge_cutoff": "2026-05",
         "training_cutoff_note": "Training data through May 2026",
+        "deprecated": True,
+    },
+    "google:gemini-3.8-flash": {
+        "provider": "google",
+        "model": "gemini-3.8-flash",
+        "display_name": "Gemini 3.8 Flash",
+        "context_window": 1_048_576,
+        "supports_tools": True,
+        "supports_streaming": True,
+        "quality_tier": 2,
+        "default_latency_ms": 300,
+        "knowledge_cutoff": "Unknown",
+        "training_cutoff_note": "Training cutoff date unknown",
     },
     "anthropic:claude-sonnet-5": {
         "provider": "anthropic",
@@ -177,6 +190,19 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 1500,
         "knowledge_cutoff": "2026-06",
         "training_cutoff_note": "Training data through June 2026",
+        "deprecated": True,
+    },
+    "openrouter:~anthropic/claude-opus-latest": {
+        "provider": "openrouter",
+        "model": "~anthropic/claude-opus-latest",
+        "display_name": "Claude Opus latest (via OpenRouter alias)",
+        "context_window": 1_000_000,
+        "supports_tools": True,
+        "supports_streaming": True,
+        "quality_tier": 1,
+        "default_latency_ms": 1500,
+        "knowledge_cutoff": "Unknown",
+        "training_cutoff_note": "Alias target changes over time; cutoff varies",
     },
     "openrouter:deepseek/deepseek-v4-flash-0731": {
         "provider": "openrouter",
@@ -189,6 +215,18 @@ MODEL_CATALOGUE: dict[str, dict[str, Any]] = {
         "default_latency_ms": 900,
         "knowledge_cutoff": "Unknown",
         "training_cutoff_note": "Training cutoff date unknown; official release July 31, 2026",
+    },
+    "openrouter:~deepseek/deepseek-flash-latest": {
+        "provider": "openrouter",
+        "model": "~deepseek/deepseek-flash-latest",
+        "display_name": "DeepSeek Flash latest (via OpenRouter alias)",
+        "context_window": 1_048_576,
+        "supports_tools": True,
+        "supports_streaming": True,
+        "quality_tier": 2,
+        "default_latency_ms": 900,
+        "knowledge_cutoff": "Unknown",
+        "training_cutoff_note": "Alias target changes over time; cutoff varies",
     },
 }
 
@@ -206,13 +244,22 @@ _DEFAULT_MODEL_SPECS: dict[str, Any] = {
 def get_model_context_specs(provider: str, model: str) -> dict[str, Any]:
     """Return static specs for a provider/model pair from MODEL_CATALOGUE.
 
-    Falls back to ``_DEFAULT_MODEL_SPECS`` if the model is not catalogued.
+    Falls back to the synced OpenRouter catalogue (context window and tool
+    support only), then to ``_DEFAULT_MODEL_SPECS``.
     Used by ``planner_node`` to inject grounding context into the system prompt.
     """
     key = f"{provider}:{model}"
     entry = MODEL_CATALOGUE.get(key)
     if entry is None:
-        return dict(_DEFAULT_MODEL_SPECS)
+        from teardrop.model_catalogue import get_synced_model
+
+        specs = dict(_DEFAULT_MODEL_SPECS)
+        synced = get_synced_model(provider, model)
+        if synced is not None:
+            if synced.get("context_length"):
+                specs["context_window"] = synced["context_length"]
+            specs["supports_tools"] = bool(synced.get("supports_tools"))
+        return specs
     return {
         "context_window": entry.get("context_window", _DEFAULT_MODEL_SPECS["context_window"]),
         "knowledge_cutoff": entry.get("knowledge_cutoff", _DEFAULT_MODEL_SPECS["knowledge_cutoff"]),

@@ -19,6 +19,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from agent.llm import create_llm_from_config, get_llm_for_request
+from agent.node_usage import _accumulate_usage
 from agent.state import A2UIComponent, AgentState, TaskStatus
 from teardrop.config import get_settings
 
@@ -66,6 +67,7 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
             try:
                 llm_config = state.metadata.get("_llm_config")
                 if llm_config:
+                    ui_provider, ui_model = llm_config["provider"], llm_config["model"]
                     ui_llm = get_llm_for_request(llm_config)
                 else:
                     ui_provider = settings.agent_ui_generator_provider
@@ -88,13 +90,18 @@ async def ui_generator_node(state: AgentState) -> dict[str, Any]:
                     ui_llm.ainvoke(prompt),
                     timeout=settings.agent_ui_generator_timeout_seconds,
                 )
+                # Meter the UI turn like planner turns so it is billed and attributed.
+                usage = _accumulate_usage(state, result, provider=ui_provider, model=ui_model)
+                metadata = {**state.metadata, "_usage": usage}
                 raw = result.content if isinstance(result.content, str) else str(result.content)
                 components = _parse_a2ui_json(raw)
                 if components:
                     return {
                         "ui_components": [c.model_dump() for c in components],
                         "task_status": TaskStatus.COMPLETED,
+                        "metadata": metadata,
                     }
+                return {"task_status": TaskStatus.COMPLETED, "metadata": metadata}
             except asyncio.TimeoutError:
                 logger.warning("ui_generator_node: LLM call timed out")
             except Exception as exc:

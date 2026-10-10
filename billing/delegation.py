@@ -139,7 +139,7 @@ class BillingDelegationService:
         if rule is None:
             return floor
 
-        computed = (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
+        computed = -(-(tokens_in * rule.tokens_in_cost_per_1k + tokens_out * rule.tokens_out_cost_per_1k) // 1000)
         return max(computed, floor)
 
     async def fund_delegation(

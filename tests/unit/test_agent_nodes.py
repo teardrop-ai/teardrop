@@ -1970,6 +1970,30 @@ class TestUiGeneratorNode:
         mock_get.assert_called_once()
         mock_create.assert_not_called()
 
+    async def test_ui_llm_turn_is_metered_into_run_usage(self, test_settings):
+        from langchain_core.messages import AIMessage
+
+        last_msg = _make_ai_message(content="APR is 3.14%")
+        state = _make_state(messages=[last_msg], metadata={"_usage": {"tokens_in": 10}, "emit_ui": True})
+        ui_response = AIMessage(
+            content='{"components": []}',
+            usage_metadata={"input_tokens": 300, "output_tokens": 40, "total_tokens": 340},
+        )
+        mock_ui_llm = MagicMock()
+        mock_ui_llm.ainvoke = AsyncMock(return_value=ui_response)
+
+        with (
+            patch("agent.node_ui.create_llm_from_config", return_value=mock_ui_llm),
+            patch("agent.node_ui._contains_structured_data", return_value=True),
+        ):
+            result = await ui_generator_node(state)
+
+        usage = result["metadata"]["_usage"]
+        assert usage["tokens_in"] == 310
+        assert usage["tokens_out"] == 40
+        assert usage["turns"][-1]["provider"] == test_settings.agent_ui_generator_provider
+        assert usage["turns"][-1]["model"] == test_settings.agent_ui_generator_model
+
     async def test_malformed_a2ui_json_returns_no_components(self, test_settings):
         text = "```a2ui\n{bad json}\n```"
         last_msg = _make_ai_message(content=text)

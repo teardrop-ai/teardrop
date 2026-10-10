@@ -231,6 +231,7 @@ async def record_failure_usage_event(
         platform_fee_usdc=0 if platform_fee > 0 else 0,
         provider=llm_config["provider"] if llm_config else runtime_settings.agent_provider,
         model=llm_config["model"] if llm_config else runtime_settings.agent_model,
+        llm_turns=usage_data.get("turns") or [],
         source=source,
     )
     await record_usage_event(usage_event)
@@ -423,6 +424,7 @@ async def run_agent_once(
         platform_fee_usdc=platform_fee,
         provider=ctx.llm_config["provider"] if ctx.llm_config else runtime_settings.agent_provider,
         model=ctx.llm_config["model"] if ctx.llm_config else runtime_settings.agent_model,
+        llm_turns=usage_data.get("turns") or [],
         source=source,
     )
     await record_usage_event(usage_event)

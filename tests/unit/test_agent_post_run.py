@@ -130,6 +130,40 @@ async def test_calculate_run_cost_prices_tools_once_independent_of_turn_models()
     )
 
 
+@pytest.mark.anyio
+async def test_calculate_run_cost_falls_back_to_global_rule_on_error():
+    from teardrop import agent_post_run
+
+    usage = {**_USAGE, "turns": [{"provider": "openrouter", "model": "x", "tokens_in": 1, "tokens_out": 1}]}
+    fallback = AsyncMock(return_value=4_200)
+    with (
+        patch.object(agent_post_run, "calculate_turns_token_cost_usdc", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch.object(agent_post_run, "calculate_run_cost_usdc", fallback),
+    ):
+        cost = await agent_post_run.calculate_run_cost(
+            usage_data=usage, llm_config=None, settings=SimpleNamespace(agent_provider="anthropic", agent_model="claude-x")
+        )
+
+    assert cost == 4_200
+    fallback.assert_awaited_once_with(usage)
+
+
+@pytest.mark.anyio
+async def test_calculate_run_cost_byok_error_charges_floor():
+    from teardrop import agent_post_run
+
+    with patch.object(agent_post_run, "calculate_tool_cost_usdc", AsyncMock(side_effect=RuntimeError("db down"))):
+        cost = await agent_post_run.calculate_run_cost(
+            usage_data=_USAGE,
+            llm_config=None,
+            settings=SimpleNamespace(byok_tier_pricing_enabled=False),
+            is_byok=True,
+            platform_fee=1_000,
+        )
+
+    assert cost == 1_000
+
+
 async def _drain(gen) -> None:
     async for _ in gen:
         pass

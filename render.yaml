@@ -47,8 +47,8 @@ services:
       - key: JWT_CLIENT_SECRET
         generateValue: true
 
-      # Prompt operator to paste in their Anthropic API key after first deploy.
-      - key: ANTHROPIC_API_KEY
+      # Prompt operator to paste in their OpenRouter API key after first deploy.
+      - key: OPENROUTER_API_KEY
         sync: false
 
       # ── Recommended ───────────────────────────────────────────────────────

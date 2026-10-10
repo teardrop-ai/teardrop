@@ -155,7 +155,6 @@ def _validate_production_config(s: "Settings") -> None:
     # with zero configured providers.
     _provider_key_map = {
         "openrouter": s.openrouter_api_key,
-        "anthropic": s.anthropic_api_key,
         "google": s.google_api_key,
         "openai": s.openai_api_key,
     }
@@ -173,7 +172,7 @@ def _validate_production_config(s: "Settings") -> None:
         raise RuntimeError(
             "All LLM providers in default_model_pool are missing API keys in production. "
             f"Missing: {', '.join(sorted(missing_providers))}. "
-            "Set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, "
+            "Set at least one of OPENAI_API_KEY, GOOGLE_API_KEY, "
             "or OPENROUTER_API_KEY."
         )
     logger.info(

@@ -131,11 +131,11 @@ class TestCalculateByokOrchestrationCost:
         get_byok_platform_fee still returns 0 for non-BYOK orgs."""
         assert get_byok_platform_fee(is_byok=False) == 0
 
-    async def test_zero_floor_returns_zero_for_tiny_runs(self):
-        """With floor=0 and < 1k tokens, result should be exactly 0."""
+    async def test_zero_floor_bills_tiny_runs_pro_rata(self):
+        """With floor=0, 100 in + 100 out at 50/1k each = 10 atomic USDC (no free remainder)."""
         settings = self._make_settings(floor=0)
         rule = self._make_rule(tokens_in_cost=50, tokens_out_cost=50)
         with patch("billing.get_settings", return_value=settings):
             with patch("billing.get_live_pricing_for_model", new=AsyncMock(return_value=rule)):
                 result = await calculate_byok_orchestration_cost(100, 100, "google", "")
-        assert result == 0
+        assert result == 10

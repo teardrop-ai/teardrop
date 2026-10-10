@@ -88,9 +88,33 @@ class OrgLlmConfig(BaseModel):
     temperature: float = 0.0
     timeout_seconds: int = 120
     routing_preference: str = "default"
+    reasoning_effort: str | None = None
+    model_reasoning_effort: dict[str, str] = Field(default_factory=dict)
     is_byok: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+def _json_map(value: Any) -> dict[str, str]:
+    """Decode a JSONB column that may arrive as a dict or a JSON string."""
+    if isinstance(value, str):
+        value = json.loads(value or "{}")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def org_reasoning_effort(
+    provider: str,
+    model: str,
+    *,
+    reasoning_effort: str | None,
+    model_reasoning_effort: dict[str, str] | None,
+) -> str | None:
+    """Org effort for a model: per-model override, then the org-wide level.
+
+    ``None`` lets the LLM factory fall back to the operator's per-model default.
+    """
+    per_model = (model_reasoning_effort or {}).get(f"{provider.lower()}:{model}")
+    return per_model or reasoning_effort or None
 
 
 # ─── Database pool ────────────────────────────────────────────────────────────
@@ -155,6 +179,8 @@ def _row_to_config(row: Row) -> OrgLlmConfig:
         temperature=row["temperature"],
         timeout_seconds=row["timeout_seconds"],
         routing_preference=row["routing_preference"],
+        reasoning_effort=row["reasoning_effort"],
+        model_reasoning_effort=_json_map(row["model_reasoning_effort"]),
         is_byok=row["is_byok"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -239,6 +265,8 @@ async def upsert_org_llm_config(
     temperature: float = 0.0,
     timeout_seconds: int = 120,
     routing_preference: str = "default",
+    reasoning_effort: str | None = None,
+    model_reasoning_effort: dict[str, str] | None = None,
 ) -> OrgLlmConfig:
     """Insert or update an org's LLM configuration.
 
@@ -256,6 +284,8 @@ async def upsert_org_llm_config(
         api_key_enc = _encrypt_llm_key(api_key)
 
     now = datetime.now(timezone.utc)
+    model_efforts = dict(model_reasoning_effort or {})
+    model_efforts_json = json.dumps(model_efforts)
 
     if api_key_enc is not None:
         # Full upsert including API key
@@ -264,8 +294,9 @@ async def upsert_org_llm_config(
             INSERT INTO org_llm_config
                 (org_id, provider, model, api_key_enc, api_base,
                  max_tokens, temperature, timeout_seconds,
-                 routing_preference, is_byok, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+                 routing_preference, is_byok, created_at, updated_at,
+                 reasoning_effort, model_reasoning_effort)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13::jsonb)
             ON CONFLICT (org_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 model = EXCLUDED.model,
@@ -276,6 +307,8 @@ async def upsert_org_llm_config(
                 timeout_seconds = EXCLUDED.timeout_seconds,
                 routing_preference = EXCLUDED.routing_preference,
                 is_byok = EXCLUDED.is_byok,
+                reasoning_effort = EXCLUDED.reasoning_effort,
+                model_reasoning_effort = EXCLUDED.model_reasoning_effort,
                 updated_at = EXCLUDED.updated_at
             """,
             org_id,
@@ -289,6 +322,8 @@ async def upsert_org_llm_config(
             routing_preference,
             is_byok,
             now,
+            reasoning_effort,
+            model_efforts_json,
         )
     elif clear_api_key:
         # Explicitly clear BYOK key while preserving other config
@@ -297,8 +332,9 @@ async def upsert_org_llm_config(
             INSERT INTO org_llm_config
                 (org_id, provider, model, api_key_enc, api_base,
                  max_tokens, temperature, timeout_seconds,
-                 routing_preference, is_byok, created_at, updated_at)
-            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, FALSE, $9, $9)
+                 routing_preference, is_byok, created_at, updated_at,
+                 reasoning_effort, model_reasoning_effort)
+            VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, $8, FALSE, $9, $9, $10, $11::jsonb)
             ON CONFLICT (org_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 model = EXCLUDED.model,
@@ -309,6 +345,8 @@ async def upsert_org_llm_config(
                 timeout_seconds = EXCLUDED.timeout_seconds,
                 routing_preference = EXCLUDED.routing_preference,
                 is_byok = FALSE,
+                reasoning_effort = EXCLUDED.reasoning_effort,
+                model_reasoning_effort = EXCLUDED.model_reasoning_effort,
                 updated_at = EXCLUDED.updated_at
             """,
             org_id,
@@ -320,6 +358,8 @@ async def upsert_org_llm_config(
             timeout_seconds,
             routing_preference,
             now,
+            reasoning_effort,
+            model_efforts_json,
         )
         is_byok = False
         has_key = False
@@ -331,8 +371,9 @@ async def upsert_org_llm_config(
             INSERT INTO org_llm_config
                 (org_id, provider, model, api_base,
                  max_tokens, temperature, timeout_seconds,
-                 routing_preference, is_byok, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $9)
+                 routing_preference, is_byok, created_at, updated_at,
+                 reasoning_effort, model_reasoning_effort)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $9, $10, $11::jsonb)
             ON CONFLICT (org_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 model = EXCLUDED.model,
@@ -341,6 +382,8 @@ async def upsert_org_llm_config(
                 temperature = EXCLUDED.temperature,
                 timeout_seconds = EXCLUDED.timeout_seconds,
                 routing_preference = EXCLUDED.routing_preference,
+                reasoning_effort = EXCLUDED.reasoning_effort,
+                model_reasoning_effort = EXCLUDED.model_reasoning_effort,
                 updated_at = EXCLUDED.updated_at
             RETURNING is_byok, (api_key_enc IS NOT NULL) AS has_api_key
             """,
@@ -353,6 +396,8 @@ async def upsert_org_llm_config(
             timeout_seconds,
             routing_preference,
             now,
+            reasoning_effort,
+            model_efforts_json,
         )
         is_byok = row["is_byok"] if row else False
         has_key = row["has_api_key"] if row else False
@@ -373,6 +418,8 @@ async def upsert_org_llm_config(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         routing_preference=routing_preference,
+        reasoning_effort=reasoning_effort,
+        model_reasoning_effort=model_efforts,
         is_byok=is_byok,
         created_at=now,
         updated_at=now,
@@ -435,13 +482,18 @@ async def build_llm_config_dict(org_id: str) -> dict[str, Any] | None:
         "max_tokens": row["max_tokens"],
         "temperature": float(row["temperature"]),
         "timeout_seconds": row["timeout_seconds"],
+        "reasoning_effort": org_reasoning_effort(
+            row["provider"],
+            row["model"],
+            reasoning_effort=row["reasoning_effort"],
+            model_reasoning_effort=_json_map(row["model_reasoning_effort"]),
+        ),
     }
 
 
 def _resolve_shared_key(provider: str, settings: Any) -> str:
     """Return the platform's shared API key for a provider."""
     mapping = {
-        "anthropic": settings.anthropic_api_key,
         "openai": settings.openai_api_key,
         "google": settings.google_api_key,
         "openrouter": settings.openrouter_api_key,

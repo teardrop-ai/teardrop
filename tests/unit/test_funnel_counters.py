@@ -305,6 +305,42 @@ class TestUnclassifiedClientLogging:
         assert self._lines(caplog) == []
 
 
+class TestIndexerProbeLogging:
+    _MSG = "mcp indexer probe"
+
+    def _lines(self, caplog):
+        return [r.getMessage() for r in caplog.records if r.getMessage().startswith(self._MSG)]
+
+    def test_logs_hops_and_origin_without_ips(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            funnel_module.log_indexer_probe("call", "Node\n/22", "203.0.113.7, 198.51.100.2", "198.51.100.2", False)
+            funnel_module.log_indexer_probe("init", "node/22", "203.0.113.7", "203.0.113.7", False)
+
+        assert self._lines(caplog) == [
+            "mcp indexer probe stage=call ua='node?/22' xff_hops=2 origin=False flagged=False",
+            "mcp indexer probe stage=init ua='node/22' xff_hops=1 origin=True flagged=False",
+        ]
+        assert not any("203.0.113.7" in line or "198.51.100.2" in line for line in self._lines(caplog))
+
+    def test_dedupes_and_caps_per_hour(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        cap = funnel_module._PROBE_LOG_MAX_PER_HOUR
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            for _ in range(3):
+                funnel_module.log_indexer_probe("call", "node", None, None, True)
+            for i in range(cap + 5):
+                funnel_module.log_indexer_probe("call", f"agent-{i}", None, None, False)
+
+        assert len(self._lines(caplog)) == cap
+
+    def test_disabled_counters_do_not_log(self, caplog):
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            funnel_module.log_indexer_probe("call", "node", None, None, False)
+
+        assert self._lines(caplog) == []
+
+
 class TestIndexerClassification:
     @pytest.mark.parametrize(
         "client_name",

@@ -21,14 +21,12 @@ from teardrop.config import get_settings
 
 # ── Optional provider imports — None when package not installed ───────────────
 try:
-    from langchain_anthropic import ChatAnthropic
-except ImportError:
-    ChatAnthropic = None  # type: ignore[assignment,misc]
-
-try:
     from langchain_openai import ChatOpenAI
+
+    from agent._openrouter import ChatOpenRouter
 except ImportError:
     ChatOpenAI = None  # type: ignore[assignment,misc]
+    ChatOpenRouter = None  # type: ignore[assignment,misc]
 
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -39,7 +37,56 @@ logger = logging.getLogger(__name__)
 
 # ── Allowed providers (validated at config and request boundaries) ────────────
 
-ALLOWED_PROVIDERS = frozenset({"anthropic", "openai", "google", "openrouter"})
+# Anthropic was retired as a direct provider; Claude models route via OpenRouter.
+ALLOWED_PROVIDERS = frozenset({"openai", "google", "openrouter"})
+
+# Reasoning effort levels accepted from operators and orgs. Applied as
+# ``reasoning.effort`` (openrouter) or ``thinking_level`` (google; "none" maps
+# to "minimal"); ignored for openai.
+ALLOWED_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high"})
+
+
+MAX_MODEL_REASONING_EFFORTS = 50
+
+
+def validate_reasoning_effort(effort: str | None) -> str | None:
+    """Normalise an effort level (blank means unset); raise ``ValueError`` when it is not allowed."""
+    value = (effort or "").strip().lower()
+    if not value:
+        return None
+    if value not in ALLOWED_REASONING_EFFORTS:
+        raise ValueError(f"Invalid reasoning effort '{effort}'. Allowed: {', '.join(sorted(ALLOWED_REASONING_EFFORTS))}")
+    return value
+
+
+def validate_model_reasoning_effort(efforts: dict[str, str]) -> dict[str, str]:
+    """Validate a ``{"provider:model": effort}`` map; return it normalised."""
+    if len(efforts) > MAX_MODEL_REASONING_EFFORTS:
+        raise ValueError(f"At most {MAX_MODEL_REASONING_EFFORTS} per-model reasoning efforts are allowed")
+    normalised: dict[str, str] = {}
+    for key, effort in efforts.items():
+        provider, sep, model = key.partition(":")
+        if not sep or not model or provider.lower() not in ALLOWED_PROVIDERS:
+            raise ValueError(
+                f"Invalid reasoning effort key '{key}'. Use 'provider:model' with provider in "
+                f"{', '.join(sorted(ALLOWED_PROVIDERS))}"
+            )
+        value = validate_reasoning_effort(effort)
+        if value is None:
+            raise ValueError(f"Reasoning effort for '{key}' must not be blank; omit the key instead")
+        normalised[f"{provider.lower()}:{model}"] = value
+    return normalised
+
+
+def platform_reasoning_effort(provider: str, model: str, settings: Any | None = None) -> str | None:
+    """Return the operator's per-model default effort (``model_reasoning_effort``), if any."""
+    if settings is None:
+        settings = get_settings()
+    efforts = getattr(settings, "model_reasoning_effort", None)
+    if not isinstance(efforts, dict):
+        return None
+    return efforts.get(f"{provider.lower()}:{model}") or None
+
 
 # ─── Global singleton (backward compat) ──────────────────────────────────────
 
@@ -50,7 +97,6 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
     """Construct a ``BaseChatModel`` based on the configured provider.
 
     Supported providers:
-    - ``anthropic``   — ``langchain-anthropic`` (``ChatAnthropic``)
     - ``openai``      — ``langchain-openai`` (``ChatOpenAI``)
     - ``google``      — ``langchain-google-genai`` (``ChatGoogleGenerativeAI``)
     - ``openrouter``  — ``langchain-openai`` via OpenRouter proxy (``ChatOpenAI``)
@@ -64,14 +110,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
         "max_tokens": settings.agent_max_tokens,
         "temperature": settings.agent_temperature,
     }
-
-    if provider == "anthropic":
-        if ChatAnthropic is None:
-            raise RuntimeError("langchain-anthropic is not installed. Run: pip install langchain-anthropic")
-        return ChatAnthropic(
-            **common,
-            api_key=settings.anthropic_api_key or None,  # type: ignore[arg-type]
-        )
+    reasoning_effort = platform_reasoning_effort(provider, settings.agent_model, settings)
 
     if provider == "openai":
         if ChatOpenAI is None:
@@ -84,10 +123,10 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
     if provider == "google":
         if ChatGoogleGenerativeAI is None:
             raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
-        return ChatGoogleGenerativeAI(
-            **common,
-            google_api_key=settings.google_api_key or None,  # type: ignore[arg-type]
-        )
+        google_kwargs: dict[str, Any] = {**common, "google_api_key": settings.google_api_key or None}
+        if reasoning_effort:
+            google_kwargs["thinking_level"] = "minimal" if reasoning_effort == "none" else reasoning_effort
+        return ChatGoogleGenerativeAI(**google_kwargs)  # type: ignore[arg-type]
 
     if provider == "openrouter":
         if ChatOpenAI is None:
@@ -97,9 +136,11 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
             "api_key": settings.openrouter_api_key or None,
             "base_url": "https://openrouter.ai/api/v1",
         }
-        return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
+        if reasoning_effort:
+            kwargs["extra_body"] = {"reasoning": {"effort": reasoning_effort}}
+        return ChatOpenRouter(**kwargs)  # type: ignore[arg-type]
 
-    raise ValueError(f"Unknown agent_provider '{provider}'. Supported: anthropic, openai, google, openrouter.")
+    raise ValueError(f"Unknown agent_provider '{provider}'. Supported: openai, google, openrouter.")
 
 
 def get_llm() -> BaseChatModel:
@@ -122,7 +163,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     """Construct a ``BaseChatModel`` from an explicit config dict.
 
     Expected keys:
-        provider        — "anthropic" | "openai" | "google" | "openrouter"
+        provider        — "openai" | "google" | "openrouter"
         model           — model identifier string
         api_key         — provider API key (required)
         api_base         — optional custom base URL (OpenAI-compatible endpoints)
@@ -134,7 +175,8 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             reasoning tokens and visible output, so an unbounded reasoning effort can
             starve or truncate the visible response. Applied as ``thinking_level``
             (google) or ``reasoning.effort`` (openrouter). Ignored for
-            anthropic/openai, where reasoning is opt-in.
+            openai, where reasoning is opt-in. When unset, the operator's
+            per-model default (``model_reasoning_effort``) applies.
     """
     provider = config["provider"].lower()
     if provider not in ALLOWED_PROVIDERS:
@@ -143,7 +185,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     api_key = config.get("api_key") or ""
     model = config["model"]
     api_base = config.get("api_base")
-    reasoning_effort = str(config.get("reasoning_effort") or "").strip().lower()
+    reasoning_effort = str(config.get("reasoning_effort") or platform_reasoning_effort(provider, model) or "").strip().lower()
 
     common: dict[str, Any] = {
         "model": model,
@@ -151,18 +193,10 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         "temperature": config.get("temperature", 0.0),
     }
 
-    if provider == "anthropic":
-        if ChatAnthropic is None:
-            raise RuntimeError("langchain-anthropic is not installed. Run: pip install langchain-anthropic")
-        kwargs: dict[str, Any] = {**common, "api_key": api_key or None}
-        if api_base:
-            kwargs["base_url"] = api_base
-        return ChatAnthropic(**kwargs)  # type: ignore[arg-type]
-
     if provider == "openai":
         if ChatOpenAI is None:
             raise RuntimeError("langchain-openai is not installed. Run: pip install langchain-openai")
-        kwargs = {**common, "api_key": api_key or None}
+        kwargs: dict[str, Any] = {**common, "api_key": api_key or None}
         if api_base:
             kwargs["base_url"] = api_base
         return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
@@ -191,7 +225,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             extra_body["reasoning"] = {"effort": reasoning_effort}
         if extra_body:
             kwargs["extra_body"] = extra_body
-        return ChatOpenAI(**kwargs)  # type: ignore[arg-type]
+        return ChatOpenRouter(**kwargs)  # type: ignore[arg-type]
 
     # Should be unreachable due to ALLOWED_PROVIDERS check above.
     raise ValueError(f"Unknown provider '{provider}'.")

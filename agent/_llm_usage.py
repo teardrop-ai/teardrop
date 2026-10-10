@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from langchain_core.messages import AIMessage
 
 
-def extract_usage(response: AIMessage) -> dict[str, int | str]:
+def extract_usage(response: AIMessage) -> dict[str, Any]:
     """Extract ``tokens_in`` / ``tokens_out`` from an LLM response.
 
     Different providers use different key names in ``usage_metadata``:
@@ -19,6 +21,10 @@ def extract_usage(response: AIMessage) -> dict[str, int | str]:
     ``output_tokens``, so this helper is forward-compatible. It also handles
     the legacy OpenAI ``prompt_tokens`` / ``completion_tokens`` keys as a
     fallback.
+
+    OpenRouter responses (see ``agent._openrouter``) also carry
+    ``upstream_model``, ``upstream_provider`` and ``upstream_cost_usd``; these
+    are passed through when present.
     """
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
         finish_reason = "stop"
@@ -31,18 +37,25 @@ def extract_usage(response: AIMessage) -> dict[str, int | str]:
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
             "finish_reason": finish_reason,
+            **_upstream_fields(response_meta),
         }
 
     meta = response.usage_metadata
 
     tokens_in = meta.get("input_tokens") or meta.get("prompt_tokens") or 0
     tokens_out = meta.get("output_tokens") or meta.get("completion_tokens") or 0
-    cache_read = 0
-    cache_creation = 0
-
-    # Anthropic usage metadata keys.
+    # Legacy raw Anthropic usage keys.
     cache_read = int(meta.get("cache_read_input_tokens") or 0)
     cache_creation = int(meta.get("cache_creation_input_tokens") or 0)
+
+    # LangChain-normalised details (all providers). ``input_tokens`` already
+    # includes these, so they are a breakdown of tokens_in, not extra tokens.
+    details = meta.get("input_token_details") or {}
+    if isinstance(details, dict):
+        cache_read = max(cache_read, int(details.get("cache_read") or 0))
+        creation = int(details.get("cache_creation") or 0) + int(details.get("ephemeral_5m_input_tokens") or 0)
+        creation += int(details.get("ephemeral_1h_input_tokens") or 0)
+        cache_creation = max(cache_creation, creation)
 
     # OpenAI prompt cache metadata (LangChain/OpenAI normalisation).
     prompt_details = meta.get("prompt_tokens_details") or {}
@@ -60,4 +73,11 @@ def extract_usage(response: AIMessage) -> dict[str, int | str]:
         "cache_read_input_tokens": int(cache_read),
         "cache_creation_input_tokens": int(cache_creation),
         "finish_reason": finish_reason,
+        **_upstream_fields(response_meta),
     }
+
+
+def _upstream_fields(response_meta: Any) -> dict[str, Any]:
+    if not isinstance(response_meta, dict):
+        return {}
+    return {k: response_meta[k] for k in ("upstream_model", "upstream_provider", "upstream_cost_usd") if k in response_meta}

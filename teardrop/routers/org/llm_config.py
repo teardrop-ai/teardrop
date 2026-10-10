@@ -32,7 +32,7 @@ router = APIRouter()
 
 
 class UpsertLlmConfigRequest(BaseModel):
-    provider: str = Field(..., description="LLM provider: anthropic, openai, or google")
+    provider: str = Field(..., description="LLM provider: openai, google, or openrouter")
     model: str = Field(..., min_length=1, max_length=200, description="Model identifier")
     api_key: str | None = Field(
         default=None,
@@ -46,6 +46,20 @@ class UpsertLlmConfigRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     timeout_seconds: int = Field(default=120, ge=10, le=600)
     routing_preference: str = Field(default="default", description="default, cost, speed, or quality")
+    reasoning_effort: str | None = Field(
+        default=None,
+        description=(
+            "Org-wide reasoning effort: none, minimal, low, medium, or high. Omit to use the platform default for each model."
+        ),
+    )
+    model_reasoning_effort: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Per-model reasoning effort overrides keyed 'provider:model' "
+            '(e.g. {"openrouter:~anthropic/claude-opus-latest": "high"}). '
+            "Takes precedence over reasoning_effort, including for smart-routed models."
+        ),
+    )
 
 
 def _llm_config_to_response(cfg: OrgLlmConfig) -> dict:
@@ -59,6 +73,8 @@ def _llm_config_to_response(cfg: OrgLlmConfig) -> dict:
         "temperature": cfg.temperature,
         "timeout_seconds": cfg.timeout_seconds,
         "routing_preference": cfg.routing_preference,
+        "reasoning_effort": cfg.reasoning_effort,
+        "model_reasoning_effort": cfg.model_reasoning_effort,
         "is_byok": cfg.is_byok,
         "created_at": cfg.created_at.isoformat(),
         "updated_at": cfg.updated_at.isoformat(),
@@ -76,6 +92,8 @@ class LlmConfigResponse(BaseModel):
     temperature: float | None = Field(default=None, description="Present when configured=true.")
     timeout_seconds: int | None = Field(default=None, description="Present when configured=true.")
     routing_preference: str | None = Field(default=None, description="Present when configured=true.")
+    reasoning_effort: str | None = None
+    model_reasoning_effort: dict[str, str] | None = Field(default=None, description="Present when configured=true.")
     is_byok: bool | None = Field(default=None, description="Present when configured=true.")
     created_at: str | None = Field(default=None, description="ISO 8601 timestamp; present when configured=true.")
     updated_at: str | None = Field(default=None, description="ISO 8601 timestamp; present when configured=true.")
@@ -105,7 +123,7 @@ async def upsert_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Create or update the authenticated org's LLM configuration."""
-    from agent.llm import ALLOWED_PROVIDERS
+    from agent.llm import ALLOWED_PROVIDERS, validate_model_reasoning_effort, validate_reasoning_effort
     from tools.definitions.http_fetch import validate_url
 
     org_id = _require_org_id(payload)
@@ -122,8 +140,14 @@ async def upsert_llm_config_endpoint(
             detail=f"Invalid routing_preference. Allowed: {', '.join(sorted(ALLOWED_ROUTING_PREFERENCES))}",
         )
 
+    try:
+        reasoning_effort = validate_reasoning_effort(body.reasoning_effort)
+        model_reasoning_effort = validate_model_reasoning_effort(body.model_reasoning_effort)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     # Provider-specific temperature limits
-    _provider_temp_limits: dict[str, float] = {"anthropic": 1.0, "openai": 2.0, "google": 2.0, "openrouter": 2.0}
+    _provider_temp_limits: dict[str, float] = {"openai": 2.0, "google": 2.0, "openrouter": 2.0}
     temp_limit = _provider_temp_limits.get(body.provider.lower(), 2.0)
     if body.temperature > temp_limit:
         raise HTTPException(
@@ -194,6 +218,8 @@ async def upsert_llm_config_endpoint(
         temperature=body.temperature,
         timeout_seconds=body.timeout_seconds,
         routing_preference=body.routing_preference,
+        reasoning_effort=reasoning_effort,
+        model_reasoning_effort=model_reasoning_effort,
     )
     return JSONResponse(
         status_code=status.HTTP_200_OK,

@@ -193,15 +193,15 @@ def test_agent_synthesis_max_tokens_default():
 def test_agent_planner_overrides_default_empty():
     s = Settings()
     assert s.agent_planner_provider == "google"
-    assert s.agent_planner_model == "gemini-3.6-flash"
+    assert s.agent_planner_model == "gemini-3.8-flash"
 
 
 def test_agent_planner_overrides_env(monkeypatch):
     monkeypatch.setenv("AGENT_PLANNER_PROVIDER", "google")
-    monkeypatch.setenv("AGENT_PLANNER_MODEL", "gemini-3.6-flash")
+    monkeypatch.setenv("AGENT_PLANNER_MODEL", "gemini-3.8-flash")
     s = Settings()
     assert s.agent_planner_provider == "google"
-    assert s.agent_planner_model == "gemini-3.6-flash"
+    assert s.agent_planner_model == "gemini-3.8-flash"
 
 
 def test_agent_llm_timeout_default():

@@ -15,9 +15,11 @@ from typing import Any
 
 from teardrop.config import get_settings
 from teardrop.llm_config.base import (
+    OrgLlmConfig,
     _resolve_shared_key,
     build_llm_config_dict,
     get_org_llm_config_cached,
+    org_reasoning_effort,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,9 +35,9 @@ _COOLDOWN_SECONDS = 60.0
 # Tier 1 = premium/quality, Tier 2 = standard/cost.  Models absent here fall
 # back to tier 99 (lowest priority) in _select_highest_quality().
 _QUALITY_TIERS: dict[str, int] = {
-    "deepseek/deepseek-v4-flash-0731": 2,
-    "gemini-3.6-flash": 2,
-    "claude-sonnet-5": 1,
+    "~deepseek/deepseek-flash-latest": 2,
+    "gemini-3.8-flash": 2,
+    "~anthropic/claude-opus-latest": 1,
 }
 
 
@@ -77,10 +79,10 @@ async def resolve_llm_config(
     if cfg.is_byok or effective_routing == "default":
         return await build_llm_config_dict(org_id)
 
-    return await _route_from_pool(effective_routing)
+    return await _route_from_pool(effective_routing, cfg)
 
 
-async def _route_from_pool(routing_preference: str) -> dict[str, Any] | None:
+async def _route_from_pool(routing_preference: str, org_cfg: OrgLlmConfig | None = None) -> dict[str, Any] | None:
     """Select a model from Teardrop's default pool based on routing strategy."""
     settings = get_settings()
     pool_models = settings.default_model_pool
@@ -112,6 +114,16 @@ async def _route_from_pool(routing_preference: str) -> dict[str, Any] | None:
         "max_tokens": settings.agent_max_tokens,
         "temperature": settings.agent_temperature,
         "timeout_seconds": settings.agent_llm_timeout_seconds,
+        "reasoning_effort": (
+            org_reasoning_effort(
+                selected["provider"],
+                selected["model"],
+                reasoning_effort=org_cfg.reasoning_effort,
+                model_reasoning_effort=org_cfg.model_reasoning_effort,
+            )
+            if org_cfg is not None
+            else None
+        ),
     }
 
 

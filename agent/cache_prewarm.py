@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 def _provider_api_key(provider: str) -> str:
     s = get_settings()
-    if provider == "anthropic":
-        return s.anthropic_api_key or ""
     if provider == "openai":
         return s.openai_api_key or ""
     if provider == "google":
@@ -62,8 +60,6 @@ async def prewarm_org_prefix(
     llm = create_llm_from_config(cfg)
 
     system = SystemMessage(content=prefix)
-    if provider == "anthropic":
-        system = SystemMessage(content=prefix, additional_kwargs={"cache_control": {"type": "ephemeral"}})
 
     try:
         response = await llm.ainvoke([system, HumanMessage(content="cache warmup probe")])

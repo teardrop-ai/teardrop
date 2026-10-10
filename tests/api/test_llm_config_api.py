@@ -29,6 +29,8 @@ def _fake_cfg(**overrides):
     cfg.temperature = 0.0
     cfg.timeout_seconds = 120
     cfg.routing_preference = "default"
+    cfg.reasoning_effort = overrides.get("reasoning_effort")
+    cfg.model_reasoning_effort = overrides.get("model_reasoning_effort", {})
     cfg.is_byok = overrides.get("is_byok", True)
     cfg.created_at = now
     cfg.updated_at = now
@@ -138,3 +140,47 @@ async def test_no_api_base_without_api_key_accepted(api_client, monkeypatch):
         },
     )
     assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_reasoning_effort_round_trips(api_client, monkeypatch):
+    """Org-wide and per-model reasoning effort are normalised and persisted."""
+    efforts = {"openrouter:~anthropic/claude-opus-latest": "high"}
+    upsert = AsyncMock(return_value=_fake_cfg(reasoning_effort="low", model_reasoning_effort=efforts, api_base=None))
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+
+    resp = await api_client.put(
+        "/llm-config",
+        json={
+            "provider": "openai",
+            "model": "gpt-4o",
+            "reasoning_effort": " LOW ",
+            "model_reasoning_effort": {"OpenRouter:~anthropic/claude-opus-latest": "High"},
+        },
+    )
+    assert resp.status_code == 200
+    kwargs = upsert.call_args.kwargs
+    assert kwargs["reasoning_effort"] == "low"
+    assert kwargs["model_reasoning_effort"] == efforts
+    body = resp.json()
+    assert body["reasoning_effort"] == "low"
+    assert body["model_reasoning_effort"] == efforts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"reasoning_effort": "extreme"},
+        {"model_reasoning_effort": {"openrouter:a/b": "max"}},
+        {"model_reasoning_effort": {"no-provider-prefix": "low"}},
+        {"model_reasoning_effort": {"anthropic:claude": "low"}},
+    ],
+)
+async def test_invalid_reasoning_effort_returns_422(api_client, monkeypatch, payload):
+    upsert = AsyncMock(return_value=_fake_cfg())
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+
+    resp = await api_client.put("/llm-config", json={"provider": "openai", "model": "gpt-4o", **payload})
+    assert resp.status_code == 422
+    upsert.assert_not_called()

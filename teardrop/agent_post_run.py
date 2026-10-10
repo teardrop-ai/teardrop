@@ -183,6 +183,7 @@ async def calculate_run_cost(
                     "model": str(turn.get("model") or _run_model),
                     "tokens_in": int(turn.get("tokens_in", 0)),
                     "tokens_out": int(turn.get("tokens_out", 0)),
+                    **{k: turn[k] for k in ("cache_creation_tokens", "upstream_cost_usd") if turn.get(k)},
                 }
                 for turn in turns
                 if isinstance(turn, dict)
@@ -192,7 +193,16 @@ async def calculate_run_cost(
         else:
             cost_usdc = await calculate_run_cost_usdc(usage_data, _run_provider, _run_model)
     except Exception:
-        logger.debug("Could not calculate run cost", exc_info=True)
+        # Never silently give a run away: fall back to the BYOK floor, or to the
+        # global rule over run totals (plus tools) for platform-key runs.
+        logger.exception("Run cost calculation failed; using fallback pricing")
+        if is_byok:
+            return platform_fee
+        try:
+            cost_usdc = await calculate_run_cost_usdc(usage_data if isinstance(usage_data, dict) else {})
+        except Exception:
+            logger.exception("Fallback run cost calculation failed; run billed 0")
+            cost_usdc = 0
     return cost_usdc
 
 

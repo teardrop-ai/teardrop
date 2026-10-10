@@ -52,17 +52,29 @@ class Settings(BaseSettings):
             return ["*"]
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-    # ── LLM / Anthropic ────────────────────────────────────────────────────────
-    anthropic_api_key: str = Field(default="", description="Anthropic API key")
+    # ── LLM providers ──────────────────────────────────────────────────────────
     openai_api_key: str = Field(default="", description="OpenAI API key")
     google_api_key: str = Field(default="", description="Google AI API key")
     openrouter_api_key: str = Field(default="", description="OpenRouter API key")
+    model_catalogue_sync_enabled: bool = Field(
+        default=True,
+        description="Periodically sync model metadata (prices, context, aliases) from OpenRouter /models.",
+    )
+    model_catalogue_sync_interval_seconds: int = Field(
+        default=21600,
+        ge=600,
+        description="Interval in seconds between OpenRouter model catalogue syncs.",
+    )
+    model_catalogue_url: str = Field(
+        default="https://openrouter.ai/api/v1/models",
+        description="Public OpenRouter models endpoint used by the catalogue sync.",
+    )
 
     agent_provider: str = Field(
         default="openrouter",
-        description="LLM provider: anthropic, openai, google, or openrouter",
+        description="LLM provider: openai, google, or openrouter",
     )
-    agent_model: str = "deepseek/deepseek-v4-flash-0731"
+    agent_model: str = "~deepseek/deepseek-flash-latest"
     agent_max_tokens: int = 4096
     agent_temperature: float = 0.0
     agent_llm_timeout_seconds: int = Field(default=180, description="Timeout in seconds for the planner LLM call")
@@ -100,7 +112,7 @@ class Settings(BaseSettings):
         ),
     )
     agent_planner_model: str = Field(
-        default="gemini-3.6-flash",
+        default="gemini-3.8-flash",
         description=(
             "Optional override model for initial planner turns. "
             "Only applied when agent_planner_provider is also set and the "
@@ -349,7 +361,7 @@ class Settings(BaseSettings):
         description="Provider for UI generation turns when no org-level BYOK config is set.",
     )
     agent_ui_generator_model: str = Field(
-        default="gemini-3.6-flash",
+        default="gemini-3.8-flash",
         description="Model for UI generation turns when no org-level BYOK config is set.",
     )
 
@@ -633,6 +645,26 @@ class Settings(BaseSettings):
             "Enable after verifying migration 041 has been applied."
         ),
     )
+    openrouter_actual_cost_billing_enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, non-BYOK OpenRouter turns that report usage.cost are billed at "
+            "cost × (1 + openrouter_credit_fee_rate) × llm_cost_markup instead of the "
+            "model's pricing_rules row. Turns without a reported cost keep rule pricing. "
+            "Per-turn upstream cost is recorded in usage_events.llm_turns either way."
+        ),
+    )
+    llm_cost_markup: float = Field(
+        default=1.25,
+        ge=1.0,
+        description="Margin multiplier applied to gateway-reported LLM cost (1.25 = +25%).",
+    )
+    openrouter_credit_fee_rate: float = Field(
+        default=0.055,
+        ge=0.0,
+        lt=1.0,
+        description="OpenRouter credit-purchase fee recovered on top of reported cost (0.055 = 5.5%).",
+    )
     # ── Stripe (prepaid credit top-up) ────────────────────────────────────────
     stripe_secret_key: str = Field(default="", description="Stripe secret key (sk_live_... or sk_test_...)")
     stripe_webhook_secret: str = Field(default="", description="Stripe webhook signing secret (whsec_...)")
@@ -900,14 +932,22 @@ class Settings(BaseSettings):
     )
     default_model_pool: list[dict[str, str]] = Field(
         default=[
-            # Cost tier — DeepSeek V4 Flash 0731 via OpenRouter; provider eligibility follows the API-key policy.
-            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash-0731"},
-            # Speed tier — Gemini 3.6 Flash (1M context, sub-300ms median).
-            {"provider": "google", "model": "gemini-3.6-flash"},
-            # Quality tier — Claude Sonnet 5 (1M context, top-tier reasoning).
-            {"provider": "anthropic", "model": "claude-sonnet-5"},
+            # Cost tier — latest DeepSeek Flash via OpenRouter alias; provider eligibility follows the API-key policy.
+            {"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"},
+            # Speed tier — Gemini 3.8 Flash (1M context).
+            {"provider": "google", "model": "gemini-3.8-flash"},
+            # Quality tier — latest Claude Opus via OpenRouter alias (1M context).
+            {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"},
         ],
         description="Models available for smart routing (Teardrop holds shared keys)",
+    )
+    model_reasoning_effort: dict[str, str] = Field(
+        default={},
+        description=(
+            "Operator default reasoning effort per model, keyed 'provider:model' "
+            "(none, minimal, low, medium, high). Applies when neither the org's LLM "
+            "config nor the calling node sets an effort."
+        ),
     )
 
     # ── Marketplace (paid MCP tool hosting + author revenue share) ─────────────
@@ -1173,7 +1213,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_model_pool(self) -> "Settings":
         """Ensure every entry in default_model_pool has a valid provider."""
-        from agent.llm import ALLOWED_PROVIDERS
+        from agent.llm import ALLOWED_PROVIDERS, validate_model_reasoning_effort
         from agent.shortlist import SHORTLIST_MIN_TOOLS
 
         for entry in self.default_model_pool:
@@ -1184,6 +1224,7 @@ class Settings(BaseSettings):
                 )
             if not entry.get("model"):
                 raise ValueError("default_model_pool entry missing 'model' key")
+        validate_model_reasoning_effort(self.model_reasoning_effort)
         if self.pg_pool_max_size < self.pg_pool_min_size:
             raise ValueError("pg_pool_max_size must be greater than or equal to pg_pool_min_size")
         if self.agent_tool_shortlist_max_tools < SHORTLIST_MIN_TOOLS:

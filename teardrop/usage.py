@@ -16,7 +16,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -65,6 +65,7 @@ class UsageEvent(BaseModel):
     settlement_status: str = "none"
     provider: str = ""
     model: str = ""
+    llm_turns: list[dict[str, Any]] = Field(default_factory=list)
     source: TelemetryRunSource = "api"
     runner_version: str = APP_VERSION
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -218,10 +219,11 @@ async def record_usage_event(event: UsageEvent) -> None:
                  tool_calls, tool_names, billable_tool_calls, billable_tool_names,
                  failed_tool_calls, failed_tool_names,
                  duration_ms, cost_usdc, platform_fee_usdc,
-                 settlement_tx, settlement_status, provider, model, source, runner_version, created_at)
+                 settlement_tx, settlement_status, provider, model, source, runner_version, created_at,
+                 llm_turns)
             VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb
             )
             """,
             event.id,
@@ -249,6 +251,7 @@ async def record_usage_event(event: UsageEvent) -> None:
             event.source,
             event.runner_version,
             event.created_at,
+            json.dumps(event.llm_turns, default=str),
         )
     except Exception:
         logger.exception("Failed to record usage event run_id=%s", event.run_id)

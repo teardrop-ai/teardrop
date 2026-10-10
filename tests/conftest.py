@@ -45,6 +45,7 @@ def test_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "")
     monkeypatch.setenv("ALLOW_PUBLIC_REGISTRATION", "true")
     monkeypatch.setenv("TURNSTILE_SECRET_KEY", "")
+    monkeypatch.setenv("MODEL_CATALOGUE_SYNC_ENABLED", "false")
     # A routable SIWE domain so wallet-auth tests exercise a realistic, valid
     # configuration. Without this the effective domain falls back to the
     # non-routable bind address (0.0.0.0), which _verify_siwe rejects as a

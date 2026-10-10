@@ -2894,6 +2894,21 @@
             "title": "Model",
             "type": "string"
           },
+          "model_reasoning_effort": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when configured=true.",
+            "title": "Model Reasoning Effort"
+          },
           "org_id": {
             "anyOf": [
               {
@@ -2909,6 +2924,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
           },
           "routing_preference": {
             "anyOf": [
@@ -8205,10 +8231,30 @@
             "title": "Model",
             "type": "string"
           },
+          "model_reasoning_effort": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Per-model reasoning effort overrides keyed 'provider:model' (e.g. {\"openrouter:~anthropic/claude-opus-latest\": \"high\"}). Takes precedence over reasoning_effort, including for smart-routed models.",
+            "title": "Model Reasoning Effort",
+            "type": "object"
+          },
           "provider": {
-            "description": "LLM provider: anthropic, openai, or google",
+            "description": "LLM provider: openai, google, or openrouter",
             "title": "Provider",
             "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Org-wide reasoning effort: none, minimal, low, medium, or high. Omit to use the platform default for each model.",
+            "title": "Reasoning Effort"
           },
           "routing_preference": {
             "default": "default",
@@ -8536,7 +8582,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.7.3"
+    "version": "2.8.0"
   },
   "openapi": "3.1.0",
   "paths": {

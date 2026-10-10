@@ -318,6 +318,7 @@ async def agent_run(
             platform_fee_usdc=platform_fee,
             provider=llm_config["provider"] if llm_config else settings.agent_provider,
             model=llm_config["model"] if llm_config else settings.agent_model,
+            llm_turns=usage_data.get("turns") or [],
             source="api",
         )
         await record_usage_event(usage_event)

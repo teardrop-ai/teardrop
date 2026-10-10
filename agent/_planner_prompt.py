@@ -293,20 +293,10 @@ def _build_planner_system_messages(
 
     uncached_prompt = "\n\n".join(uncached_parts)
 
-    if provider == "anthropic":
-        system_messages: list[SystemMessage] = [
-            SystemMessage(
-                content=cached_prompt,
-                additional_kwargs={"cache_control": {"type": "ephemeral"}},
-            ),
-        ]
-        if uncached_prompt:
-            system_messages.append(SystemMessage(content=uncached_prompt))
-    else:
-        full_prompt = cached_prompt
-        if uncached_prompt:
-            full_prompt += "\n\n" + uncached_prompt
-        system_messages = [SystemMessage(content=full_prompt)]
+    full_prompt = cached_prompt
+    if uncached_prompt:
+        full_prompt += "\n\n" + uncached_prompt
+    system_messages = [SystemMessage(content=full_prompt)]
 
     _ = settings
     return system_messages

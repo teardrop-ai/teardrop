@@ -179,6 +179,9 @@ _INDEXER_IP_MAX_KEYS = 10_000
 _UNCLASSIFIED_LOG_MAX_CHARS = 64
 _UNCLASSIFIED_LOG_MAX_PER_HOUR = 20
 _UNCLASSIFIED_NAME_UNSAFE = re.compile(r"[^a-z0-9._@/ -]")
+# TEMPORARY indexer-IP flag diagnosis (2026-10): remove once one crawler burst is captured.
+_PROBE_LOG_MAX_PER_HOUR = 40
+_PROBE_LOG_UA_MAX_CHARS = 120
 
 VALID_SURFACES: frozenset[str] = frozenset(
     {
@@ -209,6 +212,7 @@ _pool: PgPool | None = None
 _enabled: bool = False
 _counters: dict[tuple[str, datetime], int] = {}
 _unclassified_logged: tuple[datetime | None, set[str]] = (None, set())
+_probe_logged: tuple[datetime | None, set[tuple[str, str, int, bool, bool]]] = (None, set())
 _indexer_ips: dict[str, float] = {}
 
 
@@ -221,11 +225,12 @@ def init_funnel_counters(pool: PgPool, enabled: bool) -> None:
 
 def close_funnel_counters() -> None:
     """Release the pool reference and drop any unflushed counters."""
-    global _pool, _enabled, _unclassified_logged
+    global _pool, _enabled, _unclassified_logged, _probe_logged
     _pool = None
     _enabled = False
     _counters.clear()
     _unclassified_logged = (None, set())
+    _probe_logged = (None, set())
     _indexer_ips.clear()
 
 
@@ -376,6 +381,32 @@ def _log_unclassified_client(name: str) -> None:
         return
     seen.add(safe)
     logger.info("mcp unclassified client name=%r", safe)
+
+
+def log_indexer_probe(
+    stage: str, user_agent: str | None, forwarded_for: str | None, derived_ip: str | None, flagged: bool
+) -> None:
+    """TEMPORARY: log why the indexer-IP flag misses, without logging any IP.
+
+    ``xff_hops`` counts X-Forwarded-For entries; ``origin`` says whether the derived
+    client IP is the left-most (originating) entry, exposing a wrong trusted-proxy count.
+    """
+    global _probe_logged
+    if not _enabled:
+        return
+    ua = _UNCLASSIFIED_NAME_UNSAFE.sub("?", (user_agent or "")[:_PROBE_LOG_UA_MAX_CHARS].lower()).strip()
+    hops = [segment.strip() for segment in (forwarded_for or "").split(",") if segment.strip()]
+    origin = bool(hops) and derived_ip == hops[0]
+    entry = (stage, ua, len(hops), origin, flagged)
+    hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    logged_hour, seen = _probe_logged
+    if logged_hour != hour:
+        seen = set()
+        _probe_logged = (hour, seen)
+    if entry in seen or len(seen) >= _PROBE_LOG_MAX_PER_HOUR:
+        return
+    seen.add(entry)
+    logger.info("mcp indexer probe stage=%s ua=%r xff_hops=%d origin=%s flagged=%s", stage, ua, len(hops), origin, flagged)
 
 
 def mcp_initialize_surface(client_name: object) -> str:

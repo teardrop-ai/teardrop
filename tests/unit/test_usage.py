@@ -50,8 +50,9 @@ class TestRecordUsageEvent:
         call_args = pool.execute.call_args.args
         assert "run-1" in call_args
         assert 100 in call_args
-        assert call_args[-3] == "api"
-        assert call_args[-2] == APP_VERSION
+        assert call_args[-4] == "api"
+        assert call_args[-3] == APP_VERSION
+        assert call_args[-1] == "[]"
 
     def test_defaults_runner_version_to_application_version(self):
         event = UsageEvent(user_id="user-1", org_id="org-1", thread_id="thread-1", run_id="run-1")

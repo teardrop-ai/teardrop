@@ -28,6 +28,7 @@ from teardrop._background_tasks import (
     _funnel_counter_flush_loop,
     _labeling_loop,
     _memory_cleanup_loop,
+    _model_catalogue_sync_loop,
     _onboarding_credit_outbox_loop,
     _prewarm_cache_prefixes,
     _record_recovered_a2a_task_audits,
@@ -55,6 +56,7 @@ from teardrop.funnel_counters import close_funnel_counters, init_funnel_counters
 from teardrop.keys import generate_keypair
 from teardrop.llm_config import close_llm_config_db, init_llm_config_db
 from teardrop.memory import close_memory_db, init_memory_db
+from teardrop.model_catalogue import close_model_catalogue_db, init_model_catalogue_db, load_snapshot
 from teardrop.retention import close_retention_db, init_retention_db
 from teardrop.telemetry_tasks import close_telemetry_tasks, init_telemetry_tasks
 from teardrop.tool_exclusions import close_tool_exclusions_db, init_tool_exclusions_db
@@ -116,6 +118,11 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         await init_marketplace_db(pool)
         await init_llm_config_db(pool)
         await init_benchmarks_db(pool)
+        await init_model_catalogue_db(pool)
+        try:
+            await load_snapshot()
+        except Exception:
+            logger.warning("Model catalogue snapshot load failed; using static catalogue only", exc_info=True)
         await init_agent_wallets_db(pool)
         await init_scheduling_db(pool)
         await init_tool_exclusions_db(pool)
@@ -166,6 +173,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             bg_tasks.append(asyncio.create_task(_event_dispatch_recovery_loop()))
         if settings.labeling_enabled:
             bg_tasks.append(asyncio.create_task(_labeling_loop()))
+        if settings.model_catalogue_sync_enabled:
+            bg_tasks.append(asyncio.create_task(_model_catalogue_sync_loop()))
         if settings.vor_enabled and settings.cdp_configured:
             bg_tasks.append(asyncio.create_task(_vor_anchor_loop()))
         elif settings.vor_enabled:
@@ -201,6 +210,7 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
         close_a2a_tasks_db()
         await close_agent_wallets_db()
         await close_benchmarks_db()
+        await close_model_catalogue_db()
         await close_llm_config_db()
         await close_marketplace_db()
         await close_scheduling_db()

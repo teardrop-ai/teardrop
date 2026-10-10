@@ -43,16 +43,19 @@ def _accumulate_usage(state: AgentState, response: AIMessage, *, provider: str, 
     turns = usage.get("turns")
     if not isinstance(turns, list):
         turns = []
-    turns.append(
-        {
-            "provider": str(provider or ""),
-            "model": str(model or ""),
-            "tokens_in": delta_in,
-            "tokens_out": delta_out,
-            "cache_read_tokens": delta_cache_read,
-            "cache_creation_tokens": delta_cache_creation,
-        }
-    )
+    turn: dict[str, Any] = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "tokens_in": delta_in,
+        "tokens_out": delta_out,
+        "cache_read_tokens": delta_cache_read,
+        "cache_creation_tokens": delta_cache_creation,
+    }
+    # Gateway-reported model/provider/cost (OpenRouter) for actual-cost billing and audit.
+    for key in ("upstream_model", "upstream_provider", "upstream_cost_usd"):
+        if extracted.get(key) is not None:
+            turn[key] = extracted[key]
+    turns.append(turn)
     usage["turns"] = turns
     return usage
 

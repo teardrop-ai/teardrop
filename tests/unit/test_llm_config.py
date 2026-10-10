@@ -62,7 +62,6 @@ def mock_settings(fernet_key):
         llm_config_encryption_key=fernet_key,
         org_tool_encryption_key="",
         org_tools_cache_ttl_seconds=60,
-        anthropic_api_key="shared-anthropic-key",
         openai_api_key="shared-openai-key",
         google_api_key="shared-google-key",
         openrouter_api_key="shared-openrouter-key",
@@ -70,7 +69,7 @@ def mock_settings(fernet_key):
         agent_temperature=0.0,
         agent_llm_timeout_seconds=120,
         default_model_pool=[
-            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+            {"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"},
             {"provider": "openai", "model": "gpt-4o-mini"},
             {"provider": "google", "model": "gemini-2.0-flash"},
         ],
@@ -88,6 +87,8 @@ def _make_row(
     timeout_seconds: int = 120,
     routing_preference: str = "default",
     is_byok: bool = False,
+    reasoning_effort: str | None = None,
+    model_reasoning_effort: dict | str | None = None,
 ) -> dict:
     """Simulate a database row as a dict (supports __getitem__)."""
     now = datetime.now(timezone.utc)
@@ -102,6 +103,8 @@ def _make_row(
         "timeout_seconds": timeout_seconds,
         "routing_preference": routing_preference,
         "is_byok": is_byok,
+        "reasoning_effort": reasoning_effort,
+        "model_reasoning_effort": model_reasoning_effort if model_reasoning_effort is not None else {},
         "created_at": now,
         "updated_at": now,
     }
@@ -181,6 +184,14 @@ class TestRowToConfig:
         assert cfg.api_base == "https://my.endpoint.com"
         assert cfg.is_byok is True
         assert cfg.routing_preference == "default"
+        assert cfg.reasoning_effort is None
+        assert cfg.model_reasoning_effort == {}
+
+    def test_decodes_reasoning_effort_json_string(self):
+        row = _make_row(reasoning_effort="low", model_reasoning_effort='{"openrouter:x/y": "high"}')
+        cfg = _row_to_config(row)
+        assert cfg.reasoning_effort == "low"
+        assert cfg.model_reasoning_effort == {"openrouter:x/y": "high"}
 
     def test_no_api_key(self):
         row = _make_row(api_key_enc=None)
@@ -218,6 +229,24 @@ class TestBuildLlmConfigDict:
         assert result["model"] == "gpt-4o-mini"
         assert result["api_key"] == "shared-openai-key"
         assert result["api_base"] is None
+        assert result["reasoning_effort"] is None
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_per_model_beats_org_wide(self, mock_settings):
+        row = _make_row(
+            provider="openai",
+            model="gpt-4o-mini",
+            reasoning_effort="low",
+            model_reasoning_effort={"openai:gpt-4o-mini": "high"},
+        )
+        pool = AsyncMock()
+        pool.fetchrow = AsyncMock(return_value=row)
+        llm_config.base._pool = pool
+
+        with patch("teardrop.llm_config.base.get_settings", return_value=mock_settings):
+            result = await build_llm_config_dict("org-1")
+
+        assert result["reasoning_effort"] == "high"
 
     @pytest.mark.asyncio
     async def test_byok_decrypt_success(self, mock_settings):
@@ -266,13 +295,13 @@ class TestBuildLlmConfigDict:
 
 class TestResolveSharedKey:
     def test_known_providers(self, mock_settings):
-        assert _resolve_shared_key("anthropic", mock_settings) == "shared-anthropic-key"
         assert _resolve_shared_key("openai", mock_settings) == "shared-openai-key"
         assert _resolve_shared_key("google", mock_settings) == "shared-google-key"
         assert _resolve_shared_key("openrouter", mock_settings) == "shared-openrouter-key"
 
     def test_unknown_provider_returns_empty(self, mock_settings):
         assert _resolve_shared_key("cohere", mock_settings) == ""
+        assert _resolve_shared_key("anthropic", mock_settings) == ""
 
 
 # ─── Cooldowns ────────────────────────────────────────────────────────────────
@@ -301,20 +330,20 @@ class TestCooldowns:
 class TestSelectHighestQuality:
     def test_selects_tier_1(self):
         models = [
-            {"provider": "google", "model": "gemini-3.6-flash"},  # tier 2
-            {"provider": "anthropic", "model": "claude-sonnet-5"},  # tier 1
+            {"provider": "google", "model": "gemini-3.8-flash"},  # tier 2
+            {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"},  # tier 1
             {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},  # tier 2
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "claude-sonnet-5"
+        assert result["model"] == "~anthropic/claude-opus-latest"
 
     def test_unknown_model_lowest_priority(self):
         models = [
-            {"provider": "google", "model": "gemini-3.6-flash"},  # tier 2
+            {"provider": "google", "model": "gemini-3.8-flash"},  # tier 2
             {"provider": "custom", "model": "custom-model-v1"},  # tier 99
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "gemini-3.6-flash"
+        assert result["model"] == "gemini-3.8-flash"
 
     def test_single_model(self):
         models = [{"provider": "anthropic", "model": "claude-sonnet-5"}]
@@ -552,7 +581,7 @@ class TestResolveLlmConfig:
         ):
             mock_route.return_value = {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
             await resolve_llm_config("org-1")
-        mock_route.assert_called_once_with("quality")
+        mock_route.assert_called_once_with("quality", cfg)
 
 
 # ─── _route_from_pool ────────────────────────────────────────────────────────
@@ -570,13 +599,13 @@ class TestRouteFromPool:
     async def test_default_routing_picks_first(self, mock_settings):
         with patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
-        assert result["provider"] == "anthropic"
-        assert result["api_key"] == "shared-anthropic-key"
+        assert result["provider"] == "openrouter"
+        assert result["api_key"] == "shared-openrouter-key"
 
     @pytest.mark.asyncio
     async def test_cooled_down_models_filtered(self, mock_settings):
         """Cooled-down models are skipped."""
-        record_provider_failure("anthropic", "claude-haiku-4-5-20251001")
+        record_provider_failure("openrouter", "~deepseek/deepseek-flash-latest")
         with patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
         assert result["provider"] == "openai"
@@ -588,7 +617,34 @@ class TestRouteFromPool:
             record_provider_failure(m["provider"], m["model"])
         with patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings):
             result = await llm_config._route_from_pool("default")
-        assert result["provider"] == "anthropic"  # first in pool
+        assert result["provider"] == "openrouter"  # first in pool
+
+    @pytest.mark.asyncio
+    async def test_org_reasoning_effort_applies_to_routed_model(self, mock_settings):
+        cfg = OrgLlmConfig(
+            org_id="org-1",
+            provider="openrouter",
+            model="~deepseek/deepseek-flash-latest",
+            reasoning_effort="low",
+            model_reasoning_effort={"openrouter:~deepseek/deepseek-flash-latest": "medium"},
+        )
+        with patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings):
+            routed = await llm_config._route_from_pool("default", cfg)
+            no_org = await llm_config._route_from_pool("default")
+        assert routed["reasoning_effort"] == "medium"
+        assert no_org["reasoning_effort"] is None
+
+
+class TestOrgReasoningEffort:
+    def test_precedence(self):
+        efforts = {"openrouter:a/b": "high"}
+        assert (
+            llm_config.org_reasoning_effort("OpenRouter", "a/b", reasoning_effort="low", model_reasoning_effort=efforts) == "high"
+        )
+        assert (
+            llm_config.org_reasoning_effort("openrouter", "c/d", reasoning_effort="low", model_reasoning_effort=efforts) == "low"
+        )
+        assert llm_config.org_reasoning_effort("openrouter", "c/d", reasoning_effort=None, model_reasoning_effort=None) is None
 
 
 # ─── Cache invalidation ──────────────────────────────────────────────────────
@@ -660,11 +716,17 @@ class TestUpsertOrgLlmConfig:
                 "org-1",
                 provider="openai",
                 model="gpt-4o-mini",
+                reasoning_effort="low",
+                model_reasoning_effort={"openai:gpt-4o-mini": "high"},
             )
 
         assert cfg.is_byok is False
         assert cfg.has_api_key is False
+        assert cfg.reasoning_effort == "low"
+        assert cfg.model_reasoning_effort == {"openai:gpt-4o-mini": "high"}
         pool.fetchrow.assert_called_once()
+        args = pool.fetchrow.call_args[0]
+        assert args[-2:] == ("low", '{"openai:gpt-4o-mini": "high"}')
 
     @pytest.mark.asyncio
     async def test_upsert_preserve_existing_byok_key(self, mock_settings):

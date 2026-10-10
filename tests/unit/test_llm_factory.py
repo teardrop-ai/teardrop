@@ -26,11 +26,10 @@ from agent.llm import (
 
 def _make_settings(**overrides):
     defaults = dict(
-        agent_provider="anthropic",
-        agent_model="claude-haiku-4-5-20251001",
+        agent_provider="openai",
+        agent_model="gpt-4o-mini",
         agent_max_tokens=4096,
         agent_temperature=0.0,
-        anthropic_api_key="test-anthropic-key",
         openai_api_key="test-openai-key",
         google_api_key="test-google-key",
         openrouter_api_key="test-openrouter-key",
@@ -43,17 +42,10 @@ def _make_settings(**overrides):
 
 
 class TestCreateLlm:
-    def test_anthropic_provider(self):
+    def test_anthropic_provider_is_retired(self):
         settings = _make_settings(agent_provider="anthropic")
-        with patch("agent.llm.ChatAnthropic") as MockCls:
-            llm = create_llm(settings)
-            MockCls.assert_called_once_with(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=4096,
-                temperature=0.0,
-                api_key="test-anthropic-key",
-            )
-            assert llm is MockCls.return_value
+        with pytest.raises(ValueError, match="Unknown agent_provider 'anthropic'"):
+            create_llm(settings)
 
     def test_openai_provider(self):
         settings = _make_settings(agent_provider="openai", agent_model="gpt-4o-mini")
@@ -85,7 +77,7 @@ class TestCreateLlm:
             agent_model="mistral/mistral-7b-instruct",
             openrouter_api_key="test-openrouter-key",
         )
-        with patch("agent.llm.ChatOpenAI") as MockCls:
+        with patch("agent.llm.ChatOpenRouter") as MockCls:
             llm = create_llm(settings)
             call_kwargs = MockCls.call_args[1]
             assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
@@ -99,7 +91,7 @@ class TestCreateLlm:
             agent_model="deepseek/deepseek-v4-flash",
             openrouter_api_key="test-openrouter-key",
         )
-        with patch("agent.llm.ChatOpenAI") as MockCls:
+        with patch("agent.llm.ChatOpenRouter") as MockCls:
             create_llm(settings)
             call_kwargs = MockCls.call_args[1]
             assert "extra_body" not in call_kwargs
@@ -110,17 +102,17 @@ class TestCreateLlm:
             create_llm(settings)
 
     def test_provider_is_case_insensitive(self):
-        settings = _make_settings(agent_provider="ANTHROPIC")
-        with patch("agent.llm.ChatAnthropic") as MockCls:
+        settings = _make_settings(agent_provider="OPENAI")
+        with patch("agent.llm.ChatOpenAI") as MockCls:
             create_llm(settings)
             MockCls.assert_called_once()
 
     def test_empty_api_key_passes_none(self):
-        settings = _make_settings(agent_provider="anthropic", anthropic_api_key="")
-        with patch("agent.llm.ChatAnthropic") as MockCls:
+        settings = _make_settings(agent_provider="openai", openai_api_key="")
+        with patch("agent.llm.ChatOpenAI") as MockCls:
             create_llm(settings)
             MockCls.assert_called_once_with(
-                model="claude-haiku-4-5-20251001",
+                model="gpt-4o-mini",
                 max_tokens=4096,
                 temperature=0.0,
                 api_key=None,
@@ -307,7 +299,7 @@ def _make_config(**overrides) -> dict:
 
 class TestAllowedProviders:
     def test_contains_expected(self):
-        assert "anthropic" in ALLOWED_PROVIDERS
+        assert "anthropic" not in ALLOWED_PROVIDERS
         assert "openai" in ALLOWED_PROVIDERS
         assert "google" in ALLOWED_PROVIDERS
         assert "openrouter" in ALLOWED_PROVIDERS
@@ -317,15 +309,9 @@ class TestAllowedProviders:
 
 
 class TestCreateLlmFromConfig:
-    @patch("agent.llm.ChatAnthropic")
-    def test_anthropic(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(provider="anthropic")
-        result = create_llm_from_config(config)
-        assert result is mock_cls.return_value
-        call_kwargs = mock_cls.call_args[1]
-        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
-        assert call_kwargs["max_tokens"] == 4096
+    def test_anthropic_is_retired(self):
+        with pytest.raises(ValueError, match="Unknown provider 'anthropic'"):
+            create_llm_from_config(_make_config(provider="anthropic"))
 
     @patch("agent.llm.ChatOpenAI")
     def test_openai(self, mock_cls):
@@ -358,18 +344,7 @@ class TestCreateLlmFromConfig:
         with pytest.raises(ValueError, match="Unknown provider"):
             create_llm_from_config(config)
 
-    @patch("agent.llm.ChatAnthropic")
-    def test_anthropic_with_base_url(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(
-            provider="anthropic",
-            api_base="https://custom.anthropic.proxy.com/v1",
-        )
-        create_llm_from_config(config)
-        call_kwargs = mock_cls.call_args[1]
-        assert call_kwargs["base_url"] == "https://custom.anthropic.proxy.com/v1"
-
-    @patch("agent.llm.ChatOpenAI")
+    @patch("agent.llm.ChatOpenRouter")
     def test_openrouter(self, mock_cls):
         mock_cls.return_value = MagicMock()
         config = _make_config(
@@ -383,7 +358,7 @@ class TestCreateLlmFromConfig:
         assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
         assert "model_kwargs" not in call_kwargs
 
-    @patch("agent.llm.ChatOpenAI")
+    @patch("agent.llm.ChatOpenRouter")
     def test_openrouter_deepseek_model_does_not_pin_providers(self, mock_cls):
         """DeepSeek provider eligibility is delegated to OpenRouter's API-key policy."""
         mock_cls.return_value = MagicMock()
@@ -398,7 +373,7 @@ class TestCreateLlmFromConfig:
         assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
         assert "extra_body" not in call_kwargs
 
-    @patch("agent.llm.ChatOpenAI")
+    @patch("agent.llm.ChatOpenRouter")
     def test_openrouter_custom_base_url(self, mock_cls):
         """An explicit api_base overrides the OpenRouter default."""
         mock_cls.return_value = MagicMock()
@@ -435,7 +410,31 @@ class TestCreateLlmFromConfig:
         create_llm_from_config(config)
         assert mock_cls.call_args[1]["thinking_level"] == "minimal"
 
-    @patch("agent.llm.ChatOpenAI")
+    @patch("agent.llm.ChatOpenRouter")
+    def test_operator_model_default_used_when_config_has_no_effort(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        settings = MagicMock(model_reasoning_effort={"openrouter:~anthropic/claude-opus-latest": "high"})
+        config = _make_config(provider="openrouter", model="~anthropic/claude-opus-latest", api_key="k", api_base=None)
+        with patch("agent.llm.get_settings", return_value=settings):
+            create_llm_from_config(config)
+        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "high"}}
+
+    @patch("agent.llm.ChatOpenRouter")
+    def test_config_effort_beats_operator_model_default(self, mock_cls):
+        mock_cls.return_value = MagicMock()
+        settings = MagicMock(model_reasoning_effort={"openrouter:~anthropic/claude-opus-latest": "high"})
+        config = _make_config(
+            provider="openrouter",
+            model="~anthropic/claude-opus-latest",
+            api_key="k",
+            api_base=None,
+            reasoning_effort="minimal",
+        )
+        with patch("agent.llm.get_settings", return_value=settings):
+            create_llm_from_config(config)
+        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "minimal"}}
+
+    @patch("agent.llm.ChatOpenRouter")
     def test_openrouter_reasoning_effort_does_not_add_provider_pin(self, mock_cls):
         mock_cls.return_value = MagicMock()
         config = _make_config(
@@ -450,7 +449,7 @@ class TestCreateLlmFromConfig:
             "reasoning": {"effort": "low"},
         }
 
-    @patch("agent.llm.ChatOpenAI")
+    @patch("agent.llm.ChatOpenRouter")
     def test_openrouter_reasoning_effort_without_deepseek_pin(self, mock_cls):
         mock_cls.return_value = MagicMock()
         config = _make_config(
@@ -545,3 +544,28 @@ class TestGetLlmForRequest:
 
         assert len({id(result) for result in results}) == 3
         assert mock_create.call_count == 3
+
+
+class TestReasoningEffortValidation:
+    def test_normalises_and_allows_none(self):
+        from agent.llm import validate_model_reasoning_effort, validate_reasoning_effort
+
+        assert validate_reasoning_effort(None) is None
+        assert validate_reasoning_effort("") is None
+        assert validate_reasoning_effort(" High ") == "high"
+        assert validate_model_reasoning_effort({"Google:gemini-3.8-flash": "LOW"}) == {"google:gemini-3.8-flash": "low"}
+
+    @pytest.mark.parametrize(
+        "efforts",
+        [
+            {"openrouter:a/b": "max"},
+            {"a/b": "low"},
+            {"anthropic:claude": "low"},
+            {f"openai:m{i}": "low" for i in range(51)},
+        ],
+    )
+    def test_rejects_invalid_maps(self, efforts):
+        from agent.llm import validate_model_reasoning_effort
+
+        with pytest.raises(ValueError):
+            validate_model_reasoning_effort(efforts)

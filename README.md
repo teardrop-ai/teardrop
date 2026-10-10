@@ -123,7 +123,7 @@ Minimum required contents:
 # Global LLM provider fallback: anthropic | openai | google | openrouter (default: openrouter)
 # Note: Each org can override via PUT /llm-config
 AGENT_PROVIDER=openrouter
-# Default model is deepseek/deepseek-v4-flash-0731.
+# Default model is ~deepseek/deepseek-flash-latest.
 # For OpenRouter DeepSeek models, Teardrop delegates provider eligibility to the API key's OpenRouter data policy.
 OPENROUTER_API_KEY=sk-or-...      # required if AGENT_PROVIDER=openrouter
 # ANTHROPIC_API_KEY=sk-ant-...     # required if AGENT_PROVIDER=anthropic

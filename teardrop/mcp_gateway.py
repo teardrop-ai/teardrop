@@ -594,6 +594,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 SURFACE_TOOLS_LIST_ANON,
                 SURFACE_TOOLS_LIST_ANON_SRC_PREFIX,
                 is_indexer_ip,
+                log_indexer_probe,
                 mark_indexer_ip,
                 mcp_initialize_surface,
                 mcp_meta_client_name,
@@ -631,7 +632,15 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 initialize_surface = mcp_initialize_surface(client_name)
                 record_discovery_hit(initialize_surface)
                 if initialize_surface == SURFACE_MCP_INITIALIZE_PREFIX + "bot":
-                    await mark_indexer_ip(_request_ip(request))
+                    request_ip = _request_ip(request)
+                    log_indexer_probe(
+                        "init",
+                        request.headers.get("user-agent"),
+                        request.headers.get("x-forwarded-for"),
+                        request_ip,
+                        False,
+                    )
+                    await mark_indexer_ip(request_ip)
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
@@ -997,6 +1006,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX,
             anon_challenge_client_surface,
             is_indexer_ip,
+            log_indexer_probe,
             mcp_meta_client_name,
             record_discovery_hit,
             record_source_hit,
@@ -1076,11 +1086,20 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             response_kwargs["requirements"] = requirements
 
         async def record_challenger() -> None:
+            request_ip = _request_ip(request)
+            flagged = await is_indexer_ip(request_ip)
+            log_indexer_probe(
+                "call",
+                request.headers.get("user-agent"),
+                request.headers.get("x-forwarded-for"),
+                request_ip,
+                flagged,
+            )
             client_surface = anon_challenge_client_surface(
                 request.headers.get("user-agent"),
                 mcp_signal,
                 client_name=mcp_meta_client_name(data.get("params")),
-                flagged=await is_indexer_ip(_request_ip(request)),
+                flagged=flagged,
             )
             record_discovery_hit(client_surface)
             record_source_hit(SURFACE_MCP_402_ANON_SRC_PREFIX, _listing_source_tag(request), client_surface)

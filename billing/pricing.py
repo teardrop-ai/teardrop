@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import time
+from decimal import ROUND_CEILING, Decimal
 
 from billing.context import _get_pool, _has_pool
 from billing.models import PricingRule
@@ -291,25 +292,64 @@ def is_flat_rate(rule: PricingRule) -> bool:
     return rule.tokens_in_cost_per_1k <= 0 and rule.tokens_out_cost_per_1k <= 0 and rule.tool_call_cost <= 0
 
 
-def _per_unit_token_cost(rule: PricingRule, tokens_in: int, tokens_out: int) -> int:
-    return (tokens_in // 1000) * rule.tokens_in_cost_per_1k + (tokens_out // 1000) * rule.tokens_out_cost_per_1k
+def per_unit_token_cost(rule: PricingRule, tokens_in: int, tokens_out: int, cache_creation_tokens: int = 0) -> int:
+    """Pro-rata token cost in atomic USDC, rounded up once per call.
+
+    Cache-write tokens are already counted in ``tokens_in`` (LangChain totals
+    include them); they add only the provider's 25% write premium on top.
+    Integer math: everything is scaled by 4 so the premium stays exact.
+    """
+    scaled = 4 * (tokens_in * rule.tokens_in_cost_per_1k + tokens_out * rule.tokens_out_cost_per_1k)
+    scaled += max(0, cache_creation_tokens) * rule.tokens_in_cost_per_1k
+    return -(-scaled // 4000)
+
+
+def upstream_turn_cost_usdc(turn: dict) -> int | None:
+    """Actual-cost price of an OpenRouter turn in atomic USDC, or None to use rules.
+
+    Applies only when ``openrouter_actual_cost_billing_enabled`` is set and the
+    gateway reported ``upstream_cost_usd`` for the turn. Rounds up to the next
+    atomic unit so sub-micro costs are never billed as zero.
+    """
+    settings = get_settings()
+    cost_usd = turn.get("upstream_cost_usd")
+    if (
+        not settings.openrouter_actual_cost_billing_enabled
+        or str(turn.get("provider", "")) != "openrouter"
+        or not isinstance(cost_usd, (int, float))
+        or cost_usd < 0
+    ):
+        return None
+    multiplier = Decimal(str(settings.llm_cost_markup)) * (1 + Decimal(str(settings.openrouter_credit_fee_rate)))
+    return int((Decimal(str(cost_usd)) * multiplier * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
 
 
 async def calculate_turns_token_cost_usdc(turns: list[dict]) -> int:
     """Token cost of a run's LLM turns, each priced by its own provider/model rule.
 
+    OpenRouter turns with a reported upstream cost are priced from that cost
+    when actual-cost billing is enabled (see :func:`upstream_turn_cost_usdc`).
     Each distinct flat-rate rule is charged once per run, however many turns used it.
     """
     per_unit_cost = 0
     flat_prices: dict[str, int] = {}
     for turn in turns:
+        upstream_cost = upstream_turn_cost_usdc(turn)
+        if upstream_cost is not None:
+            per_unit_cost += upstream_cost
+            continue
         rule = await get_live_pricing_for_model(str(turn.get("provider", "")), str(turn.get("model", "")))
         if rule is None:
             continue
         if is_flat_rate(rule):
             flat_prices[rule.id] = rule.run_price_usdc
         else:
-            per_unit_cost += _per_unit_token_cost(rule, int(turn.get("tokens_in", 0)), int(turn.get("tokens_out", 0)))
+            per_unit_cost += per_unit_token_cost(
+                rule,
+                int(turn.get("tokens_in", 0)),
+                int(turn.get("tokens_out", 0)),
+                int(turn.get("cache_creation_tokens", 0)),
+            )
     return per_unit_cost + sum(flat_prices.values())
 
 
@@ -334,7 +374,7 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
     elif is_flat_rate(rule):
         token_cost = rule.run_price_usdc
     else:
-        token_cost = _per_unit_token_cost(rule, tokens_in, tokens_out)
+        token_cost = per_unit_token_cost(rule, tokens_in, tokens_out, int(usage_data.get("cache_creation_tokens", 0)))
 
     return token_cost + await calculate_tool_cost_usdc(tool_calls, tool_names)
 
