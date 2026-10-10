@@ -18,6 +18,7 @@ from __future__ import annotations
 from teardrop.llm_config.base import (  # noqa: F401  (re-exported for backward compatibility)
     ALLOWED_ROUTING_PREFERENCES,
     OrgLlmConfig,
+    UnpricedModelError,
     _config_cache,
     _config_lock,
     _decrypt_llm_key,
@@ -40,6 +41,7 @@ from teardrop.llm_config.base import (  # noqa: F401  (re-exported for backward 
     invalidate_llm_config_cache,
     logger,
     org_reasoning_effort,
+    require_priced_model,
     reset_llm_fernet,
     upsert_org_llm_config,
 )

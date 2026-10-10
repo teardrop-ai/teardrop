@@ -34,10 +34,22 @@ Teardrop issued RS256 JWTs are required for authorization on most endpoints. Pub
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/llm-config` | Bearer | Get org's LLM config (or defaults if not set) |
-| `PUT` | `/llm-config` | Bearer | Set or update org's LLM configuration |
+| `PUT` | `/llm-config` | Bearer | Set or update org's LLM configuration (shared-key configs must use a model with an active pricing rule; BYOK exempt) |
 | `DELETE` | `/llm-config` | Bearer | Delete org config, revert to global defaults |
 
 ### Models
+
+Shared-key LLM configurations require an explicit, currently effective pricing
+rule for the exact provider/model; provider-wide and global fallback rates do
+not qualify. This also applies to `AGENT_MODEL` and models selected from
+`DEFAULT_MODEL_POOL`. Unpriced stored configurations are rejected before a
+non-streaming agent run with HTTP 422, rather than silently switching models.
+If configuration or pricing cannot be verified, non-streaming runs return HTTP
+503. `/agent/run` has already started streaming at this point, so it emits an
+`ERROR` event and terminates without invoking the model instead.
+BYOK configurations are
+exempt; omitting `api_key` preserves a stored key, `null` clears it, and an empty
+string is rejected.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|

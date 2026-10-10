@@ -310,3 +310,9 @@ def test_pg_pool_size_invalid_bounds():
 def test_pg_pool_open_timeout_must_be_positive():
     with pytest.raises(ValueError, match="greater than 0"):
         Settings(pg_pool_open_timeout_seconds=0)
+
+
+def test_default_model_pool_excludes_retired_opus_alias():
+    """The default pool must not advertise the Opus alias without explicit pricing."""
+    s = Settings()
+    assert all(entry.get("model") != "~anthropic/claude-opus-latest" for entry in s.default_model_pool)

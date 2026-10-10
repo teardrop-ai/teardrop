@@ -59,6 +59,27 @@ def _make_rule(**overrides) -> PricingRule:
     return PricingRule(**defaults)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exact_match", [False, True])
+async def test_current_pricing_exact_match_controls_wildcard_fallback(exact_match):
+    from billing.pricing import get_current_pricing_for_model
+
+    fallback = _make_rule().model_dump()
+
+    async def fetchrow(sql, provider, model, is_byok, exact):
+        assert "effective_from <= NOW()" in sql
+        assert "AND is_byok = $3" in sql
+        assert "AND (NOT $4 OR (provider = $1 AND model = $2))" in sql
+        assert (provider, model, is_byok, exact) == ("openrouter", "~anthropic/claude-opus-latest", False, exact_match)
+        return None if exact else fallback
+
+    pool = AsyncMock()
+    pool.fetchrow.side_effect = fetchrow
+    with patch("billing.pricing._get_pool", return_value=pool):
+        rule = await get_current_pricing_for_model("openrouter", "~anthropic/claude-opus-latest", exact_match=exact_match)
+    assert (rule is None) == exact_match
+
+
 # ─── atomic_usdc_to_price_str ─────────────────────────────────────────────────
 
 

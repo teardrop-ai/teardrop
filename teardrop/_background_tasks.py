@@ -426,8 +426,11 @@ async def _prewarm_cache_prefixes(pool: PgPool) -> None:
             resolved = await resolve_llm_config(org_id)
             if resolved and resolved.get("provider") == provider and resolved.get("model") == model:
                 llm_config = resolved
+            elif resolved or provider != settings.agent_provider or model != settings.agent_model:
+                continue
         except Exception:
-            logger.debug("cache prewarm: resolve_llm_config failed for org %s", org_id, exc_info=True)
+            logger.warning("cache prewarm: resolve_llm_config failed for org %s; skipping", org_id, exc_info=True)
+            continue
 
         usage = await prewarm_org_prefix(org_id, provider, model, llm_config=llm_config)
         warmed += 1

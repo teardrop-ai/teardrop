@@ -54,7 +54,7 @@ from teardrop.agent_post_run import (
 )
 from teardrop.concurrency import limit_agent_runs
 from teardrop.config import Settings, get_settings
-from teardrop.llm_config import resolve_llm_config
+from teardrop.llm_config import UnpricedModelError, resolve_llm_config
 from teardrop.memory import recall_memories
 from teardrop.public_url import public_base_url
 from teardrop.retention import touch_checkpoint_thread
@@ -547,9 +547,11 @@ async def _prepare_run_context(
     async def _safe_llm_config() -> dict | None:
         try:
             return await resolve_llm_config(org_id)
+        except UnpricedModelError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception:
-            logger.debug("LLM config resolution failed for org_id=%s; using global default", org_id, exc_info=True)
-            return None
+            logger.warning("LLM config resolution failed for org_id=%s", org_id, exc_info=True)
+            raise HTTPException(status_code=503, detail="LLM configuration could not be verified.") from None
 
     async def _safe_org_name() -> str:
         if not org_id:

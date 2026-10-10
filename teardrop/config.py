@@ -936,8 +936,6 @@ class Settings(BaseSettings):
             {"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"},
             # Speed tier — Gemini 3.8 Flash (1M context).
             {"provider": "google", "model": "gemini-3.8-flash"},
-            # Quality tier — latest Claude Opus via OpenRouter alias (1M context).
-            {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"},
         ],
         description="Models available for smart routing (Teardrop holds shared keys)",
     )

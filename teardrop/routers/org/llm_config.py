@@ -19,6 +19,7 @@ from teardrop.llm_config import (
     OrgLlmConfig,
     delete_org_llm_config,
     get_org_llm_config,
+    require_priced_model,
     upsert_org_llm_config,
 )
 
@@ -36,6 +37,7 @@ class UpsertLlmConfigRequest(BaseModel):
     model: str = Field(..., min_length=1, max_length=200, description="Model identifier")
     api_key: str | None = Field(
         default=None,
+        min_length=1,
         description="Provider API key (BYOK). Omit to use Teardrop shared key.",
     )
     api_base: str | None = Field(
@@ -155,8 +157,14 @@ async def upsert_llm_config_endpoint(
             detail=f"Provider '{body.provider}' requires temperature ≤ {temp_limit}",
         )
 
+    api_key_omitted = "api_key" not in body.model_fields_set
+    will_have_byok = body.api_key is not None
+    if not will_have_byok and api_key_omitted:
+        existing = await get_org_llm_config(org_id)
+        will_have_byok = existing is not None and existing.has_api_key and existing.is_byok
+
     # Non-BYOK model name validation against known catalogue
-    if body.api_key is None:
+    if not will_have_byok:
         from teardrop.benchmarks import MODEL_CATALOGUE
 
         catalogue_key = f"{body.provider.lower()}:{body.model}"
@@ -175,11 +183,6 @@ async def upsert_llm_config_endpoint(
         # provider key to an arbitrary org-controlled endpoint (key exfiltration).
         # Require BYOK: a key set in this request, or an existing stored key that
         # this request preserves (api_key omitted, not explicitly cleared).
-        api_key_omitted = "api_key" not in body.model_fields_set
-        will_have_byok = body.api_key is not None
-        if not will_have_byok and api_key_omitted:
-            existing = await get_org_llm_config(org_id)
-            will_have_byok = existing is not None and existing.has_api_key
         if not will_have_byok:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -206,6 +209,12 @@ async def upsert_llm_config_endpoint(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid api_base URL: {ssrf_err}",
                 )
+
+    if not will_have_byok:
+        try:
+            await require_priced_model(body.provider.lower(), body.model)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     cfg = await upsert_org_llm_config(
         org_id,

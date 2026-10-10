@@ -37,6 +37,7 @@ from teardrop.agent_schemas import (
 )
 from teardrop.agent_stream import (
     _EV_DONE,
+    _EV_ERROR,
     _EV_RUN_FINISHED,
     _EV_RUN_STARTED,
     _EV_USAGE_SUMMARY,
@@ -147,6 +148,14 @@ async def agent_run(
         try:
             async for event in _run_stream():
                 yield event
+        except HTTPException as exc:
+            logger.warning("Agent preparation rejected run_id=%s status=%s", run_id, exc.status_code)
+            payment_header = request.headers.get("payment-signature") or request.headers.get("x-payment")
+            if payment_header and getattr(billing, "billing_method", "") == "x402":
+                from billing import release_payment_nonce
+
+                await release_payment_nonce(payment_header)
+            yield _sse_event(_EV_ERROR, {"run_id": run_id, "error": str(exc.detail)})
         finally:
             run_lease.release()
 

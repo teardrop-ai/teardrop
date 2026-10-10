@@ -519,9 +519,11 @@ async def get_current_pricing() -> PricingRule | None:
     return await _call_async(_GET_CURRENT_PRICING_ORIG)
 
 
-async def get_current_pricing_for_model(provider: str, model: str, *, is_byok: bool = False) -> PricingRule | None:
-    """Return the effective ``PricingRule`` for a specific provider/model (BYOK-aware)."""
-    return await _call_async(_GET_CURRENT_PRICING_FOR_MODEL_ORIG, provider, model, is_byok=is_byok)
+async def get_current_pricing_for_model(
+    provider: str, model: str, *, is_byok: bool = False, exact_match: bool = False
+) -> PricingRule | None:
+    """Return effective model pricing, optionally excluding wildcard fallback rules."""
+    return await _call_async(_GET_CURRENT_PRICING_FOR_MODEL_ORIG, provider, model, is_byok=is_byok, exact_match=exact_match)
 
 
 async def get_live_pricing() -> PricingRule | None:

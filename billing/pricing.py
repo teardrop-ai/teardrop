@@ -43,8 +43,10 @@ async def get_current_pricing() -> PricingRule | None:
     return PricingRule(**dict(row))
 
 
-async def get_current_pricing_for_model(provider: str, model: str, *, is_byok: bool = False) -> PricingRule | None:
-    """Return the most specific pricing rule for a provider/model (direct DB query)."""
+async def get_current_pricing_for_model(
+    provider: str, model: str, *, is_byok: bool = False, exact_match: bool = False
+) -> PricingRule | None:
+    """Return effective pricing, optionally excluding provider/global fallback rules."""
     pool = _get_pool()
     row = await pool.fetchrow(
         """
@@ -53,6 +55,7 @@ async def get_current_pricing_for_model(provider: str, model: str, *, is_byok: b
         FROM pricing_rules
         WHERE effective_from <= NOW()
           AND is_byok = $3
+          AND (NOT $4 OR (provider = $1 AND model = $2))
           AND (
             (provider = $1 AND model = $2)
             OR (provider = $1 AND model = '')
@@ -70,6 +73,7 @@ async def get_current_pricing_for_model(provider: str, model: str, *, is_byok: b
         provider,
         model,
         is_byok,
+        exact_match,
     )
     if row is None:
         return None

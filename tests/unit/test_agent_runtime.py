@@ -18,6 +18,31 @@ from teardrop.agent_runtime import _RunContext, run_agent_once
 class TestPrepareRunContext:
     """Test that _prepare_run_context survives individual gather failures."""
 
+    @pytest.mark.parametrize("pricing_failure", [True, False])
+    async def test_llm_resolution_failure_is_not_silently_replaced(self, test_settings, pricing_failure):
+        from fastapi import HTTPException
+
+        from teardrop import agent_runtime
+        from teardrop.llm_config import UnpricedModelError
+
+        error = UnpricedModelError("No pricing rule for opus") if pricing_failure else RuntimeError("DB down")
+        with (
+            patch.object(agent_runtime, "get_graph", AsyncMock(return_value=MagicMock())),
+            patch.object(agent_runtime, "build_org_langchain_tools", AsyncMock(return_value=([], {}))),
+            patch.object(agent_runtime, "build_mcp_langchain_tools", AsyncMock(return_value=([], {}))),
+            patch("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {}))),
+            patch.object(agent_runtime, "resolve_llm_config", AsyncMock(side_effect=error)),
+            patch.object(test_settings, "memory_enabled", False),
+            patch.object(test_settings, "billing_enabled", False),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await agent_runtime._prepare_run_context(
+                    org_id="org-1", user_message="hello", billing=MagicMock(verified=False), mem_settings=test_settings
+                )
+        assert exc.value.status_code == (422 if pricing_failure else 503)
+        if not pricing_failure:
+            assert "DB down" not in exc.value.detail
+
     async def test_org_tools_exception_returns_empty_tools(self, test_settings):
         """When build_org_langchain_tools raises, the agent run must not crash."""
         from teardrop import agent_runtime

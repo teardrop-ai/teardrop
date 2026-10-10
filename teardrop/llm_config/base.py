@@ -117,6 +117,22 @@ def org_reasoning_effort(
     return per_model or reasoning_effort or None
 
 
+class UnpricedModelError(ValueError):
+    """A shared-key model lacks an explicit active pricing rule."""
+
+
+async def require_priced_model(provider: str, model: str) -> None:
+    """Require explicit shared-key pricing rather than a generic fallback rate."""
+    from billing import get_current_pricing_for_model
+
+    rule = await get_current_pricing_for_model(provider, model, exact_match=True)
+    if rule is None:
+        raise UnpricedModelError(
+            f"No pricing rule for '{provider}:{model}'. Shared-key configs must use "
+            "a model with an active pricing rule; supply an api_key (BYOK) for custom models."
+        )
+
+
 # ─── Database pool ────────────────────────────────────────────────────────────
 
 _pool: PgPool | None = None
@@ -474,11 +490,15 @@ async def build_llm_config_dict(org_id: str) -> dict[str, Any] | None:
     else:
         api_key = _resolve_shared_key(row["provider"], settings)
 
+    if row["is_byok"] and (not row["api_key_enc"] or not api_key):
+        raise RuntimeError("BYOK configuration has no usable API key. Re-upload it via PUT /llm-config.")
+
     return {
         "provider": row["provider"],
         "model": row["model"],
         "api_key": api_key,
         "api_base": row["api_base"],
+        "is_byok": bool(row["is_byok"]),
         "max_tokens": row["max_tokens"],
         "temperature": float(row["temperature"]),
         "timeout_seconds": row["timeout_seconds"],

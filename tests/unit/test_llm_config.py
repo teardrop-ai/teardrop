@@ -27,6 +27,7 @@ from teardrop.llm_config import (
     invalidate_llm_config_cache,
     is_provider_cooled_down,
     record_provider_failure,
+    require_priced_model,
     reset_llm_fernet,
     resolve_llm_config,
     upsert_org_llm_config,
@@ -74,6 +75,12 @@ def mock_settings(fernet_key):
             {"provider": "google", "model": "gemini-2.0-flash"},
         ],
     )
+
+
+@pytest.fixture
+def priced_shared_models():
+    with patch("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock())) as pricing:
+        yield pricing
 
 
 def _make_row(
@@ -328,14 +335,16 @@ class TestCooldowns:
 
 
 class TestSelectHighestQuality:
-    def test_selects_tier_1(self):
+    def test_retired_opus_alias_has_no_quality_tier(self):
+        assert "~anthropic/claude-opus-latest" not in llm_config.routing._QUALITY_TIERS
+
+    def test_equal_tiers_select_first(self):
         models = [
+            {"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"},  # tier 2
             {"provider": "google", "model": "gemini-3.8-flash"},  # tier 2
-            {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"},  # tier 1
-            {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash"},  # tier 2
         ]
         result = _select_highest_quality(models)
-        assert result["model"] == "~anthropic/claude-opus-latest"
+        assert result["model"] == "~deepseek/deepseek-flash-latest"
 
     def test_unknown_model_lowest_priority(self):
         models = [
@@ -501,6 +510,7 @@ class TestSelectCheapest:
 # ─── resolve_llm_config ──────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("priced_shared_models")
 class TestResolveLlmConfig:
     @pytest.mark.asyncio
     async def test_no_config_default_returns_none(self, mock_settings):
@@ -587,6 +597,7 @@ class TestResolveLlmConfig:
 # ─── _route_from_pool ────────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("priced_shared_models")
 class TestRouteFromPool:
     @pytest.mark.asyncio
     async def test_empty_pool_returns_none(self):
@@ -790,3 +801,124 @@ class TestUpsertOrgLlmConfig:
             )
 
         assert "org-1" not in llm_config.base._config_cache
+
+
+# ─── Explicit shared-key pricing guard ───────────────────────────────────────
+
+
+class TestRequirePricedModel:
+    @pytest.mark.asyncio
+    async def test_raises_when_no_pricing_rule(self):
+        with patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)) as pricing:
+            with pytest.raises(ValueError, match="~anthropic/claude-opus-latest"):
+                await require_priced_model("openrouter", "~anthropic/claude-opus-latest")
+        pricing.assert_awaited_once_with("openrouter", "~anthropic/claude-opus-latest", exact_match=True)
+
+    @pytest.mark.asyncio
+    async def test_passes_when_pricing_rule_exists(self):
+        with patch("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock())):
+            await require_priced_model("openrouter", "~deepseek/deepseek-flash-latest")
+
+
+class TestResolveRequiresPricedSharedKeyModel:
+    def _cfg(self, is_byok: bool):
+        cfg = MagicMock()
+        cfg.is_byok = is_byok
+        cfg.routing_preference = "default"
+        cfg.reasoning_effort = None
+        cfg.model_reasoning_effort = {}
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_unpriced_shared_key_config_fails_closed(self):
+        resolved = {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"}
+        with (
+            patch(
+                "teardrop.llm_config.routing.get_org_llm_config_cached",
+                AsyncMock(return_value=self._cfg(is_byok=False)),
+            ),
+            patch("teardrop.llm_config.routing.build_llm_config_dict", AsyncMock(return_value=resolved)),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(ValueError, match="~anthropic/claude-opus-latest"):
+                await resolve_llm_config("org-1")
+
+    @pytest.mark.asyncio
+    async def test_byok_config_skips_pricing_check(self):
+        resolved = {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"}
+        with (
+            patch(
+                "teardrop.llm_config.routing.get_org_llm_config_cached",
+                AsyncMock(return_value=self._cfg(is_byok=True)),
+            ),
+            patch("teardrop.llm_config.routing.build_llm_config_dict", AsyncMock(return_value=resolved)),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)) as pricing,
+        ):
+            assert await resolve_llm_config("org-1") == resolved
+            pricing.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleared_key_cannot_use_stale_byok_exemption(self):
+        resolved = {"provider": "openrouter", "model": "~anthropic/claude-opus-latest", "is_byok": False}
+        with (
+            patch(
+                "teardrop.llm_config.routing.get_org_llm_config_cached",
+                AsyncMock(return_value=self._cfg(is_byok=True)),
+            ),
+            patch("teardrop.llm_config.routing.build_llm_config_dict", AsyncMock(return_value=resolved)),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(ValueError, match="~anthropic/claude-opus-latest"):
+                await resolve_llm_config("org-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("missing_key", [False, True])
+    async def test_stored_byok_config_without_usable_key_rejected(self, mock_settings, missing_key):
+        with patch("teardrop.llm_config.base.get_settings", return_value=mock_settings):
+            encrypted = None if missing_key else _encrypt_llm_key("")
+        pool = AsyncMock()
+        pool.fetchrow.return_value = _make_row(api_key_enc=encrypted, is_byok=True)
+        llm_config.base._pool = pool
+        with patch("teardrop.llm_config.base.get_settings", return_value=mock_settings):
+            with pytest.raises(RuntimeError, match="no usable API key"):
+                await build_llm_config_dict("org-1")
+
+    @pytest.mark.asyncio
+    async def test_priced_shared_key_config_passes(self):
+        resolved = {"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"}
+        with (
+            patch(
+                "teardrop.llm_config.routing.get_org_llm_config_cached",
+                AsyncMock(return_value=self._cfg(is_byok=False)),
+            ),
+            patch("teardrop.llm_config.routing.build_llm_config_dict", AsyncMock(return_value=resolved)),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock())),
+        ):
+            assert await resolve_llm_config("org-1") == resolved
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("preference", ["default", "cost", "speed", "quality"])
+    async def test_unpriced_pool_model_rejected(self, preference, mock_settings):
+        mock_settings.default_model_pool = [{"provider": "openrouter", "model": "~anthropic/claude-opus-latest"}]
+        with (
+            patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)),
+            patch("billing.get_live_pricing_for_model", AsyncMock(return_value=MagicMock())),
+            patch("teardrop.benchmarks.get_model_benchmarks", AsyncMock(return_value={})),
+        ):
+            with pytest.raises(ValueError, match="~anthropic/claude-opus-latest"):
+                await llm_config._route_from_pool(preference)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("empty_pool", [False, True])
+    async def test_unpriced_global_model_rejected(self, empty_pool, mock_settings):
+        mock_settings.agent_provider = "openrouter"
+        mock_settings.agent_model = "~anthropic/claude-opus-latest"
+        mock_settings.default_model_pool = []
+        with (
+            patch("teardrop.llm_config.routing.get_settings", return_value=mock_settings),
+            patch("teardrop.llm_config.routing.get_org_llm_config_cached", AsyncMock(return_value=None)),
+            patch("billing.get_current_pricing_for_model", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(ValueError, match="~anthropic/claude-opus-latest"):
+                await resolve_llm_config("org-1", routing_preference="quality" if empty_pool else None)

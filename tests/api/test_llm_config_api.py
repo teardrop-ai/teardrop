@@ -126,7 +126,12 @@ async def test_api_base_with_explicit_null_key_returns_422(api_client, monkeypat
 
 @pytest.mark.anyio
 async def test_no_api_base_without_api_key_accepted(api_client, monkeypatch):
-    """Regression: a normal non-BYOK config (no api_base) is still accepted."""
+    """Regression: a normal non-BYOK config (no api_base) is accepted when priced."""
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.get_org_llm_config",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock()))
     monkeypatch.setattr(
         "teardrop.routers.org.llm_config.upsert_org_llm_config",
         AsyncMock(return_value=_fake_cfg(provider="openai", model="gpt-4o", has_api_key=False, is_byok=False, api_base=None)),
@@ -148,6 +153,11 @@ async def test_reasoning_effort_round_trips(api_client, monkeypatch):
     efforts = {"openrouter:~anthropic/claude-opus-latest": "high"}
     upsert = AsyncMock(return_value=_fake_cfg(reasoning_effort="low", model_reasoning_effort=efforts, api_base=None))
     monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.get_org_llm_config",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock()))
 
     resp = await api_client.put(
         "/llm-config",
@@ -184,3 +194,101 @@ async def test_invalid_reasoning_effort_returns_422(api_client, monkeypatch, pay
     resp = await api_client.put("/llm-config", json={"provider": "openai", "model": "gpt-4o", **payload})
     assert resp.status_code == 422
     upsert.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_unpriced_shared_key_model_rejected(api_client, monkeypatch):
+    """Shared-key configs need explicit pricing even when fallback billing exists."""
+    upsert = AsyncMock(return_value=_fake_cfg())
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.get_org_llm_config",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=None))
+    monkeypatch.setattr("billing.get_live_pricing_for_model", AsyncMock(return_value=MagicMock()))
+
+    resp = await api_client.put(
+        "/llm-config",
+        json={"provider": "openrouter", "model": "~anthropic/claude-opus-latest"},
+    )
+    assert resp.status_code == 422
+    assert "No pricing rule" in resp.json()["detail"]
+    upsert.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_unpriced_byok_model_accepted(api_client, monkeypatch):
+    """BYOK configs are exempt — they bill via the global BYOK orchestration rule."""
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.upsert_org_llm_config",
+        AsyncMock(return_value=_fake_cfg(provider="openrouter", model="~anthropic/claude-opus-latest")),
+    )
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=None))
+
+    resp = await api_client.put(
+        "/llm-config",
+        json={"provider": "openrouter", "model": "~anthropic/claude-opus-latest", "api_key": "sk-or-byok"},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_priced_shared_key_model_accepted(api_client, monkeypatch):
+    """Shared-key configs with an active pricing rule are accepted."""
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.get_org_llm_config",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock()))
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.upsert_org_llm_config",
+        AsyncMock(
+            return_value=_fake_cfg(
+                provider="openrouter",
+                model="~deepseek/deepseek-flash-latest",
+                has_api_key=False,
+                is_byok=False,
+                api_base=None,
+            )
+        ),
+    )
+
+    resp = await api_client.put(
+        "/llm-config",
+        json={"provider": "openrouter", "model": "~deepseek/deepseek-flash-latest"},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("api_key", ["", None, "omitted"])
+async def test_api_key_state_cannot_bypass_pricing(api_client, monkeypatch, api_key):
+    existing = _fake_cfg(has_api_key=True, is_byok=True)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=existing))
+    upsert = AsyncMock(return_value=_fake_cfg(model="custom-model"))
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+    pricing = AsyncMock(return_value=None)
+    monkeypatch.setattr("billing.get_current_pricing_for_model", pricing)
+    body = {"provider": "openrouter", "model": "~anthropic/claude-opus-latest"}
+    if api_key != "omitted":
+        body["api_key"] = api_key
+    resp = await api_client.put("/llm-config", json=body)
+    assert resp.status_code == (200 if api_key == "omitted" else 422)
+    if api_key == "omitted":
+        pricing.assert_not_called()
+    else:
+        upsert.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_preserved_byok_key_accepts_custom_model(api_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=_fake_cfg()))
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.upsert_org_llm_config", AsyncMock(return_value=_fake_cfg(model="custom-model"))
+    )
+    pricing = AsyncMock(return_value=None)
+    monkeypatch.setattr("billing.get_current_pricing_for_model", pricing)
+    resp = await api_client.put("/llm-config", json={"provider": "openrouter", "model": "custom-model"})
+    assert resp.status_code == 200
+    pricing.assert_not_called()

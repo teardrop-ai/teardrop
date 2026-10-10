@@ -17,6 +17,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+
+@pytest.fixture(autouse=True)
+def _priced_global_model(monkeypatch):
+    monkeypatch.setattr("billing.get_current_pricing_for_model", AsyncMock(return_value=MagicMock()))
+
+
 # ─── Authentication ───────────────────────────────────────────────────────────
 
 
@@ -203,6 +209,40 @@ async def test_agent_run_insufficient_credit_returns_402(test_settings, monkeypa
 
 
 # ─── Successful stream (billing disabled) ────────────────────────────────────
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("unpriced", [True, False])
+async def test_agent_run_pricing_failure_emits_error_without_model_execution(api_client, monkeypatch, unpriced):
+    from billing import BillingResult
+    from teardrop.llm_config import UnpricedModelError
+
+    error = UnpricedModelError("No pricing rule for opus") if unpriced else RuntimeError("DB down")
+    monkeypatch.setattr("teardrop.agent_runtime.resolve_llm_config", AsyncMock(side_effect=error))
+    monkeypatch.setattr(
+        "teardrop.routers.agent._run_billing_gate",
+        AsyncMock(return_value=(BillingResult(verified=True, billing_method="x402"), None)),
+    )
+    release_nonce = AsyncMock()
+    monkeypatch.setattr("billing.release_payment_nonce", release_nonce)
+    lease = MagicMock()
+    monkeypatch.setattr("teardrop.routers.agent.try_acquire_agent_run_slot", lambda: lease)
+    graph = MagicMock()
+    graph.astream_events = MagicMock()
+    monkeypatch.setattr("teardrop.agent_runtime.get_graph", AsyncMock(return_value=graph))
+    monkeypatch.setattr("teardrop.agent_runtime.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.agent_runtime.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
+
+    response = await api_client.post("/agent/run", json={"message": "hello"}, headers={"payment-signature": "test-payment"})
+    assert response.status_code == 200
+    assert "event: ERROR" in response.text
+    assert ("No pricing rule for opus" if unpriced else "LLM configuration could not be verified") in response.text
+    assert "RUN_FINISHED" not in response.text
+    assert "DB down" not in response.text
+    graph.astream_events.assert_not_called()
+    lease.release.assert_called_once()
+    release_nonce.assert_awaited_once_with("test-payment")
 
 
 @pytest.mark.anyio

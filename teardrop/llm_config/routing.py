@@ -20,6 +20,7 @@ from teardrop.llm_config.base import (
     build_llm_config_dict,
     get_org_llm_config_cached,
     org_reasoning_effort,
+    require_priced_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,6 @@ _COOLDOWN_SECONDS = 60.0
 _QUALITY_TIERS: dict[str, int] = {
     "~deepseek/deepseek-flash-latest": 2,
     "gemini-3.8-flash": 2,
-    "~anthropic/claude-opus-latest": 1,
 }
 
 
@@ -71,13 +71,18 @@ async def resolve_llm_config(
         # No org config — check if routing was explicitly requested
         if routing_preference and routing_preference != "default":
             return await _route_from_pool(routing_preference)
+        settings = get_settings()
+        await require_priced_model(settings.agent_provider, settings.agent_model)
         return None
 
     effective_routing = routing_preference or cfg.routing_preference
 
     # BYOK orgs always use their own model — no smart routing across Teardrop pool
     if cfg.is_byok or effective_routing == "default":
-        return await build_llm_config_dict(org_id)
+        resolved = await build_llm_config_dict(org_id)
+        if resolved is not None and not resolved.get("is_byok", cfg.is_byok):
+            await require_priced_model(resolved["provider"], resolved["model"])
+        return resolved
 
     return await _route_from_pool(effective_routing, cfg)
 
@@ -88,6 +93,7 @@ async def _route_from_pool(routing_preference: str, org_cfg: OrgLlmConfig | None
     pool_models = settings.default_model_pool
 
     if not pool_models:
+        await require_priced_model(settings.agent_provider, settings.agent_model)
         return None
 
     # Filter out cooled-down providers
@@ -104,6 +110,8 @@ async def _route_from_pool(routing_preference: str, org_cfg: OrgLlmConfig | None
         selected = _select_highest_quality(available)
     else:
         selected = available[0]
+
+    await require_priced_model(selected["provider"], selected["model"])
 
     # Build config dict using shared keys
     return {
