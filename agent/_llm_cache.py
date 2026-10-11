@@ -29,6 +29,8 @@ def _cache_key(
     max_tokens: int = 4096,
     temperature: float = 0.0,
     reasoning_effort: str | None = None,
+    is_byok: bool = False,
+    timeout_seconds: int = 120,
 ) -> str:
     """Build a cache key from provider+model+key hash. Never stores raw keys."""
     raw = json.dumps(
@@ -40,6 +42,8 @@ def _cache_key(
             "max_tokens": max_tokens,
             "temperature": temperature,
             "reasoning_effort": reasoning_effort,
+            "is_byok": is_byok,
+            "timeout_seconds": timeout_seconds,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -63,6 +67,8 @@ def get_llm_for_request(llm_config: dict[str, Any] | None = None) -> BaseChatMod
         max_tokens=llm_config.get("max_tokens", 4096),
         temperature=llm_config.get("temperature", 0.0),
         reasoning_effort=llm_config.get("reasoning_effort"),
+        is_byok=llm_config.get("is_byok") is True,
+        timeout_seconds=llm_config.get("timeout_seconds", 120),
     )
 
     with _llm_cache_lock:

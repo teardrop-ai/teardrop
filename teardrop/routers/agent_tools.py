@@ -23,10 +23,20 @@ router = APIRouter()
 
 
 class AgentToolItem(BaseModel):
+    """Agent-run tool inventory entry; inclusion does not guarantee executability or authorize payment."""
+
     name: str
     qualified_name: str
-    source: Literal["platform", "org", "marketplace"]
-    access_mode: Literal["included", "subscribed"]
+    source: Literal["platform", "org", "marketplace"] = Field(
+        ..., description="Tool source: platform built-in, org-owned tool, or pinned community marketplace tool."
+    )
+    access_mode: Literal["included", "subscribed"] = Field(
+        ...,
+        description=(
+            "Agent-run selection: included means no marketplace pin is needed; subscribed is the legacy value for pinned. "
+            "Neither means free or payment-authorized. Pins are not required for direct MCP calls."
+        ),
+    )
     display_name: str
     description: str
     cost_usdc: int
@@ -37,7 +47,11 @@ class AgentToolItem(BaseModel):
 async def list_agent_tools(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
-    """Return all tools available to the authenticated org's agent runs."""
+    """Return the org's platform, org-owned, and pinned community tool inventory.
+
+    Inventory does not guarantee runtime injection or execution: schema drift,
+    tool policy, or runtime failures can prevent use. Billing applies separately.
+    """
     org_id = _require_org_id(payload)
     settings = get_settings()
 

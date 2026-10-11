@@ -121,6 +121,10 @@ class UnpricedModelError(ValueError):
     """A shared-key model lacks an explicit active pricing rule."""
 
 
+class ByokProviderConflictError(ValueError):
+    """A key-preserving update would cross the Anthropic provider boundary."""
+
+
 async def require_priced_model(provider: str, model: str) -> None:
     """Require explicit shared-key pricing rather than a generic fallback rate."""
     from billing import get_current_pricing_for_model
@@ -401,6 +405,9 @@ async def upsert_org_llm_config(
                 reasoning_effort = EXCLUDED.reasoning_effort,
                 model_reasoning_effort = EXCLUDED.model_reasoning_effort,
                 updated_at = EXCLUDED.updated_at
+            WHERE org_llm_config.api_key_enc IS NULL
+               OR org_llm_config.provider = EXCLUDED.provider
+               OR (org_llm_config.provider <> 'anthropic' AND EXCLUDED.provider <> 'anthropic')
             RETURNING is_byok, (api_key_enc IS NOT NULL) AS has_api_key
             """,
             org_id,
@@ -415,8 +422,10 @@ async def upsert_org_llm_config(
             reasoning_effort,
             model_efforts_json,
         )
-        is_byok = row["is_byok"] if row else False
-        has_key = row["has_api_key"] if row else False
+        if row is None:
+            raise ByokProviderConflictError("Changing providers with BYOK requires a new api_key for the selected provider.")
+        is_byok = row["is_byok"]
+        has_key = row["has_api_key"]
 
     # For the api_key branch, both flags are trivially True.
     if api_key_enc is not None:

@@ -234,6 +234,119 @@ async def test_unpriced_byok_model_accepted(api_client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_anthropic_byok_provider_accepted(api_client, monkeypatch):
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.upsert_org_llm_config",
+        AsyncMock(return_value=_fake_cfg(provider="anthropic", model="claude-sonnet-4-6", api_base=None)),
+    )
+    require_priced_model = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.org.llm_config.require_priced_model", require_priced_model)
+
+    resp = await api_client.put(
+        "/llm-config",
+        json={"provider": "anthropic", "model": "claude-sonnet-4-6", "api_key": "sk-anthropic-byok"},
+    )
+
+    assert resp.status_code == 200
+    require_priced_model.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_anthropic_provider_rejected_without_byok(api_client, monkeypatch):
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=None))
+    upsert = AsyncMock(return_value=_fake_cfg(provider="anthropic"))
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+
+    resp = await api_client.put("/llm-config", json={"provider": "anthropic", "model": "claude-sonnet-4-6"})
+
+    assert resp.status_code == 422
+    assert "Allowed for this configuration" in resp.json()["detail"]
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_unknown_provider_rejected_before_db_lookup(api_client, monkeypatch):
+    get_config = AsyncMock()
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", get_config)
+
+    resp = await api_client.put("/llm-config", json={"provider": "mistral", "model": "some-model"})
+
+    assert resp.status_code == 422
+    get_config.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_anthropic_byok_provider_accepts_preserved_key(api_client, monkeypatch):
+    existing = _fake_cfg(provider="anthropic", model="claude-sonnet-4-6", api_base=None)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=existing))
+    upsert = AsyncMock(return_value=existing)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+
+    resp = await api_client.put("/llm-config", json={"provider": "anthropic", "model": "claude-sonnet-4-6"})
+
+    assert resp.status_code == 200
+    assert upsert.call_args.kwargs["clear_api_key"] is False
+
+
+@pytest.mark.anyio
+async def test_concurrent_byok_provider_switch_returns_conflict(api_client, monkeypatch):
+    from teardrop.llm_config.base import ByokProviderConflictError
+
+    existing = _fake_cfg(provider="anthropic")
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=existing))
+    monkeypatch.setattr(
+        "teardrop.routers.org.llm_config.upsert_org_llm_config",
+        AsyncMock(side_effect=ByokProviderConflictError("Changing providers with BYOK requires a new api_key.")),
+    )
+    resp = await api_client.put("/llm-config", json={"provider": "anthropic", "model": "claude-sonnet-4-6"})
+    assert resp.status_code == 409
+    assert "requires a new api_key" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "overrides",
+    [{"api_key": None}, {"api_key": ""}, {"api_base": "https://proxy.example.com"}, {"temperature": 1.1}],
+)
+async def test_anthropic_invalid_config_does_not_mutate_stored_key(api_client, monkeypatch, overrides):
+    existing = _fake_cfg(provider="anthropic")
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=existing))
+    upsert = AsyncMock(return_value=existing)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+    body = {"provider": "anthropic", "model": "claude-sonnet-4-6", "api_key": "test-org-key", **overrides}
+    resp = await api_client.put("/llm-config", json=body)
+    assert resp.status_code == 422
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_switching_to_anthropic_with_replacement_key_accepted(api_client, monkeypatch):
+    upsert = AsyncMock(return_value=_fake_cfg(provider="anthropic", api_base=None))
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+    resp = await api_client.put(
+        "/llm-config", json={"provider": "Anthropic", "model": "claude-sonnet-4-6", "api_key": "new-org-key"}
+    )
+    assert resp.status_code == 200
+    assert upsert.call_args.kwargs["provider"] == "anthropic"
+    assert upsert.call_args.kwargs["api_key"] == "new-org-key"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("existing_provider,requested_provider", [("openai", "anthropic"), ("anthropic", "openai")])
+async def test_switching_byok_provider_requires_new_key(api_client, monkeypatch, existing_provider, requested_provider):
+    existing = _fake_cfg(provider=existing_provider)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.get_org_llm_config", AsyncMock(return_value=existing))
+    upsert = AsyncMock(return_value=existing)
+    monkeypatch.setattr("teardrop.routers.org.llm_config.upsert_org_llm_config", upsert)
+
+    resp = await api_client.put("/llm-config", json={"provider": requested_provider, "model": "model-for-provider"})
+
+    assert resp.status_code == 422
+    assert "requires a new api_key" in resp.json()["detail"]
+    upsert.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_priced_shared_key_model_accepted(api_client, monkeypatch):
     """Shared-key configs with an active pricing rule are accepted."""
     monkeypatch.setattr(

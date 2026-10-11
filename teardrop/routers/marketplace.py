@@ -900,10 +900,14 @@ async def marketplace_llms_txt(request: Request) -> Response:
 
 
 class SubscribeRequest(BaseModel):
+    """Select a community tool for the org's agent runs; this does not authorize payment or direct MCP access."""
+
     qualified_tool_name: str = Field(..., min_length=3, max_length=128, pattern=r"^[a-z0-9_-]+/[a-z0-9_]+$")
 
 
 class MarketplaceSubscriptionResponse(BaseModel):
+    """An agent-run pin represented by legacy subscription fields, not a recurring payment plan."""
+
     id: str
     org_id: str
     qualified_tool_name: str
@@ -921,7 +925,12 @@ async def subscribe_to_marketplace_tool(
     body: SubscribeRequest,
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
-    """Subscribe the authenticated org to a marketplace tool for /agent/run injection."""
+    """Pin a community tool for the authenticated org's /agent/run tool set.
+
+    The legacy subscription route selects agent tools, not recurring payments.
+    Direct /tools/mcp calls do not require a pin and retain authentication and
+    billing requirements. Pinning does not guarantee runtime injection or execution.
+    """
     from marketplace import PlatformToolSubscriptionError, SelfSubscribeError, subscribe_to_tool
 
     org_id: str = payload.get("org_id", "")
@@ -947,12 +956,16 @@ async def subscribe_to_marketplace_tool(
 
 
 class MarketplaceSubscriptionItem(BaseModel):
+    """A pinned community tool; the legacy subscribed_at field records when the pin was selected."""
+
     id: str
     qualified_tool_name: str
     subscribed_at: str = Field(..., description="ISO 8601 timestamp.")
 
 
 class MarketplaceSubscriptionListResponse(BaseModel):
+    """Active agent-run pins under the legacy subscriptions key; not an execution guarantee."""
+
     subscriptions: list[MarketplaceSubscriptionItem]
 
 
@@ -960,7 +973,7 @@ class MarketplaceSubscriptionListResponse(BaseModel):
 async def list_marketplace_subscriptions(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
-    """List active marketplace subscriptions for the authenticated org."""
+    """List the authenticated org's active community tool pins for /agent/run, not direct MCP access grants."""
     from marketplace import get_org_subscriptions
 
     org_id: str = payload.get("org_id", "")
@@ -988,7 +1001,7 @@ async def unsubscribe_from_marketplace_tool(
     subscription_id: str,
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
-    """Unsubscribe from a marketplace tool."""
+    """Unpin a community tool from the org's /agent/run selection without revoking direct MCP access."""
     from marketplace import unsubscribe_from_tool
 
     org_id: str = payload.get("org_id", "")

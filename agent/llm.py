@@ -33,12 +33,17 @@ try:
 except ImportError:
     ChatGoogleGenerativeAI = None  # type: ignore[assignment,misc]
 
+try:
+    from langchain_anthropic import ChatAnthropic
+except ImportError:
+    ChatAnthropic = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
-# ── Allowed providers (validated at config and request boundaries) ────────────
+# ── Shared/default providers (validated at config and request boundaries) ─────
 
-# Anthropic was retired as a direct provider; Claude models route via OpenRouter.
 ALLOWED_PROVIDERS = frozenset({"openai", "google", "openrouter"})
+BYOK_ONLY_PROVIDERS = frozenset({"anthropic"})
 
 # Reasoning effort levels accepted from operators and orgs. Applied as
 # ``reasoning.effort`` (openrouter) or ``thinking_level`` (google; "none" maps
@@ -163,9 +168,10 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
     """Construct a ``BaseChatModel`` from an explicit config dict.
 
     Expected keys:
-        provider        — "openai" | "google" | "openrouter"
+        provider        — "openai" | "google" | "openrouter"; "anthropic" for BYOK only
         model           — model identifier string
         api_key         — provider API key (required)
+        is_byok         — true when the API key belongs to the org
         api_base         — optional custom base URL (OpenAI-compatible endpoints)
         max_tokens      — int (default 4096)
         temperature     — float (default 0.0)
@@ -179,10 +185,14 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
             per-model default (``model_reasoning_effort``) applies.
     """
     provider = config["provider"].lower()
-    if provider not in ALLOWED_PROVIDERS:
+    is_byok = config.get("is_byok") is True
+    api_key = config.get("api_key") or ""
+    if provider not in ALLOWED_PROVIDERS and not (is_byok and provider in BYOK_ONLY_PROVIDERS):
         raise ValueError(f"Unknown provider '{provider}'. Supported: {', '.join(sorted(ALLOWED_PROVIDERS))}.")
 
-    api_key = config.get("api_key") or ""
+    if provider in BYOK_ONLY_PROVIDERS and not api_key:
+        raise ValueError(f"Provider '{provider}' requires a non-empty BYOK API key.")
+
     model = config["model"]
     api_base = config.get("api_base")
     reasoning_effort = str(config.get("reasoning_effort") or platform_reasoning_effort(provider, model) or "").strip().lower()
@@ -208,6 +218,16 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         if reasoning_effort:
             kwargs["thinking_level"] = "minimal" if reasoning_effort == "none" else reasoning_effort
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
+
+    if provider == "anthropic":
+        if ChatAnthropic is None:
+            raise RuntimeError("langchain-anthropic is not installed. Run: pip install langchain-anthropic")
+        return ChatAnthropic(
+            **common,
+            api_key=api_key,
+            base_url="https://api.anthropic.com",
+            timeout=config.get("timeout_seconds", 120),
+        )  # type: ignore[arg-type]
 
     if provider == "openrouter":
         # OpenRouter exposes an OpenAI-compatible API at a fixed base URL.

@@ -4,11 +4,13 @@ This reference lists the environment variables and configuration parameters used
 
 Set these key-value pairs in your `.env` file or within your deployment provider dashboard (e.g., Render, Docker Compose).
 
+Direct Anthropic agent inference is available only for organizations using BYOK: submit `provider=anthropic` and the organization's own `api_key` through `PUT /llm-config`. Anthropic is not supported as the shared `AGENT_PROVIDER` or in Teardrop's shared model pool.
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `AGENT_PROVIDER` | `anthropic`, `openai`, `google`, or `openrouter` (default: `openrouter`) |
+| `AGENT_PROVIDER` | `openai`, `google`, or `openrouter` (default: `openrouter`) |
 | `AGENT_MODEL` | Optional global model override (default: `deepseek/deepseek-v4-flash`). OpenRouter provider eligibility follows the API key's data policy, including ZDR. |
 | `AGENT_SYNTHESIS_MAX_TOKENS` | Max output tokens for post-tool synthesis turns (`tool_iterations >= 1`). Default: `4096`. |
 | `AGENT_PLANNER_PROVIDER` | Optional provider override for initial planner turns (`tool_iterations==0`) when no org-level BYOK config is set. |
@@ -29,7 +31,7 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 | `AGENT_MAX_TOOL_RESULT_CHARS` | Maximum characters retained in each planner-visible tool message before bounded truncation (default: `8000`). Structured tool facts are summarized into planner slots before truncation. |
 | `AGENT_MAX_CONCURRENT_RUNS` | Maximum active agent runs admitted per application process (default: `16`). Saturated HTTP requests receive `503`; non-streaming callers receive a retryable capacity error. |
 | `AGENT_POST_RUN_TELEMETRY_MAX_TASKS` | Maximum active best-effort tool-event and memory-extraction tasks per process (default: `32`). Excess telemetry is dropped; financial settlement and marketplace earnings are never routed through this limit. |
-| `ANTHROPIC_API_KEY` | Required if `AGENT_PROVIDER=anthropic` |
+| `ANTHROPIC_API_KEY` | Optional API key for Anthropic-based evaluation tooling; agent inference uses the org-owned key submitted through `/llm-config`. |
 | `OPENAI_API_KEY` | Required if `AGENT_PROVIDER=openai` |
 | `GOOGLE_API_KEY` | Required if `AGENT_PROVIDER=google` |
 | `DATABASE_URL` | Neon Postgres connection string |

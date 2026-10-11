@@ -5,13 +5,17 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from langchain_core.messages import AIMessage
+from anthropic import AsyncAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.llm import (
     ALLOWED_PROVIDERS,
+    BYOK_ONLY_PROVIDERS,
     _cache_key,
     clear_llm_cache,
     create_llm,
@@ -300,6 +304,7 @@ def _make_config(**overrides) -> dict:
 class TestAllowedProviders:
     def test_contains_expected(self):
         assert "anthropic" not in ALLOWED_PROVIDERS
+        assert "anthropic" in BYOK_ONLY_PROVIDERS
         assert "openai" in ALLOWED_PROVIDERS
         assert "google" in ALLOWED_PROVIDERS
         assert "openrouter" in ALLOWED_PROVIDERS
@@ -307,11 +312,95 @@ class TestAllowedProviders:
     def test_rejects_unknown(self):
         assert "mistral" not in ALLOWED_PROVIDERS
 
+    def test_cache_key_includes_byok_status(self):
+        byok_key = _cache_key("anthropic", "claude-sonnet", "same-key", is_byok=True)
+        shared_key = _cache_key("anthropic", "claude-sonnet", "same-key", is_byok=False)
+        assert byok_key != shared_key
+
 
 class TestCreateLlmFromConfig:
     def test_anthropic_is_retired(self):
         with pytest.raises(ValueError, match="Unknown provider 'anthropic'"):
             create_llm_from_config(_make_config(provider="anthropic"))
+
+    @patch("agent.llm.ChatAnthropic")
+    def test_anthropic_byok(self, mock_cls):
+        config = _make_config(provider="anthropic", is_byok=True)
+        result = create_llm_from_config(config)
+        mock_cls.assert_called_once_with(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            temperature=0.0,
+            api_key="sk-test-key-12345",
+            base_url="https://api.anthropic.com",
+            timeout=120,
+        )
+        assert result is mock_cls.return_value
+
+    def test_anthropic_real_client_honours_timeout_and_fixed_endpoint(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_URL", "https://proxy.example.com")
+        config = _make_config(provider="anthropic", is_byok=True, timeout_seconds=19)
+        client = create_llm_from_config(config)
+        assert client.anthropic_api_url == "https://api.anthropic.com"
+        assert client.default_request_timeout == 19
+
+    def test_anthropic_byok_requires_api_key(self):
+        config = _make_config(provider="anthropic", is_byok=True, api_key="")
+        with pytest.raises(ValueError, match="non-empty BYOK API key"):
+            create_llm_from_config(config)
+
+    async def test_anthropic_byok_sdk_tool_round_trip(self):
+        requests = []
+
+        def respond(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            assert request.url.host == "api.anthropic.com"
+            assert request.headers["x-api-key"] == "test-org-key"
+            first_turn = len(requests) == 1
+            content = (
+                [{"type": "tool_use", "id": "tool_1", "name": "lookup", "input": {"symbol": "USDC"}}]
+                if first_turn
+                else [{"type": "text", "text": "USDC balance is 5."}]
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "content": content,
+                    "stop_reason": "tool_use" if first_turn else "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 12, "output_tokens": 8},
+                },
+            )
+
+        config = _make_config(is_byok=True, model="claude-sonnet-4-6", api_key="test-org-key")
+        client = create_llm_from_config(config)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            client._async_client = AsyncAnthropic(
+                api_key=config["api_key"], base_url=client.anthropic_api_url, http_client=http_client
+            )
+            bound = client.bind_tools(
+                [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a balance.",
+                        "input_schema": {"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]},
+                    }
+                ]
+            )
+            messages = [SystemMessage(content="Answer using tools."), HumanMessage(content="USDC balance?")]
+            response = await bound.ainvoke(messages)
+            assert response.tool_calls[0]["name"] == "lookup"
+            assert response.tool_calls[0]["args"] == {"symbol": "USDC"}
+            result = await bound.ainvoke([*messages, response, ToolMessage(content="5", tool_call_id="tool_1")])
+        assert result.content == "USDC balance is 5."
+        assert requests[0]["tools"][0]["name"] == "lookup"
+        assert requests[1]["messages"][-1]["content"][0]["type"] == "tool_result"
+        assert extract_usage(result)["tokens_in"] == 12
 
     @patch("agent.llm.ChatOpenAI")
     def test_openai(self, mock_cls):
@@ -495,6 +584,23 @@ class TestGetLlmForRequest:
 
     def teardown_method(self):
         clear_llm_cache()
+
+    @patch("agent.llm.ChatAnthropic")
+    def test_cached_anthropic_byok_cannot_satisfy_shared_config(self, mock_cls):
+        config = _make_config(is_byok=True)
+        get_llm_for_request(config)
+        with pytest.raises(ValueError, match="Unknown provider"):
+            get_llm_for_request({**config, "is_byok": False})
+        mock_cls.assert_called_once()
+
+    @patch("agent.llm.ChatAnthropic")
+    def test_anthropic_timeout_change_builds_new_client(self, mock_cls):
+        mock_cls.side_effect = [MagicMock(), MagicMock()]
+        config = _make_config(is_byok=True, timeout_seconds=19)
+        first = get_llm_for_request(config)
+        second = get_llm_for_request({**config, "timeout_seconds": 25})
+        assert first is not second
+        assert mock_cls.call_args.kwargs["timeout"] == 25
 
     @patch("agent.llm.get_llm")
     def test_none_config_falls_back_to_singleton(self, mock_get_llm):

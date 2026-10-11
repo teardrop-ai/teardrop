@@ -622,8 +622,10 @@
         "type": "object"
       },
       "AgentToolItem": {
+        "description": "Agent-run tool inventory entry; inclusion does not guarantee executability or authorize payment.",
         "properties": {
           "access_mode": {
+            "description": "Agent-run selection: included means no marketplace pin is needed; subscribed is the legacy value for pinned. Neither means free or payment-authorized. Pins are not required for direct MCP calls.",
             "enum": [
               "included",
               "subscribed"
@@ -657,6 +659,7 @@
             "type": "string"
           },
           "source": {
+            "description": "Tool source: platform built-in, org-owned tool, or pinned community marketplace tool.",
             "enum": [
               "platform",
               "org",
@@ -4307,6 +4310,7 @@
         "type": "object"
       },
       "MarketplaceSubscriptionItem": {
+        "description": "A pinned community tool; the legacy subscribed_at field records when the pin was selected.",
         "properties": {
           "id": {
             "title": "Id",
@@ -4331,6 +4335,7 @@
         "type": "object"
       },
       "MarketplaceSubscriptionListResponse": {
+        "description": "Active agent-run pins under the legacy subscriptions key; not an execution guarantee.",
         "properties": {
           "subscriptions": {
             "items": {
@@ -4347,6 +4352,7 @@
         "type": "object"
       },
       "MarketplaceSubscriptionResponse": {
+        "description": "An agent-run pin represented by legacy subscription fields, not a recurring payment plan.",
         "properties": {
           "id": {
             "title": "Id",
@@ -7096,6 +7102,7 @@
         "type": "object"
       },
       "SubscribeRequest": {
+        "description": "Select a community tool for the org's agent runs; this does not authorize payment or direct MCP access.",
         "properties": {
           "qualified_tool_name": {
             "maxLength": 128,
@@ -8215,7 +8222,7 @@
                 "type": "null"
               }
             ],
-            "description": "Provider API key (BYOK). Omit to use Teardrop shared key.",
+            "description": "Provider API key (BYOK). Omit to use Teardrop shared key when supported.",
             "title": "Api Key"
           },
           "max_tokens": {
@@ -8241,7 +8248,7 @@
             "type": "object"
           },
           "provider": {
-            "description": "LLM provider: openai, google, or openrouter",
+            "description": "LLM provider: openai, google, or openrouter; anthropic requires BYOK",
             "title": "Provider",
             "type": "string"
           },
@@ -8583,7 +8590,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.8.2"
+    "version": "2.9.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11860,7 +11867,7 @@
     },
     "/agent/tools": {
       "get": {
-        "description": "Return all tools available to the authenticated org's agent runs.",
+        "description": "Return the org's platform, org-owned, and pinned community tool inventory.\n\nInventory does not guarantee runtime injection or execution: schema drift,\ntool policy, or runtime failures can prevent use. Billing applies separately.",
         "operationId": "list_agent_tools_agent_tools_get",
         "responses": {
           "200": {
@@ -14040,7 +14047,7 @@
     },
     "/marketplace/subscriptions": {
       "get": {
-        "description": "List active marketplace subscriptions for the authenticated org.",
+        "description": "List the authenticated org's active community tool pins for /agent/run, not direct MCP access grants.",
         "operationId": "list_marketplace_subscriptions_marketplace_subscriptions_get",
         "responses": {
           "200": {
@@ -14065,7 +14072,7 @@
         ]
       },
       "post": {
-        "description": "Subscribe the authenticated org to a marketplace tool for /agent/run injection.",
+        "description": "Pin a community tool for the authenticated org's /agent/run tool set.\n\nThe legacy subscription route selects agent tools, not recurring payments.\nDirect /tools/mcp calls do not require a pin and retain authentication and\nbilling requirements. Pinning does not guarantee runtime injection or execution.",
         "operationId": "subscribe_to_marketplace_tool_marketplace_subscriptions_post",
         "requestBody": {
           "content": {
@@ -14112,7 +14119,7 @@
     },
     "/marketplace/subscriptions/{subscription_id}": {
       "delete": {
-        "description": "Unsubscribe from a marketplace tool.",
+        "description": "Unpin a community tool from the org's /agent/run selection without revoking direct MCP access.",
         "operationId": "unsubscribe_from_marketplace_tool_marketplace_subscriptions__subscription_id__delete",
         "parameters": [
           {

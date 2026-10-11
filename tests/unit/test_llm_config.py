@@ -693,6 +693,19 @@ class TestCacheInvalidation:
 
 
 class TestUpsertOrgLlmConfig:
+    async def test_key_preserving_provider_conflict_fails_closed(self):
+        pool = AsyncMock()
+        pool.fetchrow.return_value = None
+        llm_config.base._pool = pool
+        with patch("teardrop.llm_config.base.invalidate_llm_config_cache", new_callable=AsyncMock) as invalidate:
+            with pytest.raises(llm_config.base.ByokProviderConflictError, match="requires a new api_key"):
+                await upsert_org_llm_config("org-1", provider="anthropic", model="claude-sonnet-4-6")
+        sql = pool.fetchrow.call_args.args[0]
+        assert "WHERE org_llm_config.api_key_enc IS NULL" in sql
+        assert "org_llm_config.provider = EXCLUDED.provider" in sql
+        assert "org_llm_config.provider <> 'anthropic' AND EXCLUDED.provider <> 'anthropic'" in sql
+        invalidate.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_upsert_with_api_key(self, mock_settings):
         pool = AsyncMock()

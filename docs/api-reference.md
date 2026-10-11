@@ -172,6 +172,28 @@ To pay, broadcast a standard ERC-20 transfer of exactly `amount` of `currency` f
 | `GET` | `/marketplace/subscriptions` | Bearer | List pinned community tools |
 | `DELETE` | `/marketplace/subscriptions/{id}` | Bearer | Unpin a community tool |
 
+### Agent-Run Pins vs Direct Tool Calls
+
+The `/marketplace/subscriptions` routes retain their legacy names: a subscription
+is an organization-level **pin** selecting a community tool for `/agent/run`, not
+a recurring payment plan or permission to call it directly through MCP. Unpinning
+removes that selection; it does not revoke direct MCP access. Published community
+tools can be called through `/tools/mcp` without a pin, subject to authentication,
+funded-credit requirements, argument validation, and the tool's current price.
+
+Ownership, agent-run selection, and payment are separate concepts:
+
+- Catalog `tool_type` identifies `platform` or `community`; it does not indicate
+    whether the caller has pinned the tool.
+- In `/agent/tools`, `source` identifies platform, org-owned, or marketplace
+    tools. The existing `access_mode="included"` means no marketplace pin is needed;
+    `access_mode="subscribed"` is the legacy value for a pinned community tool.
+    Neither value means the tool is free or that payment has been authorized.
+- A pin does not guarantee executability. Runtime injection skips tools that are
+    no longer published, whose schema differs from the pinned schema hash, or whose
+    runtime wrapper cannot be built. Run policy and execution failures can also
+    prevent a selected tool from being called. Inventory is not an execution guarantee.
+
 `GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `cost_usdc` is the effective per-call price exactly as billed by `/agent/run`, `/tools/mcp`, the deprecated `/mcp/v1`, and `GET /marketplace/quote`; price sorting uses the listed price before admin overrides. `output_schema` is the tool's declared result schema, or `null`. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats; `reputation_score` and `success_rate` are `null` for unrated tools (absence means "unrated", not zero). `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
 
 `GET /marketplace/authors` returns active published authors, including the `platform` pseudo-author when platform tools are active. Each entry contains `org_slug`, `org_name`, `tool_count`, and aggregate `total_calls`; `q` searches the public organization name or slug, and `cursor` is an opaque slug keyset token. Follow an author entry with `GET /marketplace/authors/{org_slug}` to retrieve its paginated tools. The author index is catalog metadata only and does not provide a remote A2A URL.

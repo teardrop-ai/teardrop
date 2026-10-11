@@ -22,6 +22,7 @@ from teardrop.llm_config import (
     require_priced_model,
     upsert_org_llm_config,
 )
+from teardrop.llm_config.base import ByokProviderConflictError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -33,12 +34,12 @@ router = APIRouter()
 
 
 class UpsertLlmConfigRequest(BaseModel):
-    provider: str = Field(..., description="LLM provider: openai, google, or openrouter")
+    provider: str = Field(..., description="LLM provider: openai, google, or openrouter; anthropic requires BYOK")
     model: str = Field(..., min_length=1, max_length=200, description="Model identifier")
     api_key: str | None = Field(
         default=None,
         min_length=1,
-        description="Provider API key (BYOK). Omit to use Teardrop shared key.",
+        description="Provider API key (BYOK). Omit to use Teardrop shared key when supported.",
     )
     api_base: str | None = Field(
         default=None,
@@ -125,16 +126,10 @@ async def upsert_llm_config_endpoint(
     payload: dict = Depends(require_auth),
 ) -> JSONResponse:
     """Create or update the authenticated org's LLM configuration."""
-    from agent.llm import ALLOWED_PROVIDERS, validate_model_reasoning_effort, validate_reasoning_effort
+    from agent.llm import ALLOWED_PROVIDERS, BYOK_ONLY_PROVIDERS, validate_model_reasoning_effort, validate_reasoning_effort
     from tools.definitions.http_fetch import validate_url
 
     org_id = _require_org_id(payload)
-
-    if body.provider.lower() not in ALLOWED_PROVIDERS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid provider '{body.provider}'. Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}",
-        )
 
     if body.routing_preference not in ALLOWED_ROUTING_PREFERENCES:
         raise HTTPException(
@@ -149,7 +144,7 @@ async def upsert_llm_config_endpoint(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     # Provider-specific temperature limits
-    _provider_temp_limits: dict[str, float] = {"openai": 2.0, "google": 2.0, "openrouter": 2.0}
+    _provider_temp_limits: dict[str, float] = {"openai": 2.0, "google": 2.0, "openrouter": 2.0, "anthropic": 1.0}
     temp_limit = _provider_temp_limits.get(body.provider.lower(), 2.0)
     if body.temperature > temp_limit:
         raise HTTPException(
@@ -157,11 +152,39 @@ async def upsert_llm_config_endpoint(
             detail=f"Provider '{body.provider}' requires temperature ≤ {temp_limit}",
         )
 
+    if body.provider.lower() not in ALLOWED_PROVIDERS | BYOK_ONLY_PROVIDERS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Invalid provider '{body.provider}'. Supported: {', '.join(sorted(ALLOWED_PROVIDERS))}; "
+                f"{', '.join(sorted(BYOK_ONLY_PROVIDERS))} requires BYOK."
+            ),
+        )
+
     api_key_omitted = "api_key" not in body.model_fields_set
     will_have_byok = body.api_key is not None
     if not will_have_byok and api_key_omitted:
         existing = await get_org_llm_config(org_id)
+        existing_key_switch = (
+            existing is not None
+            and existing.has_api_key
+            and existing.is_byok
+            and existing.provider.lower() != body.provider.lower()
+            and (existing.provider.lower() in BYOK_ONLY_PROVIDERS or body.provider.lower() in BYOK_ONLY_PROVIDERS)
+        )
+        if existing_key_switch:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Changing providers with BYOK requires a new api_key for the selected provider.",
+            )
         will_have_byok = existing is not None and existing.has_api_key and existing.is_byok
+
+    allowed_providers = ALLOWED_PROVIDERS | BYOK_ONLY_PROVIDERS if will_have_byok else ALLOWED_PROVIDERS
+    if body.provider.lower() not in allowed_providers:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid provider '{body.provider}'. Allowed for this configuration: {', '.join(sorted(allowed_providers))}",
+        )
 
     # Non-BYOK model name validation against known catalogue
     if not will_have_byok:
@@ -216,20 +239,23 @@ async def upsert_llm_config_endpoint(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    cfg = await upsert_org_llm_config(
-        org_id,
-        provider=body.provider.lower(),
-        model=body.model,
-        api_key=body.api_key,
-        clear_api_key="api_key" in body.model_fields_set and body.api_key is None,
-        api_base=body.api_base,
-        max_tokens=body.max_tokens,
-        temperature=body.temperature,
-        timeout_seconds=body.timeout_seconds,
-        routing_preference=body.routing_preference,
-        reasoning_effort=reasoning_effort,
-        model_reasoning_effort=model_reasoning_effort,
-    )
+    try:
+        cfg = await upsert_org_llm_config(
+            org_id,
+            provider=body.provider.lower(),
+            model=body.model,
+            api_key=body.api_key,
+            clear_api_key="api_key" in body.model_fields_set and body.api_key is None,
+            api_base=body.api_base,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+            timeout_seconds=body.timeout_seconds,
+            routing_preference=body.routing_preference,
+            reasoning_effort=reasoning_effort,
+            model_reasoning_effort=model_reasoning_effort,
+        )
+    except ByokProviderConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=_llm_config_to_response(cfg),

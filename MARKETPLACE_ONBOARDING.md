@@ -268,6 +268,15 @@ and your author profile is available at `GET /marketplace/authors/<your-org-slug
 If you used the MCP import flow in Step 3A, this patch step is not required because
 `POST /marketplace/import/publish` already created a published marketplace tool row.
 
+Publishing makes the tool discoverable; it does not pin it into other orgs'
+agent-run tool sets or authorize payment. Callers can invoke it directly through
+`/tools/mcp` without a subscription, subject to authentication and billing, or use
+`POST /marketplace/subscriptions` to **pin** it for `/agent/run`. These legacy
+subscription routes select agent tools rather than create recurring payment plans.
+Unpinning does not revoke direct MCP access, and pinning does not guarantee runtime
+execution. See [agent-run pins vs direct tool calls](docs/api-reference.md#agent-run-pins-vs-direct-tool-calls)
+for the inventory values and schema-drift caveat.
+
 > Soft-deleting (`DELETE /tools/<id>`) a published tool automatically
 > removes it from every org's pinned (`/marketplace/subscriptions`) tools so
 > `/agent/run` callers are not left with a broken reference.

@@ -37,6 +37,14 @@ Agent-owned webhook tools can be registered through `POST /tools`. Machine-provi
 
 Platform tools are always available during agent runs, are not subscribable via `POST /marketplace/subscriptions`, and incur their marketplace prices (in addition to token costs). Per-org pricing overrides are supported via `POST /admin/pricing/tools`; for agent runs, `tool_pricing_overrides` takes precedence over marketplace catalog prices when both exist for the same tool.
 
+Marketplace subscriptions are **agent-run pins**, not recurring payment plans or
+direct MCP access grants. Pinning selects a community tool for the org's
+`/agent/run` tool set; direct `/tools/mcp` calls do not require a pin and retain
+their authentication and billing requirements. In `/agent/tools`, the legacy
+`access_mode="subscribed"` means pinned, while `"included"` means no marketplace
+pin is needed, not free. Pins and inventory do not guarantee execution; see
+[agent-run pins vs direct tool calls](docs/api-reference.md#agent-run-pins-vs-direct-tool-calls).
+
 ### Marketplace Settlement & USDC Sweeping
 
 Organizations can monetize their agents via a Marketplace. Withdrawals claim pending author earnings before sending USDC through Coinbase Developer Platform (CDP) to the configured settlement wallet. Confirmed transfers become `settled`; confirmed on-chain reverts release the earnings. Submission errors and unavailable confirmations remain `in_flight`, with earnings held to prevent automatic repayment. The sweep loop settles or releases `in_flight` withdrawals that recorded a transaction hash once that transaction is finalized and matches the claimed USDC transfer; operators must establish the chain outcome before resetting any other ambiguous withdrawal.
