@@ -545,19 +545,23 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                         MCP_PROTOCOL_VERSION_META_KEY,
                         SURFACE_MCP_MODERN_ENVELOPE,
                         SURFACE_MCP_REQUEST,
+                        is_bot_client,
                         mcp_call_client_surface,
-                        mcp_meta_client_name,
+                        mcp_client_name,
                         record_discovery_hit,
+                        record_discovery_hit_if_not_bot,
                     )
 
-                    record_discovery_hit(SURFACE_MCP_REQUEST)
                     sniff_params = data.get("params")
+                    client_name = mcp_client_name(sniff_params)
+                    is_bot = is_bot_client(request.headers.get("user-agent"), client_name=client_name)
+                    record_discovery_hit_if_not_bot(SURFACE_MCP_REQUEST, is_bot)
                     sniff_meta = sniff_params.get("_meta") if isinstance(sniff_params, dict) else None
                     if isinstance(sniff_meta, dict) and MCP_PROTOCOL_VERSION_META_KEY in sniff_meta:
-                        record_discovery_hit(SURFACE_MCP_MODERN_ENVELOPE)
+                        record_discovery_hit_if_not_bot(SURFACE_MCP_MODERN_ENVELOPE, is_bot)
                     if method == "tools/call":
                         # Stateless clients may never handshake; attribute each call by its _meta clientInfo.
-                        call_client = mcp_meta_client_name(sniff_params)
+                        call_client = client_name
                         if call_client is not None:
                             record_discovery_hit(mcp_call_client_surface(call_client))
                 if method == "ai.smithery/events/list":
@@ -593,12 +597,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 SURFACE_TOOLS_LIST,
                 SURFACE_TOOLS_LIST_ANON,
                 SURFACE_TOOLS_LIST_ANON_SRC_PREFIX,
+                is_bot_client,
                 is_indexer_ip,
-                log_indexer_probe,
                 mark_indexer_ip,
+                mcp_client_name,
                 mcp_initialize_surface,
-                mcp_meta_client_name,
                 record_discovery_hit,
+                record_discovery_hit_if_not_bot,
                 record_source_hit,
                 tools_list_anon_client_surface,
             )
@@ -612,35 +617,31 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             is_tools_list = rpc_method == "tools/list"
             is_anonymous = self._extract_bearer(request) is None
             if is_tools_list:
-                record_discovery_hit(SURFACE_TOOLS_LIST)
+                user_agent = request.headers.get("user-agent")
+                client_name = mcp_client_name(rpc_params)
                 if is_anonymous:
-                    record_discovery_hit(SURFACE_TOOLS_LIST_ANON)
                     list_surface = tools_list_anon_client_surface(
-                        request.headers.get("user-agent"),
+                        user_agent,
                         _wants_mcp_payment_signal(request),
-                        client_name=mcp_meta_client_name(rpc_params),
+                        client_name=client_name,
                         flagged=await is_indexer_ip(_request_ip(request)),
                     )
+                    is_bot = list_surface.endswith(":bot")
+                    record_discovery_hit_if_not_bot(SURFACE_TOOLS_LIST, is_bot)
+                    record_discovery_hit_if_not_bot(SURFACE_TOOLS_LIST_ANON, is_bot)
                     record_discovery_hit(list_surface)
                     record_source_hit(SURFACE_TOOLS_LIST_ANON_SRC_PREFIX, _listing_source_tag(request), list_surface)
+                else:
+                    is_bot = is_bot_client(user_agent, client_name=client_name)
+                    record_discovery_hit_if_not_bot(SURFACE_TOOLS_LIST, is_bot)
             elif rpc_method in ("initialize", "server/discover"):
                 # Modern clients replace initialize with server/discover and put clientInfo in params._meta.
-                client_info = rpc_params.get("clientInfo") if isinstance(rpc_params, dict) else None
-                client_name = client_info.get("name") if isinstance(client_info, dict) else None
-                if client_name is None:
-                    client_name = mcp_meta_client_name(rpc_params)
-                initialize_surface = mcp_initialize_surface(client_name)
+                client_name = mcp_client_name(rpc_params)
+                is_bot = is_bot_client(request.headers.get("user-agent"), client_name=client_name)
+                initialize_surface = SURFACE_MCP_INITIALIZE_PREFIX + "bot" if is_bot else mcp_initialize_surface(client_name)
                 record_discovery_hit(initialize_surface)
                 if initialize_surface == SURFACE_MCP_INITIALIZE_PREFIX + "bot":
-                    request_ip = _request_ip(request)
-                    log_indexer_probe(
-                        "init",
-                        request.headers.get("user-agent"),
-                        request.headers.get("x-forwarded-for"),
-                        request_ip,
-                        False,
-                    )
-                    await mark_indexer_ip(request_ip)
+                    await mark_indexer_ip(_request_ip(request))
 
             request.state.mcp_org_id = None
             request.state.mcp_auth_method = ""
@@ -1006,9 +1007,9 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX,
             anon_challenge_client_surface,
             is_indexer_ip,
-            log_indexer_probe,
-            mcp_meta_client_name,
+            mcp_client_name,
             record_discovery_hit,
+            record_discovery_hit_if_not_bot,
             record_source_hit,
             tools_call_free_anon_client_surface,
         )
@@ -1036,13 +1037,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 limited = await _anonymous_ip_limit(request)
                 if limited is not None:
                     return limited
-                record_discovery_hit(SURFACE_TOOLS_CALL_FREE_ANON)
                 free_surface = tools_call_free_anon_client_surface(
                     request.headers.get("user-agent"),
                     _wants_mcp_payment_signal(request),
-                    client_name=mcp_meta_client_name(data.get("params")),
+                    client_name=mcp_client_name(data.get("params")),
                     flagged=await is_indexer_ip(_request_ip(request)),
                 )
+                record_discovery_hit_if_not_bot(SURFACE_TOOLS_CALL_FREE_ANON, free_surface.endswith(":bot"))
                 record_discovery_hit(free_surface)
                 record_source_hit(SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX, _listing_source_tag(request), free_surface)
                 request.state.mcp_org_id = None
@@ -1085,37 +1086,34 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         if requirements is not None:
             response_kwargs["requirements"] = requirements
 
-        async def record_challenger() -> None:
-            request_ip = _request_ip(request)
-            flagged = await is_indexer_ip(request_ip)
-            log_indexer_probe(
-                "call",
-                request.headers.get("user-agent"),
-                request.headers.get("x-forwarded-for"),
-                request_ip,
-                flagged,
-            )
-            client_surface = anon_challenge_client_surface(
+        async def classify_challenger() -> str:
+            return anon_challenge_client_surface(
                 request.headers.get("user-agent"),
                 mcp_signal,
-                client_name=mcp_meta_client_name(data.get("params")),
-                flagged=flagged,
+                client_name=mcp_client_name(data.get("params")),
+                flagged=await is_indexer_ip(_request_ip(request)),
             )
+
+        def record_challenger(client_surface: str) -> None:
             record_discovery_hit(client_surface)
             record_source_hit(SURFACE_MCP_402_ANON_SRC_PREFIX, _listing_source_tag(request), client_surface)
 
         if not payment_header:
-            record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
-            record_discovery_hit(SURFACE_MCP_402_NO_PAYMENT)
-            await record_challenger()
+            client_surface = await classify_challenger()
+            is_bot = client_surface.endswith(":bot")
+            record_discovery_hit_if_not_bot(SURFACE_MCP_402_CHALLENGE, is_bot)
+            record_discovery_hit_if_not_bot(SURFACE_MCP_402_NO_PAYMENT, is_bot)
+            record_challenger(client_surface)
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs, await self._mpp_offer(_tool_call_name(data)))
 
         billing = await verify_payment(payment_header, requirements)
         if not billing.verified:
             response_kwargs["error"] = billing.error
-            record_discovery_hit(SURFACE_MCP_402_CHALLENGE)
-            record_discovery_hit(SURFACE_MCP_402_PAYMENT_INVALID)
-            await record_challenger()
+            client_surface = await classify_challenger()
+            is_bot = client_surface.endswith(":bot")
+            record_discovery_hit_if_not_bot(SURFACE_MCP_402_CHALLENGE, is_bot)
+            record_discovery_hit_if_not_bot(SURFACE_MCP_402_PAYMENT_INVALID, is_bot)
+            record_challenger(client_surface)
             return self._x402_challenge(data.get("id"), mcp_signal, response_kwargs)
 
         request.state.x402_billing = billing

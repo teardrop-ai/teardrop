@@ -183,7 +183,7 @@ async def calculate_run_cost(
                     "model": str(turn.get("model") or _run_model),
                     "tokens_in": int(turn.get("tokens_in", 0)),
                     "tokens_out": int(turn.get("tokens_out", 0)),
-                    **{k: turn[k] for k in ("cache_creation_tokens", "upstream_cost_usd") if turn.get(k)},
+                    **{k: turn[k] for k in ("cache_creation_tokens", "upstream_cost_usd") if turn.get(k) is not None},
                 }
                 for turn in turns
                 if isinstance(turn, dict)

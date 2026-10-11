@@ -287,6 +287,29 @@ async def test_plain_http_client_keeps_http_402(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_indexer_ua_challenge_keeps_bot_partition_only(monkeypatch):
+    import billing
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+
+    _real_402_body(monkeypatch)
+    monkeypatch.setattr(billing, "build_402_headers", lambda **kwargs: {"PAYMENT-REQUIRED": "encoded"})
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    request = _mcp_request(
+        _tools_call(),
+        [
+            (b"accept", b"application/json"),
+            (b"user-agent", b"coinbasebazaardiscovery/1.0"),
+        ],
+    )
+
+    response = await MCPGatewayMiddleware(FastAPI())._handle_x402_auth(request)
+
+    assert response.status_code == 402
+    assert hits == ["mcp_402_anon_client:bot"]
+
+
+@pytest.mark.asyncio
 async def test_meta_payment_is_verified_and_failure_uses_mcp_signal(monkeypatch):
     import billing
     from teardrop.mcp_gateway import MCPGatewayMiddleware
@@ -450,6 +473,30 @@ async def test_tools_list_hides_community_tools_from_anonymous_callers(
 
 
 @pytest.mark.asyncio
+async def test_indexer_ua_tools_list_keeps_bot_partition_only(monkeypatch):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/tools/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers={"Accept": "application/json", "User-Agent": "coinbasebazaardiscovery/1.0"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    assert hits == ["tools_list_anon_client:bot"]
+
+
+@pytest.mark.asyncio
 async def test_initialize_records_client_host_bucket(monkeypatch):
     from teardrop.mcp_gateway import MCPGatewayMiddleware
     from tools.mcp_server import build_mcp_app, create_mcp_server
@@ -477,6 +524,44 @@ async def test_initialize_records_client_host_bucket(monkeypatch):
 
     assert resp.status_code == 200, resp.text
     assert hits == ["mcp_request", "mcp_initialize:claude"]
+
+
+@pytest.mark.asyncio
+async def test_indexer_ua_suppresses_request_aggregates_but_keeps_bot_handshake(monkeypatch):
+    from teardrop.mcp_gateway import MCPGatewayMiddleware
+    from tools.mcp_server import build_mcp_app, create_mcp_server
+
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+    mcp = create_mcp_server()
+    app = FastAPI(lifespan=lambda _: mcp.session_manager.run())
+    app.add_middleware(MCPGatewayMiddleware)
+    app.mount("/tools/mcp", build_mcp_app(mcp))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": {"name": "claude-ai", "version": "1.0"},
+            }
+        },
+    }
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "server/discover",
+        "user-agent": "coinbasebazaardiscovery/1.0",
+    }
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/tools/mcp", json=body, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert hits == ["mcp_initialize:bot"]
 
 
 @pytest.mark.asyncio

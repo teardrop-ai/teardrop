@@ -141,6 +141,21 @@ async def test_allowlisted_zero_cost_tool_runs_free_for_anonymous_callers(x402_g
 
 
 @pytest.mark.asyncio
+async def test_indexer_ua_free_call_keeps_bot_partition_only(x402_gateway_env, monkeypatch):
+    mocks = _patch_billing(monkeypatch, tool_cost=0)
+    monkeypatch.setattr("teardrop.rate_limit._check_rate_limit", AsyncMock(return_value=(True, 59, 0)))
+    hits: list[str] = []
+    monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
+
+    response = await _post_paid_call({"Accept": "application/json", "User-Agent": "taifoonharvester/1.0.0"})
+
+    assert response.status_code == 200
+    mocks.verify.assert_not_awaited()
+    mocks.settle.assert_not_awaited()
+    assert hits == ["tools_call_free_anon_client:bot"]
+
+
+@pytest.mark.asyncio
 async def test_allowlisted_free_tool_is_ip_rate_limited(x402_gateway_env, monkeypatch):
     mocks = _patch_billing(monkeypatch, tool_cost=0)
     limiter = AsyncMock(return_value=(False, 0, 123))
@@ -199,7 +214,10 @@ async def test_indexer_handshake_classifies_later_legacy_402_as_bot(x402_gateway
     )
 
     assert responses[0].status_code == 200
-    assert "mcp_402_no_payment" in hits
+    if expected == "bot":
+        assert "mcp_402_no_payment" not in hits
+    else:
+        assert "mcp_402_no_payment" in hits
     assert hits[-1] == f"mcp_402_anon_client:{expected}"
 
 
@@ -320,7 +338,9 @@ async def test_tool_challenge_resource_description_is_per_tool(x402_gateway_env,
         ("/tools/mcp", "node", []),
     ],
 )
-async def test_challenge_records_listing_source_for_non_bots(x402_gateway_env, monkeypatch, path, user_agent, expected):
+async def test_challenge_filters_bots_and_records_listing_source_for_non_bots(
+    x402_gateway_env, monkeypatch, path, user_agent, expected
+):
     _patch_billing(monkeypatch, tool_cost=2_000)
     hits: list[str] = []
     monkeypatch.setattr("teardrop.funnel_counters.record_discovery_hit", hits.append)
@@ -328,7 +348,11 @@ async def test_challenge_records_listing_source_for_non_bots(x402_gateway_env, m
     response = await _post_paid_call({"Accept": "application/json", "User-Agent": user_agent}, "get_token_price", path)
 
     assert response.status_code == 402
-    assert "mcp_402_no_payment" in hits
+    if user_agent == "smithery-probe-bot":
+        assert "mcp_402_no_payment" not in hits
+        assert "mcp_402_anon_client:bot" in hits
+    else:
+        assert "mcp_402_no_payment" in hits
     assert [hit for hit in hits if "_src:" in hit] == expected
 
 

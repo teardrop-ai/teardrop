@@ -105,6 +105,54 @@ class TestCacheTokenExtraction:
 
 
 class TestActualCostBilling:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("cost_fields", "enabled", "expected_llm_cost", "uses_rules"),
+        [
+            ({"upstream_cost_usd": 0}, True, 0, False),
+            ({"upstream_cost_usd": 0.0}, True, 0, False),
+            ({}, True, 400, True),
+            ({"upstream_cost_usd": None}, True, 400, True),
+            ({"upstream_cost_usd": 0.01}, True, 13188, False),
+            ({"upstream_cost_usd": 0}, False, 400, True),
+        ],
+    )
+    async def test_run_cost_preserves_reported_cost_and_tool_charges(self, cost_fields, enabled, expected_llm_cost, uses_rules):
+        from teardrop import agent_post_run
+
+        rule = SimpleNamespace(
+            id="openrouter-rule", run_price_usdc=0, tokens_in_cost_per_1k=100, tokens_out_cost_per_1k=200, tool_call_cost=0
+        )
+        turn = {
+            "provider": "openrouter",
+            "model": "~a/latest",
+            "tokens_in": 2000,
+            "tokens_out": 1000,
+            **cost_fields,
+        }
+        with (
+            patch("billing.pricing.get_settings", return_value=_settings(enabled=enabled)),
+            patch("billing.pricing.get_live_pricing_for_model", new_callable=AsyncMock, return_value=rule) as lookup,
+            patch.object(agent_post_run, "calculate_turns_token_cost_usdc", calculate_turns_token_cost_usdc),
+            patch.object(agent_post_run, "calculate_tool_cost_usdc", AsyncMock(return_value=3500)) as tool_cost,
+        ):
+            total = await agent_post_run.calculate_run_cost(
+                usage_data={
+                    "turns": [turn],
+                    "billable_tool_calls": 1,
+                    "billable_tool_names": ["platform/weather"],
+                },
+                llm_config=None,
+                settings=SimpleNamespace(agent_provider="openrouter", agent_model="~a/latest"),
+            )
+
+        assert total == expected_llm_cost + 3500
+        tool_cost.assert_awaited_once_with(1, ["platform/weather"])
+        if uses_rules:
+            lookup.assert_awaited_once_with("openrouter", "~a/latest")
+        else:
+            lookup.assert_not_awaited()
+
     def test_disabled_returns_none(self):
         with patch("billing.pricing.get_settings", return_value=_settings(enabled=False)):
             assert upstream_turn_cost_usdc({"provider": "openrouter", "upstream_cost_usd": 0.01}) is None

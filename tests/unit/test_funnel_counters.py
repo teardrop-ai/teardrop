@@ -21,6 +21,8 @@ from teardrop.funnel_counters import (
     discover_client_surface,
     flush_discovery_counters,
     init_funnel_counters,
+    is_bot_client,
+    mcp_client_name,
     mcp_initialize_surface,
     mcp_meta_client_name,
     record_discover_hit,
@@ -115,11 +117,17 @@ class TestClientClassification:
         assert surface == f"tools_list_anon_client:{expected}"
         assert surface in VALID_SURFACES
 
-    def test_record_discover_hit_records_stage_and_partition(self):
+    def test_record_discover_hit_records_non_bot_stage_and_partition(self):
+        init_funnel_counters(_pool(), enabled=True)
+        record_discover_hit(SURFACE_AGENT_CARD, "Mozilla/5.0")
+
+        assert sorted(surface for surface, _ in funnel_module._counters) == ["agent_card", "discover_client:browser"]
+
+    def test_record_discover_hit_excludes_bot_aggregate_but_keeps_partition(self):
         init_funnel_counters(_pool(), enabled=True)
         record_discover_hit(SURFACE_AGENT_CARD, "Googlebot/2.1")
 
-        assert sorted(surface for surface, _ in funnel_module._counters) == ["agent_card", "discover_client:bot"]
+        assert [surface for surface, _ in funnel_module._counters] == ["discover_client:bot"]
 
     def test_every_client_class_is_a_valid_partition(self):
         prefixes = ("mcp_402_anon_client:", "discover_client:", "tools_list_anon_client:", "tools_call_free_anon_client:")
@@ -305,42 +313,6 @@ class TestUnclassifiedClientLogging:
         assert self._lines(caplog) == []
 
 
-class TestIndexerProbeLogging:
-    _MSG = "mcp indexer probe"
-
-    def _lines(self, caplog):
-        return [r.getMessage() for r in caplog.records if r.getMessage().startswith(self._MSG)]
-
-    def test_logs_hops_and_origin_without_ips(self, caplog):
-        init_funnel_counters(_pool(), enabled=True)
-        with caplog.at_level("INFO", logger=funnel_module.__name__):
-            funnel_module.log_indexer_probe("call", "Node\n/22", "203.0.113.7, 198.51.100.2", "198.51.100.2", False)
-            funnel_module.log_indexer_probe("init", "node/22", "203.0.113.7", "203.0.113.7", False)
-
-        assert self._lines(caplog) == [
-            "mcp indexer probe stage=call ua='node?/22' xff_hops=2 origin=False flagged=False",
-            "mcp indexer probe stage=init ua='node/22' xff_hops=1 origin=True flagged=False",
-        ]
-        assert not any("203.0.113.7" in line or "198.51.100.2" in line for line in self._lines(caplog))
-
-    def test_dedupes_and_caps_per_hour(self, caplog):
-        init_funnel_counters(_pool(), enabled=True)
-        cap = funnel_module._PROBE_LOG_MAX_PER_HOUR
-        with caplog.at_level("INFO", logger=funnel_module.__name__):
-            for _ in range(3):
-                funnel_module.log_indexer_probe("call", "node", None, None, True)
-            for i in range(cap + 5):
-                funnel_module.log_indexer_probe("call", f"agent-{i}", None, None, False)
-
-        assert len(self._lines(caplog)) == cap
-
-    def test_disabled_counters_do_not_log(self, caplog):
-        with caplog.at_level("INFO", logger=funnel_module.__name__):
-            funnel_module.log_indexer_probe("call", "node", None, None, False)
-
-        assert self._lines(caplog) == []
-
-
 class TestIndexerClassification:
     @pytest.mark.parametrize(
         "client_name",
@@ -361,6 +333,20 @@ class TestIndexerClassification:
     def test_indexer_names_bucket_as_bot(self, client_name):
         assert mcp_initialize_surface(client_name) == "mcp_initialize:bot"
         assert funnel_module.mcp_call_client_surface(client_name) == "mcp_call_client:bot"
+
+    @pytest.mark.parametrize(
+        "user_agent",
+        [
+            "coinbasebazaardiscovery/1.0 https://docs.cdp.coinbase.com/x402",
+            "brickbluebot/0.1 https://brick.blue/bot",
+            "agent-tools.cloud-crawler/0.1 https://agent-tools.cloud",
+            "taifoonharvester/1.0.0 https://www.taifoon.io/docs/harvester",
+        ],
+    )
+    def test_observed_indexer_user_agents_bucket_as_bot(self, user_agent):
+        assert is_bot_client(user_agent)
+        assert discover_client_surface(user_agent) == "discover_client:bot"
+        assert anon_challenge_client_surface(user_agent, True) == "mcp_402_anon_client:bot"
 
     @pytest.mark.parametrize(
         ("client_name", "expected"),
@@ -392,6 +378,34 @@ class TestIndexerClassification:
 
     def test_seed_script_user_agent_is_bot(self):
         assert anon_challenge_client_surface("teardrop-seed-bot/1.0", False) == "mcp_402_anon_client:bot"
+
+    def test_unknown_client_name_is_not_logged_by_bot_predicate(self, caplog):
+        init_funnel_counters(_pool(), enabled=True)
+        with caplog.at_level("INFO", logger=funnel_module.__name__):
+            assert not is_bot_client("node", client_name="unknown-agent")
+
+        assert not self._unclassified_lines(caplog)
+
+    @staticmethod
+    def _unclassified_lines(caplog):
+        return [record for record in caplog.records if record.getMessage().startswith("mcp unclassified client name=")]
+
+
+class TestMcpClientName:
+    @pytest.mark.parametrize(
+        ("params", "expected"),
+        [
+            ({"clientInfo": {"name": "legacy-indexer"}}, "legacy-indexer"),
+            (
+                {"_meta": {"io.modelcontextprotocol/clientInfo": {"name": "modern-indexer"}}},
+                "modern-indexer",
+            ),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_resolves_legacy_and_modern_client_name(self, params, expected):
+        assert mcp_client_name(params) == expected
 
 
 class TestListingSource:

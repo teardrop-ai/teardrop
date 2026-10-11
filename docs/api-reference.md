@@ -96,6 +96,8 @@ Protected endpoints return a `401` challenge with `bootstrap_uri="/token"` and `
 
 `GET /billing/balance` returns atomic USDC fields. For human orgs, a `spending_limit_usdc` value of `0` means unlimited daily spend (`spending_limit_active=false`). For machine-provisioned orgs, zero resolves to `MACHINE_ORG_DAILY_SPEND_LIMIT_USDC`; an explicit org limit is preserved.
 
+When `OPENROUTER_ACTUAL_COST_BILLING_ENABLED=true`, non-BYOK OpenRouter turns use reported upstream cost with the configured credit-fee recovery and LLM markup. A reported cost of zero produces zero LLM charge; missing or null cost falls back to token-rule pricing. Tool charges remain separate. The flag defaults to false.
+
 A new Stripe or on-chain USDC top-up re-queues, best-effort, the org's credit charges from the last 7 days whose settlement retries were exhausted, oldest first, up to the top-up amount. Each recovered charge appears as a normal `debit` in `/billing/credit-history` and still honors pause and spend limits. Admin top-ups and x402 settlements are not re-queued. A re-queue failure is logged, does not undo the top-up, and is not retried; use a later top-up or the admin settlement reset.
 
 Principal limits are optional and additive to org controls. The authenticated JWT `sub` identifies the principal; absent configuration leaves org-level behavior unchanged. Every credit debit records that principal when available, including retried settlements. New credit-funded A2A debits are linked to their refund outbox row; a definitive non-delivery refund is an immutable reversal-linked top-up, and rolling org/principal spend totals exclude the reversed debit so the corresponding 24-hour cap headroom returns. Pre-migration refund rows without a debit link credit the balance but do not restore rolling-cap headroom.
@@ -245,6 +247,18 @@ Response includes `balance_usdc` (atomic units, 6 decimals: 50000000 = $50.00).
 | `GET` | `/usage/me` | Bearer | Aggregated token/tool usage for current user |
 
 ### Admin
+
+Discovery telemetry filters recognized bots at write time from `agent_card`,
+`x402_discovery`, `mcp_server_card`, `catalog`, `mcp_request`,
+`mcp_modern_envelope`, `tools_list`, `tools_list_anon`, `tools_call_free_anon`,
+and anonymous x402 challenge aggregates. Available client-class breakdowns
+retain bot counts, so their totals include traffic omitted from the aggregates.
+Discovery GETs use User-Agent classification; MCP also uses clientInfo, with the
+existing short-lived IP flag applied to anonymous listing, free-call, and
+challenge counters. Generic SDK User-Agents are not sufficient to identify bots.
+Quote hits, credit-rail challenges, and settlements remain unfiltered. Historical
+rows are not rewritten: comparisons spanning the filtering deployment mix
+different counting semantics and must not interpret the drop as lost demand.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
