@@ -1006,6 +1006,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             SURFACE_TOOLS_CALL_FREE_ANON,
             SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX,
             anon_challenge_client_surface,
+            free_anon_tool_surface,
             is_indexer_ip,
             mcp_client_name,
             record_discovery_hit,
@@ -1045,6 +1046,7 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 )
                 record_discovery_hit_if_not_bot(SURFACE_TOOLS_CALL_FREE_ANON, free_surface.endswith(":bot"))
                 record_discovery_hit(free_surface)
+                record_discovery_hit_if_not_bot(free_anon_tool_surface(tool_name), free_surface.endswith(":bot"))
                 record_source_hit(SURFACE_TOOLS_CALL_FREE_ANON_SRC_PREFIX, _listing_source_tag(request), free_surface)
                 request.state.mcp_org_id = None
                 request.state.mcp_auth_method = ""

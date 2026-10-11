@@ -66,6 +66,19 @@ class TestRecordDiscoveryHit:
 
         assert funnel_module._counters == {}
 
+    def test_per_tool_free_surface_accepts_any_wellformed_tool_name(self):
+        init_funnel_counters(_pool(), enabled=True)
+        record_discovery_hit(funnel_module.free_anon_tool_surface("future_free_tool"))
+
+        assert [surface for surface, _ in funnel_module._counters] == ["tools_call_free_anon_tool:future_free_tool"]
+
+    def test_per_tool_free_surface_rejects_malformed_tool_names(self):
+        init_funnel_counters(_pool(), enabled=True)
+        for name in ("Bad Name", "", "a" * 65, "x/y", "Upper"):
+            record_discovery_hit(funnel_module.free_anon_tool_surface(name))
+
+        assert funnel_module._counters == {}
+
 
 class TestClientClassification:
     @pytest.mark.parametrize(

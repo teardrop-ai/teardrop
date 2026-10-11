@@ -137,7 +137,7 @@ async def test_allowlisted_zero_cost_tool_runs_free_for_anonymous_callers(x402_g
     mocks.verify.assert_not_awaited()
     mocks.settle.assert_not_awaited()
     mocks.record.assert_not_awaited()
-    assert hits[-2:] == ["tools_call_free_anon", "tools_call_free_anon_client:script"]
+    assert hits[-3:] == ["tools_call_free_anon", "tools_call_free_anon_client:script", "tools_call_free_anon_tool:calculate"]
 
 
 @pytest.mark.asyncio

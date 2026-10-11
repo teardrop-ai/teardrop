@@ -43,6 +43,8 @@ SURFACE_TOOLS_LIST_ANON_CLIENT_PREFIX = "tools_list_anon_client:"
 # Anonymous tools/call admitted to an allowlisted zero-cost tool (activation before any payment).
 SURFACE_TOOLS_CALL_FREE_ANON = "tools_call_free_anon"
 SURFACE_TOOLS_CALL_FREE_ANON_CLIENT_PREFIX = "tools_call_free_anon_client:"
+# Per-tool split of non-bot tools_call_free_anon. Tool names are bounded by the gateway's free-tool allowlist.
+SURFACE_TOOLS_CALL_FREE_ANON_TOOL_PREFIX = "tools_call_free_anon_tool:"
 # MCP `initialize` (legacy) / `server/discover` (2026-07-28) handshakes by clientInfo.name bucket.
 SURFACE_MCP_INITIALIZE_PREFIX = "mcp_initialize:"
 # 2026-07-28 tools/call by params._meta clientInfo bucket; legacy calls carry no clientInfo and are not counted.
@@ -281,6 +283,22 @@ def tools_call_free_anon_client_surface(
     )
 
 
+_FREE_TOOL_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def free_anon_tool_surface(tool_name: str) -> str:
+    """Per-tool surface for an anonymous call to a zero-cost tool; any allowlisted tool gets one with no registration."""
+    return SURFACE_TOOLS_CALL_FREE_ANON_TOOL_PREFIX + tool_name
+
+
+def _is_valid_surface(surface: str) -> bool:
+    """Fixed vocabulary, plus per-tool free-call surfaces whose suffix is a well-formed tool name."""
+    if surface in VALID_SURFACES:
+        return True
+    prefix = SURFACE_TOOLS_CALL_FREE_ANON_TOOL_PREFIX
+    return surface.startswith(prefix) and _FREE_TOOL_NAME.fullmatch(surface[len(prefix) :]) is not None
+
+
 def _indexer_key(ip: str) -> str:
     return "teardrop:funnelbot:" + hashlib.sha256(ip.encode()).hexdigest()[:32]
 
@@ -430,7 +448,7 @@ def record_discovery_hit(surface: str) -> None:
     Synchronous and O(1): safe to call from request handlers on the hot path.
     Unknown surfaces are ignored (bounded vocabulary enforced here, not in SQL).
     """
-    if not _enabled or surface not in VALID_SURFACES:
+    if not _enabled or not _is_valid_surface(surface):
         return
     bucket = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     _counters[(surface, bucket)] = _counters.get((surface, bucket), 0) + 1
