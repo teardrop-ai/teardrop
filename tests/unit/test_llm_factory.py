@@ -9,8 +9,9 @@ import json
 from unittest.mock import MagicMock, patch
 
 import httpx
+import httpx2
 import pytest
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from agent.llm import (
@@ -351,6 +352,8 @@ class TestCreateLlmFromConfig:
 
     async def test_anthropic_byok_sdk_tool_round_trip(self):
         requests = []
+        # Newer Anthropic SDKs use httpx2; the mock must match the installed SDK.
+        sdk_httpx = httpx2 if issubclass(DefaultAsyncHttpxClient, httpx2.AsyncClient) else httpx
 
         def respond(request):
             body = json.loads(request.content)
@@ -363,7 +366,7 @@ class TestCreateLlmFromConfig:
                 if first_turn
                 else [{"type": "text", "text": "USDC balance is 5."}]
             )
-            return httpx.Response(
+            return sdk_httpx.Response(
                 200,
                 json={
                     "id": "msg_test",
@@ -379,7 +382,7 @@ class TestCreateLlmFromConfig:
 
         config = _make_config(is_byok=True, model="claude-sonnet-4-6", api_key="test-org-key")
         client = create_llm_from_config(config)
-        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        async with DefaultAsyncHttpxClient(transport=sdk_httpx.MockTransport(respond)) as http_client:
             client._async_client = AsyncAnthropic(
                 api_key=config["api_key"], base_url=client.anthropic_api_url, http_client=http_client
             )
