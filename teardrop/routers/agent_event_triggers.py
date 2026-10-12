@@ -467,17 +467,16 @@ async def list_event_trigger_runs(
     schedule_id: str,
     payload: dict = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=200),
-    cursor: str | None = Query(default=None, description="ISO datetime cursor for pagination"),
+    cursor: str | None = Query(default=None, description="Opaque next_cursor from a previous page (ISO timestamps accepted)"),
 ) -> JSONResponse:
     _require_enabled()
     org_id = _require_org_id(payload, _NO_ORG)
     await _get_owned_event_trigger(schedule_id, org_id)
-    from shared.pagination import parse_cursor  # noqa: PLC0415
+    from shared.pagination import encode_keyset_cursor, parse_keyset_cursor  # noqa: PLC0415
 
-    cursor_dt = parse_cursor(cursor)
-    results = await list_scheduled_run_results(schedule_id, org_id, limit=limit, cursor=cursor_dt)
+    results = await list_scheduled_run_results(schedule_id, org_id, limit=limit, cursor=parse_keyset_cursor(cursor))
     serialized = [_serialize_result(result) for result in results]
-    next_cursor = serialized[-1]["created_at"] if len(serialized) == limit else None
+    next_cursor = encode_keyset_cursor(results[-1].created_at, results[-1].id) if len(results) == limit else None
     return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
 
 

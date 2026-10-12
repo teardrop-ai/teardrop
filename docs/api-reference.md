@@ -471,3 +471,5 @@ GET /billing/invoices?limit=50
 GET /billing/invoices?limit=50&cursor=2026-04-01T12:00:00.000Z
 → { "items": [...], "next_cursor": null }   # no more pages
 ```
+
+`/agent/schedules/{id}/runs` and `/agent/event-triggers/{id}/runs` return an opaque `next_cursor` that encodes `(created_at, id)`, so results sharing a timestamp are never skipped at a page boundary. Pass it back unchanged; `next_cursor` is `null` when a page is shorter than `limit`. Bare ISO 8601 timestamps are still accepted with timestamp-only semantics.

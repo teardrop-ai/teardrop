@@ -246,6 +246,23 @@ async def test_list_agent_schedule_runs(api_client, test_settings, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_schedule_runs_next_cursor_resumes_after_last_row(api_client, test_settings, monkeypatch):
+    test_settings.scheduled_runs_enabled = True
+    monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)
+    monkeypatch.setattr("teardrop.routers.agent_schedules.get_scheduled_run", AsyncMock(return_value=_schedule()))
+    last = _result()
+    results = AsyncMock(side_effect=[[last], []])
+    monkeypatch.setattr("teardrop.routers.agent_schedules.list_scheduled_run_results", results)
+
+    first = await api_client.get("/agent/schedules/sched-1/runs?limit=1")
+    second = await api_client.get("/agent/schedules/sched-1/runs", params={"limit": 1, "cursor": first.json()["next_cursor"]})
+
+    assert second.status_code == 200
+    assert second.json()["next_cursor"] is None
+    assert results.await_args.kwargs["cursor"] == (last.created_at, last.id)
+
+
+@pytest.mark.anyio
 async def test_agent_schedules_disabled_returns_404(api_client, test_settings, monkeypatch):
     test_settings.scheduled_runs_enabled = False
     monkeypatch.setattr("teardrop.routers.agent_schedules.settings", test_settings)

@@ -175,7 +175,7 @@ async def test_database_accepts_hops_above_original_policy_cap(hop_index, event_
 
 
 @pytest.mark.asyncio
-async def test_chain_lineage_results_preserve_cursor_and_org_scope(event_control_pool):
+async def test_chain_lineage_results_page_through_timestamp_ties(event_control_pool):
     schedule = await _create_trigger("results")
     await _reserve(schedule.id, "root", "root", 0)
     await _reserve(schedule.id, "child", "root", 1)
@@ -189,13 +189,17 @@ async def test_chain_lineage_results_preserve_cursor_and_org_scope(event_control
             cost_usdc=0,
             error="",
         )
+    # Force a tie: a timestamp-only cursor would skip the second row.
+    tied = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await event_control_pool.execute("UPDATE scheduled_run_results SET created_at = $1 WHERE schedule_id = $2", tied, schedule.id)
 
-    results = await list_scheduled_run_results(schedule.id, "org-1", limit=1)
-    assert [(r.run_id, r.chain_id, r.hop_index) for r in results] == [("child", "root", 1)]
-    earlier = await list_scheduled_run_results(schedule.id, "org-1", cursor=results[0].created_at)
-    assert [(r.run_id, r.chain_id, r.hop_index) for r in earlier] == [("root", "root", 0)]
+    first = await list_scheduled_run_results(schedule.id, "org-1", limit=1)
+    second = await list_scheduled_run_results(schedule.id, "org-1", limit=1, cursor=(first[0].created_at, first[0].id))
+    assert sorted((r.run_id, r.chain_id, r.hop_index) for r in first + second) == [("child", "root", 1), ("root", "root", 0)]
+    assert await list_scheduled_run_results(schedule.id, "org-1", cursor=(second[0].created_at, second[0].id)) == []
     assert await list_scheduled_run_results(schedule.id, "foreign-org") == []
-    assert await list_scheduled_run_results(schedule.id, "org-1", cursor=datetime.now(timezone.utc) - timedelta(days=1)) == []
+    # Legacy timestamp cursors keep timestamp-only semantics.
+    assert await list_scheduled_run_results(schedule.id, "org-1", cursor=(tied, None)) == []
 
 
 @pytest.mark.asyncio

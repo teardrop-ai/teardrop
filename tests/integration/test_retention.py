@@ -105,8 +105,8 @@ async def test_retention_sweeps_disposable_records_but_keeps_immutable_data(rete
     )
     await pool.execute(
         """
-        INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
-        VALUES ('schedule-1', 'event-key-1', 'event-run-1', $1)
+        INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, chain_id, hop_index, created_at)
+        VALUES ('schedule-1', 'event-key-1', 'event-run-1', 'event-run-1', 0, $1)
         """,
         old,
     )

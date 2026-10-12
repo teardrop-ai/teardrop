@@ -8,11 +8,14 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from scheduling.context import _get_pool
 from scheduling.models import ScheduledRun, ScheduledRunResult
 from shared.audit import insert_event_row
+
+if TYPE_CHECKING:
+    from shared.pagination import KeysetCursor
 
 logger = logging.getLogger(__name__)
 
@@ -365,14 +368,19 @@ async def list_scheduled_run_results(
     org_id: str,
     *,
     limit: int = 50,
-    cursor: datetime | None = None,
+    cursor: KeysetCursor | None = None,
 ) -> list[ScheduledRunResult]:
     pool = _get_pool()
     params: list[Any] = [schedule_id, org_id, limit]
     cursor_clause = ""
     if cursor is not None:
-        params.append(cursor)
-        cursor_clause = f"AND r.created_at < ${len(params)}"
+        created_at, row_id = cursor
+        params.append(created_at)
+        if row_id is None:
+            cursor_clause = f"AND r.created_at < ${len(params)}"
+        else:
+            params.append(row_id)
+            cursor_clause = f"AND (r.created_at, r.id) < (${len(params) - 1}, ${len(params)})"
     rows = await pool.fetch(
         f"""
         SELECT r.id, r.schedule_id, r.org_id, r.run_id, r.status, r.output_text,

@@ -11286,7 +11286,7 @@
             }
           },
           {
-            "description": "ISO datetime cursor for pagination",
+            "description": "Opaque next_cursor from a previous page (ISO timestamps accepted)",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -11299,7 +11299,7 @@
                   "type": "null"
                 }
               ],
-              "description": "ISO datetime cursor for pagination",
+              "description": "Opaque next_cursor from a previous page (ISO timestamps accepted)",
               "title": "Cursor"
             }
           }
@@ -11861,7 +11861,7 @@
             }
           },
           {
-            "description": "ISO datetime cursor for pagination",
+            "description": "Opaque next_cursor from a previous page (ISO timestamps accepted)",
             "in": "query",
             "name": "cursor",
             "required": false,
@@ -11874,7 +11874,7 @@
                   "type": "null"
                 }
               ],
-              "description": "ISO datetime cursor for pagination",
+              "description": "Opaque next_cursor from a previous page (ISO timestamps accepted)",
               "title": "Cursor"
             }
           }
