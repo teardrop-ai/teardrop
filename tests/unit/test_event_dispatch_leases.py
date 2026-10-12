@@ -39,6 +39,8 @@ async def test_reserve_event_dispatch_lease_returns_duplicate_before_capacity_ch
             org_id="org-1",
             idempotency_key="event-1",
             run_id="new-run",
+            chain_id="new-run",
+            hop_index=0,
             owner_id="worker-1",
             lease_seconds=180,
             global_limit=8,
@@ -63,6 +65,8 @@ async def test_reserve_event_dispatch_lease_rejects_global_saturation():
             org_id="org-1",
             idempotency_key="event-1",
             run_id="run-1",
+            chain_id="run-1",
+            hop_index=0,
             owner_id="worker-1",
             lease_seconds=180,
             global_limit=8,
@@ -89,6 +93,8 @@ async def test_reserve_event_dispatch_lease_commits_identity_lease_and_audit():
             org_id="org-1",
             idempotency_key="event-1",
             run_id="run-1",
+            chain_id="root-run",
+            hop_index=1,
             owner_id="worker-1",
             lease_seconds=180,
             global_limit=8,
@@ -99,6 +105,10 @@ async def test_reserve_event_dispatch_lease_commits_identity_lease_and_audit():
     executed_sql = "\n".join(call.args[0] for call in connection.execute.await_args_list)
     assert "INSERT INTO event_dispatch_keys" in executed_sql
     assert "INSERT INTO event_dispatch_leases" in executed_sql
+    identity_insert = next(
+        call for call in connection.execute.await_args_list if "INSERT INTO event_dispatch_keys" in call.args[0]
+    )
+    assert identity_insert.args[1:] == ("schedule-1", "event-1", "run-1", "root-run", 1)
     audit_insert.assert_awaited_once()
     assert audit_insert.await_args.kwargs["values"][3] == "dispatch_accepted"
 

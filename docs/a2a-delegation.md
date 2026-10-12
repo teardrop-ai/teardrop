@@ -187,7 +187,11 @@ When `EVENT_TRIGGERS_ENABLED=true`, the public Agent Card advertises an `event_t
 
 Dispatch payloads must be valid JSON objects and are capped at 64 KiB. Idempotency keys remain supported, and every dispatch receives a durable internal reservation so polling works even when the caller did not provide an idempotency key. Postgres leases enforce global and per-org concurrency across instances; healthy workers renew ownership, while expired leases are reconciled into terminal failures without re-executing potentially billable work. `pushNotifications` remains false until Teardrop implements authenticated task webhooks.
 
-Trigger lifecycle, dispatch, secret rejection, and settlement metadata are written to the insert-only `event_trigger_events` audit table. The table excludes payloads, prompts, callback URLs, secrets, and secret hashes; financial truth remains in the existing credit, usage, and settlement ledgers.
+Create or PATCH a trigger with optional `next_trigger_id` to link another event trigger in the same organization; PATCH `null` removes the link. After a completed parent run finalizes its lease, the server dispatches the enabled child internally. Callbacks are unchanged and do not supply trigger-secret headers. `EVENT_CHAIN_MAX_HOPS` caps child hops, excluding the root (default: `2`, allowing **3 runs**; `0` disables child dispatch). Cycles stop at the configured cap. Each run retains the root run's `chain_id`, and `hop_index` starts at 0 for the root and increments for each child. Result lists expose these fields; task polling returns `metadata.chainId` and integer `metadata.hopIndex`.
+
+Child templates receive `{{output_text}}`, `{{parent_run_id}}`, `{{parent_trigger_id}}`, and `{{chain_id}}` (or the bounded `{{event_json}}` payload). **Parent output is untrusted input**, not an instruction authority; scalar interpolation truncates it to 4,000 characters and the configured final-prompt limit also applies. Scope tools and credit limits accordingly. Failed parents do not dispatch children. Child dispatch is at most once: the hop limit, unavailable targets, saturation, or dispatch errors emit a sanitized `chain_dispatch_skipped` audit on the parent and are never retried.
+
+Trigger lifecycle, dispatch, chain skips, secret rejection, and settlement metadata are written to the insert-only `event_trigger_events` audit table. The table excludes payloads, prompts, callback URLs, secrets, and secret hashes; financial truth remains in the existing credit, usage, and settlement ledgers.
 
 ---
 

@@ -77,7 +77,9 @@ Beyond fixed intervals, organizations can register **event triggers** that run t
 
 Managed via the `/agent/event-triggers` API (CRUD, secret rotation, and run polling). Inbound dispatch is `POST /agent/events/{trigger_token}`, authenticated with a per-trigger secret via the `X-Teardrop-Trigger-Secret` header, with optional idempotency keys and scalar-only, length-capped prompt interpolation to resist injection. Postgres execution leases enforce global and per-org concurrency (returning `429` when saturated).
 
-Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly. Configure via `EVENT_TRIGGERS_*` settings (see [docs/configuration.md](docs/configuration.md)).
+Set `next_trigger_id` to another event trigger in the same organization to chain completed runs internally, without callback authentication. Chains are linear; `EVENT_CHAIN_MAX_HOPS` caps child hops (default: `2`, allowing **3 runs** including the root; `0` disables child dispatch). Results expose `chain_id` and zero-based `hop_index`. Child delivery is at most once: unavailable or saturated targets are audited and never retried.
+
+Prompt templates interpolate untrusted payload data, so treat rendered prompts as untrusted input to the agent — scope event-trigger tools and credit limits accordingly. Configure via `EVENT_TRIGGERS_*` and `EVENT_CHAIN_MAX_HOPS` settings (see [docs/configuration.md](docs/configuration.md)).
 
 ### X (Twitter) Broadcast Posts
 

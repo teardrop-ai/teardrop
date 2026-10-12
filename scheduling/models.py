@@ -23,6 +23,7 @@ class ScheduledRun(BaseModel):
     callback_url: str | None = None
     callback_format: Literal["json", "text", "x"] = "json"
     trigger_token: str | None = None
+    next_trigger_id: str | None = None
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None
     consecutive_failures: int = 0
@@ -39,4 +40,6 @@ class ScheduledRunResult(BaseModel):
     output_text: str
     cost_usdc: int = 0
     error: str = ""
+    chain_id: str | None = None
+    hop_index: int | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

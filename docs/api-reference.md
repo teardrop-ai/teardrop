@@ -379,9 +379,11 @@ Org-scoped event-trigger registration requires a Bearer JWT containing `org_id`.
 
 Dispatch concurrency is enforced cluster-wide through Postgres leases. Saturated requests return `429`; duplicate idempotency keys return the original run identity without executing again.
 
+Registration and PATCH accept optional `next_trigger_id`, which must reference an event trigger in the authenticated organization or return `422`. PATCH `null` clears the link. Completed, finalized runs dispatch the enabled child internally using `{output_text, parent_run_id, parent_trigger_id, chain_id}` as the template payload. Parent output is untrusted and scalar interpolation caps it at 4,000 characters. Chains are linear, capped by `EVENT_CHAIN_MAX_HOPS` child hops (default: `2`, allowing 3 runs including the root; `0` disables child dispatch), and delivered at most once; hop-limit, unavailable-target, saturation, and error skips are audited as `chain_dispatch_skipped` on the parent without retry. Result lists include `chain_id` and zero-based `hop_index`; A2A tasks include `metadata.chainId` and integer `metadata.hopIndex`. The root's `chain_id` equals its `run_id`.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/agent/event-triggers` | Bearer | Register a prompt template and receive a one-time trigger secret |
+| `POST` | `/agent/event-triggers` | Bearer | Register a prompt template, optional next trigger, and receive a one-time trigger secret |
 | `GET` | `/agent/event-triggers` | Bearer | List event triggers for the authenticated org |
 | `GET` | `/agent/event-triggers/{id}` | Bearer | Get one event trigger |
 | `PATCH` | `/agent/event-triggers/{id}` | Bearer | Update trigger configuration |

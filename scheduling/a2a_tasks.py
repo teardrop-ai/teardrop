@@ -48,7 +48,7 @@ class EventTaskResponse(BaseModel):
     context_id: str = Field(alias="contextId")
     status: EventTaskStatus
     artifacts: list[EventTaskArtifact] = Field(default_factory=list)
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str | int] = Field(default_factory=dict)
 
     model_config = {"populate_by_name": True}
 
@@ -65,6 +65,8 @@ def build_event_task(
     schedule_id: str,
     run_id: str,
     result: ScheduledRunResult | None,
+    chain_id: str,
+    hop_index: int,
 ) -> EventTaskResponse:
     timestamp = result.created_at if result is not None else datetime.now(timezone.utc)
     artifacts: list[EventTaskArtifact] = []
@@ -84,5 +86,5 @@ def build_event_task(
             timestamp=timestamp.isoformat(),
         ),
         artifacts=artifacts,
-        metadata={"scheduleId": schedule_id, "source": "event-trigger"},
+        metadata={"scheduleId": schedule_id, "source": "event-trigger", "chainId": chain_id, "hopIndex": hop_index},
     )

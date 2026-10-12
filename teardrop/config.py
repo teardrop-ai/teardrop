@@ -1048,6 +1048,15 @@ class Settings(BaseSettings):
         default=20,
         description="Maximum number of event triggers (active + inactive) allowed per org.",
     )
+    event_chain_max_hops: int = Field(
+        default=2,
+        ge=0,
+        le=32_767,
+        description=(
+            "Maximum child hops per event-trigger chain, excluding the root. "
+            "Zero disables child dispatch; the upper bound is the hop_index SMALLINT storage limit."
+        ),
+    )
     event_triggers_max_concurrency: int = Field(
         default=8,
         ge=1,

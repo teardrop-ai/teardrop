@@ -24,7 +24,7 @@ _UNSET = object()
 # lookup and popped before model construction so it is never serialized.
 _RUN_COLUMNS = (
     "id, org_id, user_id, name, prompt, schedule_kind, interval_seconds, "
-    "cron_expr, enabled, callback_url, callback_format, trigger_token, next_run_at, last_run_at, "
+    "cron_expr, enabled, callback_url, callback_format, trigger_token, next_trigger_id, next_run_at, last_run_at, "
     "consecutive_failures, created_at, updated_at"
 )
 _RUN_COLUMNS_SR = ", ".join(f"sr.{col.strip()}" for col in _RUN_COLUMNS.split(","))
@@ -145,6 +145,7 @@ async def create_event_trigger(
     trigger_token: str,
     secret_hash: str,
     callback_format: str = "json",
+    next_trigger_id: str | None = None,
 ) -> ScheduledRun:
     """Insert an event-triggered run. Interval/next_run columns stay NULL so the
     polling worker (which filters ``schedule_kind = 'interval'``) ignores it."""
@@ -156,9 +157,9 @@ async def create_event_trigger(
         INSERT INTO scheduled_runs (
             id, org_id, user_id, name, prompt, schedule_kind, interval_seconds,
             cron_expr, enabled, callback_url, callback_format, trigger_token,
-            secret_hash, next_run_at, created_at, updated_at
+            secret_hash, next_trigger_id, next_run_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'event', NULL, NULL, TRUE, $6, $7, $8, $9, NULL, $10, $10)
+        VALUES ($1, $2, $3, $4, $5, 'event', NULL, NULL, TRUE, $6, $7, $8, $9, $10, NULL, $11, $11)
         RETURNING {_RUN_COLUMNS}
         """,
         run_id,
@@ -170,6 +171,7 @@ async def create_event_trigger(
         callback_format,
         trigger_token,
         secret_hash,
+        next_trigger_id,
         now,
     )
     return _row_to_scheduled_run(row)
@@ -249,6 +251,7 @@ async def update_scheduled_run(
     enabled: bool | object = _UNSET,
     callback_url: str | None | object = _UNSET,
     callback_format: str | object = _UNSET,
+    next_trigger_id: str | None | object = _UNSET,
 ) -> ScheduledRun | None:
     pool = _get_pool()
     updates: list[str] = []
@@ -278,6 +281,8 @@ async def update_scheduled_run(
         updates.append(f"callback_url = {_add(callback_url)}")
     if callback_format is not _UNSET:
         updates.append(f"callback_format = {_add(callback_format)}")
+    if next_trigger_id is not _UNSET:
+        updates.append(f"next_trigger_id = {_add(next_trigger_id)}")
 
     if not updates:
         return await get_scheduled_run(schedule_id, org_id)
@@ -367,13 +372,15 @@ async def list_scheduled_run_results(
     cursor_clause = ""
     if cursor is not None:
         params.append(cursor)
-        cursor_clause = f"AND created_at < ${len(params)}"
+        cursor_clause = f"AND r.created_at < ${len(params)}"
     rows = await pool.fetch(
         f"""
-        SELECT id, schedule_id, org_id, run_id, status, output_text, cost_usdc, error, created_at
-        FROM scheduled_run_results
-        WHERE schedule_id = $1 AND org_id = $2 {cursor_clause}
-        ORDER BY created_at DESC, id DESC
+        SELECT r.id, r.schedule_id, r.org_id, r.run_id, r.status, r.output_text,
+               r.cost_usdc, r.error, r.created_at, k.chain_id, k.hop_index
+        FROM scheduled_run_results r
+        LEFT JOIN event_dispatch_keys k ON k.schedule_id = r.schedule_id AND k.run_id = r.run_id
+        WHERE r.schedule_id = $1 AND r.org_id = $2 {cursor_clause}
+        ORDER BY r.created_at DESC, r.id DESC
         LIMIT $3
         """,
         *params,
@@ -436,35 +443,6 @@ async def record_scheduled_run_result(
     return _row_to_scheduled_run_result(row)
 
 
-async def reserve_event_dispatch(schedule_id: str, idempotency_key: str, run_id: str) -> tuple[str, bool]:
-    """Insert-first idempotency reservation for an inbound event dispatch.
-
-    Returns ``(run_id, True)`` when the reservation is newly created (caller
-    should execute), or ``(existing_run_id, False)`` when the key was already
-    reserved (caller should treat as a duplicate and skip execution).
-    """
-    pool = _get_pool()
-    inserted = await pool.fetchval(
-        """
-        INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (schedule_id, idempotency_key) DO NOTHING
-        RETURNING run_id
-        """,
-        schedule_id,
-        idempotency_key,
-        run_id,
-    )
-    if inserted is not None:
-        return str(inserted), True
-    existing = await pool.fetchval(
-        "SELECT run_id FROM event_dispatch_keys WHERE schedule_id = $1 AND idempotency_key = $2",
-        schedule_id,
-        idempotency_key,
-    )
-    return (str(existing) if existing is not None else run_id), False
-
-
 async def reserve_x_broadcast(run_id: str, schedule_id: str, org_id: str) -> bool:
     """Reserve an at-most-once publication slot for a completed scheduled run."""
     pool = _get_pool()
@@ -506,6 +484,8 @@ async def reserve_event_dispatch_lease(
     lease_seconds: int,
     global_limit: int,
     org_limit: int,
+    chain_id: str,
+    hop_index: int,
 ) -> EventDispatchLeaseResult:
     """Atomically reserve an idempotent run and a cluster-wide execution slot."""
     pool = _get_pool()
@@ -543,12 +523,14 @@ async def reserve_event_dispatch_lease(
 
             await connection.execute(
                 """
-                INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, created_at)
-                VALUES ($1, $2, $3, NOW())
+                INSERT INTO event_dispatch_keys (schedule_id, idempotency_key, run_id, chain_id, hop_index, created_at)
+                VALUES ($1, $2, $3, $4, $5, NOW())
                 """,
                 schedule_id,
                 idempotency_key,
                 run_id,
+                chain_id,
+                hop_index,
             )
             await connection.execute(
                 """
@@ -869,14 +851,14 @@ async def get_existing_dispatch(schedule_id: str, idempotency_key: str) -> str |
     return str(value) if value is not None else None
 
 
-async def event_dispatch_exists(schedule_id: str, run_id: str) -> bool:
+async def get_event_dispatch_lineage(schedule_id: str, run_id: str) -> tuple[str, int] | None:
     pool = _get_pool()
-    value = await pool.fetchval(
-        "SELECT 1 FROM event_dispatch_keys WHERE schedule_id = $1 AND run_id = $2 LIMIT 1",
+    row = await pool.fetchrow(
+        "SELECT chain_id, hop_index FROM event_dispatch_keys WHERE schedule_id = $1 AND run_id = $2 LIMIT 1",
         schedule_id,
         run_id,
     )
-    return value is not None
+    return (str(row["chain_id"]), int(row["hop_index"])) if row is not None else None
 
 
 async def mark_scheduled_run_skipped(schedule_id: str) -> None:

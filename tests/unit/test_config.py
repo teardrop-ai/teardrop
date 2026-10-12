@@ -45,6 +45,12 @@ def test_scheduled_run_timeout_must_exceed_per_turn_budgets():
     config.get_settings.cache_clear()
 
 
+@pytest.mark.parametrize("max_hops", [-1, 32_768])
+def test_event_chain_max_hops_rejects_invalid_storage_bounds(max_hops):
+    with pytest.raises(ValueError, match="event_chain_max_hops"):
+        Settings(event_chain_max_hops=max_hops)
+
+
 def test_mpp_rejects_unsafe_configuration():
     treasury = "0x" + "aa" * 20
     base = dict(mpp_enabled=True, x402_pay_to_address=treasury, mpp_currency="0x" + "cd" * 20)

@@ -7,7 +7,7 @@ import asyncio
 import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -28,6 +28,7 @@ def _event_schedule(enabled: bool = True, trigger_token: str = "tok-abc") -> Sim
         enabled=enabled,
         callback_url=None,
         trigger_token=trigger_token,
+        next_trigger_id=None,
         next_run_at=None,
         last_run_at=None,
         consecutive_failures=0,
@@ -46,6 +47,8 @@ def _event_result(status: str = "completed") -> SimpleNamespace:
         output_text="The event was handled.",
         cost_usdc=10_000,
         error="",
+        chain_id="run-1",
+        hop_index=0,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -370,7 +373,9 @@ async def test_background_execution_failure_persists_sanitized_terminal_result(m
 
     from teardrop.routers.agent_event_triggers import _run_event_in_background
 
-    await _run_event_in_background(schedule, "rendered prompt", "run-1", 180)
+    await _run_event_in_background(
+        schedule=schedule, prompt="rendered prompt", run_id="run-1", lease_seconds=180, chain_id="run-1", hop_index=0
+    )
 
     fail_mock.assert_awaited_once()
     assert fail_mock.await_args.kwargs == {
@@ -393,8 +398,8 @@ async def test_get_event_trigger_run_returns_submitted_for_reserved_run(api_clie
         AsyncMock(return_value=_event_schedule()),
     )
     monkeypatch.setattr(
-        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
-        AsyncMock(return_value=True),
+        "teardrop.routers.agent_event_triggers.get_event_dispatch_lineage",
+        AsyncMock(return_value=("run-1", 0)),
     )
     monkeypatch.setattr(
         "teardrop.routers.agent_event_triggers.get_scheduled_run_result",
@@ -418,8 +423,8 @@ async def test_get_event_trigger_run_returns_completed_artifact(api_client, test
         AsyncMock(return_value=_event_schedule()),
     )
     monkeypatch.setattr(
-        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
-        AsyncMock(return_value=True),
+        "teardrop.routers.agent_event_triggers.get_event_dispatch_lineage",
+        AsyncMock(return_value=("run-1", 0)),
     )
     monkeypatch.setattr(
         "teardrop.routers.agent_event_triggers.get_scheduled_run_result",
@@ -442,8 +447,8 @@ async def test_get_event_trigger_run_hides_unknown_run(api_client, test_settings
         AsyncMock(return_value=_event_schedule()),
     )
     monkeypatch.setattr(
-        "teardrop.routers.agent_event_triggers.event_dispatch_exists",
-        AsyncMock(return_value=False),
+        "teardrop.routers.agent_event_triggers.get_event_dispatch_lineage",
+        AsyncMock(return_value=None),
     )
     result_mock = AsyncMock()
     monkeypatch.setattr("teardrop.routers.agent_event_triggers.get_scheduled_run_result", result_mock)
@@ -452,3 +457,227 @@ async def test_get_event_trigger_run_hides_unknown_run(api_client, test_settings
 
     assert resp.status_code == 404
     result_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("max_hops,parent_hop", [(2, 0), (5, 2), (5, 4)])
+async def test_completed_parent_dispatches_child_with_lineage(max_hops, parent_hop, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    test_settings.event_chain_max_hops = max_hops
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    child = _event_schedule()
+    child.id = "child-1"
+    child.prompt = "{{output_text}}|{{parent_run_id}}|{{parent_trigger_id}}|{{chain_id}}"
+    result = _event_result()
+    result.output_text = "x" * 4_001
+    get_child = AsyncMock(return_value=child)
+    monkeypatch.setattr(router, "get_scheduled_run", get_child)
+    reservation = _mock_lease_lifecycle(monkeypatch, run_id="child-run")
+    monkeypatch.setattr(router, "execute_event_run", AsyncMock(return_value=result))
+    spawn = Mock()
+    monkeypatch.setattr(router, "_spawn_event_run", spawn)
+
+    await router._run_event_in_background(parent, "parent prompt", "run-1", 180, chain_id="run-1", hop_index=parent_hop)
+
+    get_child.assert_awaited_once_with("child-1", "test-org-id")
+    reserved = reservation.await_args.kwargs
+    assert (reserved["schedule_id"], reserved["idempotency_key"], reserved["chain_id"], reserved["hop_index"]) == (
+        "child-1",
+        "chain:run-1",
+        "run-1",
+        parent_hop + 1,
+    )
+    spawn.assert_called_once_with(
+        child, "x" * 4_000 + "|run-1|evt-1|run-1", "child-run", 180, chain_id="run-1", hop_index=parent_hop + 1
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("max_hops,parent_hop", [(0, 0), (1, 1), (2, 2), (5, 5), (5, 6)])
+async def test_configured_hop_limit_skips_child_and_audits(max_hops, parent_hop, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    test_settings.event_chain_max_hops = max_hops
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    lookup = AsyncMock()
+    reserve = AsyncMock()
+    audit = AsyncMock()
+    monkeypatch.setattr(router, "get_scheduled_run", lookup)
+    monkeypatch.setattr(router, "reserve_event_dispatch_lease", reserve)
+    monkeypatch.setattr(router, "record_event_trigger_event", audit)
+
+    await router._dispatch_chain_child(parent, _event_result(), 180, chain_id="root", hop_index=parent_hop)
+
+    lookup.assert_not_awaited()
+    reserve.assert_not_awaited()
+    audit.assert_awaited_once_with(
+        schedule_id="evt-1",
+        org_id="test-org-id",
+        run_id="run-1",
+        event_type="chain_dispatch_skipped",
+        error="Chain hop limit reached.",
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status,finalized", [("failed", True), ("completed", False)])
+async def test_failed_or_unfinalized_parent_does_not_dispatch(status, finalized, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    reserve = _mock_lease_lifecycle(monkeypatch)
+    monkeypatch.setattr(router, "finish_event_dispatch_lease", AsyncMock(return_value=finalized))
+    monkeypatch.setattr(router, "execute_event_run", AsyncMock(return_value=_event_result(status)))
+    lookup = AsyncMock()
+    monkeypatch.setattr(router, "get_scheduled_run", lookup)
+    spawn = Mock()
+    monkeypatch.setattr(router, "_spawn_event_run", spawn)
+
+    await router._run_event_in_background(parent, "prompt", "run-1", 180, chain_id="root", hop_index=0)
+
+    lookup.assert_not_awaited()
+    reserve.assert_not_awaited()
+    spawn.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("target", ["missing", "foreign", "disabled", "interval"])
+async def test_unavailable_chain_target_is_skipped(target, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    child = _event_schedule(enabled=target != "disabled")
+    child.id = "child-1"
+    if target == "foreign":
+        child.org_id = "another-org"
+    if target == "interval":
+        child.schedule_kind = "interval"
+    monkeypatch.setattr(router, "get_scheduled_run", AsyncMock(return_value=None if target == "missing" else child))
+    reserve = AsyncMock()
+    audit = AsyncMock()
+    monkeypatch.setattr(router, "reserve_event_dispatch_lease", reserve)
+    monkeypatch.setattr(router, "record_event_trigger_event", audit)
+
+    await router._dispatch_chain_child(parent, _event_result(), 180, chain_id="root", hop_index=0)
+
+    reserve.assert_not_awaited()
+    audit.assert_awaited_once_with(
+        schedule_id="evt-1",
+        org_id="test-org-id",
+        run_id="run-1",
+        event_type="chain_dispatch_skipped",
+        error="Chain target unavailable.",
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "outcome,reason",
+    [
+        ("saturated", "Chain capacity unavailable."),
+        ("duplicate", "Chain dispatch already reserved."),
+        ("exception", "Chain dispatch failed."),
+    ],
+)
+async def test_chain_admission_failure_is_audited_without_retry(outcome, reason, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    monkeypatch.setattr(router, "get_scheduled_run", AsyncMock(return_value=_event_schedule()))
+    reserve = AsyncMock(return_value=SimpleNamespace(run_id="child-run", outcome=outcome))
+    if outcome == "exception":
+        reserve.side_effect = RuntimeError("sensitive provider detail")
+    audit = AsyncMock()
+    spawn = Mock()
+    monkeypatch.setattr(router, "reserve_event_dispatch_lease", reserve)
+    monkeypatch.setattr(router, "record_event_trigger_event", audit)
+    monkeypatch.setattr(router, "_spawn_event_run", spawn)
+
+    await router._dispatch_chain_child(parent, _event_result(), 180, chain_id="root", hop_index=0)
+
+    reserve.assert_awaited_once()
+    spawn.assert_not_called()
+    audit.assert_awaited_once_with(
+        schedule_id="evt-1", org_id="test-org-id", run_id="run-1", event_type="chain_dispatch_skipped", error=reason
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("method", ["post", "patch"])
+@pytest.mark.parametrize("target", ["foreign", "interval"])
+async def test_next_trigger_rejects_foreign_or_interval_id(method, target, api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    child = _event_schedule()
+    child.id = "child-1"
+    child.schedule_kind = "interval"
+    lookup = AsyncMock(
+        side_effect=lambda schedule_id, org_id: (
+            _event_schedule() if schedule_id == "evt-1" else None if target == "foreign" else child
+        )
+    )
+    monkeypatch.setattr(router, "get_scheduled_run", lookup)
+    create = AsyncMock()
+    update = AsyncMock()
+    monkeypatch.setattr(router, "create_event_trigger", create)
+    monkeypatch.setattr(router, "update_scheduled_run", update)
+    path = "/agent/event-triggers" + ("/evt-1" if method == "patch" else "")
+
+    response = await getattr(api_client, method)(
+        path, json={"name": "Parent", "prompt": "Handle event", "next_trigger_id": "child-1"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "next_trigger_id must reference an event trigger in this organization."
+    create.assert_not_awaited()
+    update.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_patch_can_clear_next_trigger(api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    parent = _event_schedule()
+    parent.next_trigger_id = "child-1"
+    lookup = AsyncMock(return_value=parent)
+    update = AsyncMock(return_value=_event_schedule())
+    monkeypatch.setattr(router, "get_scheduled_run", lookup)
+    monkeypatch.setattr(router, "update_scheduled_run", update)
+
+    response = await api_client.patch("/agent/event-triggers/evt-1", json={"next_trigger_id": None})
+
+    assert response.status_code == 200
+    assert response.json()["next_trigger_id"] is None
+    update.assert_awaited_once_with("evt-1", "test-org-id", next_trigger_id=None)
+    lookup.assert_awaited_once_with("evt-1", "test-org-id")
+
+
+@pytest.mark.anyio
+async def test_event_run_list_exposes_lineage(api_client, test_settings, monkeypatch):
+    _enable(monkeypatch, test_settings)
+    from teardrop.routers import agent_event_triggers as router
+
+    monkeypatch.setattr(router, "get_scheduled_run", AsyncMock(return_value=_event_schedule()))
+    result = _event_result()
+    result.chain_id = "root-run"
+    result.hop_index = 2
+    monkeypatch.setattr(router, "list_scheduled_run_results", AsyncMock(return_value=[result]))
+
+    response = await api_client.get("/agent/event-triggers/evt-1/runs")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert (item["chain_id"], item["hop_index"]) == ("root-run", 2)

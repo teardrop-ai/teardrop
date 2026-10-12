@@ -1234,6 +1234,17 @@
             "title": "Name",
             "type": "string"
           },
+          "next_trigger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Trigger Id"
+          },
           "prompt": {
             "maxLength": 12000,
             "minLength": 1,
@@ -1905,6 +1916,121 @@
         "title": "EventDispatchResponse",
         "type": "object"
       },
+      "EventRunResultItem": {
+        "properties": {
+          "chain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Id"
+          },
+          "cost_usdc": {
+            "title": "Cost Usdc",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "ISO 8601 timestamp.",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "hop_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hop Index"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "org_id": {
+            "title": "Org Id",
+            "type": "string"
+          },
+          "output_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Text"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schedule_id": {
+            "title": "Schedule Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "schedule_id",
+          "org_id",
+          "run_id",
+          "status",
+          "cost_usdc",
+          "created_at"
+        ],
+        "title": "EventRunResultItem",
+        "type": "object"
+      },
+      "EventRunResultsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventRunResultItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "EventRunResultsResponse",
+        "type": "object"
+      },
       "EventTaskArtifact": {
         "properties": {
           "artifactId": {
@@ -1963,7 +2089,14 @@
           },
           "metadata": {
             "additionalProperties": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
             },
             "title": "Metadata",
             "type": "object"
@@ -2061,6 +2194,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "next_trigger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Trigger Id"
           },
           "org_id": {
             "title": "Org Id",
@@ -2173,6 +2317,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "next_trigger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Trigger Id"
           },
           "org_id": {
             "title": "Org Id",
@@ -7838,6 +7993,17 @@
             ],
             "title": "Name"
           },
+          "next_trigger_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Trigger Id"
+          },
           "prompt": {
             "anyOf": [
               {
@@ -8591,7 +8757,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.10.0"
+    "version": "2.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11143,7 +11309,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScheduledRunResultsResponse"
+                  "$ref": "#/components/schemas/EventRunResultsResponse"
                 }
               }
             },

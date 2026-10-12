@@ -33,10 +33,10 @@ from scheduling import (
     count_scheduled_runs,
     create_event_trigger,
     delete_scheduled_run,
-    event_dispatch_exists,
     execute_event_run,
     fail_event_dispatch,
     finish_event_dispatch_lease,
+    get_event_dispatch_lineage,
     get_event_trigger_for_dispatch,
     get_existing_dispatch,
     get_scheduled_run,
@@ -58,6 +58,7 @@ from teardrop.dependencies import _require_org_id, require_auth
 from teardrop.rate_limit import _enforce_rate_limit
 from teardrop.routers.agent_schedules import (
     ScheduleDeletedResponse,
+    ScheduledRunResultItem,
     ScheduledRunResultsResponse,
     _validate_callback_url,
 )
@@ -81,6 +82,7 @@ class CreateEventTriggerRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     prompt: str = Field(..., min_length=1, max_length=12_000)
     callback_url: str | None = Field(default=None, max_length=2048)
+    next_trigger_id: str | None = None
 
 
 class UpdateEventTriggerRequest(BaseModel):
@@ -88,6 +90,7 @@ class UpdateEventTriggerRequest(BaseModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=12_000)
     enabled: bool | None = None
     callback_url: str | None = Field(default=None, max_length=2048)
+    next_trigger_id: str | None = None
 
 
 class EventTriggerItem(BaseModel):
@@ -100,6 +103,7 @@ class EventTriggerItem(BaseModel):
     enabled: bool
     callback_url: str | None = None
     trigger_token: str | None = None
+    next_trigger_id: str | None = None
     event_path: str | None = Field(default=None, description="'/agent/events/{trigger_token}'; null if unset.")
     consecutive_failures: int
     last_run_at: str | None = Field(default=None, description="ISO 8601 timestamp; null until first run.")
@@ -113,6 +117,15 @@ class EventTriggerCreatedResponse(EventTriggerItem):
 
 class EventTriggerListResponse(BaseModel):
     items: list[EventTriggerItem]
+
+
+class EventRunResultItem(ScheduledRunResultItem):
+    chain_id: str | None = None
+    hop_index: int | None = None
+
+
+class EventRunResultsResponse(ScheduledRunResultsResponse):
+    items: list[EventRunResultItem]
 
 
 class RotateSecretResponse(BaseModel):
@@ -146,6 +159,7 @@ def _serialize_event_trigger(schedule) -> dict[str, object]:
         "enabled": schedule.enabled,
         "callback_url": schedule.callback_url,
         "trigger_token": schedule.trigger_token,
+        "next_trigger_id": schedule.next_trigger_id,
         "event_path": f"/agent/events/{schedule.trigger_token}" if schedule.trigger_token else None,
         "consecutive_failures": schedule.consecutive_failures,
         "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
@@ -164,6 +178,8 @@ def _serialize_result(result) -> dict[str, object]:
         "output_text": result.output_text,
         "cost_usdc": result.cost_usdc,
         "error": result.error,
+        "chain_id": result.chain_id,
+        "hop_index": result.hop_index,
         "created_at": result.created_at.isoformat(),
     }
 
@@ -178,7 +194,82 @@ async def _renew_event_lease(run_id: str, lease_seconds: int) -> None:
             return
 
 
-async def _run_event_in_background(schedule, prompt: str, run_id: str, lease_seconds: int) -> None:
+def _spawn_event_run(schedule, prompt: str, run_id: str, lease_seconds: int, *, chain_id: str, hop_index: int) -> None:
+    task = asyncio.create_task(
+        _run_event_in_background(schedule, prompt, run_id, lease_seconds, chain_id=chain_id, hop_index=hop_index)
+    )
+    _pending_event_tasks.add(task)
+    task.add_done_callback(_pending_event_tasks.discard)
+
+
+async def _dispatch_chain_child(schedule, result, lease_seconds: int, *, chain_id: str, hop_index: int) -> None:
+    if result.status != "completed" or schedule.next_trigger_id is None:
+        return
+    child = None
+    child_run_id = None
+    try:
+        if hop_index + 1 > settings.event_chain_max_hops:
+            reason = "Chain hop limit reached."
+        else:
+            child = await get_scheduled_run(schedule.next_trigger_id, schedule.org_id)
+            if child is None or child.org_id != schedule.org_id or child.schedule_kind != "event" or not child.enabled:
+                reason = "Chain target unavailable."
+            else:
+                prompt = render_event_prompt(
+                    child.prompt,
+                    {
+                        "output_text": result.output_text,
+                        "parent_run_id": result.run_id,
+                        "parent_trigger_id": schedule.id,
+                        "chain_id": chain_id,
+                    },
+                    max_chars=settings.event_triggers_prompt_max_chars,
+                )
+                run_id = str(uuid.uuid4())
+                reservation = await reserve_event_dispatch_lease(
+                    schedule_id=child.id,
+                    org_id=schedule.org_id,
+                    idempotency_key=f"chain:{result.run_id}",
+                    run_id=run_id,
+                    owner_id=_EVENT_WORKER_ID,
+                    lease_seconds=lease_seconds,
+                    global_limit=settings.event_triggers_max_concurrency,
+                    org_limit=settings.event_triggers_max_concurrency_per_org,
+                    chain_id=chain_id,
+                    hop_index=hop_index + 1,
+                )
+                if reservation.outcome == "accepted":
+                    child_run_id = reservation.run_id
+                    _spawn_event_run(child, prompt, child_run_id, lease_seconds, chain_id=chain_id, hop_index=hop_index + 1)
+                    return
+                reason = (
+                    "Chain capacity unavailable." if reservation.outcome == "saturated" else "Chain dispatch already reserved."
+                )
+    except Exception:
+        reason = "Chain dispatch failed."
+        if child_run_id is not None:
+            try:
+                await fail_event_dispatch(
+                    schedule_id=child.id,
+                    org_id=schedule.org_id,
+                    run_id=child_run_id,
+                    owner_id=_EVENT_WORKER_ID,
+                    max_consecutive_failures=settings.scheduled_runs_max_consecutive_failures,
+                )
+            except Exception:
+                logger.error("Chain lease cleanup failed run_id=%s", child_run_id)
+    await record_event_trigger_event(
+        schedule_id=schedule.id,
+        org_id=schedule.org_id,
+        run_id=result.run_id,
+        event_type="chain_dispatch_skipped",
+        error=reason,
+    )
+
+
+async def _run_event_in_background(
+    schedule, prompt: str, run_id: str, lease_seconds: int, *, chain_id: str, hop_index: int
+) -> None:
     heartbeat: asyncio.Task | None = None
     try:
         if not await start_event_dispatch_lease(run_id, _EVENT_WORKER_ID, lease_seconds):
@@ -192,13 +283,15 @@ async def _run_event_in_background(schedule, prompt: str, run_id: str, lease_sec
             return
         heartbeat = asyncio.create_task(_renew_event_lease(run_id, lease_seconds))
         result = await execute_event_run(schedule, prompt=prompt, run_id=run_id)
-        await finish_event_dispatch_lease(
+        finalized = await finish_event_dispatch_lease(
             schedule_id=schedule.id,
             org_id=schedule.org_id,
             run_id=run_id,
             owner_id=_EVENT_WORKER_ID,
             result=result,
         )
+        if finalized:
+            await _dispatch_chain_child(schedule, result, lease_seconds, chain_id=chain_id, hop_index=hop_index)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -241,6 +334,7 @@ async def create_event_trigger_endpoint(
     org_id = _require_org_id(payload, _NO_ORG)
     user_id = str(payload.get("sub") or "")
     await _validate_callback_url(body.callback_url)
+    await _validate_next_trigger(body.next_trigger_id, org_id)
     if await count_scheduled_runs(org_id, schedule_kind="event") >= settings.event_triggers_max_per_org:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -256,6 +350,7 @@ async def create_event_trigger_endpoint(
         callback_url=body.callback_url,
         trigger_token=trigger_token,
         secret_hash=_hash_secret(secret),
+        next_trigger_id=body.next_trigger_id,
     )
     await record_event_trigger_event(
         schedule_id=schedule.id,
@@ -283,6 +378,17 @@ async def _get_owned_event_trigger(schedule_id: str, org_id: str):
     return schedule
 
 
+async def _validate_next_trigger(next_trigger_id: str | None, org_id: str) -> None:
+    if next_trigger_id is None:
+        return
+    target = await get_scheduled_run(next_trigger_id, org_id)
+    if target is None or target.org_id != org_id or target.schedule_kind != "event":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="next_trigger_id must reference an event trigger in this organization.",
+        )
+
+
 @router.get("/agent/event-triggers/{schedule_id}", tags=["Agent"], response_model=EventTriggerItem)
 async def get_event_trigger_endpoint(schedule_id: str, payload: dict = Depends(require_auth)) -> JSONResponse:
     _require_enabled()
@@ -303,8 +409,10 @@ async def update_event_trigger_endpoint(
     update_fields = body.model_fields_set
     if "callback_url" in update_fields:
         await _validate_callback_url(body.callback_url)
+    if "next_trigger_id" in update_fields:
+        await _validate_next_trigger(body.next_trigger_id, org_id)
     update_kwargs: dict[str, object] = {}
-    for field in ("name", "prompt", "enabled", "callback_url"):
+    for field in ("name", "prompt", "enabled", "callback_url", "next_trigger_id"):
         if field in update_fields:
             update_kwargs[field] = getattr(body, field)
     schedule = await update_scheduled_run(schedule_id, org_id, **update_kwargs)
@@ -354,7 +462,7 @@ async def rotate_event_trigger_secret_endpoint(
     return JSONResponse(content={"id": schedule_id, "secret": secret})
 
 
-@router.get("/agent/event-triggers/{schedule_id}/runs", tags=["Agent"], response_model=ScheduledRunResultsResponse)
+@router.get("/agent/event-triggers/{schedule_id}/runs", tags=["Agent"], response_model=EventRunResultsResponse)
 async def list_event_trigger_runs(
     schedule_id: str,
     payload: dict = Depends(require_auth),
@@ -386,10 +494,11 @@ async def get_event_trigger_run(
     _require_enabled()
     org_id = _require_org_id(payload, _NO_ORG)
     schedule = await _get_owned_event_trigger(schedule_id, org_id)
-    if not await event_dispatch_exists(schedule.id, run_id):
+    lineage = await get_event_dispatch_lineage(schedule.id, run_id)
+    if lineage is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event run not found.")
     result = await get_scheduled_run_result(schedule.id, org_id, run_id)
-    task = build_event_task(schedule_id=schedule.id, run_id=run_id, result=result)
+    task = build_event_task(schedule_id=schedule.id, run_id=run_id, result=result, chain_id=lineage[0], hop_index=lineage[1])
     return JSONResponse(content=task.model_dump(mode="json", by_alias=True))
 
 
@@ -489,6 +598,8 @@ async def dispatch_event(
             lease_seconds=lease_seconds,
             global_limit=settings.event_triggers_max_concurrency,
             org_limit=settings.event_triggers_max_concurrency_per_org,
+            chain_id=run_id,
+            hop_index=0,
         )
         if reservation.outcome == "saturated":
             raise HTTPException(
@@ -513,11 +624,7 @@ async def dispatch_event(
             )
         run_id = reservation.run_id
         lease_reserved = True
-        # Background task owns slot release from here on. Hold a strong reference
-        # so the loop cannot garbage-collect the run before it finishes.
-        task = asyncio.create_task(_run_event_in_background(schedule, rendered, run_id, lease_seconds))
-        _pending_event_tasks.add(task)
-        task.add_done_callback(_pending_event_tasks.discard)
+        _spawn_event_run(schedule, rendered, run_id, lease_seconds, chain_id=run_id, hop_index=0)
     except Exception:
         if lease_reserved:
             await fail_event_dispatch(

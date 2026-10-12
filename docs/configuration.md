@@ -126,6 +126,7 @@ Direct Anthropic agent inference is available only for organizations using BYOK:
 | `SCHEDULED_RUNS_MAX_CONCURRENCY` | Maximum scheduled executions per worker tick (default: `4`) |
 | `EVENT_TRIGGERS_ENABLED` | Enable reactive event-trigger ingress and Agent Card discovery (default: `false`) |
 | `EVENT_TRIGGERS_MAX_PER_ORG` | Maximum event triggers per org, including inactive triggers (default: `20`) |
+| `EVENT_CHAIN_MAX_HOPS` | Maximum child hops per chain, excluding the root (default: `2`, allowing 3 total runs; `0` disables child dispatch). Range: `0`–`32767`, bounded by `hop_index` SMALLINT storage. Requires migration 129; restart all instances with the same value. Each child dispatch reads the loaded cap, including for chains already in progress. |
 | `EVENT_TRIGGERS_MAX_CONCURRENCY` | Maximum in-flight event executions across all instances (default: `8`) |
 | `EVENT_TRIGGERS_MAX_CONCURRENCY_PER_ORG` | Maximum cluster-wide in-flight event executions per org (default: `4`) |
 | `EVENT_TRIGGERS_RECOVERY_INTERVAL_SECONDS` | Expired execution-lease reconciliation interval (default: `30`) |
