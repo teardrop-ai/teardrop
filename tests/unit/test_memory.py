@@ -432,6 +432,34 @@ class TestExtractAndStoreMemories:
 
         assert count == 2
 
+    async def test_store_facts_false_keeps_decision_but_skips_facts(self, test_settings):
+        decision = {"action": "quote", "reasoning": "r", "task_class": "price_lookup"}
+        with (
+            patch.object(memory_module, "_is_stateless_lookup_run", return_value=False),
+            patch.object(memory_module, "_extract_facts_and_decision", AsyncMock(return_value=(["fact one"], decision))),
+            patch.object(memory_module, "store_memory", AsyncMock(return_value=MagicMock())) as store_mock,
+            patch.object(memory_module, "store_run_decision", AsyncMock(return_value=True)) as decision_mock,
+        ):
+            count = await memory_module.extract_and_store_memories(
+                "org-1", "user-1", [MagicMock(type="human", content="q")], "run-1", store_facts=False
+            )
+
+        assert count == 0
+        store_mock.assert_not_awaited()
+        decision_mock.assert_awaited_once()
+
+    def test_memory_enabled_for_org(self):
+        settings = MagicMock(memory_enabled=True, memory_isolated_org_ids=["bench-org"])
+        assert memory_module.memory_enabled_for_org(settings, "org-1") is True
+        assert memory_module.memory_enabled_for_org(settings, "bench-org") is False
+        settings.memory_enabled = False
+        assert memory_module.memory_enabled_for_org(settings, "org-1") is False
+
+    def test_eval_org_is_memory_isolated(self):
+        settings = MagicMock(memory_enabled=True, memory_isolated_org_ids=[], eval_org_ids=["bench-org"])
+        assert memory_module.memory_enabled_for_org(settings, "bench-org") is False
+        assert memory_module.memory_enabled_for_org(settings, "org-1") is True
+
     async def test_skips_extraction_for_stateless_lookup_runs(self, test_settings):
         with (
             patch.object(memory_module, "_is_stateless_lookup_run", return_value=True),

@@ -3,6 +3,12 @@
 
 """Integration test fixtures — spins up a Docker Postgres container.
 
+Fixtures apply migrations and ``TRUNCATE ... CASCADE`` shared tables, so they
+must only ever touch a disposable database. The app's ``DATABASE_URL`` is never
+used: set ``TEST_DATABASE_URL`` (CI service container) or let the fixture start
+a local container. Any target that is not a loopback ``*test*`` database aborts
+the run before a connection is opened.
+
 All integration tests are skipped if Docker is not available or if
 the SKIP_INTEGRATION_TESTS env var is set.
 """
@@ -15,6 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -26,7 +33,26 @@ from shared.db_pool import create_pool
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-_TEST_DB_URL = os.getenv("DATABASE_URL", "")
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _assert_disposable_test_database(dsn: str) -> None:
+    """Abort the whole run unless ``dsn`` targets a loopback Postgres test database."""
+    parsed = urlsplit(dsn)
+    host = (parsed.hostname or "").lower()
+    database = parsed.path.lstrip("/").lower()
+    if parsed.scheme not in {"postgres", "postgresql"} or host not in _LOCAL_DB_HOSTS or "test" not in database:
+        pytest.exit(
+            "Refusing to run integration tests: they truncate tables, and the target "
+            f"(host={host or '?'}, database={database or '?'}) is not a loopback *test* database. "
+            "Unset TEST_DATABASE_URL to use a throw-away Docker container.",
+            returncode=4,
+        )
+
+
+_TEST_DB_URL = os.getenv("TEST_DATABASE_URL", "")
+if _TEST_DB_URL:
+    _assert_disposable_test_database(_TEST_DB_URL)
 
 
 def _docker_available() -> bool:
@@ -45,7 +71,7 @@ def _docker_available() -> bool:
 _can_run = bool(_TEST_DB_URL) or _docker_available()
 if not _can_run or os.getenv("SKIP_INTEGRATION_TESTS"):
     pytest.skip(
-        "No Postgres available for integration tests (set DATABASE_URL or run Docker).",
+        "No Postgres available for integration tests (set TEST_DATABASE_URL or run Docker).",
         allow_module_level=True,
     )
 
@@ -59,7 +85,8 @@ def anyio_backend():
 def docker_postgres():
     """Provide a Postgres DSN for integration tests.
 
-    - If DATABASE_URL is set (e.g. in CI with a service container), use it directly.
+    - If TEST_DATABASE_URL is set (CI service container), use it; it was checked to be
+      a loopback *test* database at import. The app's DATABASE_URL is never consulted.
     - Otherwise, spin up a Docker container on port 5433.
     """
     if _TEST_DB_URL:

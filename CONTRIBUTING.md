@@ -74,7 +74,7 @@ pytest
 # Run unit + API suites in parallel across CPU cores (fast local feedback)
 pytest tests/unit/ tests/api/ -n auto --dist load -v
 
-# Run database-backed tests serially (requires Docker or DATABASE_URL)
+# Run database-backed tests serially (requires Docker, or TEST_DATABASE_URL for a loopback test DB)
 pytest tests/integration/ -n 0 -q -p no:cacheprovider
 
 # Run with coverage
@@ -93,8 +93,13 @@ appends coverage from the unit and API suites before enforcing the threshold.
 > session-scoped fixture starts a Postgres container on a fixed port and
 > truncates shared tables, which conflicts across workers. Run integration
 > tests serially with `pytest tests/integration -n 0`. If neither Docker nor
-> `DATABASE_URL` is available, integration tests are skipped; check the test
+> `TEST_DATABASE_URL` is available, integration tests are skipped; check the test
 > summary before treating a local `pytest` run as equivalent to CI.
+>
+> **Never point integration tests at a real database.** Their fixtures apply
+> migrations and `TRUNCATE ... CASCADE` shared tables. They ignore the app's
+> `DATABASE_URL` and abort the run unless `TEST_DATABASE_URL` is a loopback
+> (`localhost`/`127.0.0.1`/`::1`) database whose name contains `test`.
 
 ---
 

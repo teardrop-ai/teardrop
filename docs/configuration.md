@@ -110,6 +110,8 @@ Direct Anthropic agent inference is available only for organizations using BYOK:
 | `MCP_BILLING_ENABLED` | `true` to enable credit billing for MCP tool calls |
 | `MCP_X402_ENABLED` | `true` to accept x402 payments on the MCP gateway |
 | `MEMORY_ENABLED` | Enable persistent agent memory (default: `true`). Auto-disabled if `OPENAI_API_KEY` is unset. |
+| `MEMORY_ISOLATED_ORG_IDS` | JSON list of org IDs whose runs never recall or store org memories, e.g. benchmark orgs (default: `[]`). Run-decision telemetry is still recorded. |
+| `EVAL_ORG_IDS` | JSON list of benchmark org IDs (default: `[]`). Their `/agent/run` telemetry is tagged `source='eval'`, excluded from `/models/benchmarks`, marketplace reputation and cache prewarm, and memory-isolated. Billing is unchanged. Requires migration 128. |
 | `RETENTION_SWEEP_ENABLED` | Enable periodic deletion of disposable operational data (default: `true`) |
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | Retention worker cadence in seconds (default: `3600`) |
 | `RETENTION_SWEEP_BATCH_SIZE` | Maximum rows or checkpoint threads deleted per batch (default: `500`, maximum: `5000`) |

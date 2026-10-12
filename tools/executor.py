@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -74,9 +75,37 @@ def _serialize_content(result: Any) -> str:
         return json.dumps(result, default=str)
 
 
+# Structured ``error_type`` values tools report for failures outside the caller's
+# control (provider outage, platform credential, malformed provider payload).
+_UPSTREAM_ERROR_TYPES = frozenset(
+    {
+        "upstream_error",
+        "upstream_unavailable",
+        "rate_limited",
+        "authentication_error",
+        "malformed_response",
+        "non_json_response",
+        "invalid_json",
+    }
+)
+
+
 def _classify_embedded_error(result: dict[str, Any]) -> tuple[str, bool, bool, str]:
+    """Return ``(error_class, retry_safe, billable, message)`` for a tool-reported error.
+
+    Structured signals (``error_type``, webhook ``status``) win over message text.
+    Infrastructure failures are never billable; anything else is a business error.
+    """
+    error_type = str(result.get("error_type") or "").lower()
+    status = result.get("status")
+    if error_type == "timeout":
+        return ("timeout", True, False, "Tool timed out")
+    if error_type in _UPSTREAM_ERROR_TYPES or (
+        isinstance(status, int) and not isinstance(status, bool) and (status >= 500 or status == 429)
+    ):
+        return ("upstream_unavailable", True, False, "Tool upstream is unavailable")
     raw = str(result.get("error", "tool execution failed")).lower()
-    if "timeout" in raw:
+    if "timeout" in raw or "timed out" in raw:
         return ("timeout", True, False, "Tool timed out")
     if "temporarily unavailable" in raw or "circuit breaker" in raw:
         return ("upstream_unavailable", True, False, "Tool is temporarily unavailable")
@@ -195,8 +224,13 @@ async def execute_tool(
             retry_safe=False,
             billable=False,
         )
-    except aiohttp.ClientError:
-        logger.warning("tool %s upstream unavailable", tool_name, exc_info=True)
+    except aiohttp.ClientError as exc:
+        logger.warning(
+            "tool %s upstream unavailable (%s)\n%s",
+            tool_name,
+            type(exc).__name__,
+            "".join(traceback.format_tb(exc.__traceback__)),
+        )
         return ToolResult(
             success=False,
             tool_name=tool_name,
@@ -208,12 +242,17 @@ async def execute_tool(
             billable=False,
         )
     except Exception as exc:
-        logger.warning("tool %s failed: %s", tool_name, exc)
+        logger.warning(
+            "tool %s failed (%s)\n%s",
+            tool_name,
+            type(exc).__name__,
+            "".join(traceback.format_tb(exc.__traceback__)),
+        )
         return ToolResult(
             success=False,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
-            content=_error_content("business_error", "Tool execution failed", False, True),
+            content=_error_content("business_error", "Tool execution failed", False, False),
             elapsed_ms=int((time.monotonic() - start_mono) * 1000),
             error_class="business_error",
             retry_safe=False,

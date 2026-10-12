@@ -70,21 +70,22 @@ async def test_same_header_claimed_once_across_two_calls():
     assert second is False
 
 
-async def test_fail_open_when_no_pool():
-    """No bound pool → fail open (allow) so a DB outage can't halt paid traffic."""
+async def test_no_pool_skips_claim():
+    """No bound pool (dev/test without DATABASE_URL) skips the claim."""
     with patch.object(x402, "_has_pool", return_value=False):
         assert await x402._claim_payment_nonce("header") is True
 
 
-async def test_fail_open_on_db_error():
-    """A DB exception during claim fails open; the chain remains the backstop."""
+async def test_db_error_fails_closed():
+    """A DB exception during claim raises; the request must not be admitted."""
     pool = MagicMock()
     pool.fetchval = AsyncMock(side_effect=Exception("connection reset"))
     with (
         patch.object(x402, "_has_pool", return_value=True),
         patch.object(x402, "_get_pool", return_value=pool),
+        pytest.raises(Exception, match="connection reset"),
     ):
-        assert await x402._claim_payment_nonce("header") is True
+        await x402._claim_payment_nonce("header")
 
 
 async def test_distinct_headers_both_claim():

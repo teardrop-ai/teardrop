@@ -422,6 +422,7 @@ async def reputation_rollup_once() -> int:
                 run_id,
                 created_at
             FROM tool_call_events
+            WHERE source <> 'eval'
         ),
         eligible_events AS (
             SELECT

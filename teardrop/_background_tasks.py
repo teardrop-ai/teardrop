@@ -400,6 +400,7 @@ async def _prewarm_cache_prefixes(pool: PgPool) -> None:
             WHERE created_at > NOW() - INTERVAL '24 hours'
               AND provider != ''
               AND model != ''
+              AND source <> 'eval'
             GROUP BY org_id, provider, model
             HAVING COUNT(*) >= $1
             ORDER BY run_count DESC

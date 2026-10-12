@@ -73,7 +73,13 @@ class BillingCreditService:
         *,
         principal_id: str | None = None,
     ) -> Any:
-        """Check that org has sufficient credit and is within spending limits."""
+        """Check that org has sufficient credit and is within spending limits.
+
+        Unpaid credit charges still awaiting settlement (pending, retrying, or
+        exhausted within the 7-day re-arm window) are subtracted from the balance
+        and counted toward org and principal caps, so failed debits cannot be
+        followed by more runs the org cannot pay for.
+        """
         pool = self._get_pool()
 
         row = await pool.fetchrow(
@@ -97,28 +103,48 @@ class BillingCreditService:
         if is_paused:
             return self._billing_result_factory(error="Org billing is paused by admin. Contact your administrator.")
 
-        if balance < min_balance_usdc:
+        obligations = await pool.fetchrow(
+            """
+            SELECT COALESCE(SUM(amount_usdc), 0) AS org_outstanding,
+                   COALESCE(SUM(amount_usdc) FILTER (WHERE principal_id = $2), 0) AS principal_outstanding
+            FROM pending_settlements
+            WHERE org_id = $1
+              AND billing_method = 'credit'
+              AND status IN ('pending', 'retrying', 'exhausted')
+              AND created_at >= NOW() - INTERVAL '7 days'
+            """,
+            org_id,
+            principal_id,
+        )
+        outstanding = int(obligations["org_outstanding"]) if obligations else 0
+        principal_outstanding = int(obligations["principal_outstanding"]) if obligations and principal_id else 0
+
+        if balance - outstanding < min_balance_usdc:
+            if outstanding > 0:
+                shortfall = (
+                    f"Insufficient credit: balance {balance} atomic USDC with {outstanding} owed for unpaid "
+                    f"credit charges, required {min_balance_usdc} available."
+                )
+            else:
+                shortfall = f"Insufficient credit: balance {balance} atomic USDC, required {min_balance_usdc}."
             if machine_org:
                 return self._billing_result_factory(
                     error=(
-                        f"Insufficient credit: balance {balance} atomic USDC, required {min_balance_usdc}. "
+                        f"{shortfall} "
                         "Fund via GET /billing/topup/usdc/requirements then POST /billing/topup/usdc, "
                         "or POST /token with grant_type=x402."
                     )
                 )
-            return self._billing_result_factory(
-                error=(
-                    f"Insufficient credit: balance {balance} atomic USDC, "
-                    f"required {min_balance_usdc}. Top up via POST /admin/credits/topup."
-                )
-            )
+            return self._billing_result_factory(error=f"{shortfall} Top up via POST /admin/credits/topup.")
 
         if spending_limit > 0:
             daily_spend = await self._get_daily_debit_spend_fn(pool, org_id)
-            if daily_spend + min_balance_usdc > spending_limit:
+            if daily_spend + outstanding + min_balance_usdc > spending_limit:
+                owed = f" plus {outstanding} owed for unpaid credit charges" if outstanding > 0 else ""
                 return self._billing_result_factory(
                     error=(
-                        f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC used in the last 24 hours."
+                        f"Daily spending limit reached: {daily_spend} of {spending_limit} atomic USDC "
+                        f"used in the last 24 hours{owed}."
                     )
                 )
 
@@ -137,11 +163,12 @@ class BillingCreditService:
                     return self._billing_result_factory(error="Principal billing is paused by an administrator.")
                 daily_principal_spend = await self._get_daily_principal_debit_spend_fn(pool, org_id, principal_id)
                 principal_cap = int(principal_limit["daily_limit_usdc"])
-                if daily_principal_spend + min_balance_usdc > principal_cap:
+                if daily_principal_spend + principal_outstanding + min_balance_usdc > principal_cap:
+                    owed = f" plus {principal_outstanding} owed for unpaid credit charges" if principal_outstanding > 0 else ""
                     return self._billing_result_factory(
                         error=(
                             f"Principal daily spending limit reached: {daily_principal_spend} of "
-                            f"{principal_cap} atomic USDC used in the last 24 hours."
+                            f"{principal_cap} atomic USDC used in the last 24 hours{owed}."
                         )
                     )
 

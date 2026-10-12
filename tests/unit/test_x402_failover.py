@@ -188,6 +188,32 @@ async def test_verify_skips_facilitator_during_cooldown(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_verify_rejects_when_nonce_claim_raises(monkeypatch):
+    server = MagicMock(verify_payment=AsyncMock(return_value=SimpleNamespace(is_valid=True, payer="0xabc")))
+    _requirement, parser = _verification_context(monkeypatch, [server])
+    monkeypatch.setattr(x402, "_claim_payment_nonce", AsyncMock(side_effect=RuntimeError("db down")))
+
+    with patch.dict("sys.modules", {"x402": parser}):
+        result = await x402.verify_payment(base64.b64encode(b"payment").decode())
+
+    assert result.verified is False
+    assert result.error == "Payment verification temporarily unavailable. Retry shortly."
+
+
+@pytest.mark.anyio
+async def test_verify_rejects_duplicate_nonce_claim(monkeypatch):
+    server = MagicMock(verify_payment=AsyncMock(return_value=SimpleNamespace(is_valid=True, payer="0xabc")))
+    _requirement, parser = _verification_context(monkeypatch, [server])
+    monkeypatch.setattr(x402, "_claim_payment_nonce", AsyncMock(return_value=False))
+
+    with patch.dict("sys.modules", {"x402": parser}):
+        result = await x402.verify_payment(base64.b64encode(b"payment").decode())
+
+    assert result.verified is False
+    assert result.error == "Payment already used. Sign a new payment authorization."
+
+
+@pytest.mark.anyio
 async def test_settlement_is_pinned_to_verifying_facilitator(monkeypatch):
     first = MagicMock(settle_payment=AsyncMock())
     second = MagicMock(settle_payment=AsyncMock(return_value=SimpleNamespace(success=True, transaction="0xtx")))

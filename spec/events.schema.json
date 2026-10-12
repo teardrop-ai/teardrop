@@ -320,12 +320,27 @@
           "title": "Duration Ms",
           "type": "integer"
         },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
         "platform_fee_usdc": {
           "title": "Platform Fee Usdc",
           "type": "integer"
         },
+        "provider": {
+          "default": "",
+          "title": "Provider",
+          "type": "string"
+        },
         "run_id": {
           "title": "Run Id",
+          "type": "string"
+        },
+        "runner_version": {
+          "default": "",
+          "title": "Runner Version",
           "type": "string"
         },
         "tokens_in": {
@@ -357,5 +372,5 @@
       "type": "object"
     }
   },
-  "version": "2.9.0"
+  "version": "2.10.0"
 }

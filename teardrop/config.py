@@ -733,6 +733,17 @@ class Settings(BaseSettings):
         default=True,
         description="Enable persistent agent memory. Auto-disabled if openai_api_key is empty.",
     )
+    memory_isolated_org_ids: list[str] = Field(
+        default_factory=list,
+        description="Org IDs whose runs never recall or store org memories (e.g. benchmark orgs).",
+    )
+    eval_org_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Benchmark org IDs: their /agent/run telemetry is tagged source='eval', excluded from production "
+            "aggregates, and memory-isolated. Requires migration 128."
+        ),
+    )
     memory_top_k: int = Field(default=5, description="Number of memories to retrieve per agent run")
     memory_max_per_org: int = Field(default=1000, description="Maximum stored memories per organisation")
     memory_ttl_days: int = Field(default=0, description="Memory expiry in days (0 = never expire)")

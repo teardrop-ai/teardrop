@@ -72,6 +72,17 @@ class TestRecordUsageEvent:
 
 @pytest.mark.anyio
 class TestTelemetryRunStart:
+    def test_run_telemetry_source_tags_only_eval_orgs(self):
+        from types import SimpleNamespace
+
+        from teardrop.usage import normalize_telemetry_source, run_telemetry_source
+
+        settings = SimpleNamespace(eval_org_ids=["bench-org"])
+        assert run_telemetry_source("bench-org", "api", settings) == "eval"
+        assert run_telemetry_source("org-1", "api", settings) == "api"
+        assert run_telemetry_source("", "api", SimpleNamespace(eval_org_ids=[""])) == "api"
+        assert normalize_telemetry_source("eval") == "eval"
+
     async def test_inserts_once_with_source(self):
         from teardrop.usage import record_telemetry_run_started
 

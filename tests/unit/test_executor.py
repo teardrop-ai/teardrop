@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import aiohttp
 import pytest
@@ -70,6 +71,38 @@ async def test_execute_tool_timeout_classified_non_billable():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("boom SECRET-SENTINEL"),
+        aiohttp.ClientResponseError(
+            type("_ReqInfo", (), {"real_url": "https://eth-mainnet.g.alchemy.com/v2/SECRET-SENTINEL"})(),
+            (),
+            status=500,
+            message="SECRET-SENTINEL",
+        ),
+    ],
+)
+async def test_execute_tool_exception_logs_never_include_message(exc, caplog):
+    assert "SECRET-SENTINEL" in str(exc)
+    caplog.set_level("DEBUG")
+    res = await execute_tool(
+        tool_name="leaky_tool",
+        tool_call_id="c-leak",
+        tool_args={},
+        tool=_DummyTool(exc=exc),
+    )
+    assert res.success is False
+    records = [r for r in caplog.records if r.name == "tools.executor"]
+    assert records
+    for record in records:
+        rendered = caplog.handler.format(record)
+        assert "SECRET-SENTINEL" not in rendered
+        assert record.exc_info is None
+    assert any("leaky_tool" in r.getMessage() and type(exc).__name__ in r.getMessage() for r in records)
+
+
+@pytest.mark.anyio
 async def test_execute_tool_validation_error_classified_non_billable():
     class _Req(BaseModel):
         foo: int
@@ -115,6 +148,40 @@ async def test_execute_tool_embedded_business_error_billable():
         tool=tool,
     )
     assert res.success is False
+    assert res.error_class == "business_error"
+    assert res.billable is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("result", "error_class"),
+    [
+        ({"error": "DeFiLlama /overview/dexs returned HTTP 503", "error_type": "upstream_error"}, "upstream_unavailable"),
+        ({"error": "DeBank wallet returned HTTP 401", "error_type": "authentication_error"}, "upstream_unavailable"),
+        ({"error": "DeBank returned malformed JSON", "error_type": "malformed_response"}, "upstream_unavailable"),
+        ({"error": "DeFiLlama /tvl request timed out", "error_type": "timeout"}, "timeout"),
+        ({"error": "Webhook returned HTTP 503", "status": 503}, "upstream_unavailable"),
+        ({"error": "Webhook returned HTTP 429", "status": 429}, "upstream_unavailable"),
+        ({"error": "MCP tool 'x' timed out after 30s"}, "timeout"),
+    ],
+)
+async def test_execute_tool_infrastructure_errors_non_billable(result, error_class):
+    res = await execute_tool(tool_name="t", tool_call_id="c", tool_args={}, tool=_DummyTool(result=result))
+    assert res.error_class == error_class
+    assert res.billable is False
+    assert json.loads(res.content)["billable"] is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"error": "Protocol not found on DeFiLlama", "error_type": "not_found"},
+        {"error": "Webhook returned HTTP 404", "status": 404},
+    ],
+)
+async def test_execute_tool_caller_side_errors_stay_billable(result):
+    res = await execute_tool(tool_name="t", tool_call_id="c", tool_args={}, tool=_DummyTool(result=result))
     assert res.error_class == "business_error"
     assert res.billable is True
 
@@ -180,6 +247,7 @@ async def test_execute_tool_unexpected_exception_non_billable():
     assert res.success is False
     assert res.error_class == "business_error"
     assert res.billable is False
+    assert json.loads(res.content)["billable"] is False
 
 
 @pytest.mark.anyio

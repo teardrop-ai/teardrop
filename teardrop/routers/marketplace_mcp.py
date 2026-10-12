@@ -378,6 +378,20 @@ async def _handle_mcp_jsonrpc(request: Request, payload: dict) -> JSONResponse:
                 try:
                     from billing.settlement import enqueue_failed_settlement
 
+                    # Author earnings are paid by the retry worker in the same
+                    # transaction as the recovered debit (self-calls earn nothing).
+                    earnings_allocations = (
+                        [
+                            {
+                                "author_org_id": str(author_org_id),
+                                "caller_org_id": org_id or "",
+                                "tool_name": actual_tool_name,
+                                "total_cost_usdc": int(tool_cost),
+                            }
+                        ]
+                        if author_org_id and str(author_org_id) != str(org_id or "")
+                        else []
+                    )
                     await enqueue_failed_settlement(
                         call_id,
                         org_id or "",
@@ -386,6 +400,7 @@ async def _handle_mcp_jsonrpc(request: Request, payload: dict) -> JSONResponse:
                         tool_cost,
                         principal_id=payload.get("sub") or None,
                         charge_id=charge_id,
+                        earnings_allocations=earnings_allocations,
                     )
                 except Exception:
                     logger.exception("Failed to enqueue MCP settlement recovery org=%s", org_id)

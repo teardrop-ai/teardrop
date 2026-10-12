@@ -760,6 +760,15 @@ async def _extract_facts_and_decision(messages: list[Any]) -> tuple[list[str], d
         return [], None
 
 
+def memory_enabled_for_org(settings: Any, org_id: str) -> bool:
+    """Return whether runs for ``org_id`` may recall or store org memories."""
+    return (
+        bool(settings.memory_enabled)
+        and org_id not in getattr(settings, "memory_isolated_org_ids", ())
+        and org_id not in getattr(settings, "eval_org_ids", ())
+    )
+
+
 async def _extract_facts(messages: list[Any]) -> list[str]:
     """Backward-compatible facts-only accessor. Delegates to the combined extractor."""
     facts, _ = await _extract_facts_and_decision(messages)
@@ -778,6 +787,7 @@ async def extract_and_store_memories(
     thread_id: str = "",
     user_message: str = "",
     source: str = "api",
+    store_facts: bool = True,
 ) -> int:
     """Extract facts and a decision summary from a conversation; store both.
 
@@ -803,7 +813,7 @@ async def extract_and_store_memories(
 
         facts, decision = await _extract_facts_and_decision(messages)
         stored = 0
-        if not is_stateless:
+        if store_facts and not is_stateless:
             entries = await asyncio.gather(*[store_memory(org_id, user_id, fact, source_run_id=run_id) for fact in facts])
             stored = sum(1 for entry in entries if entry is not None)
             if stored > 0:

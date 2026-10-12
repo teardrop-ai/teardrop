@@ -51,4 +51,8 @@ def test_usage_summary_schema_has_expected_fields():
         "cost_usdc",
         "platform_fee_usdc",
         "delegation_cost_usdc",
+        "provider",
+        "model",
+        "runner_version",
     }
+    assert not {"provider", "model", "runner_version"} & set(usage_schema["required"])

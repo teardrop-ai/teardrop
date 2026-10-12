@@ -328,6 +328,8 @@ Teardrop prepaid credits (or on-chain x402 settlement) cover the full cost of ev
 
 Tool calls are priced the same way on every surface and for every model: admin override, then the author or platform price, then the global `pricing_rules.tool_call_cost`. Model-specific rules price tokens only. A rule with no per-unit rates is flat-rate: its `run_price_usdc` covers tokens once per run (not per LLM turn), and tool calls are billed on top.
 
+On agent runs, a tool call is billed when it succeeds or returns a tool-reported business error (for example, an unknown protocol or wallet). Infrastructure failures are not billed: timeouts, upstream outages or rate limits, invalid upstream responses, invalid arguments, and unexpected executor errors.
+
 In other words, BYOK does not eliminate the need for Teardrop credits or x402 settlement — it only removes the LLM model cost from the Teardrop bill.
 
 ---

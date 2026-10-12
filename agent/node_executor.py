@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -224,7 +225,12 @@ async def _execute_single_tool_safe(
         content = (
             f"[TOOL_ERROR] '{tool_name}' failed unexpectedly ({type(exc).__name__}). Continue synthesis with available data."
         )
-        logger.exception("tool_executor: %s unexpected failure", tool_name)
+        logger.error(
+            "tool_executor: %s unexpected failure (%s)\n%s",
+            tool_name,
+            type(exc).__name__,
+            "".join(traceback.format_tb(exc.__traceback__)),
+        )
         return {
             "message": ToolMessage(content=content, tool_call_id=call_id),
             "name": tool_name,
@@ -245,7 +251,9 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     (``agent_tool_max_calls_per_run``) and the ``max_custom_tool_calls_per_run`` quota.
 
     Billing accumulators updated in ``_usage``:
-      * ``billable_tool_calls`` — successful non-failed calls (used for cost accounting)
+      * ``billable_tool_calls`` — calls whose outcome is billable: successful tools and tool-reported
+        business errors; excludes infrastructure failures (timeout, upstream_unavailable, validation_error,
+        blocked, delegation cap) and unexpected executor exceptions (used for cost accounting)
       * ``billable_tool_names`` — tool names that ran (used for marketplace earnings
         recording and the USAGE_SUMMARY SSE event)
       * ``failed_tool_calls`` / ``failed_tool_names`` — for diagnostics
@@ -457,24 +465,59 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             "metadata": {**state.metadata, "_usage": usage, "_synthesis_forced": True},
         }
 
+    import time
+
+    per_tool_timeout_seconds = float(get_settings().agent_single_tool_timeout_seconds)
+    if per_tool_timeout_seconds <= 0:
+        per_tool_timeout_seconds = None
+    batch_timeout_seconds = get_settings().agent_tool_executor_timeout_seconds
+
+    batch_start_mono = time.monotonic()
+    tasks = [
+        asyncio.ensure_future(_execute_single_tool_safe(call, tools_by_name, state.metadata, per_tool_timeout_seconds))
+        for call in dedup_calls
+    ]
     try:
-        import time
+        _done, pending = await asyncio.wait(tasks, timeout=batch_timeout_seconds)
+    except BaseException:
+        # Node cancelled (client disconnect / run timeout): never leave tools running unaccounted.
+        for task in tasks:
+            task.cancel()
+        raise
+    batch_timed_out = bool(pending)
+    for task in pending:
+        task.cancel()
+    for task in pending:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
-        per_tool_timeout_seconds = float(get_settings().agent_single_tool_timeout_seconds)
-        if per_tool_timeout_seconds <= 0:
-            per_tool_timeout_seconds = None
+    results: list[dict[str, Any]] = []
+    for call, task in zip(dedup_calls, tasks):
+        if task in pending:
+            tool_name = call.get("name", "unknown_tool")
+            content = (
+                f"[TOOL_TIMEOUT] '{tool_name}' exceeded the {batch_timeout_seconds}s batch timeout. "
+                "Continue synthesis with available data."
+            )
+            results.append(
+                {
+                    "message": ToolMessage(content=content, tool_call_id=call.get("id", "unknown_call")),
+                    "name": tool_name,
+                    "elapsed_ms": int((time.monotonic() - batch_start_mono) * 1000),
+                    "content": content,
+                    "billable": False,
+                    "error_class": "timeout",
+                }
+            )
+        else:
+            results.append(task.result())
 
-        batch_start_mono = time.monotonic()
-        results = await asyncio.wait_for(
-            asyncio.gather(
-                *[
-                    _execute_single_tool_safe(call, tools_by_name, state.metadata, per_tool_timeout_seconds)
-                    for call in dedup_calls
-                ]
-            ),
-            timeout=get_settings().agent_tool_executor_timeout_seconds,
-        )
-        batch_elapsed = int((time.monotonic() - batch_start_mono) * 1000)
+    batch_elapsed = int((time.monotonic() - batch_start_mono) * 1000)
+    if batch_timed_out:
+        logger.error("tool_executor_node timeout after %ss", batch_timeout_seconds)
+    else:
         durations = [r["elapsed_ms"] for r in results]
         slowest = max(durations) if durations else 0
         logger.info(
@@ -483,13 +526,6 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             len(results),
             slowest,
         )
-    except asyncio.TimeoutError:
-        logger.error("tool_executor_node timeout after %ss", get_settings().agent_tool_executor_timeout_seconds)
-        return {
-            "messages": [AIMessage(content="Tool execution timed out. Some tools took too long to respond.")],
-            "task_status": TaskStatus.FAILED,
-            "metadata": {**state.metadata, "_usage": usage},
-        }
 
     tool_messages = skipped_messages + [r["message"] for r in results]
 
@@ -503,8 +539,8 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
     usage["_completed_calls"] = completed_sigs
 
     # ── Per-call telemetry log (ML/reputation foundation) ─────────────────
-    # `results` is produced by asyncio.gather() over `dedup_calls`, so the two
-    # lists share order/length — zip is safe.
+    # `results` is built in `dedup_calls` order, so the two lists share
+    # order/length — zip is safe.
     tool_call_log: list[dict[str, Any]] = list(usage.get("_tool_call_log", []))
 
     for dedup_call, result in zip(dedup_calls, results):
@@ -562,6 +598,14 @@ async def tool_executor_node(state: AgentState) -> dict[str, Any]:
             str(res.get("full_content", res.get("content", ""))),
             slots,
         )
+
+    if batch_timed_out:
+        # Completed calls are accounted above; routing stays FAILED.
+        return {
+            "messages": [AIMessage(content="Tool execution timed out. Some tools took too long to respond.")],
+            "task_status": TaskStatus.FAILED,
+            "metadata": {**state.metadata, "_usage": usage},
+        }
 
     next_plan = plan
     if using_plan and plan is not None:

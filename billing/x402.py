@@ -481,11 +481,13 @@ async def _claim_payment_nonce(payment_header: str, *, fail_closed: bool = False
     The claim key is ``_payment_nonce_hash`` of the header. On-chain settlement already
     prevents an EIP-3009 authorization from spending twice; this guard closes
     the narrower concurrent window where two in-flight requests with the same
-    header both verify and execute a paid tool before either settles. If the
-    nonce store is unavailable we fail open (log + allow) so a transient DB
-    issue cannot take down all paid traffic — the chain remains the final
-    double-spend backstop. ``fail_closed=True`` raises instead, for schemes
-    (MPP tx hashes) where the claim is the only replay guard.
+    header both verify and execute a paid tool before either settles. A
+    nonce-store query failure always raises (fail closed): admitting the
+    request would let concurrent copies of one authorization all deliver paid
+    work, and the chain only bounds collection, not delivery. With no bound
+    pool (dev/test without DATABASE_URL) the claim is skipped unless
+    ``fail_closed=True``, which raises for schemes (MPP tx hashes) where the
+    claim is the only replay guard.
     """
     if not _has_pool():
         if fail_closed:
@@ -506,10 +508,8 @@ async def _claim_payment_nonce(payment_header: str, *, fail_closed: bool = False
             nonce_hash,
         )
     except Exception:
-        if fail_closed:
-            raise
-        logger.warning("x402 nonce claim query failed; failing open", exc_info=True)
-        return True
+        logger.warning("x402 nonce claim query failed; rejecting payment", exc_info=True)
+        raise
     return claimed is not None
 
 
@@ -669,7 +669,12 @@ async def verify_payment(payment_header: str, requirements: list | None = None) 
             # Atomic concurrent-replay guard: claim the payment header before
             # returning verified=True so two in-flight requests carrying the
             # same signed header cannot both proceed to execute a paid tool.
-            if not await _claim_payment_nonce(payment_header):
+            try:
+                claimed = await _claim_payment_nonce(payment_header)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("x402 nonce claim unavailable; payment not admitted error_type=%s", type(exc).__name__)
+                return BillingResult(error="Payment verification temporarily unavailable. Retry shortly.")
+            if not claimed:
                 logger.warning("x402 payment header already claimed (concurrent replay rejected)")
                 return BillingResult(error="Payment already used. Sign a new payment authorization.")
             payer = result.payer if isinstance(result.payer, str) else ""

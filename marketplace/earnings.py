@@ -17,6 +17,42 @@ from teardrop.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+async def insert_tool_call_earnings(
+    executor,
+    author_org_id: str,
+    tool_name: str,
+    caller_org_id: str,
+    total_cost_usdc: int,
+) -> bool:
+    """Insert one earnings row via ``executor`` (pool or transaction connection).
+
+    Returns False (no row) for self-calls or non-positive costs. Raises on DB
+    errors so transactional callers can roll back.
+    """
+    total_cost_usdc = int(total_cost_usdc)
+    if author_org_id == caller_org_id or total_cost_usdc <= 0:
+        return False
+    bps = get_settings().marketplace_default_revenue_share_bps
+    author_share = (total_cost_usdc * bps) // 10_000
+    platform_share = total_cost_usdc - author_share
+    await executor.execute(
+        """
+        INSERT INTO tool_author_earnings
+            (id, org_id, tool_name, caller_org_id, amount_usdc,
+             author_share_usdc, platform_share_usdc, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+        """,
+        str(uuid.uuid4()),
+        author_org_id,
+        tool_name,
+        caller_org_id,
+        total_cost_usdc,
+        author_share,
+        platform_share,
+    )
+    return True
+
+
 async def record_tool_call_earnings(
     author_org_id: str,
     tool_name: str,
@@ -35,26 +71,7 @@ async def record_tool_call_earnings(
 
     try:
         pool = _get_pool()
-
-        bps = get_settings().marketplace_default_revenue_share_bps
-        author_share = (total_cost_usdc * bps) // 10_000
-        platform_share = total_cost_usdc - author_share
-
-        await pool.execute(
-            """
-            INSERT INTO tool_author_earnings
-                (id, org_id, tool_name, caller_org_id, amount_usdc,
-                 author_share_usdc, platform_share_usdc, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-            """,
-            str(uuid.uuid4()),
-            author_org_id,
-            tool_name,
-            caller_org_id,
-            total_cost_usdc,
-            author_share,
-            platform_share,
-        )
+        await insert_tool_call_earnings(pool, author_org_id, tool_name, caller_org_id, total_cost_usdc)
     except Exception as exc:
         logger.warning("Failed to record tool earnings error_type=%s", type(exc).__name__)
         with sentry_sdk.new_scope() as scope:

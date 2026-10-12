@@ -11,11 +11,20 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from psycopg import AsyncConnection
-from psycopg.errors import CheckViolation, UniqueViolation
+from psycopg.errors import CheckViolation, DataError, IntegrityError, UniqueViolation
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-__all__ = ["CheckViolation", "PgConnection", "PgPool", "UniqueViolation", "create_pool", "translate_sql"]
+__all__ = [
+    "CheckViolation",
+    "DataError",
+    "IntegrityError",
+    "PgConnection",
+    "PgPool",
+    "UniqueViolation",
+    "create_pool",
+    "translate_sql",
+]
 
 _PLACEHOLDER_RE = re.compile(r"\$([1-9][0-9]*)")
 

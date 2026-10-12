@@ -193,6 +193,7 @@ class TestGetModelBenchmarks:
             result = await bm_module._query_benchmarks()
         assert "anthropic:claude-sonnet-4-20250514" in result
         assert result["anthropic:claude-sonnet-4-20250514"]["total_runs_7d"] == 100
+        assert "source <> 'eval'" in pool.fetch.call_args.args[0]
 
     async def test_query_benchmarks_handles_null_metrics(self):
         import teardrop.benchmarks as bm_module

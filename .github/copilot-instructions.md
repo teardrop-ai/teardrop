@@ -26,3 +26,4 @@ Token-efficient workflow for coding agents on this repo. See [CONTRIBUTING.md](.
 ## Testing
 - Use `-n auto --dist load` for **any** run of the mocked suites — `tests/unit/`, `tests/api/`, or both together. The parallelism comes from `-n auto` (one worker per core) and applies to each suite on its own, not only when they're combined. For broad validation, run both: `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix).
 - Do **not** use `-n auto` on `tests/integration` — its session-scoped Postgres container uses a fixed port and truncates shared tables. Run integration serially with `-n 0`.
+- Integration fixtures run migrations and `TRUNCATE ... CASCADE`. Run them only against the throw-away Docker container (Docker Desktop) or a loopback `TEST_DATABASE_URL`; never export a real `DATABASE_URL`/Neon DSN into the test shell. The conftest aborts on non-loopback targets — do not bypass it.

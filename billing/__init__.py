@@ -763,8 +763,9 @@ async def enqueue_failed_settlement(
     payment_payload: str | None = None,
     principal_id: str | None = None,
     charge_id: str = "",
+    earnings_allocations: list[dict] | None = None,
 ) -> None:
-    """Queue a failed settlement for later retry, preserving rail and atomic amount."""
+    """Queue a failed settlement for later retry, preserving rail, atomic amount, and author earnings."""
     await _call_async(
         _ENQUEUE_FAILED_SETTLEMENT_ORIG,
         usage_event_id,
@@ -775,6 +776,7 @@ async def enqueue_failed_settlement(
         payment_payload,
         principal_id=principal_id,
         charge_id=charge_id,
+        earnings_allocations=earnings_allocations,
     )
 
 

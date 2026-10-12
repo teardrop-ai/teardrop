@@ -1656,6 +1656,15 @@ async def test_mcp_v1_debit_failure_links_retry_to_charge(api_client, community_
     args = enqueue.await_args.args
     assert args[0] == args[2] == charge.await_args.kwargs["invocation_id"]
     assert enqueue.await_args.kwargs["charge_id"] == "charge-1"
+    # The retry worker pays the author once the recovered debit succeeds.
+    assert enqueue.await_args.kwargs["earnings_allocations"] == [
+        {
+            "author_org_id": "author-org-id",
+            "caller_org_id": "test-org-id",
+            "tool_name": "weather",
+            "total_cost_usdc": 5_000,
+        }
+    ]
     mocks.earnings.assert_not_called()
 
 

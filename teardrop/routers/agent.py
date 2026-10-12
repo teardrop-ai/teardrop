@@ -22,10 +22,13 @@ from teardrop.agent_event_loop import stream_graph_events
 from teardrop.agent_post_run import (
     calculate_run_cost,
     dispatch_settlement,
+    fetch_run_usage_snapshot,
     fetch_usage_snapshot,
     record_post_run_telemetry,
+    schedule_run_finalizer,
 )
 from teardrop.agent_runtime import (
+    _compute_marketplace_earnings_allocations,
     _prepare_run_context,
     _record_marketplace_earnings,
     _run_billing_gate,
@@ -69,7 +72,7 @@ from teardrop.routers.agent_tools import (
     get_agent_tool_exclusions,  # noqa: F401
     list_agent_tools,  # noqa: F401
 )
-from teardrop.usage import UsageEvent, record_telemetry_run_started, record_usage_event
+from teardrop.usage import UsageEvent, record_telemetry_run_started, record_usage_event, run_telemetry_source
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -162,7 +165,8 @@ async def agent_run(
     async def _run_stream() -> AsyncIterator[dict[str, str]]:
         start_time = time.monotonic()
         yield _sse_event(_EV_RUN_STARTED, {"run_id": run_id, "thread_id": body.thread_id})
-        await record_telemetry_run_started(run_id, org_id, "api")
+        telemetry_source = run_telemetry_source(org_id, "api", settings)
+        await record_telemetry_run_started(run_id, org_id, telemetry_source)
         _log_agent_memory("stream_start", run_id=run_id)
 
         # ── Pre-graph init: gather all independent calls concurrently ─────
@@ -236,23 +240,181 @@ async def agent_run(
 
         asyncio.create_task(detect_implicit_correction(org_id, scoped_thread_id, body.message))
 
-        # Drive the LangGraph event-dispatch loop. The generator yields the
-        # per-token / per-tool / per-surface SSE frames and signals early
-        # termination (cancellation or unhandled error) via the result dict so
-        # post-run usage accounting is skipped exactly as before.
-        _loop_result: dict[str, Any] = {}
-        with agent_run_context(AgentRunContext(org_lc_tools, org_tools_by_name)):
-            async for _sse in stream_graph_events(
+        is_promotional_credit = bool(getattr(ctx, "is_promotional_credit", False))
+
+        async def _finalize_run(*, require_work: bool) -> list[dict[str, str]]:
+            """Record usage, settle, and pay authors; returns the settlement/usage SSE frames.
+
+            ``require_work`` (cancelled runs) skips billing when nothing billable was checkpointed.
+            """
+            events: list[dict[str, str]] = []
+            # ── Usage accounting (log-only, never blocks) ─────────────────────
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            # state_snapshot is also read later by the memory-extraction kickoff.
+            # Cancelled runs read the checkpoint this run wrote (never another run's state).
+            fetch_snapshot = fetch_run_usage_snapshot if require_work else fetch_usage_snapshot
+            state_snapshot, usage_data = await fetch_snapshot(
                 graph=graph,
-                initial_state=initial_state,
                 config=config,
                 run_id=run_id,
                 settings=settings,
-                org_id=org_id,
-                payload=payload,
-                result=_loop_result,
+            )
+
+            if require_work and not (
+                usage_data.get("tokens_in", 0) or usage_data.get("tokens_out", 0) or usage_data.get("billable_tool_calls", 0)
             ):
-                yield _sse
+                logger.info("agent_run cancelled before any billable work run_id=%s", run_id)
+                return events
+
+            cost_usdc = await calculate_run_cost(
+                usage_data=usage_data,
+                llm_config=llm_config,
+                settings=settings,
+                is_byok=is_byok,
+                org_llm_cfg=_org_llm_cfg,
+                platform_fee=platform_fee,
+            )
+
+            logger.info(
+                "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d "
+                "tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc_atomic=%d cost_usd=$%.6f",
+                run_id,
+                org_id,
+                duration_ms,
+                usage_data.get("tokens_in", 0),
+                usage_data.get("tokens_out", 0),
+                usage_data.get("tool_calls", 0),
+                cost_usdc,
+                cost_usdc / 1_000_000,
+            )
+
+            usage_event = UsageEvent(
+                user_id=user_id,
+                org_id=org_id,
+                thread_id=scoped_thread_id,
+                run_id=run_id,
+                tokens_in=usage_data.get("tokens_in", 0),
+                tokens_out=usage_data.get("tokens_out", 0),
+                cache_read_tokens=usage_data.get("cache_read_tokens", 0),
+                cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
+                tool_calls=usage_data.get("tool_calls", 0),
+                tool_names=usage_data.get("tool_names", []),
+                billable_tool_calls=usage_data.get("billable_tool_calls", 0),
+                billable_tool_names=usage_data.get("billable_tool_names", []),
+                failed_tool_calls=usage_data.get("failed_tool_calls", 0),
+                failed_tool_names=usage_data.get("failed_tool_names", []),
+                duration_ms=duration_ms,
+                cost_usdc=cost_usdc,
+                platform_fee_usdc=platform_fee,
+                provider=llm_config["provider"] if llm_config else settings.agent_provider,
+                model=llm_config["model"] if llm_config else settings.agent_model,
+                llm_turns=usage_data.get("turns") or [],
+                source=telemetry_source,
+            )
+            await record_usage_event(usage_event)
+
+            # ── ML telemetry (non-financial, fire-and-forget) ────────────────
+            state_values = (state_snapshot.values or {}) if state_snapshot is not None else None
+            task_status = state_values.get("task_status", "") if state_values else ""
+            task_status = getattr(task_status, "value", None) or str(task_status)
+            record_post_run_telemetry(
+                run_id=run_id,
+                org_id=org_id,
+                user_id=user_id,
+                usage_data=usage_data,
+                state_values=state_values,
+                settings=mem_settings,
+                outcome=-1 if task_status.strip().lower().endswith("failed") else 1,
+                outcome_source="auto",
+                thread_id=scoped_thread_id,
+                user_message=body.message,
+                source=telemetry_source,
+            )
+
+            # ── Settlement / credit debit (after usage recorded) ─────────────
+            delegation_spend = usage_data.get("delegation_spend_usdc", 0)
+
+            earnings_allocations = await _compute_marketplace_earnings_allocations(
+                mp_by_name=mp_by_name,
+                tool_names_used=usage_data.get("billable_tool_names", []),
+                caller_org_id=org_id,
+                is_promotional_credit=is_promotional_credit,
+            )
+            _settlement_result: dict[str, Any] = {}
+            async for _sse in dispatch_settlement(
+                billing=billing,
+                settings=settings,
+                usage_event=usage_event,
+                platform_fee=platform_fee,
+                cost_usdc=cost_usdc,
+                delegation_spend=delegation_spend,
+                org_id=org_id,
+                principal_id=user_id,
+                run_id=run_id,
+                result=_settlement_result,
+                earnings_allocations=earnings_allocations,
+            ):
+                events.append(_sse)
+            marketplace_stats_billable = _settlement_result.get("marketplace_stats_billable", False) and not is_promotional_credit
+
+            # ── Record marketplace tool earnings + usage stats ───────────────
+            # Both are gated on ``marketplace_stats_billable`` (True only after a
+            # confirmed credit debit or confirmed x402 settlement). Recording
+            # earnings before settlement succeeds would credit tool authors for
+            # runs the caller never actually paid for.
+            if marketplace_stats_billable:
+                await _record_marketplace_earnings(allocations=earnings_allocations)
+                billable_tool_names = usage_data.get("billable_tool_names", [])
+                if isinstance(billable_tool_names, list):
+                    asyncio.create_task(record_marketplace_tool_usage_many([str(name) for name in billable_tool_names]))
+
+            events.append(
+                _sse_event(
+                    _EV_USAGE_SUMMARY,
+                    {
+                        "run_id": run_id,
+                        "tokens_in": usage_event.tokens_in,
+                        "tokens_out": usage_event.tokens_out,
+                        "cache_read_tokens": usage_event.cache_read_tokens,
+                        "cache_creation_tokens": usage_event.cache_creation_tokens,
+                        "tool_calls": usage_event.tool_calls,
+                        "duration_ms": usage_event.duration_ms,
+                        "cost_usdc": usage_event.cost_usdc,
+                        "platform_fee_usdc": platform_fee,
+                        "delegation_cost_usdc": delegation_spend,
+                        "provider": usage_event.provider,
+                        "model": usage_event.model,
+                        "runner_version": usage_event.runner_version,
+                    },
+                )
+            )
+            return events
+
+        # Drive the LangGraph event-dispatch loop. The generator yields the
+        # per-token / per-tool / per-surface SSE frames and signals early
+        # termination (cancellation or unhandled error) via the result dict.
+        # Cancelled runs settle checkpointed usage; platform failures stay unbilled.
+        _loop_result: dict[str, Any] = {}
+        try:
+            with agent_run_context(AgentRunContext(org_lc_tools, org_tools_by_name)):
+                async for _sse in stream_graph_events(
+                    graph=graph,
+                    initial_state=initial_state,
+                    config=config,
+                    run_id=run_id,
+                    settings=settings,
+                    org_id=org_id,
+                    payload=payload,
+                    result=_loop_result,
+                ):
+                    yield _sse
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnected mid-stream (sse-starlette closes/cancels this
+            # generator). Settle checkpointed usage in a detached task; platform
+            # failures stay unbilled.
+            if _loop_result.get("termination_reason") != "failed":
+                schedule_run_finalizer(_finalize_run(require_work=True), run_id)
+            raise
         if _loop_result.get("terminated"):
             if _loop_result.get("termination_reason") == "failed":
                 state_snapshot, usage_data = await fetch_usage_snapshot(
@@ -272,134 +434,17 @@ async def agent_run(
                     outcome_source="auto",
                     thread_id=scoped_thread_id,
                     user_message=body.message,
+                    source=telemetry_source,
                 )
+            if _loop_result.get("termination_reason") == "cancelled":
+                # Caller-initiated termination pays for work checkpointed so far.
+                schedule_run_finalizer(_finalize_run(require_work=True), run_id)
             return
 
-        # ── Usage accounting (log-only, never blocks) ─────────────────────
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        # state_snapshot is also read later by the memory-extraction kickoff.
-        state_snapshot, usage_data = await fetch_usage_snapshot(
-            graph=graph,
-            config=config,
-            run_id=run_id,
-            settings=settings,
-        )
-
-        cost_usdc = await calculate_run_cost(
-            usage_data=usage_data,
-            llm_config=llm_config,
-            settings=settings,
-            is_byok=is_byok,
-            org_llm_cfg=_org_llm_cfg,
-            platform_fee=platform_fee,
-        )
-
-        logger.info(
-            "agent_run diagnostic_summary run_id=%s org_id=%s duration_ms=%d "
-            "tokens_in=%d tokens_out=%d tool_calls=%d cost_usdc_atomic=%d cost_usd=$%.6f",
-            run_id,
-            org_id,
-            duration_ms,
-            usage_data.get("tokens_in", 0),
-            usage_data.get("tokens_out", 0),
-            usage_data.get("tool_calls", 0),
-            cost_usdc,
-            cost_usdc / 1_000_000,
-        )
-
-        usage_event = UsageEvent(
-            user_id=user_id,
-            org_id=org_id,
-            thread_id=scoped_thread_id,
-            run_id=run_id,
-            tokens_in=usage_data.get("tokens_in", 0),
-            tokens_out=usage_data.get("tokens_out", 0),
-            cache_read_tokens=usage_data.get("cache_read_tokens", 0),
-            cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
-            tool_calls=usage_data.get("tool_calls", 0),
-            tool_names=usage_data.get("tool_names", []),
-            billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
-            billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-            failed_tool_calls=usage_data.get("failed_tool_calls", 0),
-            failed_tool_names=usage_data.get("failed_tool_names", []),
-            duration_ms=duration_ms,
-            cost_usdc=cost_usdc,
-            platform_fee_usdc=platform_fee,
-            provider=llm_config["provider"] if llm_config else settings.agent_provider,
-            model=llm_config["model"] if llm_config else settings.agent_model,
-            llm_turns=usage_data.get("turns") or [],
-            source="api",
-        )
-        await record_usage_event(usage_event)
-
-        # ── ML telemetry (non-financial, fire-and-forget) ────────────────
-        state_values = (state_snapshot.values or {}) if state_snapshot is not None else None
-        task_status = state_values.get("task_status", "") if state_values else ""
-        task_status = getattr(task_status, "value", None) or str(task_status)
-        record_post_run_telemetry(
-            run_id=run_id,
-            org_id=org_id,
-            user_id=user_id,
-            usage_data=usage_data,
-            state_values=state_values,
-            settings=mem_settings,
-            outcome=-1 if task_status.strip().lower().endswith("failed") else 1,
-            outcome_source="auto",
-            thread_id=scoped_thread_id,
-            user_message=body.message,
-        )
-
-        # ── Settlement / credit debit (after usage recorded) ─────────────
-        delegation_spend = usage_data.get("delegation_spend_usdc", 0)
-
-        _settlement_result: dict[str, Any] = {}
-        async for _sse in dispatch_settlement(
-            billing=billing,
-            settings=settings,
-            usage_event=usage_event,
-            platform_fee=platform_fee,
-            cost_usdc=cost_usdc,
-            delegation_spend=delegation_spend,
-            org_id=org_id,
-            principal_id=user_id,
-            run_id=run_id,
-            result=_settlement_result,
-        ):
+        # Shielded: a disconnect during settlement cannot abort the debit/settlement.
+        finalize_task = schedule_run_finalizer(_finalize_run(require_work=False), run_id)
+        for _sse in await asyncio.shield(finalize_task):
             yield _sse
-        marketplace_stats_billable = _settlement_result.get("marketplace_stats_billable", False) and not getattr(
-            ctx, "is_promotional_credit", False
-        )
-
-        # ── Record marketplace tool earnings + usage stats ───────────────
-        # Both are gated on ``marketplace_stats_billable`` (True only after a
-        # confirmed credit debit or confirmed x402 settlement). Recording
-        # earnings before settlement succeeds would credit tool authors for
-        # runs the caller never actually paid for.
-        if marketplace_stats_billable:
-            await _record_marketplace_earnings(
-                mp_by_name=mp_by_name,
-                tool_names_used=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-                caller_org_id=org_id,
-            )
-            billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
-            if isinstance(billable_tool_names, list):
-                asyncio.create_task(record_marketplace_tool_usage_many([str(name) for name in billable_tool_names]))
-
-        yield _sse_event(
-            _EV_USAGE_SUMMARY,
-            {
-                "run_id": run_id,
-                "tokens_in": usage_event.tokens_in,
-                "tokens_out": usage_event.tokens_out,
-                "cache_read_tokens": usage_event.cache_read_tokens,
-                "cache_creation_tokens": usage_event.cache_creation_tokens,
-                "tool_calls": usage_event.tool_calls,
-                "duration_ms": usage_event.duration_ms,
-                "cost_usdc": usage_event.cost_usdc,
-                "platform_fee_usdc": platform_fee,
-                "delegation_cost_usdc": delegation_spend,
-            },
-        )
         _log_agent_memory(
             "stream_end",
             run_id=run_id,

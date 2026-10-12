@@ -119,7 +119,7 @@ class TestCalculateRunCostUsdc:
     async def test_flat_rate_when_no_per_unit_rates(self):
         rule = _make_rule(run_price_usdc=10_000)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 5_000, "tokens_out": 2_000, "tool_calls": 3})
+            cost = await calculate_run_cost_usdc({"tokens_in": 5_000, "tokens_out": 2_000, "billable_tool_calls": 3})
         assert cost == 10_000
 
     async def test_usage_based_pricing_full_formula(self):
@@ -131,14 +131,14 @@ class TestCalculateRunCostUsdc:
         )
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
             # (2000//1000)*100 + (1000//1000)*200 + 2*50 = 200+200+100 = 500
-            cost = await calculate_run_cost_usdc({"tokens_in": 2_000, "tokens_out": 1_000, "tool_calls": 2})
+            cost = await calculate_run_cost_usdc({"tokens_in": 2_000, "tokens_out": 1_000, "billable_tool_calls": 2})
         assert cost == 500
 
     async def test_sub_1k_tokens_are_billed_pro_rata_rounded_up(self):
         """999 tokens at 100/1k = 99.9 atomic USDC, rounded up once to 100."""
         rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 999, "tokens_out": 0, "tool_calls": 0})
+            cost = await calculate_run_cost_usdc({"tokens_in": 999, "tokens_out": 0, "billable_tool_calls": 0})
         assert cost == 100
 
     async def test_cache_write_tokens_add_25_percent_input_premium(self):
@@ -146,25 +146,25 @@ class TestCalculateRunCostUsdc:
         rule = _make_rule(run_price_usdc=0, tokens_in_cost_per_1k=100)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
             cost = await calculate_run_cost_usdc(
-                {"tokens_in": 2000, "tokens_out": 0, "cache_creation_tokens": 1000, "tool_calls": 0}
+                {"tokens_in": 2000, "tokens_out": 0, "cache_creation_tokens": 1000, "billable_tool_calls": 0}
             )
         assert cost == 225
 
     async def test_zero_usage_returns_flat_rate(self):
         rule = _make_rule(run_price_usdc=5_000)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 0})
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 0})
         assert cost == 5_000
 
     async def test_no_pricing_rule_returns_zero(self):
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=None)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 1_000, "tokens_out": 500, "tool_calls": 1})
+            cost = await calculate_run_cost_usdc({"tokens_in": 1_000, "tokens_out": 500, "billable_tool_calls": 1})
         assert cost == 0
 
     async def test_tool_calls_only_with_per_unit_rate(self):
         rule = _make_rule(run_price_usdc=0, tool_call_cost=250)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 4})
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 4})
         assert cost == 1_000
 
     async def test_missing_usage_keys_default_to_zero(self):
@@ -174,10 +174,17 @@ class TestCalculateRunCostUsdc:
             cost = await calculate_run_cost_usdc({})
         assert cost == 5_000
 
+    async def test_attempt_counters_are_never_billed(self):
+        """Invariant 6: only billable_* fields price tools; attempt counters never substitute."""
+        rule = _make_rule(run_price_usdc=0, tool_call_cost=1_000)
+        with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
+            cost = await calculate_run_cost_usdc({"tool_calls": 3, "tool_names": ["a", "b", "c"]})
+        assert cost == 0
+
     async def test_usage_based_exactly_1k_tokens(self):
         rule = _make_rule(run_price_usdc=0, tokens_out_cost_per_1k=300)
         with patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 1_000, "tool_calls": 0})
+            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 1_000, "billable_tool_calls": 0})
         assert cost == 300
 
     async def test_model_rule_prices_tokens_but_not_tools(self):
@@ -240,12 +247,26 @@ class TestCalculateTurnsTokenCost:
 # ─── verify_credit ────────────────────────────────────────────────────────────
 
 
-def _mock_pool_for_verify(balance=50_000, spending_limit=0, is_paused=False, daily_spend=0):
-    """Create a mock pool that returns the given credit row and daily spend."""
-    credit_row = {"balance_usdc": balance, "spending_limit_usdc": spending_limit, "is_paused": is_paused}
+def _mock_pool_for_verify(
+    balance=50_000,
+    spending_limit=0,
+    is_paused=False,
+    daily_spend=0,
+    outstanding=0,
+    principal_outstanding=0,
+    acquisition_source=None,
+):
+    """Create a mock pool returning the credit row, outstanding obligations, then daily spend."""
+    credit_row = {
+        "balance_usdc": balance,
+        "spending_limit_usdc": spending_limit,
+        "is_paused": is_paused,
+        "acquisition_source": acquisition_source,
+    }
+    obligations_row = {"org_outstanding": outstanding, "principal_outstanding": principal_outstanding}
     daily_row = {"daily_spend": daily_spend}
     mock_pool = MagicMock()
-    mock_pool.fetchrow = AsyncMock(side_effect=[credit_row, daily_row])
+    mock_pool.fetchrow = AsyncMock(side_effect=[credit_row, obligations_row, daily_row])
     return mock_pool
 
 
@@ -267,15 +288,7 @@ class TestVerifyCredit:
         assert "5000" in result.error
 
     async def test_machine_org_insufficient_balance_advertises_agent_topup(self):
-        mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(
-            return_value={
-                "balance_usdc": 5_000,
-                "spending_limit_usdc": 5_000_000,
-                "is_paused": False,
-                "acquisition_source": "x402",
-            }
-        )
+        mock_pool = _mock_pool_for_verify(balance=5_000, spending_limit=5_000_000, acquisition_source="x402")
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("org-1", 10_000)
         assert result.verified is False
@@ -341,6 +354,7 @@ class TestVerifyCredit:
         mock_pool.fetchrow = AsyncMock(
             side_effect=[
                 {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"org_outstanding": 0, "principal_outstanding": 0},
                 {"daily_limit_usdc": 50_000, "is_paused": True},
             ]
         )
@@ -354,6 +368,7 @@ class TestVerifyCredit:
         mock_pool.fetchrow = AsyncMock(
             side_effect=[
                 {"balance_usdc": 100_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"org_outstanding": 0, "principal_outstanding": 0},
                 {"daily_limit_usdc": 50_000, "is_paused": False},
                 {"daily_spend": 45_000},
             ]
@@ -369,23 +384,20 @@ class TestVerifyCredit:
             balance=100_000,
             spending_limit=500_000,
             daily_spend=45_000,
+            acquisition_source="x402",
         )
-        mock_pool.fetchrow.side_effect = [
-            {
-                "balance_usdc": 100_000,
-                "spending_limit_usdc": 500_000,
-                "is_paused": False,
-                "acquisition_source": "x402",
-            },
-            {"daily_spend": 45_000},
-        ]
         with patch.object(billing_module, "_pool", mock_pool):
             result = await verify_credit("machine-org", 10_000)
         assert result.verified is True
 
     async def test_verify_credit_bypasses_display_cache(self):
         mock_pool = MagicMock()
-        mock_pool.fetchrow = AsyncMock(return_value={"balance_usdc": 100_000, "spending_limit_usdc": 50_000, "is_paused": False})
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 100_000, "spending_limit_usdc": 50_000, "is_paused": False},
+                {"org_outstanding": 0, "principal_outstanding": 0},
+            ]
+        )
         with (
             patch.object(billing_module, "_pool", mock_pool),
             patch.object(billing_module, "_get_daily_debit_spend", new=AsyncMock(return_value=1_000)),
@@ -394,6 +406,78 @@ class TestVerifyCredit:
             result = await verify_credit("org-1", 10_000)
         assert result.verified is True
         mock_cache_factory.assert_not_called()
+
+    async def test_outstanding_obligations_reduce_available_balance(self):
+        mock_pool = _mock_pool_for_verify(balance=100_000, outstanding=60_000)
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 50_000)
+        assert result.verified is False
+        assert "Insufficient credit" in result.error
+        assert "60000 owed for unpaid credit charges" in result.error
+        assert "POST /admin/credits/topup" in result.error
+
+    async def test_machine_org_outstanding_obligations_keep_agent_topup_guidance(self):
+        mock_pool = _mock_pool_for_verify(
+            balance=100_000,
+            spending_limit=5_000_000,
+            outstanding=60_000,
+            acquisition_source="x402",
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("machine-org", 50_000)
+        assert result.verified is False
+        assert "60000 owed" in result.error
+        assert "POST /billing/topup/usdc" in result.error
+
+    async def test_no_outstanding_obligations_admits(self):
+        mock_pool = _mock_pool_for_verify(balance=100_000, outstanding=0)
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 50_000)
+        assert result.verified is True
+
+    async def test_org_cap_counts_outstanding_obligations(self):
+        # 20_000 spent + 25_000 owed + 10_000 reserve > 50_000 cap, though spend alone fits.
+        mock_pool = _mock_pool_for_verify(
+            balance=200_000,
+            spending_limit=50_000,
+            daily_spend=20_000,
+            outstanding=25_000,
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000)
+        assert result.verified is False
+        assert "daily spending limit reached" in result.error.lower()
+        assert "25000 owed" in result.error
+
+    async def test_principal_cap_counts_principal_outstanding_obligations(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 200_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"org_outstanding": 30_000, "principal_outstanding": 30_000},
+                {"daily_limit_usdc": 50_000, "is_paused": False},
+                {"daily_spend": 15_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000, principal_id="principal-1")
+        assert result.verified is False
+        assert "principal daily spending limit" in result.error.lower()
+        assert "30000 owed" in result.error
+
+    async def test_principal_cap_ignores_other_principals_obligations(self):
+        mock_pool = MagicMock()
+        mock_pool.fetchrow = AsyncMock(
+            side_effect=[
+                {"balance_usdc": 200_000, "spending_limit_usdc": 0, "is_paused": False},
+                {"org_outstanding": 30_000, "principal_outstanding": 0},
+                {"daily_limit_usdc": 50_000, "is_paused": False},
+                {"daily_spend": 15_000},
+            ]
+        )
+        with patch.object(billing_module, "_pool", mock_pool):
+            result = await verify_credit("org-1", 10_000, principal_id="principal-1")
+        assert result.verified is True
 
 
 @pytest.mark.anyio
@@ -1704,7 +1788,9 @@ class TestCalculateRunCostWithOverrides:
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
             patch("billing.get_tool_pricing_overrides", new=AsyncMock(return_value=overrides)),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["web_search"]}
+            )
         assert cost == 15_000
 
     async def test_with_overrides_mixed_tools(self):
@@ -1719,8 +1805,8 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 2,
-                    "tool_names": ["web_search", "calculate"],
+                    "billable_tool_calls": 2,
+                    "billable_tool_names": ["web_search", "calculate"],
                 }
             )
         assert cost == 15_000 + 1_000
@@ -1737,8 +1823,8 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 2,
-                    "tool_names": ["web_search", "web_search"],
+                    "billable_tool_calls": 2,
+                    "billable_tool_names": ["web_search", "web_search"],
                 }
             )
         assert cost == 2 * 15_000
@@ -1754,8 +1840,8 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 3,
-                    "tool_names": ["calculate", "get_datetime", "get_eth_balance"],
+                    "billable_tool_calls": 3,
+                    "billable_tool_names": ["calculate", "get_datetime", "get_eth_balance"],
                 }
             )
         assert cost == 3 * 1_000
@@ -1772,8 +1858,8 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 3,
-                    "tool_names": ["calculate", "get_datetime", "count_text_stats"],
+                    "billable_tool_calls": 3,
+                    "billable_tool_names": ["calculate", "get_datetime", "count_text_stats"],
                 }
             )
         assert cost == 0
@@ -1790,8 +1876,8 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 3,
-                    "tool_names": ["web_search"],
+                    "billable_tool_calls": 3,
+                    "billable_tool_names": ["web_search"],
                 }
             )
         assert cost == 15_000 + 2 * 1_000
@@ -1806,19 +1892,21 @@ class TestCalculateRunCostWithOverrides:
                 {
                     "tokens_in": 1000,
                     "tokens_out": 500,
-                    "tool_calls": 1,
-                    "tool_names": ["web_search"],
+                    "billable_tool_calls": 1,
+                    "billable_tool_names": ["web_search"],
                 }
             )
         assert cost == 10_000
 
     async def test_empty_tool_names_list_uses_tool_calls_count(self):
-        """When tool_names=[] with tool_calls=2, falls back to tool_calls × default."""
+        """When billable_tool_names=[] with billable_tool_calls=2, falls back to billable_tool_calls × default."""
         rule = self._usage_rule()
         with (
             patch("billing.get_live_pricing", new=AsyncMock(return_value=rule)),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 2, "tool_names": []})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 2, "billable_tool_names": []}
+            )
         assert cost == 2 * 1_000
 
 
@@ -1851,7 +1939,9 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["web_search"]}
+            )
         assert cost == 4_000
 
     async def test_admin_override_takes_precedence_over_platform_price(self):
@@ -1864,7 +1954,9 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["web_search"]}
+            )
         assert cost == 9_999
         # Lookup should be skipped when an override exists.
         platform_mock.assert_not_called()
@@ -1879,7 +1971,9 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(False)),
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["web_search"]})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["web_search"]}
+            )
         assert cost == 1_000  # falls back to rule.tool_call_cost
         platform_mock.assert_not_called()
 
@@ -1895,7 +1989,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("marketplace.get_platform_tool_price", new=platform_mock),
         ):
             cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["acme/weather"]}
             )
         assert cost == 5_000
         platform_mock.assert_not_called()
@@ -1911,7 +2005,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
         ):
             cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["acme/weather"]}
             )
         assert cost == 9_000
 
@@ -1926,7 +2020,7 @@ class TestCalculateRunCostPlatformPricing:
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=4_000)),
         ):
             cost = await calculate_run_cost_usdc(
-                {"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["acme/weather"]}
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["acme/weather"]}
             )
         assert cost == 12_000
 
@@ -1939,7 +2033,9 @@ class TestCalculateRunCostPlatformPricing:
             patch("billing.get_settings", return_value=self._settings(True)),
             patch("marketplace.get_platform_tool_price", new=AsyncMock(return_value=None)),
         ):
-            cost = await calculate_run_cost_usdc({"tokens_in": 0, "tokens_out": 0, "tool_calls": 1, "tool_names": ["calculate"]})
+            cost = await calculate_run_cost_usdc(
+                {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 1, "billable_tool_names": ["calculate"]}
+            )
         assert cost == 0
 
     async def test_mixed_run_platform_and_default(self):
@@ -1963,8 +2059,8 @@ class TestCalculateRunCostPlatformPricing:
                 {
                     "tokens_in": 0,
                     "tokens_out": 0,
-                    "tool_calls": 2,
-                    "tool_names": ["web_search", "calculate"],
+                    "billable_tool_calls": 2,
+                    "billable_tool_names": ["web_search", "calculate"],
                 }
             )
         assert cost == 4_000

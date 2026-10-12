@@ -1506,11 +1506,13 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
         billing,
         principal_id: str | None = None,
         charge_id: str = "",
+        earnings_allocations: list[dict] | None = None,
     ) -> None:
         """Enqueue a failed MCP settlement for asynchronous retry.
 
         The MCP gateway has no usage_event row, so the call event id anchors
         usage_event_id and run_id (``pending_settlements`` has no FK).
+        ``earnings_allocations`` pay the marketplace author once a credit retry succeeds.
         """
         from billing.settlement import enqueue_failed_settlement
 
@@ -1528,9 +1530,35 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                 payment_payload=payment_payload,
                 principal_id=principal_id,
                 charge_id=charge_id,
+                earnings_allocations=earnings_allocations,
             )
         except Exception:
             logger.exception("Failed to enqueue MCP settlement recovery org=%s method=%s", org_id, billing_method)
+
+    @staticmethod
+    async def _mcp_earnings_allocations(tool_name: str, tool_cost: int, org_id) -> list[dict]:
+        """Author earnings allocation for a billed marketplace MCP call (empty when none apply)."""
+        if "/" not in tool_name or tool_cost <= 0:
+            return []
+        try:
+            from marketplace import get_marketplace_tool_by_name
+
+            tool_org_slug, actual_name = tool_name.split("/", 1)
+            tool_row = await get_marketplace_tool_by_name(actual_name, tool_org_slug)
+        except Exception:
+            logger.debug("Failed to resolve MCP author earnings", exc_info=True)
+            return []
+        author_org_id = tool_row.get("org_id") if tool_row is not None else None
+        if not author_org_id or str(author_org_id) == str(org_id or ""):
+            return []
+        return [
+            {
+                "author_org_id": str(author_org_id),
+                "caller_org_id": org_id or "",
+                "tool_name": actual_name,
+                "total_cost_usdc": int(tool_cost),
+            }
+        ]
 
     async def _settle_billing(
         self,
@@ -1635,30 +1663,19 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
                     None,
                     principal_id=getattr(request.state, "mcp_principal_id", "") or None,
                     charge_id=charge_id,
+                    earnings_allocations=await self._mcp_earnings_allocations(tool_name, tool_cost, org_id),
                 )
                 return response
             await self._record_mcp_outcome(request, org_id, tool_name, tool_cost, "credit", "settled")
 
         # Record marketplace earnings (fire-and-forget).
-        if "/" in tool_name and tool_cost > 0:
-            try:
-                from marketplace import get_marketplace_tool_by_name, record_tool_call_earnings
+        try:
+            from marketplace import record_tool_call_earnings
 
-                tool_org_slug, actual_name = tool_name.split("/", 1)
-                tool_row = await get_marketplace_tool_by_name(actual_name, tool_org_slug)
-                if tool_row is not None:
-                    author_org_id = tool_row.get("org_id")
-                    if author_org_id:
-                        asyncio.create_task(
-                            record_tool_call_earnings(
-                                author_org_id=author_org_id,
-                                caller_org_id=org_id or "",
-                                tool_name=actual_name,
-                                total_cost_usdc=tool_cost,
-                            )
-                        )
-            except Exception:
-                logger.debug("Failed to record MCP author earnings", exc_info=True)
+            for allocation in await self._mcp_earnings_allocations(tool_name, tool_cost, org_id):
+                asyncio.create_task(record_tool_call_earnings(**allocation))
+        except Exception:
+            logger.debug("Failed to record MCP author earnings", exc_info=True)
 
         try:
             from marketplace import record_marketplace_tool_usage_many

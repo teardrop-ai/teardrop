@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -16,10 +17,21 @@ from billing.context import (
 )
 from billing.credit import BillingCreditService
 from billing.models import BillingResult
-from shared.db_pool import PgPool
+from shared.db_pool import DataError, IntegrityError, PgPool
 from teardrop.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_earnings_allocations(raw) -> list[dict]:
+    """Decode stored earnings allocations (asyncpg returns JSONB as ``str`` by default)."""
+    if raw is None:
+        return []
+    if isinstance(raw, (str, bytes)):
+        raw = json.loads(raw)
+    if not isinstance(raw, list):
+        raise ValueError("earnings_allocations must be a JSON array")
+    return [item for item in raw if isinstance(item, dict)]
 
 
 class SettlementClaimLostError(RuntimeError):
@@ -68,6 +80,40 @@ async def _settle_claimed_credit(pool: PgPool, row, retry_count: int) -> tuple[b
             if not success:
                 return False, 0
 
+            # Author earnings for the recovered charge are written in the same
+            # transaction as the debit; the claim lease above guarantees
+            # exactly-once insertion. Permanently invalid allocations (malformed,
+            # or rejected by constraints) are skipped in a savepoint so they never
+            # block recovering the caller's charge; transient SQL errors propagate,
+            # rolling back the debit so the worker retries both together.
+            # Lazy import avoids billing<->marketplace cycle.
+            try:
+                allocations = _decode_earnings_allocations(row.get("earnings_allocations"))
+            except (ValueError, TypeError) as exc:
+                logger.error("Retry earnings allocations unreadable run_id=%s error_type=%s", row["run_id"], type(exc).__name__)
+                allocations = []
+            if allocations:
+                from marketplace import insert_tool_call_earnings  # noqa: PLC0415
+
+                for allocation in allocations:
+                    try:
+                        author_org_id = str(allocation["author_org_id"])
+                        tool_name = str(allocation["tool_name"])
+                        caller_org_id = str(allocation["caller_org_id"])
+                        total_cost_usdc = int(allocation["total_cost_usdc"])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        logger.error(
+                            "Retry earnings allocation malformed run_id=%s error_type=%s", row["run_id"], type(exc).__name__
+                        )
+                        continue
+                    try:
+                        async with conn.transaction():
+                            await insert_tool_call_earnings(conn, author_org_id, tool_name, caller_org_id, total_cost_usdc)
+                    except (IntegrityError, DataError) as exc:
+                        logger.error(
+                            "Retry earnings allocation rejected run_id=%s error_type=%s", row["run_id"], type(exc).__name__
+                        )
+
             await conn.execute(
                 """
                 UPDATE pending_settlements
@@ -109,8 +155,14 @@ async def enqueue_failed_settlement(
     payment_payload: str | None = None,
     principal_id: str | None = None,
     charge_id: str = "",
+    earnings_allocations: list[dict] | None = None,
 ) -> None:
-    """Insert a failed settlement into the retry queue."""
+    """Insert a failed settlement into the retry queue.
+
+    ``earnings_allocations`` (``author_org_id``, ``caller_org_id``, ``tool_name``,
+    ``total_cost_usdc`` atomic int) are stored so a successful credit retry pays
+    marketplace authors in the same transaction as the debit.
+    """
     if amount_usdc <= 0:
         logger.debug(
             "Skipping enqueue_failed_settlement for non-positive amount: run_id=%s method=%s amount=%s",
@@ -127,8 +179,9 @@ async def enqueue_failed_settlement(
             """
             INSERT INTO pending_settlements
                 (id, usage_event_id, org_id, run_id, billing_method,
-                  amount_usdc, payment_payload, principal_id, max_retries, charge_id, next_retry_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW() + INTERVAL '2 seconds')
+                  amount_usdc, payment_payload, principal_id, max_retries, charge_id, earnings_allocations,
+                  next_retry_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NOW() + INTERVAL '2 seconds')
             """,
             str(uuid.uuid4()),
             usage_event_id,
@@ -140,6 +193,7 @@ async def enqueue_failed_settlement(
             principal_id,
             settings.settlement_max_retries,
             charge_id,
+            json.dumps(earnings_allocations or []),
         )
         logger.info(
             "Enqueued failed settlement for retry: run_id=%s method=%s",
@@ -176,7 +230,8 @@ async def process_pending_settlements() -> int:
                                             settlement.run_id, settlement.billing_method, settlement.amount_usdc,
                                             settlement.payment_payload, settlement.principal_id,
                                             settlement.retry_count, settlement.max_retries,
-                                            settlement.charge_id, settlement.next_retry_at
+                                            settlement.charge_id, settlement.next_retry_at,
+                                            settlement.earnings_allocations
             """,
         )
     except Exception:

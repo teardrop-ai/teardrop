@@ -333,9 +333,10 @@ async def stream_graph_events(
 
     except asyncio.CancelledError:
         logger.info("agent_run cancelled run_id=%s", run_id)
-        yield _sse_event(_EV_ERROR, {"run_id": run_id, "error": "Request cancelled."})
+        # Record the reason before yielding: the consumer may close the stream at this frame.
         result["terminated"] = True
         result["termination_reason"] = "cancelled"
+        yield _sse_event(_EV_ERROR, {"run_id": run_id, "error": "Request cancelled."})
         return
 
     except Exception as exc:
@@ -356,10 +357,10 @@ async def stream_graph_events(
             if settings.app_env != "production"
             else "An internal error occurred. Check server logs for details."
         )
+        result["terminated"] = True
+        result["termination_reason"] = "failed"
         yield _sse_event(
             _EV_ERROR,
             {"run_id": run_id, "error": error_msg},
         )
-        result["terminated"] = True
-        result["termination_reason"] = "failed"
         return

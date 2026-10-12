@@ -71,6 +71,7 @@ _BUILD_AGENT_CURSOR_ORIG = _agents._build_agent_cursor
 _DECODE_AGENT_CURSOR_ORIG = _agents._decode_agent_cursor
 
 _RECORD_TOOL_CALL_EARNINGS_ORIG = _earnings.record_tool_call_earnings
+_INSERT_TOOL_CALL_EARNINGS_ORIG = _earnings.insert_tool_call_earnings
 _GET_AUTHOR_BALANCE_ORIG = _earnings.get_author_balance
 _GET_AUTHOR_EARNINGS_HISTORY_ORIG = _earnings.get_author_earnings_history
 _GET_AUTHOR_EARNINGS_BY_TOOL_ORIG = _earnings.get_author_earnings_by_tool
@@ -347,6 +348,21 @@ async def record_tool_call_earnings(
     await _call_async(_RECORD_TOOL_CALL_EARNINGS_ORIG, author_org_id, tool_name, caller_org_id, total_cost_usdc)
 
 
+async def insert_tool_call_earnings(
+    executor: Any,
+    author_org_id: str,
+    tool_name: str,
+    caller_org_id: str,
+    total_cost_usdc: int,
+) -> bool:
+    """Insert one author earnings row through ``executor`` (pool or transaction connection).
+
+    Skips self-calls and non-positive costs (returns False). Raises on DB errors so
+    transactional callers roll back with the surrounding debit.
+    """
+    return await _call_async(_INSERT_TOOL_CALL_EARNINGS_ORIG, executor, author_org_id, tool_name, caller_org_id, total_cost_usdc)
+
+
 async def get_author_balance(org_id: str) -> int:
     """Return the author's withdrawable earnings balance in atomic USDC."""
     return await _call_async(_GET_AUTHOR_BALANCE_ORIG, org_id)
@@ -595,6 +611,7 @@ __all__ = [
     "_invalidate_all_org_tool_price_cache",
     "get_platform_tool_price",
     "get_org_tool_price_by_qualified_name",
+    "insert_tool_call_earnings",
     "record_tool_call_earnings",
     "get_author_balance",
     "get_author_earnings_history",

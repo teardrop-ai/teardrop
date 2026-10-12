@@ -34,11 +34,40 @@ from billing import (
 from billing.charges import record_charge
 from teardrop.agent_stream import _EV_BILLING_SETTLEMENT, _sse_event
 from teardrop.agent_telemetry import _log_agent_memory
-from teardrop.memory import extract_and_store_memories
+from teardrop.memory import extract_and_store_memories, memory_enabled_for_org
 from teardrop.telemetry_tasks import schedule_telemetry_task
 from teardrop.usage import record_tool_call_events
 
 logger = logging.getLogger(__name__)
+
+# Run finalizers (usage, settlement, earnings) must outlive client disconnects and
+# are drained at shutdown before billing/usage resources close.
+_finalize_tasks: set[asyncio.Task] = set()
+_FINALIZER_DRAIN_TIMEOUT_SECONDS = 30.0
+
+
+def _on_finalize_done(task: asyncio.Task) -> None:
+    _finalize_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("Run settlement failed task=%s error_type=%s", task.get_name(), type(task.exception()).__name__)
+
+
+def schedule_run_finalizer(coro: Any, run_id: str) -> asyncio.Task:
+    """Run usage accounting and settlement in a task that client disconnects cannot cancel."""
+    task = asyncio.create_task(coro, name=f"finalize:{run_id}")
+    _finalize_tasks.add(task)
+    task.add_done_callback(_on_finalize_done)
+    return task
+
+
+async def drain_run_finalizers(timeout_seconds: float = _FINALIZER_DRAIN_TIMEOUT_SECONDS) -> None:
+    """Wait (never cancel) for in-flight run settlements before shutdown closes their resources."""
+    tasks = list(_finalize_tasks)
+    if not tasks:
+        return
+    _done, pending = await asyncio.wait(tasks, timeout=timeout_seconds)
+    if pending:
+        logger.error("Shutdown with %d run settlements still in flight", len(pending))
 
 
 def record_post_run_telemetry(
@@ -71,7 +100,7 @@ def record_post_run_telemetry(
         state_messages = state_values.get("messages", [])[-10:]
         if not state_messages:
             return
-        billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+        billable_tool_names = usage_data.get("billable_tool_names", [])
         if not isinstance(billable_tool_names, list):
             billable_tool_names = []
         run_slots = state_values.get("slots", {})
@@ -88,6 +117,7 @@ def record_post_run_telemetry(
                 thread_id=thread_id,
                 user_message=user_message,
                 source=source,
+                store_facts=memory_enabled_for_org(settings, org_id),
             ),
             name="memory-extraction",
         )
@@ -132,6 +162,48 @@ async def fetch_usage_snapshot(
     return state_snapshot, usage_data
 
 
+def _snapshot_run_id(snapshot: Any) -> Any:
+    values = getattr(snapshot, "values", None) or {}
+    metadata = values.get("metadata") if isinstance(values, dict) else None
+    return metadata.get("run_id") if isinstance(metadata, dict) else None
+
+
+async def fetch_run_usage_snapshot(
+    *,
+    graph: Any,
+    config: dict[str, Any],
+    run_id: str,
+    settings: Any,
+    history_limit: int = 50,
+) -> tuple[Any, dict[str, Any]]:
+    """Snapshot and ``_usage`` checkpointed by ``run_id`` itself.
+
+    Threads are shared across runs: the latest checkpoint may belong to the
+    previous run (cancelled before this run's input was saved) or to a newer
+    run. Falls back to the newest history checkpoint written by ``run_id``;
+    returns ``(None, {})`` when this run checkpointed nothing.
+    """
+    state_snapshot, usage_data = await fetch_usage_snapshot(graph=graph, config=config, run_id=run_id, settings=settings)
+    if _snapshot_run_id(state_snapshot) == run_id:
+        return state_snapshot, usage_data
+
+    async def _newest_owned() -> Any:
+        async for snapshot in graph.aget_state_history(config, limit=history_limit):
+            if _snapshot_run_id(snapshot) == run_id:
+                return snapshot
+        return None
+
+    try:
+        owned = await asyncio.wait_for(_newest_owned(), timeout=settings.agent_state_snapshot_timeout_seconds)
+    except Exception as exc:
+        logger.warning("Run checkpoint history unavailable run_id=%s error_type=%s", run_id, type(exc).__name__)
+        return None, {}
+    if owned is None:
+        return None, {}
+    usage = (owned.values or {}).get("metadata", {}).get("_usage", {})
+    return owned, usage if isinstance(usage, dict) else {}
+
+
 def run_provider_model(llm_config: dict[str, Any] | None, settings: Any) -> tuple[str, str]:
     """Return the provider/model whose pricing rule bills the run's tokens."""
     if llm_config:
@@ -140,8 +212,8 @@ def run_provider_model(llm_config: dict[str, Any] | None, settings: Any) -> tupl
 
 
 def _billable_tools(usage_data: dict[str, Any]) -> tuple[int, list[str]]:
-    tool_calls = int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)))
-    tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+    tool_calls = int(usage_data.get("billable_tool_calls", 0))
+    tool_names = usage_data.get("billable_tool_names", [])
     return tool_calls, list(tool_names) if isinstance(tool_names, list) else []
 
 
@@ -220,6 +292,7 @@ async def dispatch_settlement(
     result: dict[str, Any],
     enqueue_x402_retry: bool = True,
     source: str = "api",
+    earnings_allocations: list[dict] | None = None,
 ):
     """Credit debit or x402 settlement, yielding ``BILLING_SETTLEMENT`` frames.
 
@@ -227,6 +300,8 @@ async def dispatch_settlement(
     ``result["marketplace_stats_billable"]`` to ``True`` when a charge
     succeeded so the caller can record marketplace tool usage stats.
     Callers that withhold unsettled x402 results pass ``enqueue_x402_retry=False``.
+    ``earnings_allocations`` are persisted with a failed credit debit so the
+    retry worker pays marketplace authors once the charge is recovered.
     """
     result["marketplace_stats_billable"] = False
     result["settlement_amount_usdc"] = 0
@@ -287,6 +362,7 @@ async def dispatch_settlement(
                 cost_usdc,
                 principal_id=principal_id or None,
                 charge_id=charge_id,
+                earnings_allocations=earnings_allocations,
             )
             logger.warning("Credit debit failed run_id=%s org_id=%s", run_id, org_id)
     else:

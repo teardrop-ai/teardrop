@@ -366,7 +366,7 @@ async def _query_benchmarks(
     """Query live benchmarks from usage_events (last 7 days)."""
     pool = _get_pool()
 
-    where_clause = "WHERE created_at > NOW() - INTERVAL '7 days' AND provider != '' AND model != ''"
+    where_clause = "WHERE created_at > NOW() - INTERVAL '7 days' AND provider != '' AND model != '' AND source <> 'eval'"
     params: list[Any] = []
     if org_id:
         where_clause += " AND org_id = $1"

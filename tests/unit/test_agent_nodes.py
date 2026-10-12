@@ -1829,6 +1829,72 @@ class TestToolExecutorNode:
         assert any("[TOOL_TIMEOUT]" in m.content for m in result["messages"])
         assert result["metadata"]["_usage"]["failed_tool_calls"] == 1
 
+    async def test_aggregate_batch_timeout_keeps_completed_accounting(self, test_settings):
+        """Batch timeout still routes FAILED but counts calls that completed."""
+        calls = [
+            {"id": "c1", "name": "fast_tool", "args": {}},
+            {"id": "c2", "name": "slow_tool", "args": {}},
+        ]
+        last_msg = _make_ai_message(tool_calls=calls)
+
+        fast_tool = MagicMock()
+        fast_tool.ainvoke = AsyncMock(return_value={"result": "ok"})
+
+        async def slow_invoke(*args, **kwargs):
+            import asyncio
+
+            await asyncio.sleep(10)
+            return {"result": "late"}
+
+        slow_tool = MagicMock()
+        slow_tool.ainvoke = slow_invoke
+
+        state = _make_state(messages=[last_msg], metadata={"_usage": {}})
+        tool_map = {"fast_tool": fast_tool, "slow_tool": slow_tool}
+        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value=tool_map):
+            with patch.object(test_settings, "agent_single_tool_timeout_seconds", 5):
+                with patch.object(test_settings, "agent_tool_executor_timeout_seconds", 0.1):
+                    result = await tool_executor_node(state)
+
+        assert result["task_status"] == TaskStatus.FAILED
+        assert "Tool execution timed out" in result["messages"][0].content
+        usage = result["metadata"]["_usage"]
+        assert usage["tool_calls"] == 2
+        assert usage["billable_tool_calls"] == 1
+        assert usage["failed_tool_calls"] == 1
+        assert usage["billable_tool_names"] == ["fast_tool"]
+        assert [e["error_class"] for e in usage["_tool_call_log"]] == ["", "timeout"]
+
+    async def test_cancelled_executor_cancels_running_tools(self, test_settings):
+        """Cancelling the node (client disconnect / run timeout) must not leave tools running."""
+        import asyncio
+
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_invoke(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return {"result": "late"}
+
+        slow_tool = MagicMock()
+        slow_tool.ainvoke = slow_invoke
+        state = _make_state(
+            messages=[_make_ai_message(tool_calls=[{"id": "c1", "name": "slow_tool", "args": {}}])],
+            metadata={"_usage": {}},
+        )
+        with patch.object(nodes_module, "_get_cached_tools_by_name", return_value={"slow_tool": slow_tool}):
+            node = asyncio.create_task(tool_executor_node(state))
+            await asyncio.wait_for(started.wait(), timeout=2)
+            node.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await node
+            await asyncio.wait_for(cancelled.wait(), timeout=2)
+
     async def test_get_token_price_all_address_tokens_blocked(self, test_settings):
         call = {"id": "c1", "name": "get_token_price", "args": {"tokens": ["0xabc123", "0xdef456"]}}
         last_msg = _make_ai_message(tool_calls=[call])

@@ -121,6 +121,9 @@ class UsageSummaryData(BaseModel):
     cost_usdc: int
     platform_fee_usdc: int
     delegation_cost_usdc: int
+    provider: str = ""
+    model: str = ""
+    runner_version: str = ""
 
 
 class BillingSettlementData(BaseModel):

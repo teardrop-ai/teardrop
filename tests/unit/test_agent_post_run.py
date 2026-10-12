@@ -65,7 +65,40 @@ async def test_record_post_run_telemetry_schedules_tool_and_memory_records():
         thread_id="",
         user_message="",
         source="schedule",
+        store_facts=True,
     )
+
+
+@pytest.mark.anyio
+async def test_record_post_run_telemetry_isolated_org_skips_fact_storage():
+    from teardrop import agent_post_run
+
+    scheduled: list[object] = []
+
+    def capture_task(coroutine, *, name):
+        scheduled.append(coroutine)
+        return True
+
+    with (
+        patch.object(agent_post_run, "extract_and_store_memories", AsyncMock()) as memory_extraction,
+        patch.object(agent_post_run, "schedule_telemetry_task", capture_task),
+    ):
+        record_post_run_telemetry(
+            run_id="run-1",
+            org_id="bench-org",
+            user_id="user-1",
+            usage_data={},
+            state_values={"messages": ["hello"]},
+            settings=SimpleNamespace(
+                tool_call_event_logging_enabled=False,
+                memory_enabled=True,
+                memory_isolated_org_ids=["bench-org"],
+            ),
+        )
+        for coroutine in scheduled:
+            await coroutine
+
+    assert memory_extraction.await_args.kwargs["store_facts"] is False
 
 
 @pytest.mark.anyio
@@ -306,10 +339,31 @@ async def test_credit_failure_links_retry_to_failed_charge():
         patch.object(agent_post_run, "record_charge", AsyncMock(return_value="charge-1")) as charge,
         patch.object(agent_post_run, "enqueue_failed_settlement", AsyncMock()) as enqueue,
     ):
-        await _drain(_dispatch(SimpleNamespace(verified=True, billing_method="credit", payer="")))
+        allocations = [
+            {"author_org_id": "author-org", "caller_org_id": "org-1", "tool_name": "weather", "total_cost_usdc": 1_000}
+        ]
+        await _drain(
+            agent_post_run.dispatch_settlement(
+                billing=SimpleNamespace(verified=True, billing_method="credit", payer=""),
+                settings=SimpleNamespace(),
+                usage_event=SimpleNamespace(id="ue-1"),
+                platform_fee=0,
+                cost_usdc=4_000,
+                delegation_spend=0,
+                org_id="org-1",
+                principal_id="user-1",
+                run_id="run-1",
+                result={},
+                earnings_allocations=allocations,
+            )
+        )
 
     assert charge.await_args.kwargs["status"] == "failed"
-    assert enqueue.await_args.kwargs == {"principal_id": "user-1", "charge_id": "charge-1"}
+    assert enqueue.await_args.kwargs == {
+        "principal_id": "user-1",
+        "charge_id": "charge-1",
+        "earnings_allocations": allocations,
+    }
 
 
 @pytest.mark.anyio

@@ -7229,7 +7229,8 @@
               "api",
               "schedule",
               "trigger",
-              "a2a"
+              "a2a",
+              "eval"
             ],
             "title": "Source",
             "type": "string"
@@ -8590,7 +8591,7 @@
   "info": {
     "description": "The open API and billing gateway for autonomous economic agents",
     "title": "Teardrop",
-    "version": "2.9.0"
+    "version": "2.10.0"
   },
   "openapi": "3.1.0",
   "paths": {

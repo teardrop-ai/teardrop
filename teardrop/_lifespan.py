@@ -47,6 +47,7 @@ from teardrop.a2a_tasks import (
     start_inbound_task_workers,
     stop_inbound_task_workers,
 )
+from teardrop.agent_post_run import drain_run_finalizers
 from teardrop.agent_wallets import close_agent_wallets_db, init_agent_wallets_db
 from teardrop.benchmarks import close_benchmarks_db, init_benchmarks_db
 from teardrop.cache import close_redis, init_redis
@@ -204,6 +205,8 @@ def build_lifespan(validate_production_config: Callable[[Settings], None]):
             except asyncio.CancelledError:
                 pass
 
+        # Settlements for finished/cancelled runs need billing, usage and checkpoint resources.
+        await drain_run_finalizers()
         await stop_inbound_task_workers()
         await close_telemetry_tasks()
         close_funnel_counters()

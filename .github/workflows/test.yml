@@ -72,6 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/teardrop_test
+      # Integration fixtures read only TEST_DATABASE_URL (never DATABASE_URL) and refuse non-loopback hosts.
+      TEST_DATABASE_URL: postgresql://postgres:testpass@localhost:5432/teardrop_test
       APP_ENV: test
       JWT_CLIENT_ID: test-client
       JWT_CLIENT_SECRET: ci-test-secret

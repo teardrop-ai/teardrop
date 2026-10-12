@@ -26,10 +26,10 @@ from teardrop._meta import APP_VERSION
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_EVENT_SCHEMA_VERSION = 1
-TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a"]
+TelemetryRunSource = Literal["api", "schedule", "trigger", "a2a", "eval"]
 McpBillingMethod = Literal["x402", "credit", "mpp"]
 McpSettlementStatus = Literal["settled", "failed"]
-_VALID_TELEMETRY_SOURCES = frozenset({"api", "schedule", "trigger", "a2a"})
+_VALID_TELEMETRY_SOURCES = frozenset({"api", "schedule", "trigger", "a2a", "eval"})
 
 
 def normalize_telemetry_source(source: str | None) -> TelemetryRunSource:
@@ -37,6 +37,11 @@ def normalize_telemetry_source(source: str | None) -> TelemetryRunSource:
     if source not in _VALID_TELEMETRY_SOURCES:
         return "api"
     return cast(TelemetryRunSource, source)
+
+
+def run_telemetry_source(org_id: str, default: TelemetryRunSource, settings: Any) -> TelemetryRunSource:
+    """Tag benchmark-org runs as ``eval``; telemetry only, never a billing source."""
+    return "eval" if org_id and org_id in settings.eval_org_ids else default
 
 
 # ─── Models ───────────────────────────────────────────────────────────────────

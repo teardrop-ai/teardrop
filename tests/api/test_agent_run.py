@@ -285,6 +285,67 @@ async def test_agent_run_returns_200_sse_when_billing_disabled(api_client, monke
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(("eval_org_ids", "expected"), [(["test-org-id"], "eval"), ([], "api")])
+async def test_agent_run_tags_eval_org_telemetry(api_client, monkeypatch, eval_org_ids, expected):
+    async def _empty_astream_events(*args, **kwargs):
+        return
+        yield
+
+    mock_graph = MagicMock()
+    mock_graph.astream_events = _empty_astream_events
+    mock_graph.aget_state = AsyncMock(return_value=MagicMock(values={}))
+
+    mock_settings = MagicMock()
+    mock_settings.billing_enabled = False
+    mock_settings.billable_auth_methods = []
+    mock_settings.rate_limit_agent_rpm = 1_000
+    mock_settings.rate_limit_org_agent_rpm = None
+    mock_settings.agent_provider = "anthropic"
+    mock_settings.agent_model = "claude-3-5-sonnet-20241022"
+    mock_settings.eval_org_ids = eval_org_ids
+
+    run_started = AsyncMock()
+    usage_event = AsyncMock()
+    post_run = MagicMock()
+    monkeypatch.setattr("teardrop.routers.agent.settings", mock_settings)
+    monkeypatch.setattr("teardrop.agent_runtime.settings", mock_settings)
+    monkeypatch.setattr("teardrop.agent_runtime.get_graph", AsyncMock(return_value=mock_graph))
+    monkeypatch.setattr("teardrop.agent_runtime.build_org_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.agent_runtime.build_mcp_langchain_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {})))
+    monkeypatch.setattr("teardrop.routers.agent.record_telemetry_run_started", run_started)
+    monkeypatch.setattr("teardrop.routers.agent.record_usage_event", usage_event)
+    monkeypatch.setattr("teardrop.routers.agent.record_post_run_telemetry", post_run)
+    monkeypatch.setattr("teardrop.agent_post_run.calculate_run_cost_usdc", AsyncMock(return_value=0))
+
+    resp = await api_client.post("/agent/run", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    assert run_started.await_args.args[2] == expected
+    assert usage_event.await_args.args[0].source == expected
+    assert post_run.call_args.kwargs["source"] == expected
+
+
+@pytest.mark.anyio
+async def test_agent_run_usage_summary_includes_run_metadata(api_client, monkeypatch):
+    import json
+
+    from teardrop._meta import APP_VERSION
+
+    _earnings_harness(monkeypatch)
+
+    resp = await api_client.post("/agent/run", json={"message": "hello"})
+    assert resp.status_code == 200
+    lines = resp.text.splitlines()
+    idx = lines.index("event: USAGE_SUMMARY")
+    summary = json.loads(lines[idx + 1].removeprefix("data:").strip())
+
+    assert summary["provider"] == "anthropic"
+    assert summary["model"] == "claude-3-5-sonnet-20241022"
+    assert summary["runner_version"] == APP_VERSION
+
+
+@pytest.mark.anyio
 async def test_agent_run_returns_503_when_process_capacity_is_exhausted(api_client, monkeypatch):
     from billing import BillingResult
 
@@ -508,6 +569,7 @@ def _earnings_harness(monkeypatch):
                         "tokens_in": 0,
                         "tokens_out": 0,
                         "tool_calls": 1,
+                        "billable_tool_calls": 1,
                         "tool_names": ["acme/weather"],
                         "billable_tool_names": ["acme/weather"],
                     }
@@ -575,3 +637,115 @@ async def test_marketplace_earnings_recorded_when_billable(api_client, monkeypat
         pass
 
     earnings_mock.assert_awaited_once()
+
+
+def _terminating_stream(reason: str):
+    """Stub ``stream_graph_events`` that ends the loop with the given termination reason."""
+
+    async def _stream(**kwargs):
+        kwargs["result"]["terminated"] = True
+        kwargs["result"]["termination_reason"] = reason
+        return
+        yield
+
+    return _stream
+
+
+async def _drain_finalizers():
+    import asyncio
+
+    from teardrop import agent_post_run
+
+    await asyncio.gather(*list(agent_post_run._finalize_tasks))
+
+
+async def _async_value(value):
+    return value
+
+
+_WORKED_USAGE = {"tokens_in": 1_200, "tokens_out": 300, "billable_tool_calls": 1, "billable_tool_names": []}
+_IDLE_USAGE = {"tokens_in": 0, "tokens_out": 0, "billable_tool_calls": 0, "billable_tool_names": []}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("latest", "history", "billed"),
+    [
+        (("this", _WORKED_USAGE), [], True),
+        (("this", _IDLE_USAGE), [], False),
+        # Cancelled before this run's input was checkpointed: the thread still holds the previous run.
+        (("previous", _WORKED_USAGE), [("previous", _WORKED_USAGE)], False),
+        # A newer run on the same thread checkpointed first: bill this run's own checkpoint.
+        (("newer", _IDLE_USAGE), [("newer", _IDLE_USAGE), ("this", _WORKED_USAGE)], True),
+    ],
+)
+async def test_cancelled_stream_bills_only_this_runs_checkpointed_work(api_client, monkeypatch, latest, history, billed):
+    """Caller-initiated cancellation settles this run's own checkpointed work in a detached task."""
+    from types import SimpleNamespace
+
+    from teardrop import agent_post_run
+
+    _earnings_harness(monkeypatch)
+    seen: dict[str, str] = {}
+
+    async def _cancelled_stream(**kwargs):
+        seen["run_id"] = kwargs["run_id"]
+        kwargs["result"]["terminated"] = True
+        kwargs["result"]["termination_reason"] = "cancelled"
+        return
+        yield
+
+    def _state(owner_and_usage):
+        owner, usage = owner_and_usage
+        run_id = seen["run_id"] if owner == "this" else f"{owner}-run-id"
+        return SimpleNamespace(values={"metadata": {"run_id": run_id, "_usage": usage}})
+
+    async def _history(config, limit):
+        for entry in history:
+            yield _state(entry)
+
+    fake_graph = SimpleNamespace(aget_state=lambda config: _async_value(_state(latest)), aget_state_history=_history)
+    real_fetch = agent_post_run.fetch_run_usage_snapshot
+
+    async def _pinned(**kwargs):
+        settings = SimpleNamespace(agent_state_snapshot_timeout_seconds=5)
+        return await real_fetch(**{**kwargs, "graph": fake_graph, "settings": settings})
+
+    monkeypatch.setattr("teardrop.routers.agent.stream_graph_events", _cancelled_stream)
+    monkeypatch.setattr("teardrop.routers.agent.fetch_run_usage_snapshot", _pinned)
+    monkeypatch.setattr("teardrop.routers.agent.calculate_run_cost", AsyncMock(return_value=4_200))
+    monkeypatch.setattr("teardrop.routers.agent._record_marketplace_earnings", AsyncMock())
+    calls: list[dict] = []
+
+    async def _dispatch(**kwargs):
+        calls.append(kwargs)
+        kwargs["result"]["marketplace_stats_billable"] = False
+        return
+        yield
+
+    monkeypatch.setattr("teardrop.routers.agent.dispatch_settlement", _dispatch)
+
+    resp = await api_client.post("/agent/run", json={"message": "hello"})
+    assert resp.status_code == 200
+    async for _ in resp.aiter_lines():
+        pass
+    await _drain_finalizers()
+
+    assert [call["cost_usdc"] for call in calls] == ([4_200] if billed else [])
+
+
+@pytest.mark.anyio
+async def test_failed_stream_is_not_billed(api_client, monkeypatch):
+    """Platform failures stay unbilled."""
+    _earnings_harness(monkeypatch)
+    monkeypatch.setattr("teardrop.routers.agent.stream_graph_events", _terminating_stream("failed"))
+    dispatch_mock = MagicMock()
+    monkeypatch.setattr("teardrop.routers.agent.dispatch_settlement", dispatch_mock)
+
+    resp = await api_client.post("/agent/run", json={"message": "hello"})
+    assert resp.status_code == 200
+    async for _ in resp.aiter_lines():
+        pass
+    await _drain_finalizers()
+
+    dispatch_mock.assert_not_called()

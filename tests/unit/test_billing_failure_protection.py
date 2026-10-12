@@ -531,6 +531,7 @@ async def test_mcp_credit_recovery_persists_charge_before_enqueue():
         patch("teardrop.usage.record_mcp_call_event", new_callable=AsyncMock),
         patch("billing.charges.record_charge", new=AsyncMock(side_effect=_charge)) as charge_mock,
         patch("billing.settlement.enqueue_failed_settlement", new=AsyncMock(side_effect=_enqueue)) as enqueue_mock,
+        patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value={"org_id": "author-org"})),
     ):
         await gateway._settle_billing(request, ("org-1", 100, "acme/tool", "req-1"), MagicMock())
 
@@ -540,6 +541,9 @@ async def test_mcp_credit_recovery_persists_charge_before_enqueue():
     args = enqueue_mock.await_args.args
     assert args[0] == args[2] == "call-1"
     assert enqueue_mock.await_args.kwargs["charge_id"] == charge_id_for("mcp", "call-1")
+    assert enqueue_mock.await_args.kwargs["earnings_allocations"] == [
+        {"author_org_id": "author-org", "caller_org_id": "org-1", "tool_name": "tool", "total_cost_usdc": 100}
+    ]
 
 
 @pytest.mark.asyncio

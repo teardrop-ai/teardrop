@@ -55,7 +55,7 @@ from teardrop.agent_post_run import (
 from teardrop.concurrency import limit_agent_runs
 from teardrop.config import Settings, get_settings
 from teardrop.llm_config import UnpricedModelError, resolve_llm_config
-from teardrop.memory import recall_memories
+from teardrop.memory import memory_enabled_for_org, recall_memories
 from teardrop.public_url import public_base_url
 from teardrop.retention import touch_checkpoint_thread
 from teardrop.tool_exclusions import list_org_tool_exclusions
@@ -222,8 +222,8 @@ async def record_failure_usage_event(
         cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
         tool_calls=usage_data.get("tool_calls", 0),
         tool_names=usage_data.get("tool_names", []),
-        billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
-        billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
+        billable_tool_calls=usage_data.get("billable_tool_calls", 0),
+        billable_tool_names=usage_data.get("billable_tool_names", []),
         failed_tool_calls=usage_data.get("failed_tool_calls", 0),
         failed_tool_names=usage_data.get("failed_tool_names", []),
         duration_ms=duration_ms,
@@ -415,8 +415,8 @@ async def run_agent_once(
         cache_creation_tokens=usage_data.get("cache_creation_tokens", 0),
         tool_calls=usage_data.get("tool_calls", 0),
         tool_names=usage_data.get("tool_names", []),
-        billable_tool_calls=usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)),
-        billable_tool_names=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
+        billable_tool_calls=usage_data.get("billable_tool_calls", 0),
+        billable_tool_names=usage_data.get("billable_tool_names", []),
         failed_tool_calls=usage_data.get("failed_tool_calls", 0),
         failed_tool_names=usage_data.get("failed_tool_names", []),
         duration_ms=duration_ms,
@@ -442,6 +442,13 @@ async def run_agent_once(
         source=source,
     )
 
+    is_promotional_credit = bool(getattr(ctx, "is_promotional_credit", False))
+    earnings_allocations = await _compute_marketplace_earnings_allocations(
+        mp_by_name=ctx.mp_by_name,
+        tool_names_used=usage_data.get("billable_tool_names", []),
+        caller_org_id=org_id,
+        is_promotional_credit=is_promotional_credit,
+    )
     settlement_result: dict[str, Any] = {}
     delegation_spend = usage_data.get("delegation_spend_usdc", 0)
     async for _ignored in dispatch_settlement(
@@ -457,19 +464,14 @@ async def run_agent_once(
         result=settlement_result,
         enqueue_x402_retry=source != "a2a",
         source=source,
+        earnings_allocations=earnings_allocations,
     ):
         pass
 
-    marketplace_stats_billable = settlement_result.get("marketplace_stats_billable", False) and not getattr(
-        ctx, "is_promotional_credit", False
-    )
+    marketplace_stats_billable = settlement_result.get("marketplace_stats_billable", False) and not is_promotional_credit
     if marketplace_stats_billable:
-        await _record_marketplace_earnings(
-            mp_by_name=ctx.mp_by_name,
-            tool_names_used=usage_data.get("billable_tool_names", usage_data.get("tool_names", [])),
-            caller_org_id=org_id,
-        )
-        billable_tool_names = usage_data.get("billable_tool_names", usage_data.get("tool_names", []))
+        await _record_marketplace_earnings(allocations=earnings_allocations)
+        billable_tool_names = usage_data.get("billable_tool_names", [])
         if isinstance(billable_tool_names, list):
             asyncio.create_task(record_marketplace_tool_usage_many([str(name) for name in billable_tool_names]))
 
@@ -535,7 +537,7 @@ async def _prepare_run_context(
             return [], {}
 
     async def _safe_recall() -> list[str]:
-        if not mem_settings.memory_enabled:
+        if not memory_enabled_for_org(mem_settings, org_id):
             return []
         try:
             entries = await recall_memories(org_id, user_message, mem_settings.memory_top_k)
@@ -658,19 +660,23 @@ async def _prepare_run_context(
     )
 
 
-async def _record_marketplace_earnings(
+async def _compute_marketplace_earnings_allocations(
     *,
     mp_by_name: dict[str, Any],
     tool_names_used: list[str],
     caller_org_id: str,
-) -> None:
-    """Fire off background tasks recording author earnings for marketplace tool calls.
+    is_promotional_credit: bool = False,
+) -> list[dict[str, Any]]:
+    """Return per-call author earnings allocations for billable marketplace tool calls.
 
-    Mirrors the inline logic previously embedded in ``_stream()``; failures are
-    logged at debug level and never propagate.
+    Each allocation is ``{author_org_id, caller_org_id, tool_name, total_cost_usdc}``
+    (atomic USDC int). Promotional-credit runs, self-calls, and zero-cost calls
+    produce none. Computed before settlement so a failed credit debit can carry
+    them into the retry queue. Failures are logged at debug level and never propagate.
     """
-    if not (mp_by_name and tool_names_used):
-        return
+    allocations: list[dict[str, Any]] = []
+    if is_promotional_credit or not (mp_by_name and tool_names_used):
+        return allocations
     try:
         for tname in tool_names_used:
             if tname in mp_by_name and "/" in tname:
@@ -678,19 +684,33 @@ async def _record_marketplace_earnings(
                 t_row = await get_marketplace_tool_by_name(t_bare, t_slug)
                 if t_row:
                     # Same function that priced the call in the caller's charge.
-                    t_cost = await calculate_tool_cost_usdc(1, [tname])
+                    t_cost = int(await calculate_tool_cost_usdc(1, [tname]))
                     author_oid = t_row.get("org_id")
-                    if author_oid and t_cost > 0:
-                        asyncio.create_task(
-                            record_tool_call_earnings(
-                                author_org_id=author_oid,
-                                caller_org_id=caller_org_id,
-                                tool_name=t_bare,
-                                total_cost_usdc=t_cost,
-                            )
+                    if author_oid and t_cost > 0 and str(author_oid) != str(caller_org_id):
+                        allocations.append(
+                            {
+                                "author_org_id": str(author_oid),
+                                "caller_org_id": caller_org_id,
+                                "tool_name": t_bare,
+                                "total_cost_usdc": t_cost,
+                            }
                         )
     except Exception:
-        logger.debug("Marketplace earnings recording failed", exc_info=True)
+        logger.debug("Marketplace earnings allocation failed", exc_info=True)
+    return allocations
+
+
+async def _record_marketplace_earnings(*, allocations: list[dict[str, Any]]) -> None:
+    """Fire off background tasks recording author earnings after a confirmed settlement."""
+    for allocation in allocations:
+        asyncio.create_task(
+            record_tool_call_earnings(
+                author_org_id=allocation["author_org_id"],
+                caller_org_id=allocation["caller_org_id"],
+                tool_name=allocation["tool_name"],
+                total_cost_usdc=allocation["total_cost_usdc"],
+            )
+        )
 
 
 async def _run_billing_gate(

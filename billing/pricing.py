@@ -370,8 +370,8 @@ async def calculate_run_cost_usdc(usage_data: dict, provider: str = "", model: s
 
     tokens_in = int(usage_data.get("tokens_in", 0))
     tokens_out = int(usage_data.get("tokens_out", 0))
-    tool_calls = int(usage_data.get("billable_tool_calls", usage_data.get("tool_calls", 0)))
-    tool_names: list[str] = usage_data.get("billable_tool_names") or usage_data.get("tool_names") or []
+    tool_calls = int(usage_data.get("billable_tool_calls", 0))
+    tool_names: list[str] = usage_data.get("billable_tool_names", [])
 
     if rule is None:
         token_cost = 0

@@ -136,6 +136,33 @@ class TestPrepareRunContext:
 
         assert any("tool_inventory org_id=org-1 webhook=1 mcp=1 marketplace=1 total=3" in rec.message for rec in caplog.records)
 
+    async def test_isolated_org_skips_memory_recall(self, test_settings):
+        from teardrop import agent_runtime
+
+        recall = AsyncMock(return_value=[MagicMock(content="leaked fact")])
+        with (
+            patch.object(agent_runtime, "get_graph", AsyncMock(return_value=MagicMock())),
+            patch.object(agent_runtime, "build_org_langchain_tools", AsyncMock(return_value=([], {}))),
+            patch.object(agent_runtime, "build_mcp_langchain_tools", AsyncMock(return_value=([], {}))),
+            patch("marketplace.build_subscribed_marketplace_tools", AsyncMock(return_value=([], {}))),
+            patch("teardrop.agent_runtime.recall_memories", recall),
+            patch("teardrop.agent_runtime.resolve_llm_config", AsyncMock(return_value=None)),
+            patch("teardrop.agent_runtime.get_org_by_id", AsyncMock(return_value=None)),
+            patch.object(test_settings, "memory_enabled", True),
+            patch.object(test_settings, "memory_isolated_org_ids", ["bench-org"]),
+            patch.object(test_settings, "billing_enabled", False),
+        ):
+            isolated = await agent_runtime._prepare_run_context(
+                org_id="bench-org", user_message="hello", billing=MagicMock(verified=False), mem_settings=test_settings
+            )
+            normal = await agent_runtime._prepare_run_context(
+                org_id="org-1", user_message="hello", billing=MagicMock(verified=False), mem_settings=test_settings
+            )
+
+        assert isolated.recalled == []
+        assert normal.recalled == ["leaked fact"]
+        recall.assert_awaited_once_with("org-1", "hello", test_settings.memory_top_k)
+
 
 @pytest.mark.anyio
 async def test_client_credentials_billing_gate_uses_credit_rail(test_settings, monkeypatch):
@@ -665,11 +692,29 @@ async def test_marketplace_earnings_use_global_tool_price(monkeypatch, author_pr
     earnings_mock = MagicMock(return_value=asyncio.sleep(0))
     monkeypatch.setattr(agent_runtime, "record_tool_call_earnings", earnings_mock)
 
-    await agent_runtime._record_marketplace_earnings(
+    allocations = await agent_runtime._compute_marketplace_earnings_allocations(
         mp_by_name={"acme/weather": object()},
         tool_names_used=["acme/weather"],
         caller_org_id="caller-org",
     )
+    assert allocations == [
+        {
+            "author_org_id": "author-org",
+            "caller_org_id": "caller-org",
+            "tool_name": "weather",
+            "total_cost_usdc": expected,
+        }
+    ]
+    assert (
+        await agent_runtime._compute_marketplace_earnings_allocations(
+            mp_by_name={"acme/weather": object()},
+            tool_names_used=["acme/weather"],
+            caller_org_id="caller-org",
+            is_promotional_credit=True,
+        )
+        == []
+    )
+    await agent_runtime._record_marketplace_earnings(allocations=allocations)
     await asyncio.sleep(0)
 
     model_rule_mock.assert_not_awaited()
