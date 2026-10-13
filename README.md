@@ -475,6 +475,10 @@ Teardrop automatically advertises its MCP tools via `/.well-known/mcp/server-car
    ```
 3. Set the Display Name, Description, Homepage, and Icon within the Smithery dashboard to achieve the maximum 100/100 quality score.
 
+## Publishing to the MCP Registry
+
+The official listing is `io.github.HASAVAGE/teardrop` at `https://api.teardrop.dev/tools/mcp` (Streamable HTTP, no package). Metadata lives in `server.json` at the repo root, and `name` must match the published namespace. To publish a new version: bump `version` and `remotes` in `server.json`, then from the repo root run `mcp-publisher validate`, `mcp-publisher login github`, and `mcp-publisher publish`.
+
 ## API Reference
 
 Teardrop provides interactive visual API explorers via OpenAPI at `/docs` (Swagger UI) and `/redoc` (ReDoc UI).

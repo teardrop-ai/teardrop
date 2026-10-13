@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.HASAVAGE/teardrop",
+  "description": "Teardrop MCP gateway: paid tools for autonomous agents (x402, credits).",
+  "repository": {
+    "url": "https://github.com/teardrop-ai/teardrop",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.teardrop.dev/tools/mcp"
+    }
+  ]
+}

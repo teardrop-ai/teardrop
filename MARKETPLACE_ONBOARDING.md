@@ -43,7 +43,7 @@ organization, the owning SIWE wallet may configure the settlement wallet, but
 the destination must match the authenticated wallet address.
 
 ```bash
-curl -X POST https://api.teardrop.ai/marketplace/author-config \
+curl -X POST https://api.teardrop.dev/marketplace/author-config \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"settlement_wallet": "0xYourChecksumAddress"}'
@@ -93,7 +93,7 @@ them without hand-writing schemas.
 ### 3A.1 Register the MCP Server
 
 ```bash
-curl -X POST https://api.teardrop.ai/mcp/servers \
+curl -X POST https://api.teardrop.dev/mcp/servers \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -110,7 +110,7 @@ curl -X POST https://api.teardrop.ai/mcp/servers \
 ```bash
 SERVER_ID="<mcp-server-id>"
 
-curl -X POST https://api.teardrop.ai/marketplace/import/preview \
+curl -X POST https://api.teardrop.dev/marketplace/import/preview \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -132,7 +132,7 @@ marketplace listing. If you already called preview, `input_schema` and
 or synthesized versions from live discovery.
 
 ```bash
-curl -X POST https://api.teardrop.ai/marketplace/import/publish \
+curl -X POST https://api.teardrop.dev/marketplace/import/publish \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -166,7 +166,7 @@ MCP server — it does not write to the audit trail and does not interact with
 the circuit breaker.
 
 ```bash
-curl -X POST https://api.teardrop.ai/mcp/servers/$SERVER_ID/test-tool \
+curl -X POST https://api.teardrop.dev/mcp/servers/$SERVER_ID/test-tool \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -200,7 +200,7 @@ marketplace tools also need an `output_schema` so callers and SDKs can render th
 result contract before calling.
 
 ```bash
-curl -X POST https://api.teardrop.ai/tools \
+curl -X POST https://api.teardrop.dev/tools \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -251,7 +251,7 @@ Enable marketplace visibility by patching the tool:
 ```bash
 TOOL_ID="<tool-id-from-step-3>"
 
-curl -X PATCH https://api.teardrop.ai/tools/$TOOL_ID \
+curl -X PATCH https://api.teardrop.dev/tools/$TOOL_ID \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -323,40 +323,40 @@ Callers can discover your tools via `GET /marketplace/catalog` with optional fil
 
 ```bash
 # Get all marketplace tools (author + platform)
-curl https://api.teardrop.ai/marketplace/catalog
+curl https://api.teardrop.dev/marketplace/catalog
 
 # Filter to only your org's tools
-curl "https://api.teardrop.ai/marketplace/catalog?org_slug=<your-org-slug>"
+curl "https://api.teardrop.dev/marketplace/catalog?org_slug=<your-org-slug>"
 
 # Sort by price (ascending or descending)
-curl "https://api.teardrop.ai/marketplace/catalog?sort=price_asc"
-curl "https://api.teardrop.ai/marketplace/catalog?sort=price_desc"
+curl "https://api.teardrop.dev/marketplace/catalog?sort=price_asc"
+curl "https://api.teardrop.dev/marketplace/catalog?sort=price_desc"
 
 # Sort by successful paid calls
-curl "https://api.teardrop.ai/marketplace/catalog?sort=popularity"
+curl "https://api.teardrop.dev/marketplace/catalog?sort=popularity"
 
 # Filter by public category
-curl "https://api.teardrop.ai/marketplace/catalog?category=data"
+curl "https://api.teardrop.dev/marketplace/catalog?category=data"
 
 # List active marketplace authors (including the platform pseudo-author)
-curl "https://api.teardrop.ai/marketplace/authors?limit=50"
+curl "https://api.teardrop.dev/marketplace/authors?limit=50"
 
 # Search authors by public organization name or slug
-curl "https://api.teardrop.ai/marketplace/authors?q=data"
+curl "https://api.teardrop.dev/marketplace/authors?q=data"
 
 # Fetch one tool detail or one public author profile
-curl "https://api.teardrop.ai/marketplace/catalog/<your-org-slug>/weather_lookup"
-curl "https://api.teardrop.ai/marketplace/authors/<your-org-slug>"
+curl "https://api.teardrop.dev/marketplace/catalog/<your-org-slug>/weather_lookup"
+curl "https://api.teardrop.dev/marketplace/authors/<your-org-slug>"
 
 # Fetch the current effective price before invoking a published tool
-curl "https://api.teardrop.ai/marketplace/quote?tool=<your-org-slug>/weather_lookup"
+curl "https://api.teardrop.dev/marketplace/quote?tool=<your-org-slug>/weather_lookup"
 
 # Plain-text marketplace index for LLM/SEO discovery
-curl https://api.teardrop.ai/marketplace/llms.txt
+curl https://api.teardrop.dev/marketplace/llms.txt
 
 # Paginate results (default limit 100, max 200)
-curl "https://api.teardrop.ai/marketplace/catalog?limit=50&cursor=<next_cursor>"
-curl "https://api.teardrop.ai/marketplace/authors?limit=50&cursor=<next_cursor>"
+curl "https://api.teardrop.dev/marketplace/catalog?limit=50&cursor=<next_cursor>"
+curl "https://api.teardrop.dev/marketplace/authors?limit=50&cursor=<next_cursor>"
 ```
 
 Query parameters:
@@ -376,15 +376,15 @@ Author index objects contain `org_slug`, `org_name`, `tool_count`, and `total_ca
 
 ```bash
 # All earnings, most recent first (up to 50 per page)
-curl https://api.teardrop.ai/marketplace/earnings \
+curl https://api.teardrop.dev/marketplace/earnings \
   -H "Authorization: Bearer $TOKEN"
 
 # Filter by tool name
-curl "https://api.teardrop.ai/marketplace/earnings?tool_name=weather_lookup" \
+curl "https://api.teardrop.dev/marketplace/earnings?tool_name=weather_lookup" \
   -H "Authorization: Bearer $TOKEN"
 
 # Paginate
-curl "https://api.teardrop.ai/marketplace/earnings?cursor=<next_cursor>&limit=20" \
+curl "https://api.teardrop.dev/marketplace/earnings?cursor=<next_cursor>&limit=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -415,7 +415,7 @@ fetch the following page.  A `null` `next_cursor` means you are on the last page
 ## Step 6 — Check Your Balance
 
 ```bash
-curl https://api.teardrop.ai/marketplace/balance \
+curl https://api.teardrop.dev/marketplace/balance \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -439,7 +439,7 @@ atomic on-chain USDC transfer.  The minimum withdrawal amount is **100,000 units
 cooldown, wait and retry.
 
 ```bash
-curl -X POST https://api.teardrop.ai/marketplace/withdraw \
+curl -X POST https://api.teardrop.dev/marketplace/withdraw \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"amount_usdc": 350000}'
@@ -463,7 +463,7 @@ curl -X POST https://api.teardrop.ai/marketplace/withdraw \
 
 ```bash
 # All withdrawals, newest first
-curl https://api.teardrop.ai/marketplace/withdrawals \
+curl https://api.teardrop.dev/marketplace/withdrawals \
   -H "Authorization: Bearer $TOKEN"
 ```
 
