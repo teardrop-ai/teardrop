@@ -165,14 +165,34 @@ _MCP_ADDITIONAL_HOST_TOKENS = (
     ("agno", "sdk"),
     ("mcp-python", "sdk"),
     ("mcp-node", "sdk"),
+    ("rmcp", "sdk"),
 )
 _MCP_ADDITIONAL_HOST_PATTERNS = tuple(
     (re.compile(r"(?:^|[^a-z0-9])" + re.escape(token) + r"(?:$|[^a-z0-9])"), bucket)
     for token, bucket in _MCP_ADDITIONAL_HOST_TOKENS
 )
 _MAX_CLASSIFIED_CHARS = 256
-# Registries and scanners seen in clientInfo.name without a generic bot token (2026-10-07 log sample).
-_INDEXER_NAME_TOKENS = ("smithery", "glama", "bazaar", "harvest", "sonda", "rugpull", "agent-tools")
+# Registries and scanners seen in clientInfo.name without a generic bot token (2026-10-07 and 2026-10-13 log samples).
+_INDEXER_NAME_TOKENS = (
+    "smithery",
+    "glama",
+    "bazaar",
+    "harvest",
+    "sonda",
+    "rugpull",
+    "agent-tools",
+    "index",
+    "registry",
+    "scout",
+    "verif",
+    "enrich",
+    "collector",
+    "grader",
+    "check",
+    "extractor",
+    "reliability",
+    "mcp-pulse",
+)
 # A legacy tools/call carries no clientInfo and the server is stateless, so an indexer's handshake
 # flags its IP for this long; later anonymous calls from that IP count as `bot`.
 _INDEXER_IP_TTL_SECONDS = 900
