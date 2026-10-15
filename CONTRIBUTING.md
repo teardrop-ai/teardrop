@@ -91,6 +91,14 @@ pytest tests/unit/test_auth.py -v
 Coverage must stay above 75% (`fail_under = 75` in `pyproject.toml`). CI
 appends coverage from the unit and API suites before enforcing the threshold.
 
+For provider SDK regressions, exercise real SDK clients through controlled HTTP
+transports and check serialized request JSON plus parsed responses. Private SDK
+argument dictionaries are not wire contracts: for example, `extra_body` may hold
+sampling parameters that the SDK merges into the outgoing JSON. When changing
+SDK compatibility coverage, validate both the installed and freshly resolved
+provider SDK versions in an isolated environment and record the versions tested;
+CI installs dependencies afresh from the requirements files.
+
 > **Note:** `pytest-xdist` (`-n auto`) is safe for the mocked `tests/unit` and
 > `tests/api` suites. Do **not** run `tests/integration` with `-n auto`: its
 > session-scoped fixture starts a Postgres container on a fixed port and

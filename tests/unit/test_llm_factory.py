@@ -13,6 +13,7 @@ import httpx2
 import pytest
 from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from openai import AsyncOpenAI
 
 from agent.llm import (
     ALLOWED_PROVIDERS,
@@ -358,6 +359,11 @@ class TestCreateLlmFromConfig:
         def respond(request):
             body = json.loads(request.content)
             requests.append(body)
+            assert {"thinking_level", "thinking_budget", "thinking", "reasoning_effort", "reasoning", "extra_body"}.isdisjoint(
+                body
+            )
+            assert "effort" not in body.get("output_config", {})
+            assert body["temperature"] == 0.0
             assert request.url.host == "api.anthropic.com"
             assert request.headers["x-api-key"] == "test-org-key"
             first_turn = len(requests) == 1
@@ -380,7 +386,7 @@ class TestCreateLlmFromConfig:
                 },
             )
 
-        config = _make_config(is_byok=True, model="claude-sonnet-4-6", api_key="test-org-key")
+        config = _make_config(is_byok=True, model="claude-sonnet-4-6", api_key="test-org-key", reasoning_effort="high")
         client = create_llm_from_config(config)
         async with DefaultAsyncHttpxClient(transport=sdk_httpx.MockTransport(respond)) as http_client:
             client._async_client = AsyncAnthropic(
@@ -530,21 +536,42 @@ class TestProviderThinking:
         request = client._prepare_request([HumanMessage(content="Reply OK")])
         assert request["config"].thinking_config.model_dump(mode="json", exclude_none=True) == {"thinking_level": "LOW"}
 
-    @pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high"])
     @pytest.mark.parametrize(
         ("provider", "model"),
-        [("openai", "gpt-4o-mini"), ("openrouter", "deepseek/deepseek-v4-flash"), ("anthropic", "claude-sonnet-4-6")],
+        [("openai", "gpt-4o-mini"), ("openrouter", "deepseek/deepseek-v4-flash")],
     )
-    def test_native_provider_payloads_do_not_inherit_google_options(self, provider, model, effort):
-        client = create_llm_from_config(
-            _make_config(provider=provider, model=model, is_byok=provider == "anthropic", reasoning_effort=effort)
-        )
-        payload = client._get_request_payload([HumanMessage(content="Reply OK")])
-        assert {"thinking_level", "thinking_budget", "thinking", "reasoning_effort", "reasoning"}.isdisjoint(payload)
-        if provider == "openrouter":
-            assert payload["extra_body"] == {"reasoning": {"effort": effort}}
-        else:
-            assert "extra_body" not in payload
+    async def test_openai_compatible_wire_reasoning_is_provider_specific(self, provider, model):
+        def respond(request):
+            body = json.loads(request.content)
+            assert {"thinking_level", "thinking_budget", "thinking", "reasoning_effort", "extra_body"}.isdisjoint(body)
+            assert "effort" not in body.get("output_config", {})
+            if provider == "openrouter":
+                assert body["reasoning"] == {"effort": "high"}
+            else:
+                assert "reasoning" not in body
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Reply complete."}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+                },
+            )
+
+        client = create_llm_from_config(_make_config(provider=provider, model=model, reasoning_effort="high"))
+        async with (
+            httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client,
+            AsyncOpenAI(api_key="test-openai-key", base_url=client.openai_api_base, http_client=http_client) as sdk_client,
+        ):
+            client.root_async_client = sdk_client
+            client.async_client = sdk_client.chat.completions
+            response = await client.ainvoke([HumanMessage(content="Reply OK")])
+        assert response.content == "Reply complete."
 
     @pytest.mark.parametrize("effort", ["none", "minimal"])
     async def test_google_async_generation_no_longer_sends_rejected_minimal(self, effort):
