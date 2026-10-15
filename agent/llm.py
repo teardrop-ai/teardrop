@@ -45,9 +45,9 @@ logger = logging.getLogger(__name__)
 ALLOWED_PROVIDERS = frozenset({"openai", "google", "openrouter"})
 BYOK_ONLY_PROVIDERS = frozenset({"anthropic"})
 
-# Reasoning effort levels accepted from operators and orgs. Applied as
-# ``reasoning.effort`` (openrouter) or ``thinking_level`` (google; "none" maps
-# to "minimal"); ignored for openai.
+# Effort is a portable hint, not a provider-independent API enum. Google settings
+# are resolved against documented model capabilities; native OpenAI/Anthropic
+# retain their defaults. OpenRouter receives its own reasoning.effort field.
 ALLOWED_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high"})
 
 
@@ -93,6 +93,49 @@ def platform_reasoning_effort(provider: str, model: str, settings: Any | None = 
     return efforts.get(f"{provider.lower()}:{model}") or None
 
 
+# Explicit IDs prevent new model releases from inheriting unsupported levels.
+# https://ai.google.dev/gemini-api/docs/generate-content/thinking
+# https://ai.google.dev/gemini-api/docs/gemini-3
+_GOOGLE_THINKING_LEVELS = {
+    "gemini-3.8-flash": ("low", "medium", "high"),
+    "gemini-4-argon": ("low", "medium", "high"),
+    "gemini-3.1-pro-preview": ("low", "medium", "high"),
+    "gemini-3.6-flash": ("minimal", "low", "medium", "high"),
+    "gemini-3-flash-preview": ("minimal", "low", "medium", "high"),
+    "gemini-3.5-flash-lite": ("minimal", "low", "medium", "high"),
+    "gemini-3.1-flash-lite": ("minimal", "low", "medium", "high"),
+    "gemini-3.1-flash-lite-image": ("minimal", "high"),
+}
+_GOOGLE_MIN_THINKING_BUDGET = {
+    "gemini-2.5-pro": 128,
+    "gemini-2.5-flash": 0,
+    "gemini-2.5-flash-lite": 0,
+}
+_THINKING_LEVEL_ORDER = ("minimal", "low", "medium", "high")
+
+
+def _google_thinking_kwargs(model: str, effort: str | None) -> dict[str, Any]:
+    """Translate effort only when the model's native capabilities are known.
+
+    ``none`` means the lowest available effort, not guaranteed thinking-off.
+    Budget-only models have no exact equivalent for the other effort labels;
+    unknown models likewise retain provider defaults rather than guessed settings.
+    """
+    effort = validate_reasoning_effort(effort)
+    if effort is None:
+        return {}
+    model = model.removeprefix("models/")
+    levels = _GOOGLE_THINKING_LEVELS.get(model)
+    if levels is not None:
+        requested = "minimal" if effort == "none" else effort
+        for level in _THINKING_LEVEL_ORDER[_THINKING_LEVEL_ORDER.index(requested) :]:
+            if level in levels:
+                return {"thinking_level": level}
+    if effort == "none" and model in _GOOGLE_MIN_THINKING_BUDGET:
+        return {"thinking_budget": _GOOGLE_MIN_THINKING_BUDGET[model]}
+    return {}
+
+
 # ─── Global singleton (backward compat) ──────────────────────────────────────
 
 _llm: BaseChatModel | None = None
@@ -129,8 +172,7 @@ def create_llm(settings: Any | None = None) -> BaseChatModel:
         if ChatGoogleGenerativeAI is None:
             raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         google_kwargs: dict[str, Any] = {**common, "google_api_key": settings.google_api_key or None}
-        if reasoning_effort:
-            google_kwargs["thinking_level"] = "minimal" if reasoning_effort == "none" else reasoning_effort
+        google_kwargs.update(_google_thinking_kwargs(settings.agent_model, reasoning_effort))
         return ChatGoogleGenerativeAI(**google_kwargs)  # type: ignore[arg-type]
 
     if provider == "openrouter":
@@ -179,10 +221,11 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         reasoning_effort — optional effort hint (e.g. "low") for reasoning models.
             On reasoning models the ``max_tokens`` budget is shared between hidden
             reasoning tokens and visible output, so an unbounded reasoning effort can
-            starve or truncate the visible response. Applied as ``thinking_level``
-            (google) or ``reasoning.effort`` (openrouter). Ignored for
-            openai, where reasoning is opt-in. When unset, the operator's
-            per-model default (``model_reasoning_effort``) applies.
+            starve or truncate the visible response. Google translates the hint
+            using documented per-model levels or budgets; unknown models retain
+            defaults. OpenRouter receives ``reasoning.effort``. Native OpenAI and
+            Anthropic retain defaults. When unset, the operator's per-model
+            default (``model_reasoning_effort``) applies.
     """
     provider = config["provider"].lower()
     is_byok = config.get("is_byok") is True
@@ -215,8 +258,7 @@ def create_llm_from_config(config: dict[str, Any]) -> BaseChatModel:
         if ChatGoogleGenerativeAI is None:
             raise RuntimeError("langchain-google-genai is not installed. Run: pip install langchain-google-genai")
         kwargs = {**common, "google_api_key": api_key or None}
-        if reasoning_effort:
-            kwargs["thinking_level"] = "minimal" if reasoning_effort == "none" else reasoning_effort
+        kwargs.update(_google_thinking_kwargs(model, reasoning_effort))
         return ChatGoogleGenerativeAI(**kwargs)  # type: ignore[arg-type]
 
     if provider == "anthropic":

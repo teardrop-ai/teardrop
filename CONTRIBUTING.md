@@ -57,11 +57,14 @@ ruff check .
 # Auto-fix safe issues
 ruff check --fix .
 
-# Format
-ruff format .
+# Format files changed by your contribution
+ruff format <changed-python-files>
+
+# Required formatting gate (matches CI)
+ruff format --check .
 ```
 
-CI will reject PRs that fail `ruff check .`. Run it before pushing.
+Both `ruff format --check .` and `ruff check .` must pass before pushing; CI rejects failures in either check. Clean lint or language-server diagnostics do not establish clean formatting. Use the project virtual environment (`.venv\Scripts\python -m ruff` on Windows or `.venv/bin/python -m ruff` on Unix). Do not reformat unrelated changes to make the gate pass.
 
 ---
 
@@ -110,7 +113,7 @@ appends coverage from the unit and API suites before enforcing the threshold.
 2. Fork the repo and create a feature branch from `main`.
 3. Keep commits small and focused. Write clear commit messages.
 4. Add or update tests for any changed behaviour.
-5. Run `ruff check .` and `pytest` locally before pushing.
+5. Run `ruff format --check .`, `ruff check .`, and `pytest` locally before pushing.
 6. Submit a pull request referencing the issue.
 7. A maintainer will review within a few business days.
 

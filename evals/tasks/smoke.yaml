@@ -4,10 +4,11 @@
     "messages": [{"role": "user", "content": "What time is it in UTC right now?"}],
     "expected_tool_calls": ["get_datetime"],
     "expected_text_contains": ["UTC"],
+    "expected_text_not_contains": ["INVALID_ARGUMENT"],
     "max_duration_ms": 12000,
     "max_cost_usdc": 500000,
     "scorer": "contains",
-    "rubric": "Returns a UTC timestamp and uses the datetime tool."
+    "rubric": "Returns a UTC timestamp, uses the datetime tool, and completes post-tool synthesis without provider configuration errors."
   },
   {
     "id": "smoke.wallet.001",

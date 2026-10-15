@@ -142,6 +142,7 @@ Actions:
 - For broad local validation of the mocked `tests/unit` and `tests/api` suites, prefer the parallel form `.venv\Scripts\python -m pytest tests/unit/ tests/api/ -n auto --dist load` (or `.venv/bin/python -m pytest ...` on Unix) for faster feedback. Do **not** use `-n auto` on `tests/integration` — its session-scoped Postgres container uses a fixed port and truncates shared tables, so run integration serially with `-n 0`.
 - After the first substantive edit, run the narrowest available validation before further patching.
 - Preserve Teardrop invariants and existing style.
+- Before final verification, format only Python files changed by this cycle using `.venv\Scripts\python -m ruff format <changed-python-files>` (Windows) or `.venv/bin/python -m ruff format <changed-python-files>` (Unix). Do not reformat unrelated user changes.
 
 If the touched area includes:
 - billing or pricing: preserve atomic USDC BIGINT handling and routing by `auth_method` and `billing_method`
@@ -157,6 +158,7 @@ Use `ruthless-critic-verifier` for this phase.
 Validation tiering:
 - **Fast-Track Verification (Always)**: Execute pytest on the immediate local test domain (e.g., `tests/unit/test_<slice>.py`) using the project venv wrapper first. Do not sweep broad, unrelated tests on the first execution.
 - **Slow-Track Evaluation (Conditional)**: If the change alters core tool behavior, model routing, planner prompts, or overall run cost, proceed to run evals/tasks validations using `teardrop-eval-harness` *after* all unit verifications are green.
+- **Formatting Gate (Required)**: Run `.venv\Scripts\python -m ruff format --check .` (Windows) or `.venv/bin/python -m ruff format --check .` (Unix), matching CI. A zero exit status is required for `PASS`. Ruff lint checks and language-server diagnostics do not substitute for the formatter check. If unrelated files fail, report `BLOCK` with the paths; do not expand the formatting scope without approval. If the formatter cannot run, report `PENDING`.
 
 Always check:
 - correctness against the requested behavior
@@ -175,14 +177,14 @@ Release-boundary versioning check:
 - If the user has not yet decided to cut a release, leave `version_relevant` recorded and remind them to run the bump script before tagging.
 
 VERIFY output must be one of:
-- `PASS`: no blocking findings, validation is sufficient for current scope
+- `PASS`: no blocking findings, validation is sufficient for current scope, and the required Ruff formatter check exited zero (report the command and result)
 - `BLOCK`: concrete findings with impact, confidence, and next edit target
 - `PENDING`: validation could not run or evidence is incomplete
 
 If BLOCK:
 - write findings into `block_findings` using this format:
-    - error_type: (test_fail | invariant_violation | logic_error | missing_test)
-    - snippet: (specific traceback line, assertion, or exact failing test name)
+    - error_type: (test_fail | format_fail | invariant_violation | logic_error | missing_test)
+    - snippet: (specific traceback line, assertion, exact failing test name, or formatter output and exit status)
     - edit_target: (the specific file, function, module or line range)
 - retry PLAN once using those findings as the new constraint set
 - if the second VERIFY still blocks, stop and ask the user to re-scope or choose a direction

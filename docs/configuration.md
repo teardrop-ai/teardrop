@@ -6,6 +6,21 @@ Set these key-value pairs in your `.env` file or within your deployment provider
 
 Direct Anthropic agent inference is available only for organizations using BYOK: submit `provider=anthropic` and the organization's own `api_key` through `PUT /llm-config`. Anthropic is not supported as the shared `AGENT_PROVIDER` or in Teardrop's shared model pool.
 
+## Reasoning effort compatibility
+
+Org `model_reasoning_effort["provider:model"]` overrides org-wide `reasoning_effort`, which overrides the operator's `MODEL_REASONING_EFFORT` entry. Unset effort leaves the provider default unchanged. Planner, synthesis, and fallback requests use the same Google translation after model selection.
+
+| Provider | Translation and limits |
+|----------|------------------------|
+| Google | Known model IDs use documented `thinking_level` capabilities. `none` requests the lowest supported level; unsupported intermediate levels round up to the next supported level. On `gemini-3.8-flash`, `gemini-4-argon`, and `gemini-3.1-pro-preview`, `none` and `minimal` become `low`, not unsupported `minimal`. |
+| Google Gemini 2.5 | Uses `thinking_budget`, never `thinking_level`. `none` becomes `0` on `gemini-2.5-flash` and `gemini-2.5-flash-lite`, or `128` on `gemini-2.5-pro` (thinking cannot be disabled). Other effort labels retain defaults because Google documents no exact level-to-budget conversion. |
+| OpenRouter | Receives its native `reasoning.effort` object. Individual models still constrain supported efforts; mandatory-thinking models can reject `none`. This is not a guarantee that every effort works on every routed model. |
+| Native OpenAI / Anthropic BYOK | The generic effort hint is not sent. Existing provider defaults remain in effect; OpenRouter's reasoning object and Google's thinking parameters are not forwarded. |
+
+Google capabilities are deliberately keyed by explicit model IDs in `agent/llm.py`; a `models/` prefix is accepted. Unknown IDs, dated aliases, and new releases retain provider defaults rather than inheriting guessed capabilities. Verify the provider's documentation and add a model-specific regression before enabling an effort override for another ID. See Google's [thinking guide](https://ai.google.dev/gemini-api/docs/generate-content/thinking), [Gemini 3 guide](https://ai.google.dev/gemini-api/docs/gemini-3), and OpenRouter's [reasoning contract](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
+Lowest effort is not necessarily thinking-off, and it does not reserve a fixed visible-output budget. Thinking tokens can still consume `max_tokens`; allow sufficient output headroom for synthesis.
+
 ## Environment Variables
 
 | Variable | Description |
@@ -19,6 +34,7 @@ Direct Anthropic agent inference is available only for organizations using BYOK:
 | `AGENT_SYNTHESIS_MODEL` | Optional model override for synthesis turns, paired with `AGENT_SYNTHESIS_PROVIDER`. |
 | `AGENT_UI_GENERATOR_PROVIDER` | Provider for UI generation turns (default: `google`). **Important**: requires `GOOGLE_API_KEY` even if main provider is OpenRouter. |
 | `AGENT_UI_GENERATOR_MODEL` | Model for UI generation turns (default: `gemini-3.8-flash`). |
+| `MODEL_REASONING_EFFORT` | Optional JSON map of `provider:model` to `none`, `minimal`, `low`, `medium`, or `high`. Provider-specific behavior is described below. |
 | `AGENT_SYNTHESIS_FAST_PATH_ENABLED` | Enables a synthesis-only fast path that skips tool schema binding when the next turn is clearly final. Default: `true`. |
 | `AGENT_COMPILER_MODE_ENABLED` | Enables optional staged planner IR (`<plan>{...}</plan>`) execution. Default: `false` (safe rollout). |
 | `AGENT_TOOL_SHORTLIST_ENABLED` | Binds only a relevance-scored subset of tool schemas on planner turns to cut prompt tokens for orgs with many tools. Scoring uses human-message history; empty or unmatched requests use a stable bounded fallback. Default: `false` (safe rollout). Tool listings and executor resolution are unchanged. |

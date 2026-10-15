@@ -479,80 +479,114 @@ class TestCreateLlmFromConfig:
         call_kwargs = mock_cls.call_args[1]
         assert call_kwargs["base_url"] == "https://custom.proxy.example.com/v1"
 
-    @patch("agent.llm.ChatGoogleGenerativeAI")
-    def test_google_reasoning_effort_sets_thinking_level(self, mock_cls):
-        """Reasoning effort maps to Gemini thinking_level so hidden reasoning
-        tokens cannot consume the visible-output budget (truncation fix)."""
-        mock_cls.return_value = MagicMock()
-        config = _make_config(provider="google", model="gemini-3.6-flash", reasoning_effort="low")
-        create_llm_from_config(config)
-        assert mock_cls.call_args[1]["thinking_level"] == "low"
 
-    @patch("agent.llm.ChatGoogleGenerativeAI")
-    def test_google_without_reasoning_effort_omits_thinking_level(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(provider="google", model="gemini-3.6-flash")
-        create_llm_from_config(config)
-        assert "thinking_level" not in mock_cls.call_args[1]
-
-    @patch("agent.llm.ChatGoogleGenerativeAI")
-    def test_google_disabled_reasoning_uses_minimal_thinking_level(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(provider="google", model="gemini-3.6-flash", reasoning_effort="none")
-        create_llm_from_config(config)
-        assert mock_cls.call_args[1]["thinking_level"] == "minimal"
-
-    @patch("agent.llm.ChatOpenRouter")
-    def test_operator_model_default_used_when_config_has_no_effort(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        settings = MagicMock(model_reasoning_effort={"openrouter:~anthropic/claude-opus-latest": "high"})
-        config = _make_config(provider="openrouter", model="~anthropic/claude-opus-latest", api_key="k", api_base=None)
-        with patch("agent.llm.get_settings", return_value=settings):
-            create_llm_from_config(config)
-        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "high"}}
-
-    @patch("agent.llm.ChatOpenRouter")
-    def test_config_effort_beats_operator_model_default(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        settings = MagicMock(model_reasoning_effort={"openrouter:~anthropic/claude-opus-latest": "high"})
-        config = _make_config(
-            provider="openrouter",
-            model="~anthropic/claude-opus-latest",
-            api_key="k",
-            api_base=None,
-            reasoning_effort="minimal",
+class TestProviderThinking:
+    @pytest.mark.parametrize("factory", ["global", "request"])
+    @pytest.mark.parametrize(
+        ("model", "effort", "expected"),
+        [
+            ("gemini-3.8-flash", "none", {"thinking_level": "LOW"}),
+            ("gemini-3.8-flash", "minimal", {"thinking_level": "LOW"}),
+            ("gemini-3.8-flash", "low", {"thinking_level": "LOW"}),
+            ("gemini-3.8-flash", "medium", {"thinking_level": "MEDIUM"}),
+            ("gemini-3.8-flash", "high", {"thinking_level": "HIGH"}),
+            ("models/gemini-3.8-flash", "none", {"thinking_level": "LOW"}),
+            ("gemini-4-argon", "minimal", {"thinking_level": "LOW"}),
+            ("gemini-3.6-flash", "none", {"thinking_level": "MINIMAL"}),
+            ("gemini-3-flash-preview", "minimal", {"thinking_level": "MINIMAL"}),
+            ("gemini-3.1-pro-preview", "none", {"thinking_level": "LOW"}),
+            ("gemini-3.1-pro-preview", "medium", {"thinking_level": "MEDIUM"}),
+            ("gemini-3.1-flash-lite", "none", {"thinking_level": "MINIMAL"}),
+            ("gemini-3.1-flash-lite-image", "low", {"thinking_level": "HIGH"}),
+            ("gemini-2.5-pro", "none", {"thinking_budget": 128}),
+            ("gemini-2.5-flash", "none", {"thinking_budget": 0}),
+            ("gemini-2.5-flash-lite", "none", {"thinking_budget": 0}),
+            ("gemini-2.5-flash", "high", {}),
+            ("gemini-2.0-flash", "none", {}),
+            ("gemini-99-flash", "minimal", {}),
+            ("gemini-3.8-flash-custom", "none", {}),
+            ("gemini-3.8-flash", None, {}),
+        ],
+    )
+    def test_google_sdk_request_obeys_model_capabilities(self, factory, model, effort, expected):
+        settings = _make_settings(
+            agent_provider="google",
+            agent_model=model,
+            model_reasoning_effort={f"google:{model}": effort} if effort else {},
         )
         with patch("agent.llm.get_settings", return_value=settings):
-            create_llm_from_config(config)
-        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "minimal"}}
+            if factory == "global":
+                client = create_llm(settings)
+            else:
+                client = create_llm_from_config(_make_config(provider="google", model=model))
+        request = client._prepare_request([HumanMessage(content="Reply OK")])
+        thinking = request["config"].thinking_config
+        assert (thinking.model_dump(mode="json", exclude_none=True) if thinking else {}) == expected
 
-    @patch("agent.llm.ChatOpenRouter")
-    def test_openrouter_reasoning_effort_does_not_add_provider_pin(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(
-            provider="openrouter",
-            model="deepseek/deepseek-v4-flash-0731",
-            api_key="sk-or-test",
-            api_base=None,
-            reasoning_effort="low",
-        )
-        create_llm_from_config(config)
-        assert mock_cls.call_args[1]["extra_body"] == {
-            "reasoning": {"effort": "low"},
-        }
+    def test_google_request_effort_overrides_operator_default(self):
+        settings = _make_settings(model_reasoning_effort={"google:gemini-3.8-flash": "high"})
+        with patch("agent.llm.get_settings", return_value=settings):
+            client = create_llm_from_config(_make_config(provider="google", model="gemini-3.8-flash", reasoning_effort=" NONE "))
+        request = client._prepare_request([HumanMessage(content="Reply OK")])
+        assert request["config"].thinking_config.model_dump(mode="json", exclude_none=True) == {"thinking_level": "LOW"}
 
-    @patch("agent.llm.ChatOpenRouter")
-    def test_openrouter_reasoning_effort_without_deepseek_pin(self, mock_cls):
-        mock_cls.return_value = MagicMock()
-        config = _make_config(
-            provider="openrouter",
-            model="mistralai/mistral-7b-instruct",
-            api_key="sk-or-test",
-            api_base=None,
-            reasoning_effort="low",
+    @pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high"])
+    @pytest.mark.parametrize(
+        ("provider", "model"),
+        [("openai", "gpt-4o-mini"), ("openrouter", "deepseek/deepseek-v4-flash"), ("anthropic", "claude-sonnet-4-6")],
+    )
+    def test_native_provider_payloads_do_not_inherit_google_options(self, provider, model, effort):
+        client = create_llm_from_config(
+            _make_config(provider=provider, model=model, is_byok=provider == "anthropic", reasoning_effort=effort)
         )
-        create_llm_from_config(config)
-        assert mock_cls.call_args[1]["extra_body"] == {"reasoning": {"effort": "low"}}
+        payload = client._get_request_payload([HumanMessage(content="Reply OK")])
+        assert {"thinking_level", "thinking_budget", "thinking", "reasoning_effort", "reasoning"}.isdisjoint(payload)
+        if provider == "openrouter":
+            assert payload["extra_body"] == {"reasoning": {"effort": effort}}
+        else:
+            assert "extra_body" not in payload
+
+    @pytest.mark.parametrize("effort", ["none", "minimal"])
+    async def test_google_async_generation_no_longer_sends_rejected_minimal(self, effort):
+        from google import genai
+        from google.genai import types
+
+        def respond(request):
+            body = json.loads(request.content)
+            thinking = types.ThinkingConfig.model_validate(body["generationConfig"]["thinkingConfig"])
+            if thinking.thinking_level == types.ThinkingLevel.MINIMAL:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "code": 400,
+                            "status": "INVALID_ARGUMENT",
+                            "message": "Thinking level MINIMAL is not supported for this model.",
+                        }
+                    },
+                )
+            assert thinking.thinking_level == types.ThinkingLevel.LOW
+            assert thinking.thinking_budget is None
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {"content": {"role": "model", "parts": [{"text": "Synthesis complete."}]}, "finishReason": "STOP"}
+                    ],
+                    "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 4, "totalTokenCount": 14},
+                },
+            )
+
+        client = create_llm_from_config(_make_config(provider="google", model="gemini-3.8-flash", reasoning_effort=effort))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            sdk_client = genai.Client(api_key="test-google-key", http_options=types.HttpOptions(httpx_async_client=http_client))
+            client.client = sdk_client
+            try:
+                response = await client.ainvoke([HumanMessage(content="Summarize the tool result.")])
+            finally:
+                await sdk_client.aio.aclose()
+                sdk_client.close()
+        assert response.content == "Synthesis complete."
 
 
 class TestCacheKey:

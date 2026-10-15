@@ -306,6 +306,8 @@ Invoke-RestMethod -Uri "http://localhost:8000/llm-config" `
 
 For BYOK, add your own `api_key` (encrypted at rest). For self-hosted endpoints (vLLM, Ollama, or any OpenAI-compatible server), set `api_base` to your endpoint URL.
 
+Reasoning hints are provider-specific: Google uses documented per-model thinking levels or budgets (`none` becomes `low` on Gemini 3.8 Flash); unknown Google model IDs retain provider defaults. OpenRouter receives `reasoning.effort`, subject to its model's supported efforts. Native OpenAI and Anthropic BYOK retain defaults. See [reasoning effort compatibility](docs/configuration.md#reasoning-effort-compatibility) for precedence and limits.
+
 ### Routing preferences
 
 When you set `routing_preference` to a value other than `"default"`, Teardrop will automatically select a model from its standard pool based on your criteria:
