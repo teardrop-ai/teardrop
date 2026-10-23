@@ -8,6 +8,7 @@ PATCH /agent/runs/{run_id}/outcome.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -42,6 +43,29 @@ async def test_list_agent_decisions(api_client, monkeypatch):
     assert body["items"][0]["run_id"] == "run-123"
     assert body["items"][0]["action"] == "flag_liquidation_risk"
     assert body["next_cursor"] == _NOW.isoformat()
+
+
+@pytest.mark.anyio
+async def test_list_agent_decisions_serializes_decimal_confidence(api_client, monkeypatch):
+    # asyncpg returns NUMERIC columns as Decimal; the response must still be a JSON number.
+    row = {**_DECISION_ROW, "confidence": Decimal("0.85")}
+    monkeypatch.setattr("teardrop.routers.agent_decisions.list_run_decisions", AsyncMock(return_value=[row]))
+
+    resp = await api_client.get("/agent/decisions")
+    assert resp.status_code == 200
+    confidence = resp.json()["items"][0]["confidence"]
+    assert isinstance(confidence, float)
+    assert confidence == pytest.approx(0.85)
+
+
+@pytest.mark.anyio
+async def test_list_agent_decisions_null_confidence(api_client, monkeypatch):
+    row = {**_DECISION_ROW, "confidence": None}
+    monkeypatch.setattr("teardrop.routers.agent_decisions.list_run_decisions", AsyncMock(return_value=[row]))
+
+    resp = await api_client.get("/agent/decisions")
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["confidence"] is None
 
 
 @pytest.mark.anyio

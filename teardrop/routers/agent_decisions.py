@@ -46,7 +46,7 @@ async def list_agent_decisions(
     payload: dict = Depends(require_auth),
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, description="ISO datetime cursor for pagination"),
-) -> JSONResponse:
+) -> AgentDecisionListResponse:
     """List stored decision records for the authenticated org (newest first, cursor-paginated).
 
     Each record summarizes one agent run: the action taken, reasoning, task
@@ -76,7 +76,10 @@ async def list_agent_decisions(
         for r in rows
     ]
     next_cursor = serialized[-1]["created_at"] if serialized else None
-    return JSONResponse(content={"items": serialized, "next_cursor": next_cursor})
+    return AgentDecisionListResponse(
+        items=[AgentDecisionRecord(**row) for row in serialized],
+        next_cursor=next_cursor,
+    )
 
 
 class RunOutcomeResponse(BaseModel):
