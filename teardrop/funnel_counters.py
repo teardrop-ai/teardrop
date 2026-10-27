@@ -172,7 +172,8 @@ _MCP_ADDITIONAL_HOST_PATTERNS = tuple(
     for token, bucket in _MCP_ADDITIONAL_HOST_TOKENS
 )
 _MAX_CLASSIFIED_CHARS = 256
-# Registries and scanners seen in clientInfo.name without a generic bot token (2026-10-07 and 2026-10-13 log samples).
+# Registries and scanners seen in clientInfo.name without a generic bot token (2026-10-07, 2026-10-13, and
+# 2026-10-26 log samples). Generic names such as "mcp" or "mcpclient" stay unclassified on purpose.
 _INDEXER_NAME_TOKENS = (
     "smithery",
     "glama",
@@ -192,6 +193,29 @@ _INDEXER_NAME_TOKENS = (
     "extractor",
     "reliability",
     "mcp-pulse",
+    "catalog",
+    "directory",
+    "observatory",
+    "watch",
+    "inventory",
+    "audit",
+    "survey",
+    "scraper",
+    "canary",
+    "status",
+    "score",
+    "almanac",
+    "listing",
+    "mcp-discover",
+    "talaria",
+    "heldfast",
+    "coda-agent-runtime",
+    "proofhouse",
+    "mcpwell",
+    "mcpcost",
+    "centinela",
+    "tacuri",
+    "hultra",
 )
 # A legacy tools/call carries no clientInfo and the server is stateless, so an indexer's handshake
 # flags its IP for this long; later anonymous calls from that IP count as `bot`.

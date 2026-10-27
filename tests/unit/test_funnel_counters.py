@@ -348,6 +348,43 @@ class TestIndexerClassification:
         assert funnel_module.mcp_call_client_surface(client_name) == "mcp_call_client:bot"
 
     @pytest.mark.parametrize(
+        "client_name",
+        [
+            # Recurring monitors and directories from the 2026-10-26 unclassified log sample.
+            "talaria-catalog",
+            "heldfast",
+            "coda-agent-runtime",
+            "opentask-directory",
+            "mcp-observatory",
+            "mcpwatch",
+            "attestari-watch",
+            "mcp-inventory",
+            "endpointaudit",
+            "warden-survey",
+            "mcp-scraper",
+            "mcp-canary",
+            "mcp-status",
+            "mcpscore",
+            "agent-almanac-snapshot",
+            "sourceweft-tool-listing",
+            "aive-mcp-discover",
+            "proofhouse",
+            "mcpwell.com",
+            "mcpcost",
+            "centinela",
+            "tacuri-ai",
+            "hultra-link",
+        ],
+    )
+    def test_observed_monitor_names_bucket_as_bot(self, client_name):
+        assert mcp_initialize_surface(client_name) == "mcp_initialize:bot"
+        assert tools_list_anon_client_surface("node", True, client_name=client_name) == "tools_list_anon_client:bot"
+
+    @pytest.mark.parametrize("client_name", ["mcp", "mcpclient", "mcp-client", "mcp-browser", "teammates", "hans"])
+    def test_generic_or_ambiguous_names_stay_unclassified(self, client_name):
+        assert mcp_initialize_surface(client_name) == "mcp_initialize:other"
+
+    @pytest.mark.parametrize(
         "user_agent",
         [
             "coinbasebazaardiscovery/1.0 https://docs.cdp.coinbase.com/x402",
