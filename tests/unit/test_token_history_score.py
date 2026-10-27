@@ -71,9 +71,10 @@ class TestStatistics:
 
     def test_adjusted_t_penalises_overlap(self):
         values = [0.1, 0.2, 0.15, 0.05, 0.12, 0.18, 0.09, 0.11]
-        assert score.adjusted_t(values, horizon=30, step=1) < score.adjusted_t(values, horizon=1, step=1)
+        assert score.adjusted_t(values, horizon=3, step=1) < score.adjusted_t(values, horizon=1, step=1)
+        assert score.adjusted_t(values, horizon=30, step=1) is None  # < 2 independent windows
         assert score.adjusted_t([0.1], 7, 1) is None
-        assert score.adjusted_t([0.1, 0.1], 7, 1) is None  # zero variance
+        assert score.adjusted_t([0.1, 0.1], 1, 1) is None  # zero variance
 
     def test_quintile_spread_ignores_outcome_when_signal_ties(self):
         obs = [score.Observation(D0, f"t{i}", None, False, {"change_7d": 1.0}, forward={7: float(i)}) for i in range(10)]

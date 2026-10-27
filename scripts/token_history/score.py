@@ -188,11 +188,17 @@ def spearman(xs: Sequence[float], ys: Sequence[float]) -> float | None:
 
 
 def adjusted_t(values: Sequence[float], horizon: int, step: int) -> float | None:
-    """t-stat of the mean using ~non-overlapping sample size n * step / horizon."""
+    """t-stat of the mean using ~non-overlapping sample size n * step / horizon.
+
+    None when fewer than 2 effectively independent windows exist: overlapping
+    windows are near-copies, so their low dispersion would inflate the t-stat.
+    """
     if len(values) < 2:
         return None
+    eff_n = len(values) * min(1.0, step / horizon)
+    if eff_n < 2:
+        return None
     sd = statistics.stdev(values)
-    eff_n = max(1.0, len(values) * min(1.0, step / horizon))
     return None if sd < 1e-9 else statistics.fmean(values) / (sd / math.sqrt(eff_n))
 
 
