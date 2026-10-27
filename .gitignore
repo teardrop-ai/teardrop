@@ -36,6 +36,9 @@ venv.bak/
 .env.*.local
 !.env.example
 
+# Private token_history watchlist (lives in a Render Secret File)
+watchlist.txt
+
 # IDEs
 .idea/
 .vscode/

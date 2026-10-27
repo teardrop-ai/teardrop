@@ -1,0 +1,6 @@
+# Sample watchlist used only when WATCHLIST_PATH is unset (local dev / tests).
+# The production list lives in a Render Secret File; never commit it here.
+# One CoinGecko id per line; '#' starts a comment.
+bitcoin
+ethereum
+solana
