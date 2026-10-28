@@ -365,7 +365,11 @@ class TestCreateLlmFromConfig:
             assert "effort" not in body.get("output_config", {})
             assert body["temperature"] == 0.0
             assert request.url.host == "api.anthropic.com"
-            assert request.headers["x-api-key"] == "test-org-key"
+            # anthropic<2 sends x-api-key; anthropic>=2 sends api_key as a Bearer token.
+            assert (
+                request.headers.get("x-api-key") == "test-org-key"
+                or request.headers.get("authorization") == "Bearer test-org-key"
+            )
             first_turn = len(requests) == 1
             content = (
                 [{"type": "tool_use", "id": "tool_1", "name": "lookup", "input": {"symbol": "USDC"}}]
