@@ -461,6 +461,11 @@ def mcp_call_client_surface(client_name: object) -> str:
     return SURFACE_MCP_CALL_CLIENT_PREFIX + _mcp_host_bucket(client_name)
 
 
+def mcp_client_bucket(client_name: object) -> str:
+    """Bounded host bucket for a clientInfo.name, for diagnostics tags (no unclassified-name logging)."""
+    return _mcp_host_bucket(client_name, log_unclassified=False)
+
+
 def mcp_meta_client_name(params: object) -> str | None:
     """Read ``clientInfo.name`` from a 2026-07-28 request's ``params._meta`` envelope.
 

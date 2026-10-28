@@ -30,6 +30,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import jwt
+import sentry_sdk
+from mcp.server.streamable_http_manager import HANDSHAKE_PROTOCOL_VERSIONS
+from mcp.types import LATEST_PROTOCOL_VERSION
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -247,6 +250,57 @@ def _listing_source_tag(request: Request) -> str | None:
         return request.query_params.get(SOURCE_QUERY_PARAM)
     except Exception:
         return None
+
+
+# Bounded Sentry tag vocabularies: client-controlled values outside these sets collapse to "other".
+_SENTRY_RPC_METHODS = frozenset(
+    {
+        "initialize",
+        "server/discover",
+        "ping",
+        "tools/list",
+        "resources/list",
+        "resources/templates/list",
+        "prompts/list",
+        "subscriptions/listen",
+        "completion/complete",
+        "logging/setLevel",
+        "ai.smithery/events/list",
+    }
+)
+_SENTRY_HTTP_METHODS = frozenset({"GET", "DELETE", "HEAD", "OPTIONS"})
+_SENTRY_PROTOCOL_VERSIONS = frozenset({*HANDSHAKE_PROTOCOL_VERSIONS, LATEST_PROTOCOL_VERSION})
+
+
+def _tag_discovery_request(request: Request, rpc_method: object, rpc_params: object, *, is_anonymous: bool) -> None:
+    """Tag the per-request Sentry isolation scope with bounded MCP routing signals. Never raises."""
+    try:
+        from teardrop.funnel_counters import mcp_client_bucket, mcp_client_name
+
+        if rpc_method is None or rpc_method == "":
+            method_tag = request.method if request.method in _SENTRY_HTTP_METHODS else "none"
+        elif rpc_method in _SENTRY_RPC_METHODS:
+            method_tag = rpc_method
+        elif isinstance(rpc_method, str) and rpc_method.startswith("notifications/"):
+            method_tag = "notification"
+        else:
+            method_tag = "other"
+        version = request.headers.get("mcp-protocol-version")
+        if version is None:
+            version_tag = "none"
+        else:
+            version_tag = version if version in _SENTRY_PROTOCOL_VERSIONS else "other"
+        sentry_sdk.set_tags(
+            {
+                "mcp.rpc_method": method_tag,
+                "mcp.protocol_version": version_tag,
+                "mcp.accept_sse": "text/event-stream" in request.headers.get("accept", "").lower(),
+                "mcp.anonymous": is_anonymous,
+                "mcp.client": mcp_client_bucket(mcp_client_name(rpc_params)),
+            }
+        )
+    except Exception:
+        logger.debug("sentry discovery tagging failed", exc_info=True)
 
 
 async def _anonymous_ip_limit(request: Request) -> JSONResponse | None:
@@ -647,7 +701,17 @@ class MCPGatewayMiddleware(BaseHTTPMiddleware):
             request.state.mcp_auth_method = ""
             if discovery_response is not None:
                 return discovery_response
-            response = await call_next(request)
+            _tag_discovery_request(request, rpc_method, rpc_params, is_anonymous=is_anonymous)
+            try:
+                response = await call_next(request)
+            except RuntimeError as exc:
+                # Starlette raises this when the MCP app ends without a response; record whether the client left.
+                if str(exc) == "No response returned.":
+                    try:
+                        sentry_sdk.set_tag("mcp.client_disconnected", await request.is_disconnected())
+                    except Exception:
+                        logger.debug("sentry disconnect probe failed", exc_info=True)
+                raise
             if is_tools_list and is_anonymous:
                 # Community tools are Bearer + credit only, so anonymous (x402) callers never see them.
                 return await self._without_community_tools(response)
