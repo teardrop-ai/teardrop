@@ -1590,7 +1590,7 @@ class TestBuild402ResponseBody:
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {
             "scheme": "exact",
-            "network": "base",
+            "network": "eip155:8453",
             "asset": "0xasset",
             "amount": "10000",
             "payTo": "0xpayto",
@@ -1612,7 +1612,7 @@ class TestBuild402ResponseBody:
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {
             "scheme": "exact",
-            "network": "base",
+            "network": "eip155:8453",
             "asset": "0xasset",
             "amount": "10000",
             "payTo": "0xpayto",
@@ -1641,7 +1641,7 @@ class TestBuild402ResponseBody:
         upto_req = MagicMock()
         upto_req.model_dump.return_value = {
             "scheme": "upto",
-            "network": "base",
+            "network": "eip155:8453",
             "asset": "0xasset",
             "amount": "500000",
             "payTo": "0xpayto",
@@ -1651,7 +1651,7 @@ class TestBuild402ResponseBody:
         exact_req = MagicMock()
         exact_req.model_dump.return_value = {
             "scheme": "exact",
-            "network": "base",
+            "network": "eip155:8453",
             "asset": "0xasset",
             "amount": "10000",
             "payTo": "0xpayto",
@@ -1677,7 +1677,7 @@ class TestBuild402Headers:
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {
             "scheme": "exact",
-            "network": "base",
+            "network": "eip155:8453",
             "asset": "0xasset",
             "amount": "10000",
             "payTo": "0xpayto",
