@@ -56,6 +56,9 @@ _WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"  # vitalik.eth: long-live
 _USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 _WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 _TX_HASH = "0xbb4b3fc2b746877dce70862850602f1d19bd890ab4db47e6b7ee1da1fe578a0d"  # first tx of block 20,000,000
+_UNISWAP_V3_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+# ERC-20 approve(_UNISWAP_V3_ROUTER, 1 USDC); simulated only, never signed or sent.
+_USDC_APPROVE_CALLDATA = f"0x095ea7b3{_UNISWAP_V3_ROUTER[2:].lower():0>64}{1_000_000:064x}"
 _ERC20_TOTAL_SUPPLY_ABI = json.dumps(
     [
         {
@@ -102,6 +105,11 @@ TOOL_ARGUMENTS: dict[str, dict[str, Any]] = {
         "chain_id": 1,
     },
     "resolve_ens": {"name": "vitalik.eth"},
+    "simulate_transaction": {
+        "from_address": _WALLET,
+        "calls": [{"to": _USDC, "data": _USDC_APPROVE_CALLDATA}],
+        "chain_id": 1,
+    },
     "validate_opportunity": {"pool_id": "747c1d2a-c668-4682-b9f9-296708a3dd90"},  # Lido stETH
     "web_search": {"query": "x402 payments protocol", "num_results": 1},
 }

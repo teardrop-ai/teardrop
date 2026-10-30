@@ -292,5 +292,21 @@
     "max_cost_usdc": 500000,
     "scorer": "llm_judge",
     "rubric": "Calls assess_market_resolution once for the named market and reports its verdict (tradeable, ambiguous, avoid, or insufficient_data) with the resolution basis or top risk factor. Does not invent a probability forecast or claim to have read rules the tool did not return."
+  },
+  {
+    "id": "defi.simulate_transaction.001",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Before I sign it, simulate this Ethereum mainnet transaction from 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045: approve spender 0xE592427A0AEce92De3Edee1F18E0157C05861564 for 1000000 units on the USDC contract 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48. Will it succeed, and what approval does it create?"
+      }
+    ],
+    "expected_tool_calls": ["simulate_transaction"],
+    "forbidden_tool_calls": ["delegate_to_agent"],
+    "expected_text_contains": ["approv"],
+    "max_duration_ms": 15000,
+    "max_cost_usdc": 500000,
+    "scorer": "llm_judge",
+    "rubric": "Calls simulate_transaction on chain_id 1 from the given wallet with one approve call to the USDC contract. Reports success or the decoded revert reason, the resulting approval amount and whether it is unlimited, and the simulated block. States that the result is a point-in-time dry run, not a guarantee, and does not claim the transaction was sent."
   }
 ]

@@ -12,14 +12,17 @@ from eth_account.messages import encode_defunct
 
 from labeling import commitments
 from labeling.commitments import (
+    EXECUTION_RECEIPT_KINDS,
     LEAF_VERSION_EXECUTION_RECEIPT,
     LEAF_VERSION_PREDICTION,
     audit_path,
+    execution_receipt_leaf_fields,
     leaf_hash,
     merkle_root,
     new_salt,
     prediction_leaf_fields,
     prediction_signing_message,
+    receipt_content_sha256,
     recover_signer,
     verify_path,
 )
@@ -80,11 +83,62 @@ def test_leaf_hash_is_domain_separated_and_salted():
 
 def test_leaf_hash_rejects_reserved_version_keys_and_bad_salt():
     with pytest.raises(ValueError):
-        leaf_hash(LEAF_VERSION_EXECUTION_RECEIPT, {}, new_salt())
+        leaf_hash(3, {}, new_salt())
     with pytest.raises(ValueError):
         leaf_hash(LEAF_VERSION_PREDICTION, {"v": 9}, new_salt())
     with pytest.raises(ValueError):
         leaf_hash(LEAF_VERSION_PREDICTION, {}, "A" * 64)
+
+
+def _receipt_fields(**overrides):
+    values = {
+        "kind": "simulation",
+        "receipt_id": "r-1",
+        "org_id": "org-1",
+        "producer": "simulate_transaction",
+        "content_sha256": "b" * 64,
+        "created_at": datetime(2026, 10, 30, 14, 0, 0, 7, tzinfo=timezone(timedelta(hours=2))),
+    }
+    values.update(overrides)
+    return execution_receipt_leaf_fields(**values)
+
+
+def test_execution_receipt_leaf_is_version_2_and_distinct_from_prediction():
+    fields = _receipt_fields()
+    assert fields == {
+        "kind": "simulation",
+        "receipt_id": "r-1",
+        "org_id": "org-1",
+        "producer": "simulate_transaction",
+        "content_sha256": "b" * 64,
+        "created_at": "2026-10-30T12:00:00.000007+00:00",
+    }
+    salt = new_salt()
+    leaf = leaf_hash(LEAF_VERSION_EXECUTION_RECEIPT, fields, salt)
+    expected_preimage = commitments.canonical_json({**fields, "v": 2, "salt": salt})
+    assert leaf == hashlib.sha256(b"\x00" + expected_preimage.encode()).hexdigest()
+    assert leaf != leaf_hash(LEAF_VERSION_PREDICTION, fields, salt)
+
+
+@pytest.mark.parametrize("kind", sorted(EXECUTION_RECEIPT_KINDS))
+def test_every_receipt_kind_shares_leaf_version_2(kind):
+    leaf_hash(LEAF_VERSION_EXECUTION_RECEIPT, _receipt_fields(kind=kind), new_salt())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"kind": "prediction"}, {"content_sha256": "B" * 64}, {"content_sha256": "b" * 63}, {"receipt_id": ""}, {"producer": ""}],
+)
+def test_execution_receipt_leaf_fields_reject_invalid_values(overrides):
+    with pytest.raises(ValueError):
+        _receipt_fields(**overrides)
+
+
+def test_receipt_content_sha256_is_canonical():
+    assert receipt_content_sha256({"b": 1, "a": [2]}) == receipt_content_sha256({"a": [2], "b": 1})
+    assert receipt_content_sha256({"a": 1}) == hashlib.sha256(b'{"a":1}').hexdigest()
+    with pytest.raises(ValueError):
+        receipt_content_sha256({"x": float("nan")})
 
 
 def test_prediction_leaf_fields_normalize_timestamp_to_utc_microseconds():

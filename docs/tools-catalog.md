@@ -38,6 +38,7 @@ fee stays a small share of each call; free tools stay at $0.000.
 | `assess_counterparty_risk` | $0.035 (35,000 atomic) |
 | `validate_opportunity` | $0.015 (15,000 atomic) |
 | `assess_market_resolution` | $0.025 (25,000 atomic) |
+| `simulate_transaction` | $0.010 (10,000 atomic) |
 
 ## Agent Discovery
 
@@ -124,6 +125,7 @@ All system tool implementations are under [tools/definitions/](tools/definitions
 | `http_fetch` | Fetches and extracts content from a URL. Includes SSRF protection — private/cloud-metadata IPs are blocked, and every redirect hop is re-validated before being followed. |
 | `read_contract` | Calls `view`/`pure` functions on any smart contract by ABI fragment, with optional `caller_address` context for `msg.sender`-dependent views. Calls are read-only and use bounded RPC timeout/retry handling. |
 | `resolve_ens` | Resolves ENS name → address or address → ENS primary name. |
+| `simulate_transaction` | Dry-runs one call or an ordered bundle (up to 8, e.g. approve then swap) from a wallet on Ethereum or Base via `eth_simulateV1`, without signing or broadcasting. Returns per-call success or decoded revert reason (`Error(string)`, `Panic`, custom selector), gas used, the wallet's net ETH/ERC-20 balance changes, new approvals (flagging effectively unlimited ones), and a leaf-v2 execution-receipt `content_sha256`. Falls back to independent `eth_call` + `eth_estimateGas` per call (`mode: eth_call_fallback`, no balance/approval changes) when the RPC lacks `eth_simulateV1`. Receipts are not yet persisted or anchored. |
 | `count_text_stats` | Returns character, word, sentence, and paragraph counts for a given text. |
 | `web_search` | Web search via Tavily. Set `TAVILY_API_KEY` to activate. |
 | `get_defi_positions` | Aggregate DeFi positions (expanded Aave v3 reserves, Compound v3 markets, Uniswap v3 LP, and canonical Ethereum Lido stETH/wstETH balances) for a wallet on Ethereum or Base. |

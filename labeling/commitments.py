@@ -14,7 +14,9 @@ Any table can be anchored by the single worker in ``labeling.anchor`` when it ha
 
 The table is then registered with ``labeling.anchor.register_anchor_source``.
 
-Leaf versions: ``1`` = prediction. ``2`` is reserved for execution receipts.
+Leaf versions: ``1`` = prediction. ``2`` = execution receipt, a single format shared by every
+receipt ``kind`` (``simulation``, ``tool_call``, ``run``). New receipt producers add a kind, not a
+leaf version; kind-specific detail lives in the content committed to by ``content_sha256``.
 """
 
 from __future__ import annotations
@@ -33,7 +35,8 @@ from labeling.contracts import canonical_json, utc_datetime
 
 LEAF_VERSION_PREDICTION = 1
 LEAF_VERSION_EXECUTION_RECEIPT = 2
-SUPPORTED_LEAF_VERSIONS = frozenset({LEAF_VERSION_PREDICTION})
+SUPPORTED_LEAF_VERSIONS = frozenset({LEAF_VERSION_PREDICTION, LEAF_VERSION_EXECUTION_RECEIPT})
+EXECUTION_RECEIPT_KINDS = frozenset({"simulation", "tool_call", "run"})
 HASH_ALGORITHM = "rfc6962-sha256"
 MAX_BATCH_LEAVES = 4096
 PREDICTION_SIGNING_DOMAIN = "Teardrop VOR prediction v1"
@@ -75,6 +78,37 @@ def prediction_leaf_fields(
         "definition": f"{definition_key}@{definition_version}",
         "payload_sha256": payload_sha256,
         "prediction_at": utc_datetime(prediction_at).isoformat(timespec="microseconds"),
+    }
+
+
+def receipt_content_sha256(content: Mapping[str, Any]) -> str:
+    """Return the lowercase hex SHA-256 of a receipt's canonical JSON content."""
+    return hashlib.sha256(canonical_json(dict(content)).encode("ascii")).hexdigest()
+
+
+def execution_receipt_leaf_fields(
+    *,
+    kind: str,
+    receipt_id: str,
+    org_id: str,
+    producer: str,
+    content_sha256: str,
+    created_at: datetime,
+) -> dict[str, Any]:
+    """Return the leaf-v2 fields for an execution receipt of any ``kind``."""
+    if kind not in EXECUTION_RECEIPT_KINDS:
+        raise ValueError("Unsupported execution receipt kind")
+    if not _HEX64.fullmatch(content_sha256):
+        raise ValueError("Receipt content_sha256 must be 64 lowercase hex characters")
+    if not (receipt_id and org_id and producer):
+        raise ValueError("Receipt id, org id, and producer are required")
+    return {
+        "kind": kind,
+        "receipt_id": receipt_id,
+        "org_id": org_id,
+        "producer": producer,
+        "content_sha256": content_sha256,
+        "created_at": utc_datetime(created_at).isoformat(timespec="microseconds"),
     }
 
 
