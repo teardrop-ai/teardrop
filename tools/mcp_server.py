@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # Qualified `org/tool` names are billing keys; SEP-986 would warn on every refresh.
 logging.getLogger("mcp.shared.tool_name_validation").setLevel(logging.ERROR)
 
-# Parity with the deprecated /mcp/v1 tools/list page size.
+# Cap on community tools listed per tools/list refresh.
 _COMMUNITY_TOOL_LIMIT = 200
 
 MCP_SERVER_DESCRIPTION = (

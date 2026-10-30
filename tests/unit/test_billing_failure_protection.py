@@ -3,9 +3,7 @@
 
 """Unit tests for billing protection — failed tool calls must not debit credit.
 
-Covers the two settle paths:
-    - app.py mcp_jsonrpc_handler debit gate (``execution_failed`` check).
-    - mcp_gateway.MCPGateway._settle_billing skips when execution_failed=True.
+Covers ``mcp_gateway.MCPGatewayMiddleware._settle_billing``, which skips settlement when execution_failed=True.
 """
 
 from __future__ import annotations
@@ -112,6 +110,32 @@ async def test_settle_billing_debits_on_success():
     debit_mock.assert_called_once()
     record_mock.assert_called_once_with(request, "org-1", "test_tool", 100, "credit", "settled")
     assert result is response
+
+
+@pytest.mark.asyncio
+async def test_settle_billing_credit_community_tool_records_author_earnings():
+    gateway = MCPGatewayMiddleware(app=MagicMock())
+    request = MagicMock()
+    request.state = MagicMock(spec=[])
+    response = MagicMock()
+    pending = ("caller-org", 5_000, "acme/weather", "req-1")
+
+    with (
+        patch("billing.debit_credit", new_callable=AsyncMock, return_value=(True, 5_000)),
+        patch.object(gateway, "_record_mcp_outcome", new_callable=AsyncMock),
+        patch("marketplace.get_marketplace_tool_by_name", new=AsyncMock(return_value={"org_id": "author-org"})),
+        patch("marketplace.record_tool_call_earnings", new=AsyncMock()) as earnings_mock,
+        patch("marketplace.record_marketplace_tool_usage_many", new=AsyncMock()),
+    ):
+        await gateway._settle_billing(request, pending, response, execution_failed=False)
+        await asyncio.sleep(0)
+
+    earnings_mock.assert_awaited_once_with(
+        author_org_id="author-org",
+        caller_org_id="caller-org",
+        tool_name="weather",
+        total_cost_usdc=5_000,
+    )
 
 
 def _assert_withheld(result, req_id: str) -> None:

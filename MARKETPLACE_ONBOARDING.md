@@ -240,7 +240,7 @@ curl -X POST https://api.teardrop.dev/tools \
 > **BYOK orgs** (Bring Your Own Key) may pay a different orchestration fee if `BYOK_TIER_PRICING_ENABLED=true` on the platform (seeded by migration 041). BYOK orgs always pay your `base_price_usdc` plus any applicable BYOK orchestration fees to Teardrop.
 > This split is fixed; per-author overrides are not supported.
 >
-> **Pricing consistency across call paths:** every surface — `GET /marketplace/catalog`, `GET /marketplace/quote`, `/agent/run`, `/tools/mcp`, and the deprecated `/mcp/v1` — resolves the price with the same rule: exact qualified name override, then bare tool name override, then author `base_price_usdc` (`0` = free), then the global default tool-call cost when the price is unset.
+> **Pricing consistency across call paths:** every surface — `GET /marketplace/catalog`, `GET /marketplace/quote`, `/agent/run`, and `/tools/mcp` — resolves the price with the same rule: exact qualified name override, then bare tool name override, then author `base_price_usdc` (`0` = free), then the global default tool-call cost when the price is unset.
 
 ---
 

@@ -122,7 +122,7 @@ The public `/tools/mcp` `tools/list` exposes platform tools, plus published comm
 
 Community tools on `/tools/mcp` require a Bearer token and funded credit; no subscription is required. They are not payable with x402: anonymous calls get `401` with JSON-RPC `-32001`, before any payment challenge. A community call never runs unbilled; with MCP billing disabled it returns `503` `-32603`. The MCP server card lists platform tools and, when the marketplace is enabled, advertises `marketplace.mcp_url` (`/tools/mcp`) for community tools.
 
-Credit callers may bound any call with `params._meta["teardrop/max_cost_usdc"]` (non-negative integer, atomic USDC); the charged amount never exceeds it. Org and principal pause and 24-hour caps still apply, and the per-org MCP rate limit is shared with `/mcp/v1`. Rejected, failed, and unaffordable calls are not charged.
+Credit callers may bound any call with `params._meta["teardrop/max_cost_usdc"]` (non-negative integer, atomic USDC); the charged amount never exceeds it. Org and principal pause and 24-hour caps still apply, and the per-org MCP rate limit applies. Rejected, failed, and unaffordable calls are not charged.
 
 | HTTP | JSON-RPC code | Meaning |
 |------|---------------|---------|
@@ -147,9 +147,9 @@ To pay, broadcast a standard ERC-20 transfer of exactly `amount` of `currency` f
 | `402` | `-32043` | Challenge not issued by this server, expired, or terms changed; transfer missing, unconfirmed, mismatched, or mined before the challenge; or hash already used. Includes a replacement challenge in `error.data.challenges` |
 | `503` | `-32603` | Replay store or chain RPC unavailable; retry the same credential before it expires |
 
-#### `/mcp/v1` marketplace gateway (deprecated)
+#### `/mcp/v1` marketplace gateway (removed)
 
-`POST /mcp/v1` is deprecated and sunsets on 2026-10-29. Responses carry `Deprecation`, `Sunset`, and `Link: </tools/mcp>; rel="successor-version"` headers. It keeps its existing behavior until then: Bearer and credit only, the same price metadata, `max_cost_usdc` bound, and error codes (returned as HTTP `200` JSON-RPC errors). To migrate to `/tools/mcp`, send `Accept: application/json` (Streamable HTTP), call platform tools by bare name instead of `platform/{tool_name}`, and expect the HTTP statuses above.
+`POST /mcp/v1` reached its 2026-10-29 sunset and has been removed; requests now return `404`. Use `/tools/mcp`: send `Accept: application/json` (Streamable HTTP), call platform tools by bare name instead of `platform/{tool_name}`, and expect the HTTP statuses above.
 
 ### Marketplace
 
@@ -200,7 +200,7 @@ Ownership, agent-run selection, and payment are separate concepts:
     runtime wrapper cannot be built. Run policy and execution failures can also
     prevent a selected tool from being called. Inventory is not an execution guarantee.
 
-`GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `cost_usdc` is the effective per-call price exactly as billed by `/agent/run`, `/tools/mcp`, the deprecated `/mcp/v1`, and `GET /marketplace/quote`; price sorting uses the listed price before admin overrides. `output_schema` is the tool's declared result schema, or `null`. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats; `reputation_score` and `success_rate` are `null` for unrated tools (absence means "unrated", not zero). `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
+`GET /marketplace/catalog` sorts by `name`, `price_asc`, `price_desc`, `popularity`, or `reputation`. Categories are `defi`, `search`, `data`, `communication`, and `utility`; an empty category is allowed for uncategorized tools. `cost_usdc` is the effective per-call price exactly as billed by `/agent/run`, `/tools/mcp`, and `GET /marketplace/quote`; price sorting uses the listed price before admin overrides. `output_schema` is the tool's declared result schema, or `null`. `total_calls`, `reputation_score`, and `success_rate` are non-financial aggregate stats; `reputation_score` and `success_rate` are `null` for unrated tools (absence means "unrated", not zero). `unique_caller_count` is omitted below five distinct calling orgs. These fields are not sourced from the immutable earnings ledger.
 
 `GET /marketplace/authors` returns active published authors, including the `platform` pseudo-author when platform tools are active. Each entry contains `org_slug`, `org_name`, `tool_count`, and aggregate `total_calls`; `q` searches the public organization name or slug, and `cursor` is an opaque slug keyset token. Follow an author entry with `GET /marketplace/authors/{org_slug}` to retrieve its paginated tools. The author index is catalog metadata only and does not provide a remote A2A URL.
 

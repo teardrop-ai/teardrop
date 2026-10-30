@@ -185,7 +185,7 @@ async def test_execute_marketplace_tool_pins_connection():
     SSRF-pinned connector instead of an unpinned aiohttp session."""
     from unittest.mock import MagicMock
 
-    from teardrop.routers.marketplace_mcp import _execute_marketplace_tool
+    from marketplace.execution import execute_marketplace_tool as _execute_marketplace_tool
 
     mock_resp = AsyncMock()
     mock_resp.status = 200
@@ -223,7 +223,7 @@ async def test_execute_marketplace_tool_pins_connection():
 
 async def test_execute_marketplace_tool_blocks_rebinding():
     """A URL that fails the with-IPs validation is rejected before any connection."""
-    from teardrop.routers.marketplace_mcp import _execute_marketplace_tool
+    from marketplace.execution import execute_marketplace_tool as _execute_marketplace_tool
 
     tool_row = {
         "id": "",

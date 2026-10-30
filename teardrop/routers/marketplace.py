@@ -15,7 +15,6 @@ SSRF, and circuit-breaker semantics are preserved exactly.
 Sibling marketplace routers:
   * ``teardrop.routers.marketplace_import`` — MCP import preview/publish
   * ``teardrop.routers.marketplace_agents`` — A2A agent registration + directory
-  * ``teardrop.routers.marketplace_mcp``    — deprecated MCP JSON-RPC gateway (POST /mcp/v1)
 """
 
 from __future__ import annotations
